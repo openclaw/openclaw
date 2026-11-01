@@ -1,15 +1,14 @@
-import {
-  getActiveEmbeddedRunCount,
-  isEmbeddedAgentRunActive,
-} from "../../agents/embedded-agent-runner/active-run-projections.js";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { onGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
-import { createBackgroundWorkOwner } from "../../process/background-work.js";
+import { getSkillWorkshopReviewLane } from "../../process/background-work.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
-
-const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
+import {
+  getActiveSessionRunCount,
+  isSessionRunActive,
+} from "../../sessions/session-controller.queries.js";
 
 /**
  * The background Workshop review run: the openclaw harness on a locked model, crediting
@@ -25,8 +24,8 @@ export async function runSkillWorkshopReview(
 ) {
   const foreground = new AbortController();
   const yieldToForeground = () => {
-    const ownRun = isEmbeddedAgentRunActive(params.sessionId) ? 1 : 0;
-    if (getActiveEmbeddedRunCount() > ownRun) {
+    const ownRun = isSessionRunActive(params.sessionId) ? 1 : 0;
+    if (getActiveSessionRunCount() > ownRun) {
       foreground.abort(new DOMException("Skill review yielded to foreground work", "AbortError"));
     }
   };
@@ -53,7 +52,7 @@ export async function runSkillWorkshopReview(
     const result = await runEmbeddedAgent({
       ...params,
       abortSignal,
-      lane: reviews.lane,
+      lane: getSkillWorkshopReviewLane(),
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",
       // Review is best-effort work: never spend interactive capacity on retries.
@@ -78,7 +77,6 @@ export async function runSkillWorkshopReview(
       conversationRecall: undefined,
       gitCoauthorPrompt: undefined,
       forceMessageTool: false,
-      forceHeartbeatTool: false,
       contextTokenBudget: 16_384,
       streamParams: { maxTokens: 2_048 },
       thinkLevel: "low",
@@ -96,5 +94,6 @@ export async function runSkillWorkshopReview(
     unsubscribe();
     params.preparedRunAdmission.close();
     clearAgentRunContext(params.runId);
+    cleanupSessionResources(params.sessionId);
   }
 }

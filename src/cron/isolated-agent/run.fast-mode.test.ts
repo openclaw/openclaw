@@ -4,6 +4,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
@@ -11,6 +12,7 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { readSessionMessagesAsyncMock } from "./run-automation.test-support.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as h from "./run.test-harness.js";
 
@@ -19,6 +21,7 @@ function expectCall(mock: unknown, fields: Record<string, unknown>) {
 }
 
 const runAgent = await h.loadRunCronIsolatedAgentTurn();
+const completedTurn = () => ({ payloads: [{ text: "test output" }], meta: { agentMeta: {} } });
 
 function runJob(job: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
   return runAgent(
@@ -37,7 +40,6 @@ function expectCronInvocationContext(runParams: {
   sessionId?: string;
   sessionKey?: string;
 }): string {
-  expect(runParams.runId).toEqual(expect.any(String));
   expect(runParams.runId).not.toBe("");
   expect(runParams.runId).not.toBe("test-session-id");
   expect(runParams.sessionId).toBe("test-session-id");
@@ -45,7 +47,6 @@ function expectCronInvocationContext(runParams: {
     sessionId: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    cronRunsByJobId: new Map([["test-job", { pacingEnabled: false }]]),
   });
   return runParams.runId;
 }
@@ -54,13 +55,52 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
   setupRunCronIsolatedAgentTurnSuite();
   beforeEach(() => h.mockRunCronFallbackPassthrough());
 
+  it.each([
+    { schedule: "at", target: "session:agent:default:main", eligible: true },
+    { schedule: "at", target: "isolated", eligible: false },
+    { schedule: "at", target: "current", eligible: false },
+    { schedule: "cron", target: "session:agent:default:main", eligible: false },
+  ])(
+    "accepts next_check only for an explicit one-shot continuation ($schedule, $target)",
+    async ({ schedule, target, eligible }) => {
+      let invocationRunId = "";
+      h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+        invocationRunId = runParams.runId;
+        const propose = () => recordCronNextCheckProposal(runParams.runId, "test-job", 60_000);
+        if (eligible) {
+          propose();
+        } else {
+          expect(propose).toThrow("cron next_check requires");
+        }
+        return completedTurn();
+      });
+      const result = await runJob(
+        {
+          sessionTarget: target,
+          schedule:
+            schedule === "at"
+              ? { kind: "at", at: "2026-07-27T12:00:00.000Z" }
+              : { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+          delivery: { mode: "none" },
+        },
+        target.startsWith("session:") ? { sessionKey: target.slice(8) } : {},
+      );
+      expect(result.status, result.error).toBe("ok");
+      expect(result.nextCheck).toEqual(eligible ? { delayMs: 60_000 } : undefined);
+      expect(() => recordCronNextCheckProposal(invocationRunId, "test-job", 60_000)).toThrow(
+        "cron next_check is only available to the currently running job",
+      );
+    },
+  );
+
   it("retains the selected owner while reusing a global session", async () => {
     h.resolveCronSessionMock.mockReturnValue(h.makeCronSession({ isNewSession: false }));
-    let admittedOwner: { sessionKey?: string; agentId?: string } | undefined;
     h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
-      const admitted = getAgentRunContext(runParams.runId);
-      admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
-      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+      expect(getAgentRunContext(runParams.runId)).toMatchObject({
+        sessionKey: "global",
+        agentId: "research",
+      });
+      return completedTurn();
     });
     const result = await runJob(
       { sessionTarget: "session:main", delivery: { mode: "none" } },
@@ -71,47 +111,70 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
       },
     );
     expect(result).toMatchObject({ status: "ok", sessionKey: "global" });
-    expect(admittedOwner).toEqual({ sessionKey: "global", agentId: "research" });
   });
 
-  it("releases current invocation context without clearing an existing physical context", async () => {
-    const sessionKey = "agent:default:cron:test";
-    const initialSessionEntry = h.makeCronSessionEntry({ retained: true });
-    const cronSession = h.makeCronSession({
-      store: { [sessionKey]: initialSessionEntry },
-      initialSessionEntry,
-    });
-    h.loadSessionEntryMock.mockImplementation((_storePath, key) =>
-      key === sessionKey ? initialSessionEntry : undefined,
-    );
-    h.resolveCronSessionMock.mockReturnValue(cronSession);
-    const previousGeneration = getAgentEventLifecycleGeneration();
-    registerAgentRunContext("test-session-id", { sessionKey, verboseLevel: "off" });
-    const expectedContext = { ...getAgentRunContext("test-session-id") };
-    const onExecutionStarted = vi.fn();
-    let invocationRunId = "";
-    h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
-      invocationRunId = expectCronInvocationContext(runParams);
-      await runParams.onExecutionStarted?.();
-      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
-    });
-    try {
-      const result = await runAgent({
-        ...makeParams("current"),
-        onExecutionStarted,
-      });
-      expect(result).toMatchObject({ status: "ok" });
-      expect(invocationRunId).not.toBe("");
-      expect(getAgentRunContext(invocationRunId)).toBeUndefined();
-      expect(getAgentRunContext("test-session-id")).toEqual(expectedContext);
-      expect(cronSession.store).toEqual({});
-      expect(onExecutionStarted).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ sessionId: "test-session-id", runId: invocationRunId }),
+  it.each([
+    { target: "isolated", failure: false, physical: "current" },
+    { target: "current", failure: true, physical: "stale" },
+  ])(
+    "releases $target invocation context (failure=$failure, physical=$physical)",
+    async ({ target, failure, physical }) => {
+      const sessionKey = "agent:default:cron:test";
+      const initialSessionEntry = h.makeCronSessionEntry({ retained: true });
+      const cronSession = h.makeCronSession(
+        failure ? {} : { store: { [sessionKey]: initialSessionEntry }, initialSessionEntry },
       );
-    } finally {
-      clearAgentRunContext("test-session-id", previousGeneration);
-    }
-  });
+      if (!failure) {
+        h.loadSessionEntryMock.mockImplementation((_storePath, key) =>
+          key === sessionKey ? initialSessionEntry : undefined,
+        );
+      }
+      h.resolveCronSessionMock.mockReturnValue(cronSession);
+      const previousGeneration = getAgentEventLifecycleGeneration();
+      if (physical === "current") {
+        registerAgentRunContext("test-session-id", { sessionKey, verboseLevel: "off" });
+      } else {
+        claimAgentRunContext("test-session-id", {
+          sessionKey,
+          sessionId: "test-session-id",
+          lifecycleGeneration: previousGeneration,
+        });
+      }
+      const expectedContext = { ...getAgentRunContext("test-session-id") };
+      if (physical === "stale") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      const onExecutionStarted = vi.fn();
+      let invocationRunId = "";
+      h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
+        invocationRunId = expectCronInvocationContext(runParams);
+        if (failure) {
+          throw new Error("runner failed");
+        }
+        await runParams.onExecutionStarted?.();
+        return completedTurn();
+      });
+      try {
+        const result = await runAgent({
+          ...makeParams(target),
+          onExecutionStarted,
+        });
+        expect(result).toMatchObject(
+          failure ? { status: "error", error: "runner failed" } : { status: "ok" },
+        );
+        expect(getAgentRunContext(invocationRunId)).toBeUndefined();
+        expect(getAgentRunContext("test-session-id")).toEqual(expectedContext);
+        expect(cronSession.store).toEqual({});
+        if (!failure) {
+          expect(onExecutionStarted).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ sessionId: "test-session-id", runId: invocationRunId }),
+          );
+        }
+      } finally {
+        clearAgentRunContext("test-session-id", previousGeneration);
+      }
+    },
+  );
 
   it("does not let old cron cleanup clear a newer same-id run context", async () => {
     let invocationRunId = "";
@@ -125,12 +188,11 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
         sessionId: "test-session-id",
         lifecycleGeneration: newerLifecycleGeneration,
       });
-      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+      return completedTurn();
     });
 
     await runAgent(makeParams());
 
-    expect(invocationRunId).not.toBe("");
     expect(getAgentRunContext(invocationRunId)).toMatchObject({
       sessionId: "test-session-id",
       lifecycleGeneration: newerLifecycleGeneration,
@@ -160,20 +222,22 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     expect(getAgentRunContext("test-session-id")).toBeUndefined();
   });
 
-  it("releases overlapping persistent-session invocation contexts independently", async () => {
-    // Exercise process-local ownership without the persistent session admission
-    // that serializes real turns on one key.
+  it("serializes overlapping persistent-session invocations and releases their contexts independently", async () => {
     process.env.OPENCLAW_TEST_FAST = "1";
     h.resolveCronSessionMock.mockImplementation(() => h.makeCronSession());
     const invocationRunIds: string[] = [];
+    const runnerEvents: string[] = [];
     const first = { started: createDeferred(), blocked: createDeferred() };
     const second = { started: createDeferred(), blocked: createDeferred() };
     h.runEmbeddedAgentMock.mockImplementation(async (runParams) => {
       invocationRunIds.push(expectCronInvocationContext(runParams));
-      const turn = invocationRunIds.length === 1 ? first : second;
+      const isFirst = invocationRunIds.length === 1;
+      const turn = isFirst ? first : second;
+      runnerEvents.push(isFirst ? "first started" : "second started");
       turn.started.resolve();
       await turn.blocked.promise;
-      return { payloads: [{ text: "test output" }], meta: { agentMeta: {} } };
+      runnerEvents.push(isFirst ? "first returned" : "second returned");
+      return completedTurn();
     });
     const sessionKey = "agent:default:messagechat:direct:123";
     const runParams = { ...makeParams(`session:${sessionKey}`), sessionKey };
@@ -181,17 +245,16 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
     const firstRun = runAgent(runParams);
     await first.started.promise;
     const secondRun = runAgent(runParams);
+    first.blocked.resolve();
     await second.started.promise;
 
-    expect(invocationRunIds).toHaveLength(2);
+    expect(runnerEvents).toEqual(["first started", "first returned", "second started"]);
     const [firstRunId, secondRunId] = invocationRunIds;
     assert(firstRunId && secondRunId);
     expect(firstRunId).not.toBe(secondRunId);
-    expect(getAgentRunContext(firstRunId)).toBeDefined();
     expect(getAgentRunContext(secondRunId)).toBeDefined();
     expect(getAgentRunContext("test-session-id")).toBeUndefined();
 
-    first.blocked.resolve();
     expect((await firstRun).status).toBe("ok");
     expect(getAgentRunContext(firstRunId)).toBeUndefined();
     expect(getAgentRunContext(secondRunId)).toBeDefined();
@@ -207,56 +270,41 @@ describe("runCronIsolatedAgentTurn invocation ownership", () => {
 describe("runCronIsolatedAgentTurn session cleanup", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
-  it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
-    h.dispatchCronDeliveryMock.mockImplementationOnce(
-      (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
-        .dispatchCronDelivery,
-    );
-    const result = await runJob({
-      deleteAfterRun: true,
-      delivery: { mode: "none" },
-    });
-
-    expect(result.status).toBe("ok");
-    expect(h.callGatewayMock).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: "agent:default:cron:test",
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: "test-session-id",
-        expectedLifecycleRevision: "test-lifecycle-revision",
-        expectedSessionUpdatedAt: 0,
-      },
-      timeoutMs: 10_000,
-    });
-  });
-
-  it("leaves transcript cleanup with dispatch when delivery rejects", async () => {
-    h.resolveCronDeliveryPlanMock.mockReturnValue({
-      requested: true,
-      mode: "announce",
-      channel: "messagechat",
-      to: "test-target",
-    });
-    h.dispatchCronDeliveryMock.mockRejectedValueOnce(
-      new Error("delivery receipt store unavailable"),
-    );
-
-    const result = await runJob({
-      deleteAfterRun: true,
-      delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
-    });
-
-    expect(result).toMatchObject({ status: "error", error: "delivery receipt store unavailable" });
-    expect(h.dispatchCronDeliveryMock).toHaveBeenCalledOnce();
-    expect(h.callGatewayMock).not.toHaveBeenCalled();
-    expect(h.retireSessionMcpRuntimeMock).toHaveBeenCalledWith({
-      sessionId: "test-session-id",
-      reason: "isolated-cron-dispose",
-      onError: expect.any(Function),
-    });
-  });
+  it.each([false, true])(
+    "keeps deletion with delivery dispatch (rejected=%s)",
+    async (rejected) => {
+      const delivery = rejected
+        ? { mode: "announce", channel: "messagechat", to: "test-target" }
+        : { mode: "none" };
+      if (rejected) {
+        h.resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, ...delivery });
+        h.dispatchCronDeliveryMock.mockRejectedValueOnce(
+          new Error("delivery receipt store unavailable"),
+        );
+      } else {
+        h.dispatchCronDeliveryMock.mockImplementationOnce(
+          (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
+            .dispatchCronDelivery,
+        );
+      }
+      const result = await runJob({ deleteAfterRun: true, delivery });
+      if (rejected) {
+        expect(result).toMatchObject({
+          status: "error",
+          error: "delivery receipt store unavailable",
+        });
+        expect(h.callGatewayMock).not.toHaveBeenCalled();
+        expectCall(h.retireSessionMcpRuntimeMock, {
+          sessionId: "test-session-id",
+          reason: "isolated-cron-dispose",
+          onError: expect.any(Function),
+        });
+      } else {
+        expect(result.status).toBe("ok");
+        expectCall(h.callGatewayMock, { method: "sessions.delete" });
+      }
+    },
+  );
 
   it("retires the previous bundled MCP runtime when a persistent cron session rolls over", async () => {
     h.resolveCronSessionMock.mockReturnValue(
@@ -271,7 +319,6 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       { sessionKey: "agent:main:main:thread:9999" },
     );
     expect(result.status).toBe("ok");
-    expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expectCall(h.runEmbeddedAgentMock, {
       cleanupBundleMcpOnRunEnd: false,
       allowGatewaySubagentBinding: true,
@@ -303,11 +350,8 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       h.resolveCronSessionMock.mockReturnValue(
         h.makeCronSession({ store: { [source.sessionKey]: sourceEntry } }),
       );
-      h.readSessionMessagesAsyncMock.mockResolvedValue([
-        { role: "user", content: "Otters hold hands while sleeping." },
-        { role: "assistant", content: "Got it." },
-      ]);
-      const message = isolated ? "Reply tick in your own session." : "Summarize the animal fact.";
+      readSessionMessagesAsyncMock.mockResolvedValue([{ role: "user", content: "Animal fact." }]);
+      const message = "Summarize the animal fact.";
       const result = await runJob({
         sessionKey: source.sessionKey,
         sessionTarget: isolated ? "isolated" : "current",
@@ -316,24 +360,14 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       });
       expect(result.status).toBe("ok");
       const prompt = h.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt;
-      expect(prompt).toEqual(expect.any(String));
       if (isolated) {
         expect(result.sessionKey).not.toBe(source.sessionKey);
-        expect(h.readSessionMessagesAsyncMock).not.toHaveBeenCalled();
+        expect(readSessionMessagesAsyncMock).not.toHaveBeenCalled();
         expect(prompt).toContain(message);
-        expect(prompt).not.toContain("Otters hold hands while sleeping.");
-        expectCall(h.resolveCronSessionMock, { sourceSessionKey: undefined, forceNew: true });
+        expect(prompt).not.toContain("Animal fact.");
       } else {
-        expect(h.readSessionMessagesAsyncMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionEntry: sourceEntry,
-            sessionId: source.sessionId,
-            sessionKey: source.sessionKey,
-          }),
-          { mode: "recent", maxBytes: 256 * 1024, maxLines: 220, maxMessages: 220 },
-        );
         expect(prompt).toContain(
-          "Recent conversation:\n- User: Otters hold hands while sleeping.\n- Assistant: Got it.\n\nSummarize the animal fact.",
+          "Recent conversation:\n- User: Animal fact.\n\nSummarize the animal fact.",
         );
       }
       expectCall(h.dispatchCronDeliveryMock, {

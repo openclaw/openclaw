@@ -2,7 +2,6 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -107,10 +106,15 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["browser.request"],
         operatorScopes: ["operator.read", "operator.sessions.write"],
+        deferredMethods: ["connect"],
+        awaitInitialRoster: false,
       });
       await page.goto(
         `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
       );
+      await page.locator("openclaw-browser-document .connect-splash").waitFor();
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
       await page
         .getByText(
           "Browser control is unavailable for this connection. Reconnect with browser access.",
@@ -343,7 +347,7 @@ suite.define(() => {
   );
 
   it.each(["panel", "older card"])(
-    "preserves browser routes after automatic reveal through %s",
+    "preserves browser routes after explicit opening through %s",
     async (firstOpen) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
@@ -419,22 +423,19 @@ suite.define(() => {
           const hostCard = page
             .locator("openclaw-browser-tab-card")
             .filter({ hasText: "Managed tab" });
-          // Thumbnails may capture both routes; automatic reveal follows only the latest live result.
+          // Thumbnails may capture both routes without opening the side panel.
           await hostCard.locator(".shot img").waitFor();
           await page
             .locator("openclaw-browser-tab-card")
             .filter({ hasText: "Node tab" })
             .locator(".shot img")
             .waitFor();
-          await page.locator('section.bp .bp-shot[alt="Node tab"]').waitFor();
-          expect(await page.locator("section.bp").count()).toBe(1);
+          expect(await page.locator("section.bp").count()).toBe(0);
           expect(await focusRequests()).toEqual([]);
           const panel = page.locator("section.bp");
           if (firstOpen === "panel") {
-            await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-            await panel.waitFor({ state: "hidden" });
             const beforePanelOpen = (await browserRequests()).length;
-            await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
+            await openChatSidePanelType(page, "Browser");
             await panel.locator('.bp-shot[alt="Node tab"]').waitFor();
             expect(await panel.locator(".bp-profile").textContent()).toBe("work");
             expect(await focusRequests(beforePanelOpen)).toEqual([]);

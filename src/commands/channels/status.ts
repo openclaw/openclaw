@@ -1,4 +1,3 @@
-// Implements `openclaw channels status` with gateway status and config-only fallback.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
@@ -8,6 +7,7 @@ import {
   isExpectedCliError,
   isGatewayCredentialsCliError,
 } from "../../cli/failure-output.js";
+import { prepareCliGatewayStateAccess } from "../../cli/gateway-rpc.runtime.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { callGateway } from "../../gateway/call.js";
@@ -70,6 +70,7 @@ export async function channelsStatusCommand(
           params,
           timeoutMs: remainingMs,
           sharedStateMode: "read-only",
+          beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         });
       },
     );

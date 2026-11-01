@@ -29,6 +29,7 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
 /** Source roots whose changes require the root dev build pipeline. */
 export const runNodeSourceRoots = [
   "src",
+  "ui/src/i18n/.i18n",
   ...RUN_NODE_PACKAGE_SOURCE_ROOTS,
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
@@ -77,6 +78,9 @@ const isRelevantRunNodePath = (
     ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))
   ) {
     return false;
+  }
+  if (/^ui\/src\/i18n\/\.i18n\/[^/]+\.tm\.jsonl$/u.test(normalizedPath)) {
+    return true;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {
     return true;

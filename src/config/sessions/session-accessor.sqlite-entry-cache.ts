@@ -91,7 +91,6 @@ type SessionEntryCacheUpdate = { sessionKey: string } & (
 function readCachedExactSessionEntries(
   database: SessionEntryCacheDatabase,
   sessionKeys: readonly string[],
-  clone: boolean,
 ): Map<string, SessionEntry> | undefined {
   const cached = sessionEntryCaches.get(database.db);
   if (!cached || database.db.isTransaction) {
@@ -110,11 +109,8 @@ function readCachedExactSessionEntries(
     for (const sessionKey of new Set(sessionKeys)) {
       const key = toUSVString(sessionKey);
       const entry = cached.entries.get(key)!;
-      // Mutable reads own each raw key; internal readers borrow the frozen committed facts.
-      entries.set(
-        sessionKey,
-        validateDeliveryCanonicalSessionEntry(key, clone ? structuredClone(entry) : entry),
-      );
+      // Mutable reads own each raw key, including nested entry values.
+      entries.set(sessionKey, validateDeliveryCanonicalSessionEntry(key, structuredClone(entry)));
     }
     return entries;
   } catch {
@@ -129,7 +125,7 @@ export function readExactSessionEntryCandidatesInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   requests: readonly (readonly string[])[],
   projection: SessionEntryReadScope["projection"] | "delivery",
-  options: { clone?: boolean; validation?: "canonical" } = {},
+  options: { validation?: "canonical" } = {},
 ): Array<Result<ExactSessionEntry[], unknown>> {
   const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
   const validationKeys = (sessionKey: string) =>
@@ -139,7 +135,7 @@ export function readExactSessionEntryCandidatesInDatabase(
   const keys = [...new Set(requests.flatMap((request) => request.flatMap(validationKeys)))];
   const cachedEntries =
     projection === "list" && options.validation === undefined
-      ? readCachedExactSessionEntries(database, keys, options.clone !== false)
+      ? readCachedExactSessionEntries(database, keys)
       : undefined;
   let readPrepared: (sessionKey: string) => InternalSessionEntry | undefined;
   if (cachedEntries) {
@@ -239,18 +235,19 @@ export function readSessionEntryCache(
 ): SessionEntryCacheSnapshot {
   return runSqliteReadOperationSync(database.db, () => {
     const projection = options.projection;
+    const validityToken =
+      options.cache &&
+      !options.deferParticipants &&
+      !options.latest &&
+      projection !== "full" &&
+      !database.db.isTransaction &&
+      getAdmittedSqliteSchemaFacts(database.db)
+        ? readSessionEntryCacheValidityToken(database.db)
+        : undefined;
     const prepared = assertCanonicalSqliteSessionKeysCurrent(database, projection !== "full");
-    if (
-      !options.cache ||
-      options.deferParticipants ||
-      options.latest ||
-      projection === "full" ||
-      database.db.isTransaction ||
-      !getAdmittedSqliteSchemaFacts(database.db)
-    ) {
+    if (!validityToken) {
       return loadSessionEntrySnapshot(database, projection, prepared, options.deferParticipants);
     }
-    const validityToken = readSessionEntryCacheValidityToken(database.db);
     const cached = sessionEntryCaches.get(database.db);
     if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
       return cached;
@@ -262,11 +259,7 @@ export function readSessionEntryCache(
       freezeJsonSnapshot(entry);
     }
     const next = { ...loaded, validityToken };
-    if (cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))) {
-      sessionEntryCaches.set(database.db, next);
-    } else {
-      sessionEntryCaches.delete(database.db);
-    }
+    sessionEntryCaches.set(database.db, next);
     return next;
   });
 }
@@ -357,7 +350,7 @@ export function publishSessionEntryCacheInvalidation(
     sharingUnchanged?: boolean;
   },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
-): void {
+): SessionEntry | undefined {
   let facts = update.facts;
   const cached = writeGeneration
     ? publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration)
@@ -387,7 +380,12 @@ export function publishSessionEntryCacheInvalidation(
           update.snapshots,
         )
       : undefined;
-  publishSessionSharingEntryChange(database, { ...update, facts, ...(entry ? { entry } : {}) });
+  publishSessionSharingEntryChange(database, {
+    ...update,
+    facts,
+    ...(entry ? { entry } : {}),
+    fullEntry,
+  });
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const sharingChange =
     update.sharingUnchanged || facts?.kind === "unchanged" || facts?.kind === "participants"
@@ -417,6 +415,7 @@ export function publishSessionEntryCacheInvalidation(
         }
       : { kind: "marker", sharingChange },
   );
+  return fullEntry;
 }
 
 /** Refresh participant projections without reloading unchanged session-entry JSON. */

@@ -8,13 +8,20 @@ import { gunzipSync } from "node:zlib";
 import { afterAll, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
+import {
+  generateStoredDeviceIdentity,
+  insertStoredDeviceIdentityIfAbsent,
+  readStoredDeviceIdentity,
+} from "../infra/device-identity-store.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import type { DB as StateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseAsync,
@@ -34,8 +41,8 @@ afterAll(() => tempDirs.cleanup());
 function manifest(root: string): Record<string, string> {
   // Ignore lifecycle scratch and SQLite reader noise; persisted state stays byte-identical.
   return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(root)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
       .filter((relative) => relative.split(path.sep)[0] !== "tmp" && !relative.endsWith("-shm"))
@@ -98,18 +105,20 @@ type AdmissionCase = {
   unavailablePlugin?: boolean;
   selectedSession?: boolean;
   restored?: boolean;
+  redirected?: boolean;
   identityFile?: string;
   canonicalIdentity?: boolean;
 };
 it.each<[string, AdmissionCase]>([
   ["Config auto-restored from backup", { config: "clobbered", restored: true }],
+  ["Config auto-restored from backup", { config: "clobbered", restored: true, redirected: true }],
   ["Legacy workspace setup state requires migration", { config: "clobbered", workspace: true }],
   ["Legacy session store requires migration", { selectedSession: true }],
   ["Missing config", { config: "absent" }],
   ["Missing config", { config: "absent", consolidated: true }],
   ["Configured plugin load path is unavailable", { consolidated: true, unavailablePlugin: true }],
   ["OpenClaw config is invalid", { consolidated: true, unavailablePlugin: true, repairable: true }],
-  ["Legacy device identity exists", { identityFile: "device.json" }],
+  ["Legacy client credentials require migration", { identityFile: "device.json" }],
   ["__CANONICAL_IDENTITY_READY__", { identityFile: "device.json", canonicalIdentity: true }],
 ])(
   "startup admission preserves shipped state: %s (%j)",
@@ -123,6 +132,7 @@ it.each<[string, AdmissionCase]>([
       unavailablePlugin,
       selectedSession,
       restored,
+      redirected,
       identityFile,
       canonicalIdentity,
     },
@@ -150,12 +160,13 @@ it.each<[string, AdmissionCase]>([
     );
     const configPath = path.join(stateDir, "openclaw.json");
     const baseEnv = fixtureEnv(root, stateDir, configPath);
+    const admitted = restored || canonicalIdentity || (unavailablePlugin && !repairable);
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.mkdirSync(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
     fs.mkdirSync(workspaceDir);
-    if (selectedSession) {
-      // Reach the legacy session refusal without an earlier registry-schema refusal.
+    if (selectedSession || admitted) {
+      // Config admission and legacy-session checks begin with current credential ownership.
       openOpenClawStateDatabase({ path: databasePath, env: baseEnv });
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
     } else {
@@ -173,12 +184,9 @@ it.each<[string, AdmissionCase]>([
       }
       const identity = canonicalIdentity ? generateStoredDeviceIdentity() : undefined;
       if (identity) {
-        const { deviceId, publicKeyPem, privateKeyPem, createdAtMs } = identity;
-        prepared
-          .prepare(
-            "INSERT INTO device_identities (identity_key, device_id, public_key_pem, private_key_pem, created_at_ms, updated_at_ms) VALUES ('primary', ?, ?, ?, ?, ?)",
-          )
-          .run(deviceId, publicKeyPem, privateKeyPem, createdAtMs, createdAtMs);
+        insertStoredDeviceIdentityIfAbsent(identity, { env: baseEnv });
+      } else if (admitted) {
+        expect(readStoredDeviceIdentity({ env: baseEnv })).toBeNull();
       }
       if (consolidated) {
         prepared.close();
@@ -242,8 +250,10 @@ it.each<[string, AdmissionCase]>([
       const configBefore = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : null;
       const schemaBefore = schemaMetadata(databasePath);
       const before = manifest(stateDir);
-      expect(schemaBefore.userVersion).toBe(selectedSession ? OPENCLAW_STATE_SCHEMA_VERSION : 1);
-      if (!selectedSession) {
+      expect(schemaBefore.userVersion).toBe(
+        selectedSession || admitted ? OPENCLAW_STATE_SCHEMA_VERSION : 1,
+      );
+      if (!selectedSession && !admitted) {
         expect(Boolean(before[path.join("state", "openclaw.sqlite-wal")])).toBe(!consolidated);
       }
       const entry = `
@@ -261,15 +271,23 @@ it.each<[string, AdmissionCase]>([
         if (${Boolean(restored)} && process.env.OPENCLAW_GATEWAY_TOKEN) {
           throw new Error("Discarded clobbered config environment leaked through admission.");
         }
+        if (${Boolean(redirected)} &&
+            (process.env.PGCLI_ADMISSION_BOOTSTRAP !== "retained" ||
+             process.env.PGCLI_ADMISSION_DOTENV !== "retained")) {
+          throw new Error("Config recovery discarded accepted routing or dotenv environment.");
+        }
         if (${Boolean(canonicalIdentity)}) {
-          const { DatabaseSync } = await import("node:sqlite");
-          const db = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
-          try {
-            const current = db.prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'").get();
-            if (current?.device_id !== ${JSON.stringify(identity?.deviceId)}) {
-              throw new Error("Startup replaced the canonical identity.");
-            }
-          } finally { db.close(); }
+          const { isDeepStrictEqual } = await import("node:util");
+          const { readStoredDeviceIdentityReadOnly } = await import(${JSON.stringify(
+            runtimeUrl({
+              currentModuleUrl: import.meta.url,
+              sourceWorkerName: "../infra/device-identity-store",
+              distWorkerPath: "infra/device-identity-store.js",
+            }),
+          )});
+          if (!isDeepStrictEqual(readStoredDeviceIdentityReadOnly(), ${JSON.stringify(identity)})) {
+            throw new Error("Startup replaced the canonical identity.");
+          }
           console.log("__CANONICAL_IDENTITY_READY__");
         }
       `;
@@ -280,6 +298,20 @@ it.each<[string, AdmissionCase]>([
           config === "clobbered" ? path.join(stateDir, "empty-workspace") : workspaceDir,
         OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
       };
+      if (redirected) {
+        fs.mkdirSync(path.join(root, ".openclaw"));
+        writeJson(path.join(root, ".openclaw", "openclaw.json"), {
+          env: {
+            vars: {
+              OPENCLAW_STATE_DIR: stateDir,
+              PGCLI_ADMISSION_BOOTSTRAP: "retained",
+            },
+          },
+        });
+        fs.writeFileSync(path.join(stateDir, ".env"), "PGCLI_ADMISSION_DOTENV=retained\n");
+        delete env.OPENCLAW_STATE_DIR;
+        delete env.OPENCLAW_CONFIG_PATH;
+      }
       const result = await runFixture(
         runtimeRoot,
         env,
@@ -293,7 +325,6 @@ it.each<[string, AdmissionCase]>([
       `,
       );
       const output = `${result.stdout}\n${result.stderr}`;
-      const admitted = restored || canonicalIdentity || (unavailablePlugin && !repairable);
       expect(result.code, output).toBe(admitted ? 0 : 78);
       expect(output).toContain(reason);
       if (admitted) {
@@ -450,10 +481,54 @@ it.each<[string, string, boolean, string?]>([
     } else {
       expect(result.stdout, output).toContain("__READY__");
       expect(output).not.toContain("__REFUSED__");
-      expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsJson);
-      expect(fs.readdirSync(stateDir)).not.toContainEqual(
-        expect.stringMatching(/^exec-approvals\.json\.migrated\./),
-      );
+      expect(fs.existsSync(approvalsPath)).toBe(false);
+      expect(fs.existsSync(`${approvalsPath}.doctor-importing`)).toBe(false);
+      const archives = fs
+        .readdirSync(stateDir)
+        .filter((name) => name.startsWith("exec-approvals.json.migrated."));
+      expect(archives).toHaveLength(1);
+      const archivePath = path.join(stateDir, archives[0]!);
+      expect(fs.readFileSync(archivePath, "utf8")).toBe(approvalsJson);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(archivePath).mode & 0o777).toBe(0o600);
+      }
+      // The startup child has exited; inspect its committed state without creating an owner.
+      using migrated = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      const query =
+        getNodeSqliteKysely<Pick<StateDatabase, "migration_sources" | "exec_approvals_config">>(
+          migrated,
+        );
+      const receipts = executeSqliteQuerySync(
+        migrated,
+        query
+          .selectFrom("migration_sources")
+          .selectAll()
+          .where("migration_kind", "=", "legacy-exec-approvals-json"),
+      ).rows;
+      expect(receipts).toHaveLength(1);
+      const sourceHash = createHash("sha256").update(approvalsJson).digest("hex");
+      expect(receipts[0]).toMatchObject({
+        source_path: approvalsPath,
+        source_sha256: sourceHash,
+        source_size_bytes: Buffer.byteLength(approvalsJson),
+        removed_source: 1,
+        status: "completed",
+      });
+      expect(JSON.parse(receipts[0]?.report_json ?? "null")).toMatchObject({
+        decision: "empty-legacy-retired",
+        archivePath,
+        sourceSha256: sourceHash,
+        importedRecordCount: 0,
+        removesSource: true,
+      });
+      expect(
+        executeSqliteQuerySync(
+          migrated,
+          query.selectFrom("exec_approvals_config").select("config_key"),
+        ).rows,
+      ).toEqual([]);
     }
     expect(fs.readFileSync(legacyPath)).toEqual(before);
     expect(fs.readFileSync(configPath)).toEqual(configBefore);

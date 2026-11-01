@@ -28,7 +28,6 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-storage-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
-import { withLegacyStateHeadLayout } from "../../src/state/openclaw-state-db-schema-v26-layout.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -37,7 +36,10 @@ import {
   RETIRED_COMMITMENTS_SCHEMA_SQL,
   SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
 } from "../../src/state/openclaw-state-schema-retired.js";
-import { getOpenClawStateRuntimeSchema } from "../../src/state/openclaw-state-schema-runtime.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  getOpenClawStatePredecessorSchema,
+} from "../../src/state/openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 
 export type SqliteSchemaInput = {
@@ -55,7 +57,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  add("state-before-v26", "state", withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL));
+  for (const version of [38, 37, 36, 35, 31, 27, 26]) {
+    add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
+  }
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);
   add("daemon-runtime-pins-v1", "daemon", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
   add("client-credentials-v1", "client", CLIENT_CREDENTIAL_SCHEMA_SQL);
@@ -185,6 +189,7 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
   for (const tables of [
     ["schema_meta", "state_leases"],
     ["schema_meta", "state_leases", "agent_database_leases"],
+    ["schema_meta", "migration_runs"],
   ]) {
     add(
       `state-existing-${tables.at(-1)}`,

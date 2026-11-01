@@ -1,25 +1,22 @@
-import { requireFirstPostJsonRequest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { baseUrl, expectMediaRequest, expectRequestConfig } from "./media-request.test-support.js";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
-    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-    postJsonRequestMock: vi.fn(),
-    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-  }));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  postJsonRequest: postJsonRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+const model = "hexgrad/Kokoro-82M";
+const voice = "af_bella";
+const context = { cfg: {} as never, timeoutMs: 30_000 };
+const http = vi.hoisted(() => ({
+  assertOkOrThrowHttpError: vi.fn(async () => {}),
+  postJsonRequest: vi.fn(),
+  resolveProviderHttpRequestConfig:
+    vi.fn<typeof import("openclaw/plugin-sdk/provider-http").resolveProviderHttpRequestConfig>(),
 }));
+
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>();
+  http.resolveProviderHttpRequestConfig.mockImplementation(actual.resolveProviderHttpRequestConfig);
+  return { ...actual, ...http };
+});
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-http");
@@ -28,36 +25,36 @@ afterAll(() => {
 
 describe("deepinfra speech provider", () => {
   afterEach(() => {
-    assertOkOrThrowHttpErrorMock.mockClear();
-    postJsonRequestMock.mockReset();
-    resolveProviderHttpRequestConfigMock.mockClear();
+    for (const mock of Object.values(http)) {
+      mock.mockClear();
+    }
+    http.postJsonRequest.mockReset();
     vi.unstubAllEnvs();
   });
 
   it("normalizes provider-owned speech config", () => {
     const provider = buildDeepInfraSpeechProvider();
+    expect(provider.defaultTimeoutMs).toBe(120_000);
     const resolved = provider.resolveConfig?.({
-      cfg: {} as never,
-      timeoutMs: 30_000,
+      ...context,
       rawConfig: {
         providers: {
           deepinfra: {
             apiKey: "sk-test",
-            baseUrl: "https://api.deepinfra.com/v1/openai/",
-            modelId: "deepinfra/hexgrad/Kokoro-82M",
-            voiceId: "af_bella",
+            baseUrl: `${baseUrl}/`,
+            modelId: `deepinfra/${model}`,
+            voiceId: voice,
             speed: 1.1,
             responseFormat: " MP3 ",
           },
         },
       },
     });
-
     expect(resolved).toEqual({
       apiKey: "sk-test",
-      baseUrl: "https://api.deepinfra.com/v1/openai",
-      model: "hexgrad/Kokoro-82M",
-      voice: "af_bella",
+      baseUrl,
+      model,
+      voice,
       speed: 1.1,
       responseFormat: "mp3",
       extraBody: undefined,
@@ -66,85 +63,47 @@ describe("deepinfra speech provider", () => {
 
   it("synthesizes OpenAI-compatible speech through DeepInfra", async () => {
     const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
+    http.postJsonRequest.mockResolvedValue({
       response: new Response(new Uint8Array([1, 2, 3]), { status: 200 }),
       release,
     });
 
-    const provider = buildDeepInfraSpeechProvider();
-    const result = await provider.synthesize({
+    const result = await buildDeepInfraSpeechProvider().synthesize({
       text: "hello",
       cfg: {
-        models: {
-          providers: {
-            deepinfra: {
-              apiKey: "sk-deepinfra",
-              baseUrl: "https://api.deepinfra.com/v1/openai/",
-            },
-          },
-        },
+        models: { providers: { deepinfra: { apiKey: "sk-deepinfra", baseUrl: `${baseUrl}/` } } },
       } as never,
-      providerConfig: {
-        model: "hexgrad/Kokoro-82M",
-        voice: "af_bella",
-        speed: 1.2,
-      },
+      providerConfig: { model, voice, speed: 1.2 },
       target: "voice-note",
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "deepinfra",
-        capability: "audio",
-        transport: "http",
-        defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-        allowPrivateNetwork: false,
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstPostJsonRequest(
-      postJsonRequestMock,
-      "DeepInfra speech request",
-    );
-    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
-    expect(postRequestHeaders).toBeInstanceOf(Headers);
-    expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
-      authorization: "Bearer sk-deepinfra",
-      "content-type": "application/json",
-    });
-    expect(postRequest).toEqual({
-      url: "https://api.deepinfra.com/v1/openai/audio/speech",
-      headers: postRequestHeaders,
+    expectRequestConfig(http.resolveProviderHttpRequestConfig, "audio");
+    expectMediaRequest(http.postJsonRequest, {
+      path: "/audio/speech",
+      apiKey: "sk-deepinfra",
       timeoutMs: 12_345,
       body: {
-        model: "hexgrad/Kokoro-82M",
+        model,
         input: "hello",
-        voice: "af_bella",
+        voice,
         response_format: "mp3",
         speed: 1.2,
       },
-      fetchFn: fetch,
-      allowPrivateNetwork: false,
-      dispatcherPolicy: undefined,
     });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
-    expect(result.outputFormat).toBe("mp3");
-    expect(result.fileExtension).toBe(".mp3");
-    expect(result.voiceCompatible).toBe(true);
+    expect(result).toMatchObject({
+      outputFormat: "mp3",
+      fileExtension: ".mp3",
+      voiceCompatible: true,
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 
   it("uses DEEPINFRA_API_KEY when provider config omits apiKey", () => {
     vi.stubEnv("DEEPINFRA_API_KEY", "sk-env");
-    const provider = buildDeepInfraSpeechProvider();
-
-    expect(
-      provider.isConfigured({
-        cfg: {} as never,
-        providerConfig: {},
-        timeoutMs: 30_000,
-      }),
-    ).toBe(true);
+    expect(buildDeepInfraSpeechProvider().isConfigured({ ...context, providerConfig: {} })).toBe(
+      true,
+    );
   });
 });

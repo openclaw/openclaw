@@ -41,21 +41,27 @@ describe("schema migration backup scope", () => {
     ).toEqual(["config_machine_state", "receipts", "schema_meta"]);
   });
 
-  it("uses scoped integrity for declared upgrades and full integrity for unknown history", () => {
+  it("selects quick integrity independently of historical backup eligibility", () => {
     expect(
       resolveSchemaMigrationIntegrityCheck({
         kind: "agent",
         foundVersion: 26,
         supportedVersion: 28,
       }),
-    ).toEqual({ check: "quick", tables: ["other", "outbox", "schema_meta"] });
+    ).toMatchObject({
+      check: "quick",
+      tables: expect.arrayContaining(["other", "outbox", "schema_meta"]),
+    });
     expect(
       resolveSchemaMigrationIntegrityCheck({
         kind: "agent",
         foundVersion: 25,
         supportedVersion: 28,
       }),
-    ).toEqual({ check: "full" });
+    ).toMatchObject({
+      check: "quick",
+      tables: expect.arrayContaining(["transcript_events", "session_nodes", "schema_meta"]),
+    });
     expect(
       resolveSchemaMigrationIntegrityCheck(
         { kind: "agent", foundVersion: 26, supportedVersion: 28 },

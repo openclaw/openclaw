@@ -1,6 +1,7 @@
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
@@ -186,13 +187,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   const candidates = scanPiFileCandidates(env);
   const entry = { expiresAt: Date.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
   piFileCandidateCache.set(key, entry);
-  while (piFileCandidateCache.size > PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES) {
-    const oldest = piFileCandidateCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    piFileCandidateCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(piFileCandidateCache, PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES);
   try {
     return await candidates;
   } catch (error) {
@@ -370,9 +365,6 @@ async function readPiSessionSummary(
     // last good index instead of poisoning future append scans.
     return cached?.summary;
   }
-  if (cached?.summary?.threadId && cached.summary.threadId !== summary?.threadId) {
-    threadFileCache.delete(threadCacheKey(cached.storeRoot, cached.summary.threadId));
-  }
   cacheSummary(candidate.file, { ...candidate, summary, scanState });
   if (summary) {
     threadFileCache.set(threadCacheKey(candidate.storeRoot, summary.threadId), candidate.file);
@@ -385,7 +377,7 @@ function summaryMatches(summary: PiSessionSummary, needle?: string): boolean {
     return true;
   }
   return [summary.threadId, summary.name, summary.cwd].some((field) =>
-    field?.toLocaleLowerCase().includes(needle),
+    field?.toLocaleLowerCase().normalize("NFC").includes(needle),
   );
 }
 
@@ -419,7 +411,7 @@ export async function listPiSummaryPage(
   }
   const target = params.offset + params.limit + 1;
   const matches: PiSessionSummary[] = [];
-  const needle = params.searchTerm?.toLocaleLowerCase();
+  const needle = params.searchTerm?.toLocaleLowerCase().normalize("NFC");
   for await (const summary of scanPiSummaries(candidates)) {
     if (summaryMatches(summary, needle)) {
       matches.push(summary);

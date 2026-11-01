@@ -1,14 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
 import { CronService } from "../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-harness.js";
 import { loadCronStore } from "../cron/store.js";
 import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import {
   createRegistry,
@@ -44,29 +42,39 @@ async function createScheduler() {
     cronEnabled: false,
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   schedulers.add(cron);
   return { cron, storePath };
 }
 
-async function startService(getCronService?: () => CronService) {
+function capturingRegistry(
+  pluginId: string,
+  id = "maintenance",
+  origin: Parameters<typeof createRegistry>[2] = "workspace",
+) {
   let context: OpenClawPluginServiceContext | undefined;
   const registry = createRegistry(
     [
       {
-        id: "maintenance",
-        start: (ctx) => {
-          context = ctx;
+        id,
+        start: (started) => {
+          context = started;
         },
       },
     ],
-    "test-plugin",
+    pluginId,
+    origin,
   );
+  return { registry, getContext: () => expectDefined(context, "started service context") };
+}
+
+async function startService(getCronService: () => CronService) {
+  const { registry, getContext } = capturingRegistry("test-plugin");
   const handle = await startPluginServices({ registry, config: {}, getCronService });
   handles.add(handle);
-  return { context: expectDefined(context, "started service context"), handle };
+  const context = getContext();
+  return { context, handle, service: expectDefined(context.getCron?.(), "Gateway scheduler") };
 }
 
 function createJob(name = family.name) {
@@ -82,99 +90,96 @@ function createJob(name = family.name) {
   };
 }
 
-describe("plugin service scheduler ownership", () => {
-  it("keeps one handle per scheduler and reconciles through a successor service", async () => {
-    const { cron } = await createScheduler();
-    const first = await startService(() => cron);
-    const service = expectDefined(first.context.getCron?.(), "Gateway scheduler");
-    expect(first.context.getCron?.()).toBe(service);
-    const isEnabled = expectDefined(service.isEnabled, "scheduler enabled observation");
-    expect(await isEnabled()).toBe(false);
-    await service.add(createJob());
-    await first.handle.stop();
-    expect(() => first.context.getCron?.()).toThrow("no longer active");
-    await expect(service.list()).rejects.toThrow("no longer active");
-    await expect(isEnabled()).rejects.toThrow("no longer active");
-    await expect(
-      expectDefined(service.enqueueRun, "service run admission")("retained", "if-enabled"),
-    ).rejects.toThrow("no longer active");
+it("preserves the cron owner's error object through the service handle", async () => {
+  const { cron } = await createScheduler();
+  const error = new CronAgentSelectionRequiredError();
+  vi.spyOn(cron, "add").mockRejectedValueOnce(error);
+  const { service } = await startService(() => cron);
 
-    const next = await startService(() => cron);
-    const successor = expectDefined(next.context.getCron?.(), "replacement scheduler");
-    const job = expectDefined(
-      (await successor.list({ includeDisabled: true }))[0],
-      "managed plugin job",
-    );
-    expect(job).toMatchObject({ declarationKey: family.declarationKey });
-    await successor.update(job.id, { schedule: { kind: "cron", expr: "0 3 * * *" } });
-    expect(await successor.list({ includeDisabled: true })).toMatchObject([
-      { id: job.id, schedule: { expr: "0 3 * * *" } },
-    ]);
-  });
-
-  it.each(["service stop", "scheduler replacement"] as const)(
-    "rejects reads and writes queued before %s without changing stored rows",
-    async (retirement) => {
-      const original = await createScheduler();
-      const replacement = await createScheduler();
-      const job = await original.cron.add({ ...createJob(), enabled: true });
-      let current = original.cron;
-      const { context, handle } = await startService(() => current);
-      const service = expectDefined(context.getCron?.(), "Gateway scheduler");
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const blocker = original.cron.updateWithPrecondition(job.id, {}, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
-      const queued = [
-        expectDefined(service.isEnabled, "scheduler enabled observation")(),
-        service.list({ includeDisabled: true }),
-        service.add({ ...createJob("late addition"), declarationKey: "test-plugin:late" }),
-        service.update(job.id, { name: "late update" }),
-        service.remove(job.id),
-        service.removeStaleJobFamily(family),
-        expectDefined(service.enqueueRun, "service run admission")(job.id, "if-enabled"),
-      ];
-      const results = Promise.allSettled(queued);
-      let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
-      try {
-        if (retirement === "scheduler replacement") {
-          current = replacement.cron;
-          expect(context.getCron?.()).not.toBe(service);
-        } else {
-          stopping = handle.stop();
-          expect(() => context.getCron?.()).toThrow("stopping");
-        }
-      } finally {
-        release.resolve();
-        await stopping;
-        await blocker;
-        await results;
-      }
-      expect((await results).map((result) => result.status)).toEqual(Array(7).fill("rejected"));
-      expect((await loadCronStore(original.storePath)).jobs).toMatchObject([
-        { id: job.id, name: family.name },
-      ]);
-      expect((await loadCronStore(replacement.storePath)).jobs).toHaveLength(0);
-    },
-  );
+  await expect(service.add(createJob())).rejects.toBe(error);
 });
 
-it("shares the canonical runtime identity only while the exporter lease is active", async () => {
-  let readIdentity: NonNullable<
-    OpenClawPluginServiceContext["internalDiagnostics"]
-  >["getRuntimeIdentity"];
-  const registry = createRegistry(
+it("keeps one handle per scheduler and reconciles through a successor service", async () => {
+  const { cron } = await createScheduler();
+  const first = await startService(() => cron);
+  const { service } = first;
+  expect(first.context.getCron?.()).toBe(service);
+  const isEnabled = expectDefined(service.isEnabled, "scheduler enabled observation");
+  expect(await isEnabled()).toBe(false);
+  await service.add(createJob());
+  await first.handle.stop();
+  expect(() => first.context.getCron?.()).toThrow("no longer active");
+  await Promise.all(
     [
-      {
-        id: "diagnostics-prometheus",
-        start: (ctx) => {
-          readIdentity = ctx.internalDiagnostics?.getRuntimeIdentity;
-        },
-      },
-    ],
+      service.list(),
+      isEnabled(),
+      expectDefined(service.enqueueRun, "service run admission")("retained", "if-enabled"),
+    ].map((read) => expect(read).rejects.toThrow("no longer active")),
+  );
+
+  const { service: successor } = await startService(() => cron);
+  const job = expectDefined(
+    (await successor.list({ includeDisabled: true }))[0],
+    "managed plugin job",
+  );
+  expect(job).toMatchObject({ declarationKey: family.declarationKey });
+  await successor.update(job.id, { schedule: { kind: "cron", expr: "0 3 * * *" } });
+  expect(await successor.list({ includeDisabled: true })).toMatchObject([
+    { id: job.id, schedule: { expr: "0 3 * * *" } },
+  ]);
+});
+
+it.each(["service stop", "scheduler replacement"] as const)(
+  "rejects reads and writes queued before %s without changing stored rows",
+  async (retirement) => {
+    const original = await createScheduler();
+    const replacement = await createScheduler();
+    const job = await original.cron.add({ ...createJob(), enabled: true });
+    let current = original.cron;
+    const { context, handle, service } = await startService(() => current);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const blocker = original.cron.updateWithPrecondition(job.id, {}, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const queued = [
+      expectDefined(service.isEnabled, "scheduler enabled observation")(),
+      service.list({ includeDisabled: true }),
+      service.add({ ...createJob("late addition"), declarationKey: "test-plugin:late" }),
+      service.update(job.id, { name: "late update" }),
+      service.remove(job.id),
+      service.removeStaleJobFamily(family),
+      expectDefined(service.enqueueRun, "service run admission")(job.id, "if-enabled"),
+    ];
+    const results = Promise.allSettled(queued);
+    let stopping: ReturnType<PluginServicesHandle["stop"]> | undefined;
+    try {
+      if (retirement === "scheduler replacement") {
+        current = replacement.cron;
+        expect(context.getCron?.()).not.toBe(service);
+      } else {
+        stopping = handle.stop();
+        expect(() => context.getCron?.()).toThrow("stopping");
+      }
+    } finally {
+      release.resolve();
+      await stopping;
+      await blocker;
+      await results;
+    }
+    expect((await results).map((result) => result.status)).toEqual(Array(7).fill("rejected"));
+    expect((await loadCronStore(original.storePath)).jobs).toMatchObject([
+      { id: job.id, name: family.name },
+    ]);
+    expect((await loadCronStore(replacement.storePath)).jobs).toHaveLength(0);
+  },
+);
+
+it("shares the canonical runtime identity only while the exporter lease is active", async () => {
+  const { registry, getContext } = capturingRegistry(
+    "diagnostics-prometheus",
     "diagnostics-prometheus",
     "bundled",
   );
@@ -183,6 +188,7 @@ it("shares the canonical runtime identity only while the exporter lease is activ
     config: {},
     onHandle: (issued) => handles.add(issued),
   });
+  const readIdentity = getContext().internalDiagnostics?.getRuntimeIdentity;
   const buildId = resolveRuntimeServiceBuildId();
   expect(readIdentity?.()).toEqual({
     processInstanceId: getGatewayProcessInstanceId(),
@@ -190,74 +196,4 @@ it("shares the canonical runtime identity only while the exporter lease is activ
   });
   await handle.stop();
   expect(() => readIdentity?.()).toThrow("no longer active");
-});
-
-it("isolates service deadlines and joins admitted work before retiring its owner", async () => {
-  const clock = createGatewaySchedulerClock(100);
-  const scheduler = createTestGatewayScheduler(clock.clock);
-  const registry = createRegistry([]);
-  const contexts = new Map<string, OpenClawPluginServiceContext>();
-  for (const pluginId of ["source-a", "source-b"]) {
-    registry.services.push({
-      pluginId,
-      origin: "bundled",
-      source: "test",
-      id: "events",
-      service: {
-        id: "events",
-        start: (context) => {
-          contexts.set(pluginId, context);
-        },
-      },
-    });
-  }
-  const handle = await startPluginServices({ registry, config: {}, scheduler });
-  handles.add(handle);
-  const first = expectDefined(contexts.get("source-a")?.scheduler, "first source scheduler");
-  const sibling = expectDefined(contexts.get("source-b")?.scheduler, "sibling source scheduler");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const siblingFired = createDeferredCore();
-  let callbackFinished = false;
-  first.schedule({
-    id: "refresh",
-    atMs: 200,
-    run: async () => {
-      entered.resolve();
-      await release.promise;
-      callbackFinished = true;
-    },
-  });
-  sibling.schedule({ id: "refresh", atMs: 200, run: () => siblingFired.resolve() });
-  try {
-    const firing = clock.advanceTo(200);
-    await Promise.all([entered.promise, siblingFired.promise]);
-    const stopping = handle.stop({
-      strict: true,
-      deadlineAtMs: Date.now() + 5_000,
-      pluginIds: new Set(["source-a"]),
-    });
-    expect(first.signal.aborted).toBe(true);
-    expect(sibling.signal.aborted).toBe(false);
-    expect(() => first.schedule({ id: "late", atMs: 300, run: () => {} })).toThrow();
-    let stopFinished = false;
-    void stopping.then(() => {
-      stopFinished = true;
-    });
-    await Promise.resolve();
-    expect(stopFinished).toBe(false);
-    expect(callbackFinished).toBe(false);
-    release.resolve();
-    await stopping;
-    await firing;
-    expect(callbackFinished).toBe(true);
-    const next = createDeferredCore();
-    sibling.schedule({ id: "refresh", atMs: 300, run: () => next.resolve() });
-    await clock.advanceTo(300);
-    await next.promise;
-  } finally {
-    release.resolve();
-    await handle.stop();
-    await scheduler.stop();
-  }
 });

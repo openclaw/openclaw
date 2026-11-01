@@ -58,13 +58,10 @@ const preparedRuntimeSnapshotState = vi.hoisted(() => ({
   useSnapshotPluginRegistry: false,
 }));
 
-vi.mock("../llm/stream.js", async () => {
-  const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
-  return {
-    ...original,
-    streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
-  };
-});
+vi.mock("../llm/stream.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../llm/stream.js")>()),
+  streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
+}));
 
 vi.mock("./sessions/session-manager.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
@@ -87,6 +84,7 @@ vi.mock("./sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: (...args: unknown[]) => getModelRegistryRuntimeMock(...args),
 }));
 
+// mock-isolation: BTW fixtures supply model/auth snapshots and release tracking without published-runtime owners.
 vi.mock("./prepared-model-runtime.js", () => {
   const loadSnapshot = async (params: {
     agentId?: string;
@@ -130,6 +128,7 @@ vi.mock("./prepared-model-runtime.js", () => {
       const snapshot = await loadSnapshot(params);
       return {
         snapshot,
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: snapshotResources.acquire?.().release ?? (async () => {}),
       };
     },
@@ -325,7 +324,9 @@ vi.mock("./auth-profiles/session-override.js", () => ({
   resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
+// mock-isolation: BTW fixtures capture debug output without loading process-wide diagnostic owners.
 vi.mock("../logging/diagnostic.js", () => ({
+  logSessionStateChange: vi.fn(),
   diagnosticLogger: {
     debug: (...args: unknown[]) => diagDebugMock(...args),
   },

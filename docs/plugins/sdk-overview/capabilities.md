@@ -17,6 +17,7 @@ worker, storage, or embedding provider must satisfy. Part of the
 
 | Method                                           | What it registers                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerDecisionProvider(...)`              | Typed decision inference with V1 or prepared V2 execution                         |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
 | `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
 | `api.registerStorageProvider(...)`               | Opaque object storage for named locations                                         |
@@ -95,7 +96,46 @@ namespacing, encryption, and health classification; consumers own retention.
 Providers must not create or interpret location markers or expose credentials in
 `displayTarget` or errors. See [Storage locations](/concepts/storage-locations).
 
+### Repository preparation integrations
+
+A deployment can select an optional repository policy with
+`gateway.repositoryIntegration`. The plugin declares
+`contracts.repositoryIntegrations: ["repository"]` and calls
+`api.registerRepositoryIntegration(...)` with the version 1
+`RepositoryIntegration` contract from `openclaw/plugin-sdk/plugin-entry`.
+Registration alone does not select it. A selected owner that is missing,
+disabled, unloaded, or disposed blocks admission rather than falling back.
+
+The integration interprets authenticated connection metadata and admits source
+access for worker repository preparation with native, GitHub App, and managed
+OAuth or PAT credentials. Selecting a managed profile does not bypass policy:
+admission runs before refresh or profile lookup, while the native managed-profile
+owner retains credential reading and rotation. Policy admission does not request
+a native bearer for a managed profile. Its `withIdentity` callback
+receives the original caller, exact session and request binding, current profile
+reader, and a live `assertCurrent` guard. Check that guard after awaited policy
+work and immediately before effects. The native issuer retains signing keys;
+policy receives only public App selection facts. Returned credential callbacks
+remain bound to the plugin instance and stop working after its disposal.
+
+Dispatch carries this admission through cold provisioning, prepared-workspace
+binding, and repository checkout. A fresh authenticated chat can supply a new
+admission for redispatch; previous dispatch callbacks cannot be reused after the
+request finishes. Credentials and callbacks are never stored in environment
+snapshots or sent over RPC. The dispatch owner revokes temporary App credentials
+on success or failure. The `preparedCapacity` descriptor is `"image"` or
+`"repository"`; native preparation and capacity accounting remain host-owned.
+This contract does not replace publication policy or enable a standing reserve.
+Without a selected integration, native credential and trusted-proxy behavior is
+unchanged.
+
 ### Worker providers
+
+`destroy({ leaseId, profile, signal?, onCleanupAccepted? })` must resolve only after physical teardown is proven. A provider can set `supportsCleanupAcceptance: true` and call the optional `onCleanupAccepted()` notification once cleanup is accepted and no longer needs the session, or once a provider-owned teardown capture is claimed. The Gateway shuts down session work before supplying this callback, then may complete reclaim while the environment remains `destroying`. The existing lifecycle owner retains the destroy operation, its deadline, and restart recovery. Later rejection records a visible, retryable cleanup failure; it must not be swallowed. The callback is only a notification for this invocation, not authorization for later work. Providers without the capability keep their existing blocking teardown path. Direct environment destruction still waits for confirmation.
+
+The optional teardown `signal` aborts at the provider deadline and when reconciliation is interrupted by shutdown or suspension. Forward it through capture, stop, and post-stop cleanup; wait for owned commands to settle before rejecting. Rejection retains the recorded lease and cleanup intent for startup retry. A provider that cannot cancel remains owned until its actual operation settles; timeout alone never proves release.
+
+The bundled Crabbox provider requests `stop --wait=false`, notifies acceptance, and then uses a waiting `stop` within the same bounded cleanup budget to confirm release. Direct backends that reject asynchronous stop retain blocking cleanup. Terminal or unrecognized inspection results alone do not prove that all provider resources have been released.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
 
@@ -105,7 +145,9 @@ Providers may implement `maintain({ profiles, signal, assertCurrent })` for boun
 Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass`, `options.os`, and `options.executionMode` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease for the same operation id and selected execution mode; a retry cannot silently change modes. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. If the provider confirms cleanup completed, throw `WorkerProviderError.cleanupComplete(leaseId, provisionError)`. Core finishes local teardown, including node enrollment retirement, and reports the original error as `provider_failure`. The provisioning intent becomes terminal. Report confirmed cleanup only after the operation’s allocation release or authoritative absence is proven and its lease-cleanup commands have settled. Separately retained checkpoint, image-retirement, and capture-recovery obligations remain provider-owned; this signal does not clear them. Ordinary errors preserve uncertain allocations for replay with the same operation ID. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain `id`, `label`, optional `os`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. An option without `os` applies to every advertised operating system. The optional asynchronous `listOperatingSystems(profile)` hook returns provider-owned `{ id, label, default?, disabledReason? }` choices. An optional `disabledReason` keeps an unavailable target visible but unselectable and supplies a repair hint (1–256 characters, without surrounding whitespace). Providers still validate target availability before allocation; picker metadata does not authorize provisioning. Plugin authors can derive the item type from `Awaited<ReturnType<NonNullable<WorkerProvider["listOperatingSystems"]>>>[number]` or declare a local structural type; there is no public `WorkerOperatingSystem` export. Core treats OS ids as opaque strings; plugins own their meaning and validation. `environments.list` exposes up to 64 machine options and up to eight operating systems per profile, omitting the operating-system list when there is only one choice. Session-placement providers declare one or both current `supportedExecutionModes` values in this fixed order: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicate values, unknown modes, and unrecognized orders are rejected. `worker-turn` requires a node lease; `remote-exec` accepts either a node lease or an existing SSH lease. Omission advertises no placement modes while preserving direct environment lifecycle calls. Direct environment creation without a session supplies no execution mode, so providers retain their intentional default setup; the bundled Crabbox provider defaults to `worker-turn`. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile, options?)`; include acquisition, provider-owned setup, and cleanup in that bound. `resolveDestroyTimeoutMs(profile)` declares the equivalent budget for teardown, including snapshot capture or other provider-owned work before confirmed release. Core uses that budget for both requested teardown and bootstrap-failure cleanup; an explicit service timeout override takes precedence. Budgets must be positive safe integers within the platform timer limit.
 Core supplies the optional `options.profileId` to both `provision` and `prepareProvision` from the persisted environment record. It identifies the configured profile for display, including replay after that profile changes or is removed; it does not change allocation identity or replace the frozen settings snapshot.
 
-An optional `options.signal` cancels the current provisioning attempt. Forward it to acquisition, project preparation, setup, readiness, and enrollment waits, and settle active commands before rejecting; a caller-visible timeout or abort is not proof that a provider child exited or a lease was released. Compose it with project, runtime-preparation, and enrollment signals instead of replacing it with a narrower grant's signal. Keep cleanup on its independent, uncancelled lifecycle authority. Core records destroy intent for the exact operation and resolves its allocation before the normal teardown; providers that cannot cancel promptly remain owned until their real operation settles. Gateway shutdown is distinct: enrollment closure alone retains a fixed allocation for restart adoption, while an aborted provisioning signal means explicit cancellation.
+An optional `options.signal` tells the provider to stop the current provisioning attempt. It can abort because the caller cancelled or because the Gateway is shutting down. Forward it to acquisition, project preparation, setup, readiness, and enrollment waits, and settle active commands before rejecting; a caller-visible timeout or abort is not proof that a provider child exited or a lease was released. Compose it with project, runtime-preparation, and enrollment signals instead of replacing it with a narrower grant's signal. Keep cleanup on its independent, uncancelled lifecycle authority. Providers that cannot stop promptly remain owned until their real operation settles.
+
+An aborted signal alone does not request machine destruction: providers must preserve allocations for replay with the same operation ID. For a cancelled attempt, core records destruction intent only for an explicit cancellation or destroy request, then resolves the exact operation's allocation before normal teardown. Gateway shutdown preserves the operation ID and recorded lease for restart adoption without recording destruction intent. Runtime-preparation or enrollment closure likewise stops that work without authorizing allocation destruction.
 
 Providers can implement `prepareProvision(profile, operationId, options?)`, returning an allocation function `() => Promise<WorkerLease>`. Preparation may validate local settings and read configuration, but must not allocate, renew, modify resources, enroll nodes, or call project preparation. Core keeps a fresh environment in `requested` during preparation and records `provisioning` immediately before invoking the returned function. Prepared facts remain in that invocation; do not reread configuration inside the allocation function. A fresh preparation failure needs no provider teardown. A replay preparation failure remains uncertain because a previous invocation may already have allocated. Cancellation or timeout discards the prepared function. Providers without this hook retain the existing `provision` contract; providers implementing it should delegate their direct `provision` entry point to the same preparation and allocation flow.
 
@@ -154,6 +196,13 @@ is the generic embedding surface for reusable vector generation. Memory search
 consumes this generic provider surface. The older memory-specific registrar and
 manifest contract were removed after their August 2026 migration window.
 
+Bundled embedding providers can receive an optional host-injected
+`acquireLocalService` hook matching the existing public
+`PluginRuntime["llm"]["acquireLocalService"]` shape. It leases only the configured
+local service. Forward the caller's signal, observe readiness through the optional
+target callback `onReadinessWait`, and release the lease after the provider request
+settles.
+
 Embedding providers can type their asynchronous `batchEmbed(...)` capability with
 `EmbeddingProviderBatchRuntime` from
 `openclaw/plugin-sdk/embedding-provider-runtime-contract`. The public contract
@@ -195,6 +244,21 @@ The four explicit codecs are `decisionBatchV1ToV2`,
 `DecisionContractError`. They preserve values rather than performing inference,
 thresholding, argmax, probability normalization, or accounting estimates.
 
+`isDecisionBatchV1Representable(batch)` validates V2 input and narrows its types
+without creating a V1 request. It returns `false` for unsupported kinds, explicit
+JSON scalars, or resource limits, including V1's 256-question ceiling. Malformed
+input throws `DecisionContractError`. Use it when preserving V1 admission while
+encoding a native protocol directly; it does not grant execution authority.
+
+System One adapters can share `encodeSystemOneQuestions` and
+`decodeSystemOneResponse` from the same entrypoint. Encoding renames Boolean
+questions to native `noul`; the caller still owns input and question admission.
+The strict decoder preserves native labels, scores, distributions, model identity,
+and usage, requiring token counts and bounded confidence for Choice/Score/Box.
+It returns an untrusted candidate, not an admitted result: always call
+`validateDecisionResultV2(batch, candidate, capabilities)` before returning it.
+These helpers perform no HTTP, auth, retries, or accounting.
+
 For example, an explicit V2 JSON string cannot become V1 text without losing its
 evidence kind. Rich answers, abstention, or accounting that V1 cannot represent
 also cannot be silently downgraded. Compatible conversions may share readonly
@@ -229,15 +293,21 @@ The host retains the request until physical provider cleanup settles, even when
 cancellation or plugin reload has already revoked dispatch authority. It validates
 and snapshots accepted output before returning it. Auth facts, headers and
 transport overrides do not enter public results. Cost recording is a separate
-consumer of accepted outcomes. V2 SDK calls record validated usage only after
-provider and caller lifetime checks pass; rejected, retired or cancelled results
-produce no usage event. Accounting uses the selected provider/model, excluding
-auth profile suffixes, and the host-owned calling plugin identity. Reported USD
-costs, including zero, win over prepared token rates. Unknown route pricing stays
+consumer of accepted outcomes. V1 and V2 SDK calls, core calls, the explicit tool,
+and the tool prefilter record validated usage once after their final caller
+checks pass. Rejected, retired or cancelled results produce no usage event.
+Accounting uses the selected provider/model without auth profile suffixes and
+the explicit operation agent. Only plugin calls carry a calling-plugin identity.
+Reported USD costs, including zero, win over prepared token rates. Unknown route pricing stays
 unknown. Estimates enter accounting only; returned usage keeps provider facts.
+Missing usage and native-unit-only usage do not emit token/cost events.
 
-The core `decision_evaluate` tool also uses V2 execution while retaining its bounded
-Boolean/Choice/Score input shape. It exposes accepted native answers, abstention,
+The core `decision_evaluate` tool also uses V2 execution. Omit `contractVersion`
+for the existing Boolean/Choice/Score input shape, or set `contractVersion: 2` for
+tagged text, JSON, image or list state and the provider's declared native question
+types. Box questions require image state and return normalized `top`, `bottom`,
+`left`, and `right` edges; use a separate Boolean question to check presence.
+The tool exposes accepted native answers, abstention,
 per-question errors, metadata and usage without V1 result narrowing. Existing V1
 providers continue through the lossless input/result bridge. Automatic consumers
 that still use V1 retain their own fallback behavior when a native result cannot
@@ -245,10 +315,41 @@ be represented without loss.
 
 V1 and V2 callers can use either provider version when the pure SDK codecs can
 represent the entire batch and result without loss. Native abstention, images,
-sort/tag questions or other unrepresentable data return `unsupported-input`
+sort/tag/box questions or other unrepresentable data return `unsupported-input`
 across the V1 boundary. They never become fabricated probabilities or labels.
 Existing V1 providers retain their documented execution contract. External
 plugins adopt V2 only after a host release exports the required V2 SDK surface.
+
+### Provider implementation boundaries
+
+Provider plugins own model eligibility, native input limits, answer semantics,
+and HTTP or worker execution. Keep these decisions in the plugin when separating
+its adapter, codec, and executor:
+
+| Responsibility                                                                       | Owner                   |
+| ------------------------------------------------------------------------------------ | ----------------------- |
+| Versioned evidence, questions, answers, validation, and lossless conversion          | Decision data contracts |
+| Consumer identity, model policy, selection, and accepted usage                       | Runtime coordination    |
+| Capacity, deadlines, circuit state, version bridging, and physical settlement        | Provider host           |
+| Selected route, capabilities, agent/profile credentials, and private transport facts | Prepared inference      |
+| Native protocol mappings, provider eligibility, and transport or worker execution    | Provider plugin         |
+
+Register through `api.registerDecisionProvider` and import contracts from
+`openclaw/plugin-sdk/decisions`. The prepared adapter projects the selected
+model, auth, request, and lifetime facts into plugin-local execution. Pure codecs
+encode requests and decode native responses without resolving credentials,
+selecting routes, performing I/O, or recording usage. Consumers continue to use
+`api.runtime.decisions.evaluateV2`; they do not construct provider contexts.
+Preserving V1 admission with `isDecisionBatchV1Representable` does not require
+converting native execution or results through V1.
+
+For HTTP adapters, retain complete prepared request metadata when checking
+responses for reflected credentials. The existing
+`createProviderCredentialMatcher` helper from `openclaw/plugin-sdk/provider-http`
+can account for replacement-auth headers and prefixes, plus configured header
+names. Structural result validation cannot detect leaked credentials. Preserve
+live admission checks after DNS or queue waits, and await response/transport
+release before settling the operation.
 
 ## Decision models (contract version 1)
 

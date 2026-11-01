@@ -1,7 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { loggingState } from "../../logging/state.js";
 import * as autoFallback from "./agent-runner-auto-fallback.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -59,6 +57,20 @@ function expectNotices(reply: ReturnType<typeof vi.fn>, texts: string[], address
 }
 
 describe("executeAgentTurn: compaction events", () => {
+  it("warns about omitted seed history without claiming a compaction", async () => {
+    const onCompactionNoticePayload = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
+    expect(result.kind).toBe("success");
+    expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("Full history remains saved"),
+      isCompactionNotice: true,
+    });
+  });
   it("warns about degraded compaction even when ordinary notices are disabled", async () => {
     const onCompactionNoticePayload = vi.fn();
     mockCompaction({}, { qualityDegraded: true });
@@ -73,45 +85,11 @@ describe("executeAgentTurn: compaction events", () => {
       text: expect.stringContaining("/new or a larger model"),
     });
   });
-  it("logs Codex app-server compaction completion while notices stay silent by default", async () => {
+  it("keeps compaction notices silent by default", async () => {
     const onBlockReply = vi.fn();
-    const consoleLog = vi.fn();
-    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "compact" });
-    loggingState.rawConsole = {
-      log: consoleLog,
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-    try {
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run("openai", "gpt-5.5", initialFallbackAttemptOptions(params)),
-          provider: "openai",
-          model: "gpt-5.5",
-          attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],
-        }),
-      );
-      const context = {
-        backend: "codex-app-server",
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "compaction-1",
-      };
-      mockCompaction(context, context);
-
-      const result = await executeTestTurn({ opts: { onBlockReply } });
-
-      expect(result.kind).toBe("success");
-      expect(onBlockReply).not.toHaveBeenCalled();
-      expect(consoleLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-        "codex app-server auto-compaction succeeded for openai/gpt-5.5; refreshed session context",
-      );
-    } finally {
-      loggingState.rawConsole = null;
-      setLoggerOverride(null);
-      resetLogger();
-    }
+    mockCompaction({ backend: "codex-app-server" }, { backend: "codex-app-server" });
+    expect((await executeTestTurn({ opts: { onBlockReply } })).kind).toBe("success");
+    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("carries committed compaction into a later CLI fallback failure", async () => {
@@ -179,7 +157,7 @@ describe("executeAgentTurn: compaction events", () => {
   });
 
   it("keeps session settlement failures out of the model failure fact", async () => {
-    const settleSessionOverride = vi
+    using _ = vi
       .spyOn(autoFallback, "clearRecoveredAutoFallbackPrimaryProbeSelection")
       .mockRejectedValueOnce(new Error("session override settlement failed"));
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -188,14 +166,10 @@ describe("executeAgentTurn: compaction events", () => {
       return { payloads: [{ text: "recovered" }], meta: {} };
     });
 
-    try {
-      const result = await executeTestTurn();
+    const result = await executeTestTurn();
 
-      expect(result).toMatchObject({ kind: "final" });
-      expect(result.postCompactionModelFailure).toBeUndefined();
-    } finally {
-      settleSessionOverride.mockRestore();
-    }
+    expect(result).toMatchObject({ kind: "final" });
+    expect(result.postCompactionModelFailure).toBeUndefined();
   });
 
   it("delivers compaction hook messages alongside notifyUser notices (#90185)", async () => {
@@ -214,6 +188,44 @@ describe("executeAgentTurn: compaction events", () => {
       ["Hook before", "🧹 Compacting context...", "Hook after", "🧹 Compaction complete"],
       true,
     );
+  });
+
+  it("delivers recovery hook notices without repeating lifecycle or accounting", async () => {
+    const onBlockReply = vi.fn();
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "notice", messages: ["Recovery hook before"] },
+      });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "notice", messages: ["Recovery hook after"] },
+      });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const result = await executeTestTurn({
+      followupRun: createNotifyUserRun(),
+      opts: { onBlockReply, onCompactionStart, onCompactionEnd },
+    });
+
+    expect(result).toMatchObject({ kind: "success", autoCompactionCount: 1 });
+    expect(onCompactionStart).toHaveBeenCalledOnce();
+    expect(onCompactionEnd).toHaveBeenCalledExactlyOnceWith({ completed: true });
+    expect(onBlockReply).toHaveBeenCalledTimes(4);
+    expectNotices(onBlockReply, [
+      "🧹 Compacting context...",
+      "Recovery hook before",
+      "Recovery hook after",
+      "🧹 Compaction complete",
+    ]);
   });
 
   it("fires both notifyUser notices alongside onCompactionStart / onCompactionEnd callbacks (#87107)", async () => {

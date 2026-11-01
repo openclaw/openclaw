@@ -1,11 +1,7 @@
-// Agent runtime config tests cover agent-specific runtime config resolution from temp homes.
-import path from "node:path";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 type ConfigSnapshotForWrite = {
@@ -13,14 +9,9 @@ type ConfigSnapshotForWrite = {
   writeOptions: { basePluginMetadataSnapshot?: PluginMetadataSnapshot };
 };
 
-type ResolveCommandConfigParams = {
-  config: OpenClawConfig;
-  commandName: string;
-  targetIds: Set<string>;
-  allowedPaths?: Set<string>;
-  optionalActivePaths?: Set<string>;
-  runtime: RuntimeEnv;
-};
+type ResolveCommandConfigParams = Parameters<
+  typeof import("../cli/command-config-resolution.runtime.js").resolveCommandConfigWithSecrets
+>[0];
 
 const loadConfigMock = vi.hoisted(() => vi.fn<() => OpenClawConfig>());
 const readConfigFileSnapshotForWriteMock = vi.hoisted(() =>
@@ -139,32 +130,32 @@ vi.mock("../cli/command-config-resolution.runtime.js", () => ({
 
 const runtime = createThrowingTestRuntime();
 
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
-}
-
-function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigParams {
-  const call = resolveCommandConfigWithSecretsMock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected command config resolution call ${callIndex}`);
-  }
-  const [params] = call;
-  return params;
-}
-
-function mockConfig(home: string, storePath: string): OpenClawConfig {
-  const cfg = {
-    agents: {
-      defaults: {
-        model: { primary: "anthropic/claude-opus-4-6" },
-        models: { "anthropic/claude-opus-4-6": {} },
-        workspace: path.join(home, "openclaw"),
-      },
-    },
-    session: { store: storePath, mainKey: "main" },
-  } as OpenClawConfig;
+function mockConfig(cfg: OpenClawConfig = {}): OpenClawConfig {
   loadConfigMock.mockReturnValue(cfg);
   return cfg;
+}
+
+const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+function modelConfig(apiKey: string | ReturnType<typeof secretRef>): OpenClawConfig["models"] {
+  return { providers: { openai: { baseUrl: "https://api.openai.com/v1", apiKey, models: [] } } };
+}
+function telegramConfig(defaultAccount?: string): OpenClawConfig["channels"] {
+  return {
+    telegram: {
+      ...(defaultAccount ? { defaultAccount } : { botToken: secretRef("TELEGRAM_BOT_TOKEN") }),
+      accounts: {
+        ops: { botToken: secretRef("TELEGRAM_OPS_TOKEN") },
+        chat: { botToken: secretRef("TELEGRAM_CHAT_TOKEN") },
+      },
+    },
+  };
+}
+function resolveSecretsWith(config: OpenClawConfig) {
+  resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+    resolvedConfig: config,
+    effectiveConfig: config,
+    diagnostics: [],
+  });
 }
 
 beforeEach(() => {
@@ -182,234 +173,98 @@ beforeEach(() => {
 
 describe("agentCommand runtime config", () => {
   it("materializes auth-profile refs for standalone local runs", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
-      const sourceConfig = { ...loadedConfig, secrets: { providers: {} } } as OpenClawConfig;
-      const pluginMetadataSnapshot = {
-        plugins: [],
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      } as unknown as PluginMetadataSnapshot;
-      readConfigFileSnapshotForWriteMock.mockResolvedValue({
-        snapshot: { valid: true, resolved: sourceConfig },
-        writeOptions: { basePluginMetadataSnapshot: pluginMetadataSnapshot },
-      });
-      getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue(null);
-
-      await resolveAgentRuntimeConfig(runtime);
-
-      expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
-        config: sourceConfig,
-        assignmentConfig: loadedConfig,
-        includeConfigRefs: false,
-        pluginMetadataSnapshot,
-      });
-      expect(prepareSecretsRuntimeSnapshotMock.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(
-        pluginMetadataSnapshot,
-      );
-      expect(activateSecretsRuntimeSnapshotMock).toHaveBeenCalledWith(
-        expect.objectContaining({ sourceConfig, config: loadedConfig }),
-      );
-      expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
+    const loadedConfig = mockConfig();
+    const sourceConfig = { ...loadedConfig, secrets: { providers: {} } } as OpenClawConfig;
+    const pluginMetadataSnapshot = {
+      plugins: [],
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    } as unknown as PluginMetadataSnapshot;
+    readConfigFileSnapshotForWriteMock.mockResolvedValue({
+      snapshot: { valid: true, resolved: sourceConfig },
+      writeOptions: { basePluginMetadataSnapshot: pluginMetadataSnapshot },
     });
+    getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue(null);
+
+    await resolveAgentRuntimeConfig(runtime);
+
+    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
+      config: sourceConfig,
+      assignmentConfig: loadedConfig,
+      includeConfigRefs: false,
+      pluginMetadataSnapshot,
+    });
+    expect(prepareSecretsRuntimeSnapshotMock.mock.calls[0]?.[0].pluginMetadataSnapshot).toBe(
+      pluginMetadataSnapshot,
+    );
+    expect(activateSecretsRuntimeSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceConfig, config: loadedConfig }),
+    );
+    expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("sets runtime snapshots from source config before embedded agent run", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
-      loadedConfig.models = {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-            models: [],
-          },
-        },
-      };
-      const sourceConfig = structuredClone(loadedConfig);
-      const resolvedConfig = {
-        ...loadedConfig,
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-resolved-runtime", // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
+    const loadedConfig = mockConfig({ models: modelConfig(secretRef("OPENAI_API_KEY")) });
+    const sourceConfig = structuredClone(loadedConfig);
+    const resolvedConfig = {
+      ...loadedConfig,
+      models: modelConfig("sk-resolved-runtime"), // pragma: allowlist secret
+    };
 
-      loadConfigMock.mockReturnValue(loadedConfig);
-      readConfigFileSnapshotForWriteMock.mockResolvedValue({
-        snapshot: { valid: true, resolved: sourceConfig },
-        writeOptions: {},
-      });
-      getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue({
-        config: loadedConfig,
-        sourceConfig,
-        configRefsPrepared: true,
-      });
-      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
-        resolvedConfig,
-        effectiveConfig: resolvedConfig,
-        diagnostics: [],
-      });
-
-      const prepared = await resolveAgentRuntimeConfig(runtime);
-
-      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
-        config: loadedConfig,
-        commandName: "agent",
-        targetIds: new Set(["models.providers.*.apiKey"]),
-        optionalActivePaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
-        runtime,
-      });
-      const targetIds = requireResolveCommandConfigParams().targetIds;
-      expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
-      expect(targetIds.has("channels.telegram.botToken")).toBe(false);
-      expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-      expect(prepared).toBe(resolvedConfig);
+    getActiveSecretsRuntimeConfigSnapshotMock.mockReturnValue({
+      config: loadedConfig,
+      sourceConfig,
+      configRefsPrepared: true,
     });
+    resolveSecretsWith(resolvedConfig);
+
+    const prepared = await resolveAgentRuntimeConfig(runtime);
+
+    expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
+      config: loadedConfig,
+      commandName: "agent",
+      targetIds: new Set(["models.providers.*.apiKey"]),
+      optionalActivePaths: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
+      runtime,
+    });
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
+    expect(prepared).toBe(resolvedConfig);
   });
 
-  it("scopes session-only routing secrets to the channel default account", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
-      loadedConfig.channels = {
-        telegram: {
-          defaultAccount: "ops",
-          accounts: {
-            ops: {
-              botToken: { source: "env", provider: "default", id: "TELEGRAM_OPS_TOKEN" },
-            },
-            chat: {
-              botToken: { source: "env", provider: "default", id: "TELEGRAM_CHAT_TOKEN" },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig["channels"];
-      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
-        resolvedConfig: loadedConfig,
-        effectiveConfig: loadedConfig,
-        diagnostics: [],
-      });
-
-      await resolveAgentRuntimeConfig(runtime, {
-        runtimeChannelSecretScope: { channel: "telegram" },
-      });
-
-      const resolution = requireResolveCommandConfigParams();
-      expect(resolution.allowedPaths).toEqual(
-        new Set(["channels.telegram.botToken", "channels.telegram.accounts.ops.botToken"]),
-      );
-      expect(resolution.allowedPaths?.has("channels.telegram.accounts.chat.botToken")).toBe(false);
+  it.each(["default", "selected"])("scopes routing secrets to the %s account", async (scope) => {
+    const selected = scope === "selected";
+    const loadedConfig = mockConfig({
+      channels: telegramConfig(selected ? undefined : "ops"),
+      ...(selected ? { models: modelConfig(secretRef("OPENAI_API_KEY")) } : {}),
     });
-  });
-
-  it("scopes session-only recipient routing secrets to the selected account", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const loadedConfig = mockConfig(home, store);
-      loadedConfig.models = {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
-            models: [],
-          },
-        },
-      } as OpenClawConfig["models"];
-      loadedConfig.channels = {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-          accounts: {
-            ops: {
-              botToken: { source: "env", provider: "default", id: "TELEGRAM_OPS_TOKEN" },
-            },
-            chat: {
-              botToken: { source: "env", provider: "default", id: "TELEGRAM_CHAT_TOKEN" },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig["channels"];
-      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
-        resolvedConfig: loadedConfig,
-        effectiveConfig: loadedConfig,
-        diagnostics: [],
-      });
-
-      await resolveAgentRuntimeConfig(runtime, {
-        runtimeChannelSecretScope: { channel: "telegram", accountId: "ops" },
-      });
-
-      const resolution = requireResolveCommandConfigParams();
-      expect(resolution.allowedPaths).toEqual(
-        new Set([
-          "models.providers.openai.apiKey",
-          "channels.telegram.botToken",
-          "channels.telegram.accounts.ops.botToken",
-        ]),
-      );
-      expect(resolution.allowedPaths?.has("channels.telegram.accounts.chat.botToken")).toBe(false);
+    resolveSecretsWith(loadedConfig);
+    await resolveAgentRuntimeConfig(runtime, {
+      runtimeChannelSecretScope: { channel: "telegram", ...(selected ? { accountId: "ops" } : {}) },
     });
+    expect(resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].allowedPaths).toEqual(
+      new Set([
+        ...(selected ? ["models.providers.openai.apiKey"] : []),
+        "channels.telegram.botToken",
+        "channels.telegram.accounts.ops.botToken",
+      ]),
+    );
   });
 
   it.each([
-    {
-      name: "global memory headers",
-      apply: (config: OpenClawConfig) => {
-        config.memory = {
-          search: {
-            remote: {
-              headers: {
-                Authorization: { source: "env", provider: "default", id: "MEMORY_HEADER" },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig["memory"];
-      },
-    },
-    {
-      name: "per-agent memory headers",
-      apply: (config: OpenClawConfig) => {
-        config.agents = {
-          ...config.agents,
-          entries: {
-            personal: {
-              memory: {
-                search: {
-                  remote: {
-                    headers: {
-                      Authorization: {
-                        source: "env",
-                        provider: "default",
-                        id: "AGENT_MEMORY_HEADER",
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as unknown as OpenClawConfig["agents"];
-      },
-    },
-  ])("resolves command secrets for $name", async ({ apply }) => {
-    await withTempHome(async (home) => {
-      const loadedConfig = mockConfig(home, path.join(home, "sessions.json"));
-      apply(loadedConfig);
-      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
-        resolvedConfig: loadedConfig,
-        effectiveConfig: loadedConfig,
-        diagnostics: [],
-      });
+    ["global", { memory: memoryConfig("MEMORY_HEADER") }],
+    [
+      "per-agent",
+      { agents: { entries: { personal: { memory: memoryConfig("AGENT_MEMORY_HEADER") } } } },
+    ],
+  ] as const)("resolves command secrets for %s memory headers", async (_scope, config) => {
+    const loadedConfig = mockConfig(config as unknown as OpenClawConfig);
+    resolveSecretsWith(loadedConfig);
 
-      await resolveAgentRuntimeConfig(runtime);
+    await resolveAgentRuntimeConfig(runtime);
 
-      expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
-    });
+    expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledTimes(1);
   });
 });
+
+function memoryConfig(id: string) {
+  return { search: { remote: { headers: { Authorization: secretRef(id) } } } };
+}

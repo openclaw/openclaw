@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolveRuntimeBootstrapToolingEntrypointUrl } from "../runtime-process-bootstrap.generated.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
@@ -56,9 +57,13 @@ export function configurePrepareGitHooks(params = {}) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   if (existsSync(join(DEFAULT_PACKAGE_ROOT, "src/state/openclaw-state-schema.sql"))) {
     // Source preparation uses the generator CLI; packaged installs have no schemas.
-    const generated = spawnSync(process.execPath, [join(scriptDir, "generate-kysely-types.mts")], {
-      stdio: "inherit",
-    });
+    const generated = spawnSync(
+      process.execPath,
+      [fileURLToPath(resolveRuntimeBootstrapToolingEntrypointUrl("kyselyTypes"))],
+      {
+        stdio: "inherit",
+      },
+    );
     if (generated.error) {
       throw generated.error;
     }

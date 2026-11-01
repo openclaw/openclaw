@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { iterateSseFrames } from "@openclaw/ai/internal/shared";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core/model-contracts/anthropic";
 import { stableStringify } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -18,12 +19,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
+import { omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
-import {
-  buildStableCachePrefix,
-  logLiveCache,
-  type LiveResolvedModel,
-} from "./live-cache-test-support.js";
+import { buildStableCachePrefix, type LiveResolvedModel } from "./live-cache-test-support.js";
 import { buildUsageWithNoCost } from "./stream-message-shared.js";
 
 export function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {
@@ -39,12 +37,10 @@ export function buildEmbeddedCachePrompt(suffix: string, sections = 48): string 
   return lines.join("\n");
 }
 
-function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
-  const candidate = model.baseUrl;
-  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
-}
-
-function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
+function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string {
+  if (typeof model.baseUrl === "string" && model.baseUrl.trim().length > 0) {
+    return model.baseUrl;
+  }
   if (model.provider === "anthropic") {
     return "https://api.anthropic.com/v1";
   }
@@ -54,21 +50,13 @@ function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): strin
   return "https://example.invalid/v1";
 }
 
+const positiveInteger = (value: unknown, fallback: number) =>
+  typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : fallback;
+
 function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
   // Live model discovery can return partial metadata; embedded runner tests need
   // a complete config model definition.
-  const contextWindowCandidate = model.contextWindow;
-  const maxTokensCandidate = model.maxTokens;
-  const reasoningCandidate = model.reasoning;
-  const inputCandidate = model.input;
-  const contextWindow =
-    typeof contextWindowCandidate === "number" && Number.isFinite(contextWindowCandidate)
-      ? Math.max(1, Math.trunc(contextWindowCandidate))
-      : 128_000;
-  const maxTokens =
-    typeof maxTokensCandidate === "number" && Number.isFinite(maxTokensCandidate)
-      ? Math.max(1, Math.trunc(maxTokensCandidate))
-      : 8_192;
+  const { input: inputCandidate, reasoning } = model;
   const input: Array<"text" | "image"> =
     Array.isArray(inputCandidate) &&
     inputCandidate.every((value) => value === "text" || value === "image")
@@ -78,11 +66,11 @@ function buildEmbeddedModelDefinition(model: LiveResolvedModel["model"]) {
     id: model.id,
     name: model.id,
     api: resolveEmbeddedModelApi(model),
-    reasoning: typeof reasoningCandidate === "boolean" ? reasoningCandidate : false,
+    reasoning: typeof reasoning === "boolean" ? reasoning : false,
     input,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens,
+    contextWindow: positiveInteger(model.contextWindow, 128_000),
+    maxTokens: positiveInteger(model.maxTokens, 8_192),
   };
 }
 
@@ -95,13 +83,9 @@ function resolveEmbeddedModelApi(
 export function normalizeLiveUsage(
   usage:
     | AssistantMessage["usage"]
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
+    | (Partial<Pick<AssistantMessage["usage"], "input" | "output" | "cacheRead" | "cacheWrite">> & {
         total?: number;
-      }
+      })
     | undefined,
 ): AssistantMessage["usage"] {
   if (!usage) {
@@ -109,25 +93,15 @@ export function normalizeLiveUsage(
   }
   const input = usage.input ?? 0;
   const output = usage.output ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
   const totalTokens =
     "totalTokens" in usage && typeof usage.totalTokens === "number"
       ? usage.totalTokens
       : "total" in usage && typeof usage.total === "number"
         ? usage.total
         : input + output;
-  const cost =
-    "cost" in usage && usage.cost
-      ? usage.cost
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens,
-    cost,
+    ...buildUsageWithNoCost({ ...usage, totalTokens }),
+    ...("cost" in usage && usage.cost ? { cost: usage.cost } : {}),
   };
 }
 
@@ -142,32 +116,26 @@ export function buildEmbeddedRunnerConfig(
 ): OpenClawConfig {
   const provider = params.model.provider;
   const modelKey = `${provider}/${params.model.id}`;
-  const providerBaseUrl =
-    resolveProviderBaseUrl(params.model) ?? resolveDefaultProviderBaseUrl(params.model);
-  return {
-    models: {
-      providers: {
-        [provider]: {
-          api: resolveEmbeddedModelApi(params.model),
-          auth: "api-key",
-          apiKey: params.apiKey,
-          baseUrl: providerBaseUrl,
-          models: [buildEmbeddedModelDefinition(params.model)],
-        },
-      },
+  const providerConfig = {
+    api: resolveEmbeddedModelApi(params.model),
+    auth: "api-key" as const,
+    apiKey: params.apiKey,
+    baseUrl: resolveProviderBaseUrl(params.model),
+    models: [buildEmbeddedModelDefinition(params.model)],
+  };
+  const modelConfig = {
+    ...(params.modelAlias ? { alias: params.modelAlias } : {}),
+    params: {
+      cacheRetention: params.cacheRetention,
+      ...(params.transport ? { transport: params.transport } : {}),
     },
+  };
+  return {
+    models: { providers: { [provider]: providerConfig } },
     agents: {
       entries: { main: { agentDir: params.agentDir } },
       defaults: {
-        models: {
-          [modelKey]: {
-            ...(params.modelAlias ? { alias: params.modelAlias } : {}),
-            params: {
-              cacheRetention: params.cacheRetention,
-              ...(params.transport ? { transport: params.transport } : {}),
-            },
-          },
-        },
+        models: { [modelKey]: modelConfig },
         ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
       },
     },
@@ -183,16 +151,12 @@ export async function runEmbeddedReleasePrefixScenario(
     probe: (config: OpenClawConfig, suffix: string) => Promise<AssistantMessage["usage"]>;
     readTraceEvents: () => Promise<
       Array<{
-        runId?: string;
         stage?: string;
         options?: {
           input?: number;
           cacheRead?: number;
           cacheWrite?: number;
-          requestIndex?: number;
-          requestGapMs?: number;
-          providerPrefix?: string;
-          changes?: Array<{ code?: string; detail?: string }>;
+          changes?: Array<{ code?: string }>;
         };
       }>
     >;
@@ -291,17 +255,13 @@ export async function runEmbeddedReleasePrefixScenario(
             effectivePayload = {
               ...payload,
               input: effectiveInput.map((item) => {
-                if (
-                  !isRecord(item) ||
-                  (item.type !== "function_call" &&
-                    !(item.type === "message" && item.role === "assistant"))
-                ) {
-                  return item;
-                }
                 // Responses may omit provider item envelopes during replay; call IDs
                 // and function-call-output envelopes remain part of the input contract.
-                const { id: _id, status: _status, ...inputItem } = item;
-                return inputItem;
+                return isRecord(item) &&
+                  (item.type === "function_call" ||
+                    (item.type === "message" && item.role === "assistant"))
+                  ? omitWireFields(item, ["id", "status"])
+                  : item;
               }),
             };
           }
@@ -321,19 +281,13 @@ export async function runEmbeddedReleasePrefixScenario(
           }
           const history = prefix.history.join("\n");
           const marker = `Reply with exactly CACHE-OK release-turn-${turn + 1}.`;
-          expect(
-            history.includes("Synthetic prefix hook before:") && history.includes(marker),
-            "prepend hook reached wire",
-          ).toBe(true);
-          expect(
-            history.includes("Synthetic prefix hook after:") && history.includes(marker),
-            "append hook reached wire",
-          ).toBe(true);
+          expect(history).toContain(marker);
+          expect(history, "prepend hook reached wire").toContain("Synthetic prefix hook before:");
+          expect(history, "append hook reached wire").toContain("Synthetic prefix hook after:");
           if (turn >= 2) {
-            expect(
-              history.includes("Synthetic skill updated."),
-              "refreshed instructions reached history",
-            ).toBe(true);
+            expect(history, "refreshed instructions reached history").toContain(
+              "Synthetic skill updated.",
+            );
           }
           requests.push({ prefix, atMs, turn });
         } catch (error) {
@@ -348,72 +302,45 @@ export async function runEmbeddedReleasePrefixScenario(
           const capture = (async () => {
             const reader = response.clone().body?.getReader();
             assert(reader, "provider response has an event stream");
-            const decoder = new TextDecoder();
-            let pending = "";
             try {
-              for (;;) {
-                const chunk = await reader.read();
-                assert(!chunk.done, "provider stream ended before response.completed");
-                pending += decoder.decode(chunk.value, { stream: true });
-                let newline: number;
-                while ((newline = pending.indexOf("\n")) >= 0) {
-                  const line = pending.slice(0, newline).trimEnd();
-                  pending = pending.slice(newline + 1);
+              for await (const { frame } of iterateSseFrames(() => reader.read())) {
+                for (const rawLine of frame.split("\n")) {
+                  const line = rawLine.trimEnd();
                   if (!line.startsWith("data: ") || line === "data: [DONE]") {
                     continue;
                   }
                   const event: unknown = JSON.parse(line.slice(6));
-                  if (
-                    !event ||
-                    typeof event !== "object" ||
-                    !("type" in event) ||
-                    event.type !== "response.completed"
-                  ) {
+                  if (!isRecord(event) || event.type !== "response.completed") {
                     continue;
                   }
-                  assert(
-                    "response" in event && event.response && typeof event.response === "object",
-                  );
+                  assert(isRecord(event.response));
                   const completed = event.response;
-                  assert(
-                    "id" in completed &&
-                      typeof completed.id === "string" &&
-                      "output" in completed &&
-                      Array.isArray(completed.output),
-                  );
+                  assert(typeof completed.id === "string" && Array.isArray(completed.output));
                   // Completion status and log probabilities are response envelopes,
                   // not replay input. Keep every model-visible field in the inherited context.
                   const output = completed.output.map((item: unknown) => {
                     if (!isRecord(item)) {
                       return item;
                     }
-                    if (item.type === "function_call") {
-                      const { status: _status, ...call } = item;
-                      return {
-                        ...call,
-                        ...(typeof call.arguments === "string"
-                          ? { arguments: JSON.stringify(JSON.parse(call.arguments)) }
-                          : {}),
-                      };
+                    const replayItem = omitWireFields(
+                      item,
+                      item.type === "function_call" ? ["status"] : [],
+                    );
+                    if (item.type === "function_call" && typeof item.arguments === "string") {
+                      replayItem.arguments = JSON.stringify(JSON.parse(item.arguments));
                     }
                     if (item.type === "message" && Array.isArray(item.content)) {
-                      return {
-                        ...item,
-                        content: item.content.map((block: unknown) => {
-                          if (!isRecord(block)) {
-                            return block;
-                          }
-                          const { logprobs: _logprobs, ...content } = block;
-                          return content;
-                        }),
-                      };
+                      replayItem.content = item.content.map((block: unknown) =>
+                        isRecord(block) ? omitWireFields(block, ["logprobs"]) : block,
+                      );
                     }
-                    return item;
+                    return replayItem;
                   });
                   responseHistory.set(completed.id, [...inheritedInput, ...output]);
                   return;
                 }
               }
+              assert.fail("provider stream ended before response.completed");
             } finally {
               // Tee cancellation can await the transport branch; terminal capture must not.
               void reader.cancel().catch(() => {});
@@ -457,21 +384,6 @@ export async function runEmbeddedReleasePrefixScenario(
         const previousPromptTokens = previous
           ? previous.input + previous.cacheRead + previous.cacheWrite
           : undefined;
-        logLiveCache(
-          JSON.stringify({
-            scenario: "release-prefix",
-            provider,
-            turn: turn + 1,
-            input: run.input,
-            cacheRead: run.cacheRead,
-            cacheWrite: run.cacheWrite,
-            output: run.output,
-            previousPromptTokens,
-            requestGapMs: turn
-              ? requests[turn * requestsPerTurn]!.atMs - requests[turn * requestsPerTurn - 1]!.atMs
-              : undefined,
-          }),
-        );
         if (previousPromptTokens !== undefined && provider !== "openai") {
           expect(previousPromptTokens, "provider minimum cacheable prefix").toBeGreaterThan(4_096);
           expect(run.cacheRead, "reuse at least 80% of the previous prompt").toBeGreaterThanOrEqual(
@@ -485,26 +397,9 @@ export async function runEmbeddedReleasePrefixScenario(
     const results = events.filter((event) => event.stage === "cache:result");
     expect(results, "one cache diagnostic per provider request").toHaveLength(4 * requestsPerTurn);
     let previousPromptTokens: number | undefined;
-    for (const [index, result] of results.entries()) {
+    for (const result of results) {
       const usage = result.options;
       const promptTokens = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
-      logLiveCache(
-        JSON.stringify({
-          scenario: "release-prefix-diagnostic",
-          provider,
-          turn: Math.floor(index / requestsPerTurn) + 1,
-          request: index + 1,
-          runId: result.runId,
-          input: usage?.input,
-          cacheRead: usage?.cacheRead,
-          cacheWrite: usage?.cacheWrite,
-          promptTokens,
-          cachedTokenRatio: promptTokens > 0 ? (usage?.cacheRead ?? 0) / promptTokens : 0,
-          requestGapMs: result.options?.requestGapMs,
-          providerPrefix: result.options?.providerPrefix ?? "no-cache-drop",
-          changes: result.options?.changes?.map((change) => change.code) ?? [],
-        }),
-      );
       if (previousPromptTokens !== undefined) {
         expect(
           usage?.cacheRead,
@@ -513,7 +408,7 @@ export async function runEmbeddedReleasePrefixScenario(
       }
       previousPromptTokens = promptTokens;
       expect(
-        result.options?.changes?.map((change) => change.code) ?? [],
+        usage?.changes?.map((change) => change.code) ?? [],
         "tracked cache input changes",
       ).toEqual([]);
     }

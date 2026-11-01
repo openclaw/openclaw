@@ -12,11 +12,11 @@ import {
   normalizeArchiveRoot,
   resolvePortableArchivePathKey,
   type BackupSymbolicLink,
+  buildBackupArchivePath,
 } from "../infra/backup-archive-path-policy.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { UpdateRunDriverSchema } from "../infra/update-run-driver-schema.js";
-import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 
 const recoveryPath = z
   .string()
@@ -224,7 +224,69 @@ type BackupManifestSqliteSnapshot = { sourcePath: string } & (
   | { role: "agent"; agentId: string }
 );
 
+export type BackupManifestPostgresAnchor = {
+  sourcePath: string;
+  storeId: string;
+  namespace: string;
+};
+
+function parseBackupManifestPostgresAnchors(value: unknown): BackupManifestPostgresAnchor[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Local-companion manifest requires PostgreSQL anchor inventory.");
+  }
+  const paths = new Set<string>();
+  return value.map((anchor) => {
+    if (
+      !isRecord(anchor) ||
+      Object.keys(anchor).length !== 3 ||
+      typeof anchor.storeId !== "string" ||
+      !anchor.storeId.trim() ||
+      typeof anchor.namespace !== "string" ||
+      !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(anchor.namespace)
+    ) {
+      throw new Error("Backup manifest contains an invalid PostgreSQL anchor.");
+    }
+    const sourcePath = parseBackupManifestSourcePath(anchor.sourcePath, "PostgreSQL anchor");
+    const key = sourcePath.replaceAll("\\", "/").normalize("NFC").toLowerCase();
+    if (paths.has(key)) {
+      throw new Error("Backup manifest contains duplicate PostgreSQL anchor paths.");
+    }
+    paths.add(key);
+    return { sourcePath, storeId: anchor.storeId, namespace: anchor.namespace };
+  });
+}
+
+function parseLocalCompanionProfile(parsed: Record<string, unknown>): {
+  profile?: "local-companion";
+  postgresAnchors?: BackupManifestPostgresAnchor[];
+} {
+  if (parsed.profile !== undefined && parsed.profile !== "local-companion") {
+    throw new Error("Backup manifest contains an unsupported profile.");
+  }
+  const postgresAnchors =
+    parsed.profile === "local-companion"
+      ? parseBackupManifestPostgresAnchors(parsed.postgresAnchors)
+      : undefined;
+  if (parsed.profile === "local-companion") {
+    if (
+      !Array.isArray(parsed.postgresSnapshots) ||
+      parsed.postgresSnapshots.length !== 0 ||
+      !Array.isArray(parsed.sqliteSnapshots)
+    ) {
+      throw new Error(
+        "Local-companion backups require SQLite inventory and no PostgreSQL exports.",
+      );
+    }
+  } else if (parsed.postgresAnchors !== undefined) {
+    throw new Error("PostgreSQL anchor inventory requires the local-companion profile.");
+  }
+
+  return parsed.profile === "local-companion" ? { profile: parsed.profile, postgresAnchors } : {};
+}
+
 export type BackupManifest = {
+  profile?: "local-companion";
+  postgresAnchors?: BackupManifestPostgresAnchor[];
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -239,6 +301,8 @@ export type BackupManifest = {
     stateDir?: string;
     configPath?: string;
     configSourcePath?: string;
+    /** Capture-time canonical identity; payloads retain their archive source spelling. */
+    sharedDatabaseSourcePath?: string;
     oauthDir?: string;
     workspaceDirs?: string[];
     agentRoots?: Array<{ agentId: string; sourcePath: string }>;
@@ -478,6 +542,7 @@ export function parseBackupManifest(raw: string): BackupManifest {
   }
 
   return {
+    ...parseLocalCompanionProfile(parsed),
     schemaVersion: 1,
     archiveRoot,
     createdAt,
@@ -502,6 +567,14 @@ export function parseBackupManifest(raw: string): BackupManifest {
                 configSourcePath: parseBackupManifestSourcePath(
                   parsed.paths.configSourcePath,
                   "configuration source",
+                ),
+              }),
+          ...(parsed.paths.sharedDatabaseSourcePath === undefined
+            ? {}
+            : {
+                sharedDatabaseSourcePath: parseBackupManifestSourcePath(
+                  parsed.paths.sharedDatabaseSourcePath,
+                  "shared database source",
                 ),
               }),
           agentRoots: parseBackupManifestAgentRoots(parsed.paths.agentRoots),
@@ -581,35 +654,20 @@ export type NormalizedArchiveEntry = {
   type?: string;
 };
 
-export async function extractManifest(params: {
-  archivePath: string;
-  manifestEntryPath: string;
-}): Promise<string> {
-  let manifestContentPromise: Promise<Buffer | Error> | undefined;
-  await tar.t({
-    file: params.archivePath,
-    gzip: true,
-    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
-    filter: (entryPath) => entryPath === params.manifestEntryPath,
-    onReadEntry: (entry) => {
-      manifestContentPromise = Promise.resolve(
-        backupManifestSizeError(entry.size) ??
-          entry.concat().catch((error: unknown) => toStringifiedError(error)),
-      );
-    },
-  });
-
-  if (!manifestContentPromise) {
-    throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
+/** Collect during listing; defer content errors until the complete entry inventory is checked. */
+export async function readBackupManifestEntry(entry: tar.ReadEntry): Promise<string | Error> {
+  const sizeError = backupManifestSizeError(entry.size);
+  if (sizeError) {
+    return sizeError;
   }
-  const content = await manifestContentPromise;
-  if (content instanceof Error) {
-    throw content;
+  try {
+    const content = await entry.concat();
+    return isUtf8(content)
+      ? content.toString("utf8")
+      : new Error("Backup manifest must be valid UTF-8.");
+  } catch (error) {
+    return toStringifiedError(error);
   }
-  if (!isUtf8(content)) {
-    throw new Error("Backup manifest must be valid UTF-8.");
-  }
-  return content.toString("utf8");
 }
 
 export function isRegularArchiveFile(entryType: string | undefined): boolean {

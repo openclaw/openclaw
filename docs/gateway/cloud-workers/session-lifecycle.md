@@ -37,9 +37,17 @@ If the node is still reconnecting after a Gateway restart or update, that same s
 
 A message that arrives while the Gateway is installing an updated worker runtime on its machine waits for that installation before admission instead of interrupting it. Bytes still transferring to the node keep the turn alive; Stop, the turn's timeout, or a Gateway restart cancels the wait. After installation, the turn runs on the updated runtime; a failed update follows the existing pending-update recovery.
 
-Graceful Gateway stop and restart interrupt OpenClaw worker turns as soon as draining begins, because worker protocol admission is closed during shutdown. The Gateway retains each interrupted turn's claim and pending workspace results for startup recovery instead of waiting for worker admission retries or failing the placement. Local embedded turns keep their normal drain behavior.
+Graceful Gateway stop and restart mark running root sessions and abort active
+worker turns promptly. They do not preserve execution claims for startup replay.
+In-flight provisioning is cancelled and its resources released; the resumed root
+turn can request provisioning again if needed.
 
-For node-backed sessions interrupted by a restart, recovery confirms the old worker has stopped, settles pending workspace results, and retires the interrupted turn while retaining the machine. An interrupted claim without a finishing acknowledgment enters the same result recovery flow, so edits already made on the retained machine are accepted before the next turn. The next message receives fresh authority; it does not replay the interrupted tool call automatically. Explicit Stop, Move, and failed-provider cleanup retain their normal teardown behavior.
+Resource and file integrity remain separate responsibilities. Recorded leases,
+staged workspace results, move journals, and orphan cleanup remain durable. Their
+owners can finish reconciliation or release resources without restarting an agent
+turn. The next admitted input uses fresh authority and does not mechanically replay
+an interrupted tool call. Explicit Stop, Move, and failed-provider cleanup keep
+their normal teardown behavior.
 
 ## Synchronize workspace files
 
@@ -50,7 +58,7 @@ for implementation and benchmarking details.
 
 Workspace manifest downloads use gzip when the node supports it and remain compatible with uncompressed transfers. Both the compressed response and its decoded manifest stay within the 64 MiB safety limit; the node verifies the decoded manifest before changing the workspace.
 
-For a Gateway-source worktree, synchronization is not continuous: OpenClaw sends a fresh eligible inventory at dispatch, not before every turn on an existing worker. Files created only on the Gateway after dispatch remain local until explicitly staged with `git add`. Staged paths join the accepted manifest at the next completed worker reconciliation. Unstaged new inputs require a fresh dispatch.
+For a Gateway-source worktree, OpenClaw sends a fresh eligible inventory at dispatch. Files created only on the Gateway afterward remain local until explicitly staged with `git add`. Before the next worker turn executes, reconciliation admits those staged paths, preserves independent worker edits, and retains conflicting worker bytes for inspection. Completed turns also reconcile workspace changes. Unstaged new inputs require a fresh dispatch.
 
 ### Deliver skills to the worker
 
@@ -74,6 +82,8 @@ the live owner before acceptance, and preserves result refs for restart recovery
 A change on either side uses the full reconciliation path, including conflict handling.
 
 Completed cloud turns preserve eligible, size-bounded workspace files before the turn claim is released. Repository-only sessions accept a cumulative immutable checkpoint in the Gateway's bare artifact repository. Gateway-source sessions apply those changes to their managed worktree. Worker-turn uses its terminal worker event to create the durable pending-result fence. Remote-exec waits for workspace quiescence and enters the same reconciliation flow after the local Codex attempt. Before applying the result, the Gateway stages complete authenticated base/current manifests plus each changed resulting blob as a Git ref under `refs/openclaw/worker-results/`; deletions are represented by the manifests and need no blob. This keeps the cloud delta recoverable even if the Gateway stops during the apply without duplicating unchanged baseline content. Workspace results use Git file semantics: regular files, executable bits, symlinks, additions, changes, and deletions are retained, while empty directories and other directory modes are not. Gateway-source changes remain in the managed worktree for normal review and commit; repository-only changes remain on the node and in the accepted checkpoint.
+
+At the checkout root, `.cache/vitest/`, `.cache/openclaw/bun/`, `.cache/ms-playwright/`, and `.local/share/pnpm/store/` are derived caches, `.artifacts/vitest-workers/` contains generated compiler outputs, and `.artifacts/dist-artifacts.lock/` contains runtime ownership files. Workspace capture, transfer, and reconciliation exclude these exact roots. Recovery applies the same rule to previously retained results without changing their authenticated receipts. Other files under `.cache/`, `.local/`, and `.artifacts/`, nested paths, and explicit staged inputs remain subject to the normal workspace eligibility and size limits; genuine concurrent source edits still produce conflicts.
 
 ### Retain idle workers
 
@@ -102,11 +112,15 @@ Result staging and rollback preserve exact supported filenames and file bytes, i
 
 If workspace transfer ownership closes during an upload, the Gateway disconnects the uploader promptly, including while it waits for validation after sending all bytes. The cancelled upload cannot become an accepted workspace result.
 
-Replacement and Gateway Move restore files against the pinned base; they do not restore worker commit history, merge stages, or partial staging. After a recorded cloud publication, Gateway Move continues the local branch from that verified pushed commit while keeping later accepted file changes available for review. Review recovered conflict-marker files before continuing. When a publishable checkpoint is available, restoration marks its added files as intent-to-add, keeping added and edited contents unstaged for review. Accepted publication deletions are restored as staged index removals; any recovered file bytes remain available. Ignored recovery-only files and attachments are not enrolled for publication. If publication capture was unavailable, recovered ignored files need an explicit `git add -f` before publishing.
+For repository-only sessions, checkpoints also retain bounded worker Git deltas. Replacement workers, forks, and Gateway Move fetch the pinned base, verify and import the retained pack, and adopt the worker head when the managed branch still matches that base. Dirty files remain available for review; merge stages and partial staging are not restored. Missing, oversized, non-descending, or unverifiable history keeps the file result and records a "Cloud worker commits were not adopted" note. After a recorded cloud publication, Gateway Move continues the local branch from that verified pushed commit; worker history never overwrites a branch that moved. Review recovered conflict-marker files before continuing. When a publishable checkpoint is available, restoration marks its added files as intent-to-add, keeping added and edited contents unstaged for review. Accepted publication deletions are restored as staged index removals; any recovered file bytes remain available. Ignored recovery-only files and attachments are not enrolled for publication. If publication capture was unavailable, recovered ignored files need an explicit `git add -f` before publishing.
 
 ### Publish worker changes
 
-For each OpenClaw `worker-turn`, the Gateway binds its effective shared GitHub identity into the worker's `exec` launches, using the same [`tools.github`](/gateway/config-tools#tools-github) selection as ordinary Gateway-host exec. When that identity is available, `gh` is authenticated and HTTPS `git push` uses the `gh auth git-credential` helper. The worker checkout carries the session-owned branch name and, for GitHub repositories, an HTTPS `origin`. The agent commits and pushes directly from the worker. Reconciliation preserves file contents, not the worker's commit history, so work pushed from the worker lands on GitHub first. At every turn start, the worker fast-forwards its checkout to the session branch on `origin` when the local branch is behind, bringing in history pushed by an earlier worker; a diverged local branch is left untouched.
+For each OpenClaw `worker-turn`, the Gateway binds its effective shared GitHub identity into the worker's `exec` launches, using the same [`tools.github`](/gateway/config-tools#tools-github) selection as ordinary Gateway-host exec. When that identity is available, `gh` is authenticated and HTTPS `git push` uses the `gh auth git-credential` helper. The worker checkout carries the session-owned branch name and, for GitHub repositories, an HTTPS `origin`. The agent commits and pushes directly from the worker. At every turn start, the worker fast-forwards its checkout to the session branch on `origin` when the local branch is behind, bringing in history pushed by an earlier worker; a diverged local branch is left untouched. Before advancing, the worker checks whether incoming file paths are blocked by local files or directories, including filesystem aliases. Any file-versus-directory obstruction skips the whole fast-forward and records a warning, preserving the local branch, index, and working-tree bytes even when the blocking path is tracked and clean.
+
+For Gateway-source worktrees, Stop and reclaim also adopt worker commits when the worker history descends from the dispatch base and the Gateway's managed branch is still at that base. Reclaim fast-forwards the branch with an expected-old-value check; it never force-updates a branch that moved. Uncommitted changes on top of worker commits remain working-tree changes, and unrelated staged changes are preserved. If the worker history diverged, the Gateway branch moved, or staged Gateway changes conflict with worker commits, OpenClaw keeps file-content reconciliation and records a visible transcript note explaining why it did not adopt commits.
+
+Commit transfer uses a Git pack limited to 256 MiB in workspace-result upload v2, selected only when both peers advertise support. Older workers and Gateways continue using v1 file-content reconciliation without adopting worker commits. Repository sessions report unavailable history and retain their file checkpoints. Normal turn reconciliation continues to apply file contents; Gateway-source commit adoption happens during reclaim, and repository-session adoption happens when restoring a checkpoint.
 
 Codex `remote-exec` sessions and the Control UI **Publish PR** action use the Gateway publication broker; remote-exec agents request publication with `github_publish`. Repository-only publication uses an accepted Git-normalized checkpoint without creating a Gateway checkout. Shared or explicitly selected personal publication can use that checkpoint after Stop; personal credentials remain on the Gateway. See [Publish with your account](/concepts/user-model#publish-with-your-account).
 
@@ -151,7 +165,7 @@ ordinary reconcile-first move instead.
 
 To stop a running turn in the Control UI, use chat **Stop** or `/stop` first. Once no turn is running, choose **Stop cloud worker…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
 
-Stop and idle suspension retain this final-save obligation across Gateway restarts, even when capture failed before a workspace result was staged. Startup resumes reconciliation before releasing the machine. If a Gateway update changed the worker bundle, recovery stops the old process, installs the current bundle on that exact draining placement, and finishes the save and teardown without restarting a turn. Failed capture or installation retains the machine for another recovery attempt. If the machine is gone, only the last accepted workspace survives and the session records the failure, as described below.
+Stop and idle suspension retain this final-save obligation across Gateway restarts, even when capture failed before a workspace result was staged. Startup resumes reconciliation before releasing the machine. If Stop is interrupted after the placement enters `draining` but before its final-save claim is recorded, background recovery enrolls the save on the same attached worker without requiring a Gateway restart. It leaves active claims and moves with their existing owners; an offline worker waits for reconnection without replaying input or allocating a replacement. If a Gateway update changed the worker bundle, recovery stops the old process, installs the current bundle on that exact draining placement, and finishes the save and teardown without restarting a turn. Failed capture or installation retains the machine for another recovery attempt. If the machine is gone, only the last accepted workspace survives and the session records the failure, as described below.
 
 While a replacement worker is being prepared, the turn remains queued for admission and uses the setup operation's existing timeouts. It is not treated as a stalled model turn. Chat **Stop** also cancels replacement setup; the Gateway waits for any started provisioning work to settle and clean up before releasing its ownership. A stopped or superseded turn cannot launch a replacement later when a setup wait finishes.
 
@@ -203,6 +217,8 @@ If provider teardown fails or times out during stop or move, the request reports
 
 While cleanup remains pending, the placement keeps the original failure and the latest cleanup cause. Repeated recovery checks do not append another copy of the same error, and long diagnostics retain the final provider cause.
 
+Before accepting a fresh worker or remote-exec turn, OpenClaw checks the exact attached provider lease. An unavailable observation rejects admission without replacing or releasing the worker; retry after provider connectivity returns. A dormant paired device keeps its lease and follows the existing reconnect path. Confirmed lease loss enters the same cleanup path as background recovery before any new input is claimed; this check never allocates a replacement or replays input.
+
 An ended or unusable provider lease is not proof that its machine was deleted. OpenClaw fences that worker, stops renewing the lease, and requests explicit provider teardown. Failed teardown stays retryable; a missing local claim or an earlier “not found” warning does not turn a failed stop into success.
 
 ## Move through the API
@@ -229,7 +245,7 @@ unsynced-file and in-flight-work loss boundary as the Control UI confirmation.
 
 ## Recover after an interruption
 
-Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines; interrupted pending provisioning retains its fixed provider operation for startup replay. A failed model turn keeps the active placement available for a retry. In Gateway-source worktrees, workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
+Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), with durable resource cleanup so interruption does not justify guessing or leaking a machine. In-flight provisioning is cancelled at graceful shutdown rather than replayed as execution at startup. A failed model turn keeps the active placement available for a retry. In Gateway-source worktrees, workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
 
 Recovery requested for one worker inspects that environment and resumes only its associated workspace results and moves, waiting for earlier operations on those sessions. Regular background sweeps reconcile all environments, then recover sessions one at a time. They skip sessions with an unfinished placement operation and retry them on the next sweep. Orphan workspace cleanup also waits until every session sharing that workspace is idle. A targeted recovery does not wait for an unrelated background sweep. These queues exist only in the running Gateway; updates do not change persisted placement state or configuration.
 
@@ -253,10 +269,70 @@ Worker-turn live previews are snapshots of the current assistant message. Correc
 
 Workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud worker…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds. For a Gateway-source session it snapshots the managed worktree under `refs/openclaw/snapshots/` before removing it; for a repository-only session it deletes the source owner and retained checkpoint artifacts. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
 
-For repository-only sessions, the Gateway retains complete base/current file manifests and changed file contents in immutable checkpoints. It does not keep a full copy of upstream Git history or unchanged base files. Replacement workers therefore need the pinned upstream commit to be fetchable or already present in the node's verified seed cache. An explicit Gateway move needs that commit available to its project clone. A moved or deleted remote branch does not change the pinned commit, but losing access to that commit can prevent restoration.
+For repository-only sessions, the Gateway retains complete base/current file manifests, changed file contents, and bounded worker Git delta packs in immutable checkpoints. The packs exclude the pinned base and its ancestors: the Gateway does not keep a full copy of upstream Git history or unchanged base files. Replacement workers therefore need the pinned upstream commit to be fetchable or already present in the node's verified seed cache. An explicit Gateway move needs that commit available to its project clone. A moved or deleted remote branch does not change the pinned commit, but losing access to that commit can prevent restoration.
+
+After the first repository checkpoint, node transfers use the last accepted manifest as their baseline. The Gateway reuses unchanged checkpoint blobs while retaining the original pinned source in recovery metadata. An unchanged file manifest reuses the accepted checkpoint only when its publication snapshot and Git lineage also match; empty commits and changed publication bytes still create a new checkpoint. Stale or missing accepted parents are rejected.
 
 Checkpoint history stays until session deletion; the managed-worktree seven-day idle cleanup and thirty-day snapshot expiry do not apply. Back up the [state database and repository artifacts](/reference/database-schemas#cloud-repository-workspaces) together. This saves Gateway checkout space, not all storage used by a session's accepted changes.
 
 While the worker is active, **Files**, file editing, and diffs inspect its actual checkout through the authenticated node connection. After Stop, retained changed-file previews and change paths remain available, but unchanged upstream files, editing, and full diffs require a running worker. The diff panel explains that the workspace is stopped. Opening these views never substitutes the agent's Gateway workspace.
 
 After a reclaimed placement or a previously active failed placement, the next message starts a replacement on the original destination once cleanup and workspace recovery are complete. If initial setup never completed or the original destination is unavailable, use **Restart session…** to choose where to continue. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
+
+## Exact provider-resource receipts
+
+New Linux Azure Sandbox allocations made through Crabbox record their observed
+resource identity in the existing environment store before setup or node enrollment.
+The original provision operation remains the allocation recovery key. Restart
+recovery reuses that operation and refuses a different resource; an unavailable
+observation does not prove that the original resource was deleted.
+
+Stop still performs the existing final workspace save. Provider teardown then
+uses the saved exact resource identity and remains pending until the provider
+confirms deletion. A missing local claim, timeout, or failed observation cannot
+complete cleanup. Existing environments without a receipt retain their original
+fixed-lease cleanup behavior; they are not silently rebound to a newly observed
+resource. Providers without receipt support remain unchanged, but cannot operate
+on an environment that already has a receipt.
+
+This is a prerequisite for retained session disks, not activation: idle suspension
+still follows the existing lifecycle, and Gateway workspace checkpoints remain
+the recovery source. It enables neither retained allocation nor pause/resume nor
+disk-authoritative workspaces.
+
+### Explicit current-disk consumers (not activated)
+
+The repository owner can retain an exact disk binding, but no user-facing selector
+activates it yet. For that binding, active file reads, edits, downloads, and incoming
+attachments use the original attached node. Editor writes settle their existing
+result custody without updating an older Gateway mirror.
+
+Explicit publication captures a fresh immutable snapshot under the existing session
+reservation and node quiescence. All requests selected for the same accepted turn
+reuse that snapshot, including a retry after artifact capture but before receipt
+binding. An already selected publication never includes later disk edits.
+
+Gateway export preparation also requires the original attached disk and a fresh
+snapshot, preserving private Git history and working files. It verifies the source
+again before binding the local worktree. Staged changes and unavailable history
+fail closed rather than silently losing index contents or commits. This preparation
+also serves an explicit **Move to Gateway** for an already-bound, active disk.
+The existing pending-result record retains the immutable export and original
+resource receipt. Only after the verified managed worktree is bound to the session
+does the repository owner retire disk custody; the existing environment owner
+then settles exact-resource cleanup before the placement finishes locally.
+
+An interrupted Move before local binding captures the original disk again rather
+than restoring an old mirror. After local binding, recovery keeps that worktree
+and finishes custody retirement and cleanup without reapplying an export. Missing
+exports, replaced disks, or changed session ownership keep recovery held. Existing
+mirrored pending results keep their original acceptance semantics. This uses the
+existing schema and cleanup owners; it adds no disk-mode selector or activation.
+Paused-disk preparation remains a separate prerequisite. Missing or replaced disks
+never fall back to a stored mirror or source-only reconstruction.
+
+The shared-state schema upgrade preserves old rows with an absent receipt and
+fences older binaries that cannot honor recorded identities. To roll back, first
+settle the new environments and their pending cleanup, then restore the matching
+pre-upgrade state backup with its binary. Do not perform a package-only downgrade
+or erase receipt metadata to force cleanup.

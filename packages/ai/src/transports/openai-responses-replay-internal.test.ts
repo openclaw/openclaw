@@ -1,213 +1,151 @@
 import { setImmediate } from "node:timers/promises";
-import type { Model } from "@openclaw/llm-core";
 import OpenAI from "openai";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CompactionReplayRejection } from "../provider-options.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
+import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { createResponsesStreamWithRecovery } from "./openai-responses-replay-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "./openai-transport-shared.js";
 import { withProviderResponseHook } from "./transport-stream-shared.js";
-
-const model = {
+const model = fixtures.createModel({
   id: "gpt-5.6-luna",
-  name: "Responses retry lifecycle",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://responses.example.test/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4_096,
-} satisfies Model<"openai-responses">;
-
-describe("Responses streamed recovery lifecycle", () => {
-  it.each([
-    {
-      secondFailure: "streamed",
-      expectedOrder: [
-        "create:1",
-        "hook:req_1",
-        "cleanup:req_1",
-        "close:req_1",
-        "create:2",
-        "hook:req_2",
-        "close:req_2",
-        "create:3",
-        "commit",
-        "hook:req_3",
-        "close:req_3",
-      ],
-    },
-    {
-      secondFailure: "HTTP",
-      expectedOrder: [
-        "create:1",
-        "hook:req_1",
-        "cleanup:req_1",
-        "close:req_1",
-        "create:2",
-        "create:3",
-        "commit",
-        "hook:req_3",
-        "close:req_3",
-      ],
-    },
-  ])(
-    "closes prior streams before retry ($secondFailure)",
-    async ({ secondFailure, expectedOrder }) => {
-      const order: string[] = [];
-      const responses: Response[] = [];
-      const controller = new AbortController();
-      const cleanupStarted = createDeferred();
-      const releaseCleanup = createDeferred();
-      let consuming: Promise<void> | undefined;
-      let attempt = 0;
-      const client = new OpenAI({
-        apiKey: "fixture-key",
-        baseURL: model.baseUrl,
-        organization: null,
-        project: null,
-        maxRetries: 0,
-        fetch: async () => {
-          const error = {
-            code: "invalid_encrypted_content",
-            message: "could not decrypt the provided encrypted_content",
-            type: "invalid_request_error",
-          };
-          if (attempt === 2 && secondFailure === "HTTP") {
-            const response = Response.json({ error }, { status: 400 });
-            responses.push(response);
-            return response;
+});
+it.each(["streamed", "HTTP"])(
+  "Responses recovery closes prior streams before retry (%s)",
+  async (secondFailure) => {
+    const order: string[] = [];
+    const requests: Record<string, unknown>[] = [];
+    let firstResponse: Response | undefined;
+    const controller = new AbortController();
+    const [cleanupStarted, releaseCleanup] = [createDeferred(), createDeferred()];
+    let consuming: Promise<unknown[]> | undefined;
+    let attempt = 0;
+    const client = new OpenAI({
+      apiKey: "fixture-key",
+      baseURL: model.baseUrl,
+      organization: null,
+      project: null,
+      maxRetries: 0,
+      fetch: async (_input, init) => {
+        requests.push(await fixtures.requestBody(init));
+        order.push(`create:${++attempt}`);
+        const error = {
+          code: "invalid_encrypted_content",
+          message: "could not decrypt the provided encrypted_content",
+          type: "invalid_request_error",
+        };
+        if (attempt === 2 && secondFailure === "HTTP") {
+          return Response.json({ error }, { status: 400 });
+        }
+        const response = { id: `resp_${attempt}`, output: [] };
+        const events = [
+          { type: "response.created", response: { ...response, status: "in_progress" } },
+          attempt === 3
+            ? { type: "response.completed", response: { ...response, status: "completed" } }
+            : { type: "response.failed", response: { ...response, status: "failed", error } },
+        ];
+        const httpResponse = fixtures.sseResponse(events, { "x-request-id": `req_${attempt}` });
+        firstResponse ??= httpResponse;
+        return httpResponse;
+      },
+    });
+    const reasoning = { type: "reasoning" as const, id: "rs_prior", summary: [] };
+    const encrypted = { ...reasoning, encrypted_content: "reasoning-data" };
+    const checkpoint = {
+      type: "compaction" as const,
+      id: "cmp_prior",
+      encrypted_content: "compaction-data",
+    };
+    const after = { role: "user" as const, content: "After checkpoint" };
+    const before = { role: "user" as const, content: "Before checkpoint" };
+    const request: OpenAIResponsesRequestParams = {
+      model: model.id,
+      stream: true,
+      input: structuredClone([encrypted, checkpoint, after]),
+    };
+    const buildFullHistoryRequest = vi.fn((): OpenAIResponsesRequestParams => ({
+      ...request,
+      input: [structuredClone(before), ...request.input],
+    }));
+    const rejected = vi.fn((_item: CompactionReplayRejection) => void order.push("commit"));
+    try {
+      const result = await createResponsesStreamWithRecovery({
+        client,
+        request,
+        requestOptions: { signal: controller.signal },
+        model,
+        canRetryStream: () => true,
+        buildFullHistoryRequest,
+        onCompactionRejected: rejected,
+        async *wrapStream({ stream, response }) {
+          try {
+            yield* withProviderResponseHook({
+              stream,
+              signal: controller.signal,
+              abort: (reason) => controller.abort(reason),
+              hook: createOpenAIProviderAcceptanceHook(
+                {
+                  signal: controller.signal,
+                  onResponse: ({ headers }) => void order.push(`hook:${headers["x-request-id"]}`),
+                },
+                response,
+                model,
+              ),
+            });
+          } finally {
+            if (response === firstResponse) {
+              order.push("cleanup:req_1");
+              cleanupStarted.resolve();
+              await releaseCleanup.promise;
+            }
+            order.push(`close:${response.headers.get("x-request-id")}`);
           }
-          const response = {
-            id: `resp_${attempt}`,
-            object: "response",
-            model: model.id,
-            output: [],
-          };
-          const events = [
-            { type: "response.created", response: { ...response, status: "in_progress" } },
-            attempt === 3
-              ? { type: "response.completed", response: { ...response, status: "completed" } }
-              : { type: "response.failed", response: { ...response, status: "failed", error } },
-          ];
-          const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
-          const httpResponse = new Response(body, {
-            headers: { "content-type": "text/event-stream", "x-request-id": `req_${attempt}` },
-          });
-          responses.push(httpResponse);
-          return httpResponse;
         },
       });
-      const send = client.responses.create.bind(client.responses);
-      const create = vi.spyOn(client.responses, "create").mockImplementation((body, options) => {
-        order.push(`create:${++attempt}`);
-        return send(body, options);
+      expect(order).toEqual(["create:1"]);
+      consuming = collect(result.stream);
+      await Promise.race([cleanupStarted.promise, consuming]);
+      await setImmediate();
+      expect(order).toEqual(["create:1", "hook:req_1", "cleanup:req_1"]);
+      releaseCleanup.resolve();
+      const events = await consuming;
+      expect(events).toMatchObject([
+        { type: "response.created", response: { id: "resp_1" } },
+        ...(secondFailure === "streamed"
+          ? [{ type: "response.created", response: { id: "resp_2" } }]
+          : []),
+        { type: "response.created", response: { id: "resp_3" } },
+        { type: "response.completed", response: { id: "resp_3", status: "completed" } },
+      ]);
+      expect(order).toEqual([
+        "create:1",
+        "hook:req_1",
+        "cleanup:req_1",
+        "close:req_1",
+        "create:2",
+        ...(secondFailure === "streamed" ? ["hook:req_2", "close:req_2"] : []),
+        "create:3",
+        "commit",
+        "hook:req_3",
+        "close:req_3",
+      ]);
+      expect(requests.map((body) => body.input)).toEqual([
+        [encrypted, checkpoint, after],
+        [reasoning, checkpoint, after],
+        [before, reasoning, after],
+      ]);
+      expect(buildFullHistoryRequest).toHaveBeenCalledOnce();
+      expect(rejected).toHaveBeenCalledExactlyOnceWith({
+        id: "cmp_prior",
+        data: "compaction-data",
       });
-      const request: OpenAIResponsesRequestParams = {
-        model: model.id,
-        stream: true,
-        input: [
-          { type: "reasoning", id: "rs_prior", encrypted_content: "reasoning-data", summary: [] },
-          { type: "compaction", id: "cmp_prior", encrypted_content: "compaction-data" },
-          { role: "user", content: "After checkpoint" },
-        ],
-      };
-      const buildFullHistoryRequest = vi.fn((): OpenAIResponsesRequestParams => ({
-        ...request,
-        input: [{ role: "user", content: "Before checkpoint" }, ...request.input],
-      }));
-      const onCompactionRejected = vi.fn((_checkpoint: CompactionReplayRejection) => {
-        order.push("commit");
-      });
-
-      try {
-        const result = await createResponsesStreamWithRecovery({
-          client,
-          request,
-          requestOptions: { signal: controller.signal },
-          model,
-          canRetryStream: () => true,
-          buildFullHistoryRequest,
-          onCompactionRejected,
-          wrapStream: ({ stream, response }) => ({
-            async *[Symbol.asyncIterator]() {
-              try {
-                yield* withProviderResponseHook({
-                  stream,
-                  signal: controller.signal,
-                  abort: (reason) => controller.abort(reason),
-                  hook: createOpenAIProviderAcceptanceHook(
-                    {
-                      signal: controller.signal,
-                      onResponse: ({ headers }) => {
-                        order.push(`hook:${headers["x-request-id"]}`);
-                      },
-                    },
-                    response,
-                    model,
-                  ),
-                });
-              } finally {
-                if (response === responses[0]) {
-                  order.push("cleanup:req_1");
-                  cleanupStarted.resolve();
-                  await releaseCleanup.promise;
-                }
-                order.push(`close:${response.headers.get("x-request-id")}`);
-              }
-            },
-          }),
-        });
-        expect(order).toEqual(["create:1"]);
-
-        const events: unknown[] = [];
-        consuming = (async () => {
-          for await (const event of result.stream) {
-            events.push(event);
-          }
-        })();
-        await Promise.race([cleanupStarted.promise, consuming]);
-        await setImmediate();
-        expect(create.mock.calls.length).toBe(1);
-        expect(order).toEqual(["create:1", "hook:req_1", "cleanup:req_1"]);
-        releaseCleanup.resolve();
-        await consuming;
-
-        expect(events).toMatchObject([
-          { type: "response.created", response: { id: "resp_1" } },
-          ...(secondFailure === "streamed"
-            ? [{ type: "response.created", response: { id: "resp_2" } }]
-            : []),
-          { type: "response.created", response: { id: "resp_3" } },
-          { type: "response.completed", response: { id: "resp_3", status: "completed" } },
-        ]);
-        expect(order).toEqual(expectedOrder);
-        expect(create).toHaveBeenCalledTimes(3);
-        expect(create.mock.calls[0]?.[0]).toBe(request);
-        expect(create.mock.calls[1]?.[0].input).toEqual([
-          { type: "reasoning", id: "rs_prior", summary: [] },
-          { type: "compaction", id: "cmp_prior", encrypted_content: "compaction-data" },
-          { role: "user", content: "After checkpoint" },
-        ]);
-        expect(create.mock.calls[2]?.[0].input).toEqual([
-          { role: "user", content: "Before checkpoint" },
-          { type: "reasoning", id: "rs_prior", summary: [] },
-          { role: "user", content: "After checkpoint" },
-        ]);
-        expect(buildFullHistoryRequest).toHaveBeenCalledOnce();
-        expect(onCompactionRejected).toHaveBeenCalledExactlyOnceWith({
-          id: "cmp_prior",
-          data: "compaction-data",
-        });
-      } finally {
-        releaseCleanup.resolve();
-        controller.abort();
-        await Promise.allSettled([consuming]);
-        create.mockRestore();
-      }
-    },
-  );
-});
+    } finally {
+      releaseCleanup.resolve();
+      controller.abort();
+      await Promise.allSettled([consuming]);
+    }
+  },
+);

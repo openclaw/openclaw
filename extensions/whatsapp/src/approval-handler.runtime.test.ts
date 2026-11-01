@@ -1,28 +1,62 @@
-// Whatsapp tests cover approval handler plugin behavior.
+import { setImmediate as tick } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { whatsappApprovalNativeRuntime } from "./approval-handler.runtime.js";
+const { presentation, transport, interactions } = whatsappApprovalNativeRuntime;
+
+function approvalContext(id = "exec-1") {
+  return {
+    cfg: {},
+    accountId: "default",
+    context: { accountId: "default" },
+    request: { id, request: { command: "echo hi" }, createdAtMs: 0, expiresAtMs: 60_000 },
+    approvalKind: "exec" as const,
+    view: {
+      approvalKind: "exec" as const,
+      approvalId: id,
+      phase: "pending" as const,
+      title: "Approval",
+      metadata: [],
+      commandText: "echo hi",
+      actions: [],
+      expiresAtMs: 60_000,
+    },
+    pendingPayload: {
+      manualFallbackPayload: { text: "pending" },
+      reactionPayload: {
+        text: "pending",
+        allowedDecisions: ["allow-once" as const],
+        reactionBindings: [],
+      },
+    },
+  };
+}
+
+const plannedTarget = {
+  surface: "origin" as const,
+  reason: "preferred" as const,
+  target: { to: "15551230000@s.whatsapp.net" },
+};
+
+async function finishPending<T>(operation: T | Promise<T>, complete: () => void) {
+  let settled = false;
+  const pending = Promise.resolve(operation).then((value) => {
+    settled = true;
+    return value;
+  });
+  await tick();
+  expect(settled).toBe(false);
+  complete();
+  return pending;
+}
 
 describe("whatsappApprovalNativeRuntime", () => {
   it("renders allowed thumbs-only reactions in pending exec approvals", async () => {
-    const payload = await whatsappApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: { accountId: "default" },
-      request: {
-        id: "exec-1",
-        request: {
-          command: "echo hi",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "exec",
+    const payload = await presentation.buildPendingPayload({
+      ...approvalContext(),
       nowMs: 0,
       view: {
-        approvalKind: "exec",
-        approvalId: "exec-1",
-        commandText: "echo hi",
+        ...approvalContext().view,
         actions: [
           {
             decision: "allow-once",
@@ -37,7 +71,7 @@ describe("whatsappApprovalNativeRuntime", () => {
             style: "danger",
           },
         ],
-      } as never,
+      },
     });
 
     expect(payload.reactionPayload.text).toContain("👍 Allow Once");
@@ -48,75 +82,26 @@ describe("whatsappApprovalNativeRuntime", () => {
     expect(payload.reactionPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
-  it("normalizes WhatsApp targets and carries account ids into prepared delivery", async () => {
+  it.each([
+    ["explicit account", {}, "ops", "ops"],
+    [
+      "configured default",
+      { channels: { whatsapp: { defaultAccount: "work", accounts: { work: {} } } } },
+      undefined,
+      "work",
+    ],
+  ] as const)("normalizes targets with %s", async (_name, cfg, accountId, expectedAccount) => {
     await expect(
-      whatsappApprovalNativeRuntime.transport.prepareTarget({
-        cfg: {} as never,
-        accountId: "ops",
-        context: { accountId: "ops" },
-        plannedTarget: {
-          surface: "origin",
-          reason: "preferred",
-          target: {
-            to: "15551230000@s.whatsapp.net",
-          },
-        },
-        request: {
-          id: "exec-1",
-          request: {
-            command: "echo hi",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 60_000,
-        },
-        approvalKind: "exec",
-        view: {
-          approvalKind: "exec",
-          approvalId: "exec-1",
-          commandText: "echo hi",
-          actions: [],
-        } as never,
-        pendingPayload: {
-          manualFallbackPayload: { text: "pending" },
-          reactionPayload: {
-            text: "pending",
-            allowedDecisions: ["allow-once"],
-            reactionBindings: [],
-          },
-        },
+      transport.prepareTarget({
+        ...approvalContext(),
+        cfg,
+        accountId,
+        context: { accountId },
+        plannedTarget,
       }),
     ).resolves.toEqual({
-      dedupeKey: expect.any(String),
-      target: {
-        to: "+15551230000",
-        accountId: "ops",
-      },
-    });
-  });
-
-  it("resolves the configured default account before binding native reactions", async () => {
-    await expect(
-      whatsappApprovalNativeRuntime.transport.prepareTarget({
-        cfg: {
-          channels: {
-            whatsapp: {
-              defaultAccount: "work",
-              accounts: { work: {} },
-            },
-          },
-        },
-        plannedTarget: {
-          surface: "origin",
-          reason: "preferred",
-          target: { to: "15551230000@s.whatsapp.net" },
-        },
-      } as never),
-    ).resolves.toEqual({
-      dedupeKey: expect.stringContaining("work:"),
-      target: {
-        to: "+15551230000",
-        accountId: "work",
-      },
+      dedupeKey: expect.stringContaining(`${expectedAccount}:`),
+      target: { to: "+15551230000", accountId: expectedAccount },
     });
   });
 });
@@ -136,70 +121,16 @@ it("waits for native reaction binding and cleanup completion", async () => {
     remoteJid: "15551230000@s.whatsapp.net",
     messageId: "approval-message",
   };
-  const request = {
-    id: "exec-pending",
-    request: { command: "echo hi" },
-    createdAtMs: 0,
-    expiresAtMs: 60_000,
-  };
+  const context = approvalContext("exec-pending");
   try {
-    let bindingSettled = false;
-    const binding = Promise.resolve(
-      whatsappApprovalNativeRuntime.interactions!.bindPending!({
-        cfg: {},
-        accountId: "default",
-        entry,
-        request,
-        approvalKind: "exec",
-        view: {
-          approvalKind: "exec",
-          approvalId: request.id,
-          phase: "pending",
-          title: "Approval",
-          metadata: [],
-          commandText: "echo hi",
-          actions: [],
-          expiresAtMs: 60_000,
-        },
-        pendingPayload: {
-          manualFallbackPayload: { text: "pending" },
-          reactionPayload: {
-            text: "pending",
-            allowedDecisions: ["allow-once"],
-            reactionBindings: [],
-          },
-        },
-      }),
-    ).then((value) => {
-      bindingSettled = true;
-      return value;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(bindingSettled).toBe(false);
-    bindingWrite.resolve(null);
-    await expect(binding).resolves.toBeNull();
-
-    let cleanupSettled = false;
-    const cleanup = Promise.resolve(
-      whatsappApprovalNativeRuntime.interactions!.unbindPending!({
-        cfg: {},
-        accountId: "default",
-        entry,
-        request,
-        approvalKind: "exec",
-        binding: true,
-      }),
-    ).then(() => {
-      cleanupSettled = true;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(cleanupSettled).toBe(false);
-    cleanupWrite.resolve();
-    await cleanup;
+    await expect(
+      finishPending(interactions!.bindPending!({ ...context, entry }), () =>
+        bindingWrite.resolve(null),
+      ),
+    ).resolves.toBeNull();
+    await finishPending(interactions!.unbindPending!({ ...context, entry, binding: true }), () =>
+      cleanupWrite.resolve(),
+    );
   } finally {
     bindingWrite.resolve(null);
     cleanupWrite.resolve();

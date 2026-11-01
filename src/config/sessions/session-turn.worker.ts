@@ -12,9 +12,9 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
+import { createCliHistoryOwnerProbe, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { applySessionGoalOperation } from "./goals-operation-policy.js";
-import { readSessionGoalOperationReceipt } from "./goals-operations.js";
+import { readSessionGoalOperationReceipt } from "./goals-operation-receipts.js";
 import {
   readQualifiedSessionEntryRow,
   readSessionKeyBySessionIdInDatabase,
@@ -25,18 +25,19 @@ import {
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import {
   readTranscriptContextStateInTransaction,
   readTranscriptContextVersionInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import type { ResolvedSessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -58,11 +59,22 @@ function inCustody<T>(
 ): T {
   const assertCurrent = () =>
     context.admit("transaction", { kind: "session-entry-patch-validated" });
+  // Coverage asks the host for its live owner check inside this transaction, once.
+  const probe = createCliHistoryOwnerProbe();
+  let probed = false;
+  const confirmsOwner = () => {
+    if (!probed) {
+      context.admit("transaction", probe.fact);
+      probed = true;
+    }
+    return probe.holds();
+  };
   const owned = () =>
     runWithCliHistoryWriter(
       input.cliWriter
         ? {
             ...input.cliWriter,
+            ...(input.cliWriter.confirmOwner ? { confirmsOwner } : {}),
             target: {
               agentId: input.agentId,
               sessionKey: input.sessionKey,
@@ -100,6 +112,7 @@ export function prepareSessionTurn(
   requested: SessionTurnPlan,
   context: AgentWorkerOperationContext,
   incarnation?: string,
+  resident?: SessionActorStoredState,
 ) {
   let input = requested;
   const database = context.open();
@@ -115,16 +128,14 @@ export function prepareSessionTurn(
     let runtimeSelection: ReturnType<typeof readQualifiedSessionEntryRow>;
     if (input.options.resolveRuntimeTarget) {
       // Cron base/run keys can share an ID; the retained window owns its transcript.
-      const persistedKey = readSessionKeyBySessionIdInDatabase(
-        database,
-        input.options.expectedSessionId,
-      );
-      runtimeSelection = readQualifiedSessionEntryRow(
-        database,
-        input.agentId,
-        persistedKey ?? input.sessionKey,
-        { allowCanonicalMove: !persistedKey },
-      );
+      const persistedKey = resident
+        ? resident.window?.session_key
+        : readSessionKeyBySessionIdInDatabase(database, input.options.expectedSessionId);
+      runtimeSelection = resident
+        ? resident.entryRows.get(input.sessionKey)
+        : readQualifiedSessionEntryRow(database, input.agentId, persistedKey ?? input.sessionKey, {
+            allowCanonicalMove: !persistedKey,
+          });
       runtimeTarget = {
         agentId: input.agentId,
         sessionId: input.options.expectedSessionId,
@@ -195,7 +206,9 @@ export function prepareSessionTurn(
           : undefined;
     const transcriptState =
       !result && input.options.messages.length
-        ? readTranscriptContextStateInTransaction(database, scope.sessionId)
+        ? resident
+          ? { version: resident.hot.transcript.version, coldArchive: undefined }
+          : readTranscriptContextStateInTransaction(database, scope.sessionId)
         : undefined;
     if (input.prepareColdTranscript && transcriptState?.coldArchive) {
       return {
@@ -216,9 +229,22 @@ export function prepareSessionTurn(
             input.options.messages.map((append) => {
               const key = readMessageIdempotencyKey(append.message);
               return {
-                pending: Boolean(resolveSessionPendingInputAppend(database, scope, append.message)),
+                pending: Boolean(
+                  resolveSessionPendingInputAppend(
+                    database,
+                    scope,
+                    append.message,
+                    resident?.pendingInputs,
+                  ),
+                ),
                 existing:
-                  key && append.idempotencyLookup !== "caller-checked"
+                  key &&
+                  append.idempotencyLookup !== "caller-checked" &&
+                  (!resident?.transcript.complete ||
+                    append.idempotencyLookup === "scan-assistant" ||
+                    [...resident.transcript.identities.values()].some(
+                      (identity) => identity.message_idempotency_key === key,
+                    ))
                     ? readTranscriptMessageByScopedIdempotencyKey(
                         database,
                         scope,
@@ -241,7 +267,7 @@ export function prepareSessionTurn(
       version: transcriptState?.version,
       expectedSessionState:
         expectedEntry &&
-        buildRestartRecoveryExpectedState(
+        buildSessionTranscriptTurnExpectedState(
           selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
         ),
       goalId:
@@ -286,7 +312,7 @@ export function applySessionTurn<T>(
             ...(input.custody ? [input.custody.sessionKey] : []),
           ],
           () => {
-            const scope = {
+            let scope = {
               agentId: input.agentId,
               path: context.options.path,
               sessionKey: input.sessionKey,
@@ -351,7 +377,8 @@ export function applySessionTurn<T>(
                   projectionNeedsReconcile = true;
                 },
               },
-              (selected) => {
+              (selected, selectedScope) => {
+                scope = { ...scope, sessionKey: selectedScope.sessionKey };
                 const revision = getSqliteReadScopeRevision(database.db);
                 selectedPostimage =
                   selected && revision

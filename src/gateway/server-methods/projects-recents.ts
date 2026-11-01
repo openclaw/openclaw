@@ -105,10 +105,11 @@ export async function listProjectRecents(
         const workspace = indexed.byAgent.get(agentId);
         project = workspace?.repoRoot === folder ? workspace : indexed.byPath.get(folder);
       }
+      const execNode = project || !folder ? undefined : normalizeOptionalString(entry.execNode);
       const key = project
         ? `project:${project.id}`
         : folder
-          ? `folder:${normalizeOptionalString(entry.execNode) ?? ""}\0${folder}`
+          ? `folder:${execNode ?? ""}\0${folder}`
           : undefined;
       if (!key || seen.has(key)) {
         continue;
@@ -122,9 +123,7 @@ export async function listProjectRecents(
               kind: "folder",
               folder: folder!,
               displayName: folderDisplayName(folder!),
-              ...(normalizeOptionalString(entry.execNode)
-                ? { execNode: normalizeOptionalString(entry.execNode) }
-                : {}),
+              ...(execNode ? { execNode } : {}),
             },
       );
       if (recents.length === 8) {

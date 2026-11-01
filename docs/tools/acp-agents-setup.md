@@ -276,8 +276,17 @@ signal. That check also supplies failure diagnostics and is bounded by
 `plugins.entries.acpx.config.timeoutSeconds`; an unhealthy result does not
 launch a second check. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` or
 `OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1` only for scripts or environments that
-intentionally keep the startup check disabled. Run `/acp doctor` for an explicit
-on-demand check.
+intentionally keep the startup check disabled.
+
+Health checks run from the plugin-owned `<state>/acpx` directory, which the
+service creates before probing. They do not require the default agent workspace
+to exist. Sessions still launch in their requested `cwd`, falling back to the
+configured plugin or service workspace when no session directory is supplied.
+
+A failed check makes the backend unavailable for ACP spawns across the Gateway.
+After correcting the cause, run `/acp doctor` to check again; a successful check
+restores availability without restarting. Spawn attempts do not automatically
+retry the health check.
 
 Override an individual ACP agent command with structured arguments when a path
 or flag value should remain one argv token:
@@ -403,6 +412,60 @@ openclaw config set plugins.entries.acpx.config.probeAgent claude
 
 With the default hybrid reload mode, this change automatically reloads the plugin.
 Run `/acp doctor` to check the updated backend.
+
+<a id="agent-process-environment" />
+
+### Agent process environment
+
+By default, ACP agents, their command probes, and the terminals they open
+inherit the whole Gateway environment, including the Gateway's own credentials.
+Two optional plugin settings narrow what they inherit. Both are unset by
+default, which keeps that behavior unchanged.
+
+- `agentProcessEnvAllow`: when set, children inherit only process essentials
+  (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LANGUAGE`, `TZ`,
+  `TMPDIR`, `TMP`, `TEMP`, every `LC_*` and `XDG_*`, plus the Windows system
+  and profile variables on Windows) and the listed names. An empty list keeps
+  essentials only.
+- `agentProcessEnvBlock`: names children do not inherit.
+
+They apply in this order: the allowlist first, then the blocklist removes names
+from the result, then explicit grants apply last and always win. Explicit grants
+are `ACPX_AUTH_*` variables, credentials the runtime injects for an agent, and
+variables OpenClaw sets itself (such as the default `TOKIO_WORKER_THREADS`
+cap). Names are case-sensitive except on Windows, and must not contain `=` or
+whitespace.
+
+Example that keeps OpenClaw's own credentials away from ACP agents while they
+still inherit everything else:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "config": {
+          "agentProcessEnvBlock": [
+            "OPENCLAW_GATEWAY_TOKEN",
+            "OPENCLAW_HOOK_TOKEN",
+            "OP_CONNECT_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Block a provider key only when the ACP agent does not need it: an agent that
+authenticates with that key can no longer start. MCP servers the agent launches,
+including the OpenClaw tool bridges, normally inherit the agent's environment
+too. With an allowlist, also list what they need, such as `OPENCLAW_STATE_DIR`
+or `OPENCLAW_CONFIG_PATH` when the Gateway uses them, and any variable your
+config references. New settings apply to agents started after the plugin
+reloads.
 
 ## Permission configuration
 

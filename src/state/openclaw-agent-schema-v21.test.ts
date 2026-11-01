@@ -34,7 +34,7 @@ function seedCurrentFixture(database: DatabaseSync) {
 }
 
 describe("historical schema-21 storage fixture", () => {
-  it("restores the frozen outbox columns, primary key, and indexes", () => {
+  it("restores the frozen outbox and trajectory storage", () => {
     using database = new DatabaseSync(":memory:");
     using historical = new DatabaseSync(":memory:");
     seedCurrentFixture(database);
@@ -51,6 +51,9 @@ describe("historical schema-21 storage fixture", () => {
     expect(outbox.columns.filter((column) => column.pk !== 0)).toEqual([
       expect.objectContaining({ name: "advancement_key", pk: 1 }),
     ]);
+    expect(collectSqliteSchemaShape(database).trajectory_runtime_events).toEqual(
+      collectSqliteSchemaShape(historical).trajectory_runtime_events,
+    );
     expect(database.prepare("SELECT * FROM cache_entries").all()).toEqual(cacheRows);
     expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);

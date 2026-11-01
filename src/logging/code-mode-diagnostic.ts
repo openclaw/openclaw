@@ -49,11 +49,6 @@ export function logCodeModeFailure(error: unknown, context: CodeModeFailureConte
   });
 }
 
-type CodeModeDiagnosticFields = Record<
-  string,
-  boolean | number | string | readonly string[] | undefined
->;
-
 export function isCodeModeDiagnosticEnabled(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_DEBUG_CODE_MODE);
 }
@@ -61,7 +56,7 @@ export function isCodeModeDiagnosticEnabled(): boolean {
 export function logCodeModeDiagnostic(
   log: Pick<SubsystemLogger, "info">,
   boundary: string,
-  fields: CodeModeDiagnosticFields,
+  fields: Record<string, boolean | number | string | readonly string[] | undefined>,
 ): void {
   if (!isCodeModeDiagnosticEnabled()) {
     return;

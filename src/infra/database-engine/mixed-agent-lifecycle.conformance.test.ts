@@ -17,6 +17,7 @@ import {
   readActiveOpenClawAgentDatabaseLeasesReadOnly,
 } from "../../state/openclaw-agent-db-lease.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
+import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -36,6 +37,9 @@ import {
   useMixedAgentPair,
 } from "./mixed-agent.conformance.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
+
+const isSharedDeleteCommit = (facts: Record<string, unknown>) =>
+  facts.kind === "native-binding-storage" && facts.phase === "delete" && facts.stage === "commit";
 
 function observeNativeGrants(
   observe: (
@@ -85,20 +89,18 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
         const shared = openOpenClawStateDatabase(options);
         expect(isPostgresSqlConnection(database.db)).toBe(agentEngine === "postgres");
         expect(isPostgresSqlConnection(shared.db)).toBe(stateEngine === "postgres");
-        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly(options)).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ agent_id: "leased", path: database.path }),
-          ]),
-        );
+        const expectLease = (pathname: string) =>
+          expect(readActiveOpenClawAgentDatabaseLeasesReadOnly(options)).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ agent_id: "leased", path: pathname }),
+            ]),
+          );
+        expectLease(database.path);
         expect(() => assertNoOpenClawAgentDatabaseLeases("leased", options)).toThrow(/still open/);
         expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
         expect(() => assertNoOpenClawAgentDatabaseLeases("leased", options)).not.toThrow();
         const reopened = openOpenClawAgentDatabase(options);
-        expect(readActiveOpenClawAgentDatabaseLeasesReadOnly(options)).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ agent_id: "leased", path: reopened.path }),
-          ]),
-        );
+        expectLease(reopened.path);
         closeOpenClawAgentDatabaseByPath(reopened.path);
       });
     });
@@ -121,18 +123,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
             }),
           );
         });
-        const rejected = await fixture.remove().then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        if (
-          !(rejected instanceof Error) ||
-          !rejected.message.includes("binding changed before session deletion")
-        ) {
-          throw rejected instanceof Error
-            ? rejected
-            : new Error("A changed binding did not veto session deletion");
-        }
+        await expect(fixture.remove()).rejects.toThrow("binding changed before session deletion");
         expect(vetoReached).toBe(true);
         expect(fixture.readEntry()).toEqual(entry);
         expect(fixture.readBinding()).toMatchObject(binding!);
@@ -147,11 +138,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
         let sharedDelete = false;
         let agentCommit = false;
         const interception = observeNativeGrants((request, facts) => {
-          if (
-            facts.kind === "native-binding-storage" &&
-            facts.phase === "delete" &&
-            facts.stage === "commit"
-          ) {
+          if (isSharedDeleteCommit(facts)) {
             sharedDelete = true;
           }
           if (request.stage === "commit" && facts.kind === "session-native-binding") {
@@ -161,15 +148,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
             throw refusal;
           }
         });
-        const rejected = await fixture.remove().then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        if (rejected !== refusal) {
-          throw rejected instanceof Error
-            ? rejected
-            : new Error("Agent commit refusal did not abort session deletion");
-        }
+        await expect(fixture.remove()).rejects.toBe(refusal);
         expect(agentCommit).toBe(true);
         expect(fixture.readEntry()).toEqual(entry);
         expect(fixture.readBinding()).toMatchObject(binding!);
@@ -187,7 +166,10 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
       await upsertSessionEntryCore(scope, { sessionId: "retirement-before", updatedAt: 1 });
       const database = inAdmission(() => openOpenClawAgentDatabase(options));
       const shared = inAdmission(() => openOpenClawStateDatabase(options));
-      inAdmission(() => closeOpenClawAgentDatabaseByPath(database.path));
+      // Synchronous close revokes workers but does not join their native lease release.
+      await drainAgentDatabaseResources({ path: database.path }, async () =>
+        inAdmission(() => closeOpenClawAgentDatabaseByPath(database.path)),
+      );
       const target = { agentId: options.agentId, path: database.path };
       const cfg = {
         agents: { entries: { retiring: {}, kept: {} } },
@@ -301,9 +283,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
             observeNativeGrants((request, facts) => {
               const atCheckpoint =
                 checkpoint === "shared"
-                  ? facts.kind === "native-binding-storage" &&
-                    facts.phase === "delete" &&
-                    facts.stage === "commit"
+                  ? isSharedDeleteCommit(facts)
                   : request.stage === "commit" && facts.kind === "session-native-binding";
               if (atCheckpoint && !stopped) {
                 assert(

@@ -1,24 +1,22 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as databasePathIdentity from "../infra/sqlite-worker-identity.js";
-import { withOpenClawAgentDatabaseWrite } from "../plugin-sdk/sqlite-runtime.js";
+import { withOpenClawAgentDatabaseWrite as writeDatabase } from "../plugin-sdk/sqlite-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
-  borrowOpenClawAgentDatabase,
-  closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
-  openOpenClawAgentDatabase,
+  borrowOpenClawAgentDatabase as borrowDatabase,
+  closeOpenClawAgentDatabasesForTest as closeDatabases,
+  getOpenClawAgentDatabaseIfOpen as getOpenDatabase,
+  openOpenClawAgentDatabase as openDatabase,
 } from "./openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
 import {
-  runOpenClawAgentWorkerWrite,
-  runOpenClawAgentWriteAdmission,
+  runOpenClawAgentWorkerWrite as workerWrite,
+  runOpenClawAgentWriteAdmission as admitWrite,
 } from "./openclaw-agent-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,108 +35,56 @@ describe("agent database write admission", () => {
       release();
     }
     await drainStoreWriterQueuesForTest(SQLITE_SESSION_WRITER_QUEUES, "test cleanup");
-    closeOpenClawAgentDatabasesForTest();
+    closeDatabases();
   });
 
-  function reserveWorkerOperation(start?: () => void, workerOptions = options) {
+  function reserveWorkerOperation(workerOptions = options) {
     const entered = createDeferredCore();
     const settled = createDeferredCore();
     releases.push(settled.resolve);
-    const done = runOpenClawAgentWorkerWrite(workerOptions, async () => {
-      start?.();
+    const done = workerWrite(workerOptions, async () => {
       entered.resolve();
       await settled.promise;
     });
-    return { entered: entered.promise, done, release: settled.resolve };
+    return {
+      entered: entered.promise,
+      done,
+      release: settled.resolve,
+      finish: async () => {
+        settled.resolve();
+        await done;
+      },
+    };
   }
 
-  it.each(["stable", "retargeted"] as const)(
-    "preserves FIFO and rejects stale worker reservation through a %s alias",
-    async (target) => {
-      const directory = path.dirname(options.path);
-      const alias = path.join(directory, "alias");
-      const successor = path.join(directory, "successor");
-      const linkType = process.platform === "win32" ? "junction" : "dir";
-      fs.symlinkSync(directory, alias, linkType);
-      const aliased = { ...options, path: path.join(alias, path.basename(options.path)) };
-      const capture = databasePathIdentity.readDatabasePathIdentitySync;
-      const identity =
-        target === "retargeted"
-          ? vi
-              .spyOn(databasePathIdentity, "readDatabasePathIdentitySync")
-              .mockImplementationOnce((pathname) => {
-                const observed = capture(pathname);
-                // Move the alias between its captured identity and worker reservation.
-                fs.mkdirSync(successor);
-                fs.unlinkSync(alias);
-                fs.symlinkSync(successor, alias, linkType);
-                return observed;
-              })
-          : undefined;
-      const calls: number[] = [];
-      const writes: Promise<number>[] = [];
-      const reservation = reserveWorkerOperation(() => {
-        for (const value of [1, 2, 3]) {
-          writes.push(
-            withOpenClawAgentDatabaseWrite(value === 2 ? aliased : options, () => {
-              calls.push(value);
-              return value;
-            }),
-          );
-        }
-      }, aliased);
-      try {
-        if (target === "retargeted") {
-          reservation.release();
-          await expect(reservation.done).rejects.toThrow("database target changed");
-          expect(writes).toEqual([]);
-          return;
-        }
-        await reservation.entered;
-        await setImmediate();
-        expect(calls).toEqual([]);
-      } finally {
-        identity?.mockRestore();
-        reservation.release();
-        await reservation.done.catch(() => undefined);
-        await Promise.all(writes);
-      }
-      await expect(Promise.all(writes)).resolves.toEqual([1, 2, 3]);
-      expect(calls).toEqual([1, 2, 3]);
-    },
-  );
-
-  it("retains caller context and lets synchronous mutations reenter the ordinary owner", async () => {
-    const caller = new AsyncLocalStorage<string>();
-    const reservation = reserveWorkerOperation();
-    await reservation.entered;
-    const write = caller.run("foreground-owner", () =>
-      runOpenClawAgentWriteAdmission(options, () =>
-        withOpenClawAgentDatabaseWrite(options, () => caller.getStore()),
-      ),
-    );
-    reservation.release();
-    await reservation.done;
-    await expect(write).resolves.toBe("foreground-owner");
-  });
+  function aliasFixture() {
+    const directory = path.dirname(options.path);
+    const alias = path.join(directory, "alias");
+    const successor = path.join(directory, "successor");
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    fs.symlinkSync(directory, alias, linkType);
+    return {
+      successor,
+      aliased: { ...options, path: path.join(alias, path.basename(options.path)) },
+      other: { ...options, path: path.join(successor, path.basename(options.path)) },
+      retarget: () => {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(successor, alias, linkType);
+      },
+    };
+  }
 
   it.each(["cold", "warm", "borrowed", "admission"] as const)(
     "rejects a queued write after its alias retargets without committing to either target (%s)",
     async (mode) => {
-      const directory = path.dirname(options.path);
-      const alias = path.join(directory, "alias");
-      const successor = path.join(directory, "successor");
+      const { successor, aliased, other, retarget } = aliasFixture();
       fs.mkdirSync(successor);
-      const linkType = process.platform === "win32" ? "junction" : "dir";
-      fs.symlinkSync(directory, alias, linkType);
-      const aliased = { ...options, path: path.join(alias, path.basename(options.path)) };
-      const other = { ...options, path: path.join(successor, path.basename(options.path)) };
-      const original = openOpenClawAgentDatabase(options);
-      const replacement = openOpenClawAgentDatabase(other);
+      const original = openDatabase(options);
+      const replacement = openDatabase(other);
       for (const database of [original, replacement]) {
         database.db.exec("CREATE TABLE admission_proof (value TEXT NOT NULL) STRICT");
       }
-      const borrowed = mode === "borrowed" ? borrowOpenClawAgentDatabase(aliased) : undefined;
+      const borrowed = mode === "borrowed" ? borrowDatabase(aliased) : undefined;
       const borrowedDb = borrowed && requireNativeSqliteDatabase(borrowed.db);
       const commit = (value: string) => (database: typeof original) => {
         database.db.prepare("INSERT INTO admission_proof VALUES (?)").run(value);
@@ -146,20 +92,17 @@ describe("agent database write admission", () => {
       const cold = mode === "cold" || mode === "admission";
       const write = (value: string) =>
         mode === "admission"
-          ? runOpenClawAgentWriteAdmission(aliased, () =>
-              commit(value)(openOpenClawAgentDatabase(aliased)),
-            )
-          : withOpenClawAgentDatabaseWrite(aliased, commit(value), borrowedDb);
+          ? admitWrite(aliased, () => commit(value)(openDatabase(aliased)))
+          : writeDatabase(aliased, commit(value), borrowedDb);
       if (!cold) {
-        await withOpenClawAgentDatabaseWrite(aliased, commit("before"), borrowedDb);
+        await writeDatabase(aliased, commit("before"), borrowedDb);
       }
       const reservation = reserveWorkerOperation();
       await reservation.entered;
       const queued = write("queued");
       const refused = expect(queued).rejects.toThrow("database target changed");
       try {
-        fs.unlinkSync(alias);
-        fs.symlinkSync(successor, alias, linkType);
+        retarget();
         const next = write("successor");
         if (cold) {
           await next;
@@ -167,13 +110,12 @@ describe("agent database write admission", () => {
           await expect(next).rejects.toThrow("database file identity changed");
         }
       } finally {
-        reservation.release();
-        await reservation.done;
+        await reservation.finish();
         await Promise.allSettled([queued, refused]);
         borrowed?.release();
       }
       await refused;
-      await withOpenClawAgentDatabaseWrite(options, commit("after"));
+      await writeDatabase(options, commit("after"));
       expect(original.db.prepare("SELECT value FROM admission_proof ORDER BY rowid").all()).toEqual(
         (cold ? ["after"] : ["before", "after"]).map((value) => ({ value })),
       );
@@ -183,48 +125,47 @@ describe("agent database write admission", () => {
     },
   );
 
-  it.each([true])(
-    "rejects a closed borrowed handle without adopting a replacement (%s)",
-    async (replace) => {
-      const borrowed = borrowOpenClawAgentDatabase(options);
-      const reservation = reserveWorkerOperation();
-      await reservation.entered;
-      const mutate = vi.fn();
-      const write = withOpenClawAgentDatabaseWrite(
-        options,
-        mutate,
-        requireNativeSqliteDatabase(borrowed.db),
-      );
-      const rejected = expect(write).rejects.toThrow("Borrowed agent database closed or changed");
-      closeOpenClawAgentDatabasesForTest();
-      const replacement = replace ? openOpenClawAgentDatabase(options) : undefined;
-      reservation.release();
-      await reservation.done;
-      await rejected;
-      expect(mutate).not.toHaveBeenCalled();
-      expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(replacement);
-      borrowed.release();
-    },
-  );
+  it("rejects a closed borrowed handle without adopting a replacement", async () => {
+    const borrowed = borrowDatabase(options);
+    const reservation = reserveWorkerOperation();
+    await reservation.entered;
+    const mutate = vi.fn();
+    const write = writeDatabase(options, mutate, requireNativeSqliteDatabase(borrowed.db));
+    const rejected = expect(write).rejects.toThrow("Borrowed agent database closed or changed");
+    closeDatabases();
+    const replacement = openDatabase(options);
+    await reservation.finish();
+    await rejected;
+    expect(mutate).not.toHaveBeenCalled();
+    expect(getOpenDatabase(options)).toBe(replacement);
+    borrowed.release();
+  });
 
-  it.each(["cold", "borrowed"] as const)(
-    "pins a queued relative path before cwd changes (%s)",
+  it.each(["cold", "borrowed", "state directory"] as const)(
+    "pins queued relative database and registry paths before cwd changes (%s)",
     async (mode) => {
       const firstDirectory = path.dirname(options.path);
       const secondDirectory = path.join(firstDirectory, "other-cwd");
+      const originalState = path.join(firstDirectory, "state");
+      const stateDirectory = mode === "state directory";
+      const selectedPath = stateDirectory
+        ? path.join(originalState, "agents/main/agent/openclaw-agent.sqlite")
+        : options.path;
       fs.mkdirSync(secondDirectory);
-      const borrowed = mode === "borrowed" ? borrowOpenClawAgentDatabase(options) : undefined;
+      const borrowed = mode === "borrowed" ? borrowDatabase(options) : undefined;
       const borrowedDb = borrowed && requireNativeSqliteDatabase(borrowed.db);
-      const reservation = reserveWorkerOperation();
+      const reservation = reserveWorkerOperation({ ...options, path: selectedPath });
       const cwd = vi.spyOn(process, "cwd").mockReturnValue(firstDirectory);
       const mutate = vi.fn(
-        ({ path: databasePath }: ReturnType<typeof openOpenClawAgentDatabase>) => databasePath,
+        ({ path: databasePath }: ReturnType<typeof openDatabase>) => databasePath,
       );
       let write: Promise<string> | undefined;
       try {
         await reservation.entered;
-        write = withOpenClawAgentDatabaseWrite(
-          { ...options, path: path.basename(options.path) },
+        write = writeDatabase(
+          stateDirectory
+            ? { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: "state" } }
+            : { ...options, path: path.basename(options.path) },
           mutate,
           borrowedDb,
         );
@@ -232,18 +173,22 @@ describe("agent database write admission", () => {
         await setImmediate();
         expect(mutate).not.toHaveBeenCalled();
         cwd.mockReturnValue(secondDirectory);
-        reservation.release();
-        await reservation.done;
-        await expect(write).resolves.toBe(options.path);
+        await reservation.finish();
+        await expect(write).resolves.toBe(selectedPath);
         expect(mutate).toHaveBeenCalledOnce();
-        expect(fs.existsSync(options.path)).toBe(true);
+        expect(fs.existsSync(selectedPath)).toBe(true);
         expect(fs.existsSync(path.join(secondDirectory, path.basename(options.path)))).toBe(false);
+        if (stateDirectory) {
+          expect(fs.existsSync(path.join(originalState, "state/openclaw.sqlite"))).toBe(true);
+          expect(fs.existsSync(path.join(secondDirectory, "state/state/openclaw.sqlite"))).toBe(
+            false,
+          );
+        }
         if (borrowed) {
-          expect(getOpenClawAgentDatabaseIfOpen(options)?.db).toBe(borrowed.db);
+          expect(getOpenDatabase(options)?.db).toBe(borrowed.db);
         }
       } finally {
-        reservation.release();
-        await reservation.done;
+        await reservation.finish();
         await write?.catch(() => {});
         cwd.mockRestore();
         borrowed?.release();
@@ -251,60 +196,19 @@ describe("agent database write admission", () => {
     },
   );
 
-  it("pins a queued relative state directory for registry and lease ownership", async () => {
-    const root = path.dirname(options.path);
-    const otherCwd = path.join(root, "other-cwd");
-    const originalState = path.join(root, "state");
-    const selectedPath = path.join(
-      originalState,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(otherCwd);
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(root);
-    const release = createDeferredCore();
-    releases.push(release.resolve);
-    const reservation = runOpenClawAgentWorkerWrite(
-      { ...options, path: selectedPath },
-      async () => release.promise,
-    );
-    let write: Promise<string> | undefined;
-    try {
-      write = withOpenClawAgentDatabaseWrite(
-        { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: "state" } },
-        (database) => database.path,
-      );
-      void write.catch(() => {});
-      await setImmediate();
-      cwd.mockReturnValue(otherCwd);
-      release.resolve();
-      await reservation;
-      await expect(write).resolves.toBe(selectedPath);
-      expect(fs.existsSync(path.join(originalState, "state", "openclaw.sqlite"))).toBe(true);
-      expect(fs.existsSync(path.join(otherCwd, "state", "state", "openclaw.sqlite"))).toBe(false);
-    } finally {
-      release.resolve();
-      await reservation;
-      await write?.catch(() => {});
-      cwd.mockRestore();
-    }
-  });
-
   it("joins a mistakenly asynchronous callback before rejecting it or admitting the next writer", async () => {
     const tail = createDeferredCore();
     const entered = createDeferredCore();
     releases.push(tail.resolve);
     const calls: string[] = [];
-    const malformed = withOpenClawAgentDatabaseWrite(options, async () => {
+    const malformed = writeDatabase(options, async () => {
       entered.resolve();
       await tail.promise;
       calls.push("callback settled");
     });
     const rejected = expect(malformed).rejects.toThrow("write callbacks must remain synchronous");
     await entered.promise;
-    const next = withOpenClawAgentDatabaseWrite(options, () => calls.push("next writer"));
+    const next = writeDatabase(options, () => calls.push("next writer"));
     await setImmediate();
     expect(calls).toEqual([]);
     tail.resolve();

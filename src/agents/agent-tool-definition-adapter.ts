@@ -1,11 +1,21 @@
+import { formatErrorMessage, readErrorName } from "@openclaw/normalization-core/error-coercion";
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
- * Adapts runtime AgentTool objects into session ToolDefinition entries.
  * Owns hook execution, client-tool delegation, result coercion, and safe
  * logging for failed tool calls.
  */
+import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
 import { logDebug, logError } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { isPlainObject } from "../utils.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runAgentToolSourceExecutionGuard,
+} from "./agent-tool-source-execution-guard.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   buildBlockedToolResult,
@@ -31,25 +41,27 @@ import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js
 import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
-import {
-  attachInternalToolExecutionPreparer,
-  copyInternalToolResultState,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
-type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
+function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
+  const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
+  return () => {
+    assertCurrent();
+    runAgentToolSourceExecutionGuard(tool);
+  };
+}
 
-type ClientToolCallRecorder =
-  | ((toolName: string, params: Record<string, unknown>) => void)
-  | {
-      reserve?: (toolCallId: string, toolName: string) => void;
-      complete: (toolCallId: string, toolName: string, params: Record<string, unknown>) => void;
-      discard?: (toolCallId: string, toolName: string) => void;
-    };
+type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
+const toolDefinitionSources = new WeakMap<ToolDefinition, AnyAgentTool>();
+
+/** Policy follows the concrete registered definition back to its runtime-owned source. */
+export function getToolDefinitionSource(definition: ToolDefinition): AnyAgentTool | undefined {
+  return toolDefinitionSources.get(definition);
+}
 
 function describeToolExecutionError(err: unknown): {
   message: string;
@@ -61,24 +73,6 @@ function describeToolExecutionError(err: unknown): {
     return { message, ...(operatorHint ? { operatorHint } : {}) };
   }
   return { message: String(err) };
-}
-
-function normalizeToolExecutionResult(params: {
-  toolName: string;
-  result: unknown;
-}): AgentToolResult<unknown> {
-  const { toolName, result } = params;
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
-    if (Array.isArray(record.content)) {
-      return result as AgentToolResult<unknown>;
-    }
-    logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
-    return payloadTextResult(
-      ("details" in record ? record.details : record) ?? { status: "ok", tool: toolName },
-    );
-  }
-  return payloadTextResult(result ?? { status: "ok", tool: toolName });
 }
 
 function buildToolExecutionErrorResult(params: {
@@ -101,19 +95,32 @@ async function executeAdaptedToolOperation(params: {
   run: () => Promise<unknown>;
 }): Promise<AgentToolResult<unknown>> {
   try {
-    return normalizeToolExecutionResult({
-      toolName: params.normalizedToolName,
-      result: await params.run(),
-    });
+    const toolName = params.normalizedToolName;
+    const result = await params.run();
+    if (result && typeof result === "object") {
+      const record = result as Record<string, unknown>;
+      if (Array.isArray(record.content)) {
+        return result as AgentToolResult<unknown>;
+      }
+      logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
+      return payloadTextResult(
+        ("details" in record ? record.details : record) ?? { status: "ok", tool: toolName },
+      );
+    }
+    return payloadTextResult(result ?? { status: "ok", tool: toolName });
   } catch (err) {
-    if (params.signal?.aborted) {
+    if (params.signal?.aborted || isLocalStorageOutcomeError(err)) {
       throw err;
     }
     const described = describeToolExecutionError(err);
     const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
     // Operator-only: the hint names containment configuration and stays out of the
     // model-visible result below.
-    logError(`[tools] ${params.normalizedToolName} failed:${operatorHint}`);
+    const name = readErrorName(err);
+    const diagnostic = formatErrorMessage(err, { includeCode: true });
+    logError(
+      `[tools] ${params.normalizedToolName} failed: ${name ? `${name}: ` : ""}${diagnostic}${operatorHint}`,
+    );
     const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
@@ -204,6 +211,7 @@ export function toToolDefinitions(
         const [toolCallId, params, callSignal, onUpdate] = args;
         const signal = resolveAbortSignal(callSignal);
         signal?.throwIfAborted();
+        const assertSourceCurrent = captureSourceInvocationGuard(tool, signal);
         const control = readInternalExecutionControl(args[4]);
         recordStructuredReplayTrustForToolCall(toolCallId, tool, hookContext?.runId);
         let executeParams = params;
@@ -261,20 +269,25 @@ export function toToolDefinitions(
               if (decision && !decision.launch) {
                 return { content: [], details: { status: "skipped" } };
               }
+              assertSourceCurrent();
               decision?.start?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
             }
+            assertSourceCurrent();
             return await tool.execute(toolCallId, executeParams, signal, onUpdate);
           },
         });
       },
     } satisfies ToolDefinition;
+    toolDefinitionSources.set(definition, tool);
     copyCodeModeControlToolIdentity(tool, definition);
+    copyAgentToolReplaySafety(tool, definition);
     if (!sourcePreparer) {
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);
     }
     return attachInternalToolExecutionPreparer(definition, async (params) => {
       const signal = resolveAbortSignal(params.signal);
+      const assertSourceCurrent = captureSourceInvocationGuard(tool, signal);
       signal?.throwIfAborted();
       recordStructuredReplayTrustForToolCall(params.toolCallId, tool, hookContext?.runId);
       const settle = (run: () => Promise<unknown>) =>
@@ -308,6 +321,7 @@ export function toToolDefinitions(
       };
       let prepared: Awaited<ReturnType<typeof sourcePreparer>>;
       try {
+        assertSourceCurrent();
         prepared = await sourcePreparer({
           toolCallId: params.toolCallId,
           args: params.args,
@@ -324,10 +338,11 @@ export function toToolDefinitions(
       return {
         kind: "ready",
         args: ready.args,
-        execute: (onImplementationStart) => {
-          signal?.throwIfAborted();
-          return settle(() => ready.execute(onImplementationStart));
-        },
+        execute: (onImplementationStart) =>
+          settle(async () => {
+            assertSourceCurrent();
+            return await ready.execute(onImplementationStart);
+          }),
         dispose: ready.dispose,
       };
     });
@@ -366,7 +381,13 @@ function coerceParamsRecord(
 
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
-  onClientToolCall?: ClientToolCallRecorder,
+  onClientToolCall?:
+    | ((toolName: string, params: Record<string, unknown>) => void)
+    | {
+        reserve?: (toolCallId: string, toolName: string) => void;
+        complete: (toolCallId: string, toolName: string, params: Record<string, unknown>) => void;
+        discard?: (toolCallId: string, toolName: string) => void;
+      },
   hookContext?: HookContext,
 ): ToolDefinition[] {
   const recorder = typeof onClientToolCall === "object" ? onClientToolCall : undefined;
@@ -379,6 +400,7 @@ export function toClientToolDefinitions(
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const [toolCallId, params, signal] = args;
+        const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
         const control = readInternalExecutionControl(args[4]);
         recorder?.reserve?.(toolCallId, func.name);
         try {
@@ -410,7 +432,7 @@ export function toClientToolDefinitions(
             recorder?.discard?.(toolCallId, func.name);
             return { content: [], details: { status: "skipped" } };
           }
-          signal?.throwIfAborted();
+          assertSourceCurrent();
           decision?.start?.();
           if (typeof onClientToolCall === "function") {
             onClientToolCall(func.name, paramsRecord);
@@ -419,6 +441,9 @@ export function toClientToolDefinitions(
           }
         } catch (err) {
           recorder?.discard?.(toolCallId, func.name);
+          if (signal?.aborted) {
+            throw err;
+          }
           if (err instanceof ToolInputError) {
             return buildToolExecutionErrorResult({
               toolName: func.name,

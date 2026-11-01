@@ -299,7 +299,7 @@ export function createReleaseCheckSelection(options = {}) {
   const group = options.rerunGroup ?? "all";
   let groups;
   if (group === "all") {
-    groups = ["install-smoke", "cross-os", "package", "qa-parity"];
+    groups = ["install-smoke", "cross-os", "windows-node", "package", "qa-parity"];
     if (isEnabled(options.runReleaseSoak)) {
       groups.push("live-e2e");
     }
@@ -309,7 +309,15 @@ export function createReleaseCheckSelection(options = {}) {
   } else if (group === "qa") {
     groups = ["qa-parity", "qa-live"];
   } else if (
-    ["install-smoke", "cross-os", "live-e2e", "package", "qa-parity", "qa-live"].includes(group)
+    [
+      "install-smoke",
+      "cross-os",
+      "windows-node",
+      "live-e2e",
+      "package",
+      "qa-parity",
+      "qa-live",
+    ].includes(group)
   ) {
     groups = [group];
   } else {
@@ -322,6 +330,7 @@ export function createReleaseCheckSelection(options = {}) {
     release_check_groups_json: JSON.stringify(groups),
     install_smoke_scheduled: independent && selected("install-smoke"),
     cross_os_scheduled: candidate && selected("cross-os"),
+    windows_node_scheduled: candidate && selected("windows-node"),
     live_e2e_scheduled: independent && selected("live-e2e"),
     package_acceptance_scheduled: candidate && selected("package"),
     qa_parity_scheduled: independent && selected("qa-parity"),
@@ -332,7 +341,10 @@ export function createReleaseCheckSelection(options = {}) {
     ...result,
     package_acceptance_lanes: RELEASE_PACKAGE_ACCEPTANCE_LANES,
     package_required:
-      result.cross_os_scheduled || result.package_acceptance_scheduled || result.docker_required,
+      result.cross_os_scheduled ||
+      result.windows_node_scheduled ||
+      result.package_acceptance_scheduled ||
+      result.docker_required,
   };
 }
 

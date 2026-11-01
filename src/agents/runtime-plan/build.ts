@@ -19,6 +19,7 @@ import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
 } from "../embedded-agent-runner/tool-schema-runtime.js";
+import { resolveModelCyberAccessProgramDefault } from "../model-catalog-access-programs.js";
 import type { AgentTool } from "../runtime/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
@@ -175,8 +176,8 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     });
   const resolveTransportExtraParams = (
     overrides: Parameters<AgentRuntimePlan["transport"]["resolveExtraParams"]>[0] = {},
-  ) =>
-    resolvePreparedExtraParams({
+  ) => {
+    const extraParams = resolvePreparedExtraParams({
       cfg: config,
       transportConfig: asOpenClawConfig(params.transportConfig),
       provider: params.provider,
@@ -193,6 +194,19 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
         ? { mode: auth.selectedAuthMode, authFlow: auth.selectedAuthFlow }
         : undefined,
     });
+    if (Object.hasOwn(extraParams, "accessPrograms")) {
+      return extraParams;
+    }
+    const cyber = resolveModelCyberAccessProgramDefault({
+      config,
+      agentId: overrides.agentId ?? params.agentId,
+      provider: params.provider,
+      modelId: params.modelId,
+      runtimeId: params.harnessRuntime ?? params.harnessId ?? "openclaw",
+      route: auth.modelRoute,
+    });
+    return cyber === undefined ? extraParams : { ...extraParams, accessPrograms: { cyber } };
+  };
   let memoizedTranscriptPolicy: ReturnType<typeof resolveTranscriptRuntimePolicy> | undefined;
   let memoizedTransportExtraParams: ReturnType<typeof resolveTransportExtraParams> | undefined;
   const providerTextTransforms = resolveProviderTextTransforms({

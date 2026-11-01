@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { createSqliteFamilyEngines } from "./database-engine/selection-fixture.test-support.js";
 import type { DatabaseEngineSelection } from "./database-engine/types.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
@@ -27,16 +28,7 @@ describe("SQLite worker state context across module copies", () => {
     "hands the installed %s state selection to workers without losing SQLite family choices",
     async (state) => {
       const selection: DatabaseEngineSelection = {
-        effectiveEngines: {
-          state,
-          agent: "sqlite",
-          workboard: "sqlite",
-          logbook: "sqlite",
-          "team-reports": "sqlite",
-          quarantine: "sqlite",
-          "managed-update": "sqlite",
-          "package-activation": "sqlite",
-        },
+        effectiveEngines: createSqliteFamilyEngines({ state }),
         ...(state === "postgres"
           ? { postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" } }
           : {}),

@@ -8,7 +8,8 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
   "contracts": {
-    "usageProviders": ["deepseek"]
+    "usageProviders": ["deepseek"],
+    "webSearchProviders": ["deepseek"]
   },
   "providerEndpoints": [
     {
@@ -32,11 +33,13 @@
         "baseUrl": "https://api.deepseek.com",
         "api": "openai-completions",
         "defaultModel": "deepseek-v4-pro",
+        "family": "deepseek",
         "models": [
           {
             "id": "deepseek-v4-flash",
             "name": "DeepSeek V4 Flash",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -47,16 +50,19 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           },
           {
             "id": "deepseek-v4-pro",
             "name": "DeepSeek V4 Pro",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -67,16 +73,19 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           },
           {
             "id": "deepseek-v4-flash-vision-exp",
             "name": "DeepSeek V4 Flash Vision (Experimental)",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -87,16 +96,19 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           },
           {
             "id": "deepseek-flash",
             "name": "DeepSeek V4.1 Flash",
             "reasoning": true,
+            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
@@ -107,10 +119,12 @@
               "cacheWrite": 0
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
               "maxTokensField": "max_tokens",
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "defaultThinkingLevel": "high"
             }
           }
         ]
@@ -147,6 +161,31 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
-  }
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "DeepSeek Search API Key",
+      "help": "DeepSeek API key. Falls back to DEEPSEEK_API_KEY, then to models.providers.deepseek.apiKey while that provider and its models use https://api.deepseek.com.",
+      "sensitive": true
+    }
+  },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ]
 }

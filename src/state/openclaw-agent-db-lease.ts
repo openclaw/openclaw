@@ -1,23 +1,26 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { LruCache } from "../infra/lru-cache.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import type { SqliteIntegrityCheck } from "../infra/sqlite-integrity.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   AgentDatabaseDeletionRefusedError,
@@ -26,7 +29,7 @@ import {
 } from "./agent-deletion-journal.js";
 import { withExistingAgentLeaseWrite } from "./openclaw-agent-db-existing-write.js";
 import {
-  agentDatabaseLeaseStaleReason,
+  createAgentDatabaseLeaseStaleReasonReader,
   mayShareAgentDatabaseFile,
   readAgentDatabaseLeaseProvenance,
   agentDatabaseLeaseProcessDeathRefusal,
@@ -47,6 +50,7 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
 import { ensureAgentDatabaseLeaseSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -59,6 +63,12 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 
 const log = createSubsystemLogger("state/agent-db");
+// Diagnostic state survives handle churn, but never owns leases or suppresses seal checks.
+const closeReceipts = resolveGlobalSingleton(
+  Symbol.for("openclaw.agentDatabaseCloseReceipts"),
+  () => new LruCache<{ agentId: string; receipt: string }>(128),
+  (receipts) => receipts.clear(),
+);
 
 type AgentDatabaseLeaseDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -131,6 +141,7 @@ export type OpenClawAgentIntegrityVerificationReceiver = (
   canReuseRuntimeIntegrity: boolean,
   invalidated: boolean,
   because?: string,
+  liveOwnerProvenance?: string,
 ) => void;
 
 export function claimOpenClawAgentDatabaseLease(
@@ -193,10 +204,12 @@ function claimAgentDatabaseLeaseInDatabase(
   assertAgentDeletionPathFence(database, deletionFence);
   let invalidated = false;
   let hasOtherOwner = false;
+  let liveOwnerProvenance: string | undefined;
   let processDeathRefusal: string | undefined;
+  const staleReasonFor = createAgentDatabaseLeaseStaleReasonReader();
   for (const held of readAgentDatabaseLeases(database.db)) {
     const sharesFile = mayShareAgentDatabaseFile(held.path, owner.path);
-    const staleReason = sharesFile ? agentDatabaseLeaseStaleReason(held) : undefined;
+    const staleReason = sharesFile ? staleReasonFor(held) : undefined;
     if (staleReason) {
       const because = agentDatabaseLeaseProcessDeathRefusal(held, owner.path, staleReason);
       processDeathRefusal ??= because;
@@ -215,6 +228,7 @@ function claimAgentDatabaseLeaseInDatabase(
         database.db,
         db.deleteFrom("agent_database_leases").where("lease_id", "=", held.lease_id),
       );
+      reportPriorBootLeaseRelease(database.db, held.lease_id, staleReason);
     } else if (
       sharesFile &&
       held.lease_id !== owner.leaseId &&
@@ -224,12 +238,26 @@ function claimAgentDatabaseLeaseInDatabase(
         held.owner_start_time !== owner.ownerStartTime)
     ) {
       hasOtherOwner = true;
+      // A live peer that finished admitting this same physical file already verified it; another
+      // process rescanning it adds no protection and costs a full integrity_check per open.
+      // Provenance binds boot, PID namespace, build and file inode, so a replaced path never borrows.
+      if (
+        held.path === owner.path &&
+        held.provenance !== null &&
+        held.provenance === owner.provenance &&
+        held.opened_at > 0 &&
+        held.owner_start_time !== null &&
+        getFileLockProcessStartTime(held.owner_pid) === held.owner_start_time
+      ) {
+        liveOwnerProvenance = held.provenance;
+      }
     }
   }
   onVerification?.(
     !hasOtherOwner,
     invalidated,
     processDeathRefusal ?? (hasOtherOwner ? "live-or-unknown-owner" : undefined),
+    liveOwnerProvenance,
   );
   executeSqliteQuerySync(
     database.db,
@@ -240,7 +268,7 @@ function claimAgentDatabaseLeaseInDatabase(
       path: owner.path,
       owner_pid: owner.ownerPid,
       owner_start_time: owner.ownerStartTime,
-      opened_at: 0, // A killed, unfinished admission cannot lend process-death provenance.
+      opened_at: 0, // A live, unfinished admission cannot lend verification.
     }),
   );
 }
@@ -248,21 +276,35 @@ function claimAgentDatabaseLeaseInDatabase(
 export function releaseOpenClawAgentDatabaseLease(
   leaseId: string,
   options: OpenClawStateDatabaseOptions = {},
-  closeOutcome?: { path: string; publishSeal: () => boolean } | "read-only" | "uncheckpointed",
+  closeOutcome?:
+    | { path: string; publishSeal: () => boolean }
+    | "read-only"
+    | "uncheckpointed"
+    | "postgres-closed",
 ): void {
   const release = (database: EngineConnection) => {
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
     const held = executeSqliteQueryTakeFirstSync(
       database,
-      db.selectFrom("agent_database_leases").select("path").where("lease_id", "=", leaseId),
+      closeOutcome === undefined
+        ? db
+            .selectFrom("agent_database_leases")
+            .select(["path", "agent_id"])
+            .where("lease_id", "=", leaseId)
+        : db
+            .deleteFrom("agent_database_leases")
+            .where("lease_id", "=", leaseId)
+            .returning(["path", "agent_id"]),
     );
-    if (held && !closeOutcome) {
-      clearAgentDatabaseLeaseVerifications(database, held.path);
+    if (closeOutcome === undefined) {
+      if (held) {
+        clearAgentDatabaseLeaseVerifications(database, held.path);
+      }
+      executeSqliteQuerySync(
+        database,
+        db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
+      );
     }
-    executeSqliteQuerySync(
-      database,
-      db.deleteFrom("agent_database_leases").where("lease_id", "=", leaseId),
-    );
     let receipt: string;
     if (!held) {
       receipt = "lease-not-held";
@@ -279,12 +321,24 @@ export function releaseOpenClawAgentDatabaseLease(
       // Shared-state writer admission excludes a competing claim until this release commits.
       receipt = closeOutcome.publishSeal() ? "written" : "verification-missing";
     }
-    const publish = () =>
-      log.info(`agent database clean-close receipt: ${receipt}`, {
-        path: held?.path,
-        leaseId,
-        receipt,
-      });
+    const publish = () => {
+      if (held) {
+        const previous = closeReceipts.get(held.path);
+        if (previous?.agentId === held.agent_id && previous.receipt === receipt) {
+          return;
+        }
+        closeReceipts.set(held.path, { agentId: held.agent_id, receipt });
+      }
+      log.info(
+        `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}`,
+        {
+          agentId: held?.agent_id,
+          path: held?.path,
+          leaseId,
+          receipt,
+        },
+      );
+    };
     if (!deferSqlitePostCommitPublication(database, publish)) {
       publish();
     }
@@ -296,20 +350,23 @@ export function releaseOpenClawAgentDatabaseLease(
   if (maintenance?.databasePath === databasePath) {
     return withExistingAgentLeaseWrite(maintenance.authority, options, release);
   }
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      ensureAgentDatabaseLeaseSchema(database.db);
-      release(database.db);
-    },
-    typeof closeOutcome === "object"
-      ? {
-          ...options,
-          initializationAgentPaths: [
-            ...(options.initializationAgentPaths ?? []),
-            closeOutcome.path,
-          ],
-        }
-      : options,
+  // Native handle disposal releases its lock after boot admission has ended.
+  withEngineStoreAdmission(() =>
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        ensureAgentDatabaseLeaseSchema(database.db);
+        release(database.db);
+      },
+      typeof closeOutcome === "object"
+        ? {
+            ...options,
+            initializationAgentPaths: [
+              ...(options.initializationAgentPaths ?? []),
+              closeOutcome.path,
+            ],
+          }
+        : options,
+    ),
   );
 }
 
@@ -327,10 +384,11 @@ function hasAgentDatabasePathLease(database: EngineConnection, pathname: string)
   );
 }
 
-/** Record that the claimed native owner completed its admission. */
+/** Preserve a known FULL requirement across death, then replace it on completed admission. */
 export function recordOpenClawAgentDatabaseAdmission(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  status: "full-required" | "complete" = "complete",
 ): void {
   runOpenClawStateWriteTransaction(
     (database) => {
@@ -339,7 +397,7 @@ export function recordOpenClawAgentDatabaseAdmission(
         database.db,
         getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db)
           .updateTable("agent_database_leases")
-          .set({ opened_at: Date.now() })
+          .set({ opened_at: status === "full-required" ? -1 : Date.now() })
           .where("lease_id", "=", leaseId)
           .where("agent_id", "=", params.agentId)
           .where("path", "=", params.path)
@@ -350,6 +408,7 @@ export function recordOpenClawAgentDatabaseAdmission(
       }
     },
     { env: params.env },
+    { singleStatement: true },
   );
 }
 
@@ -367,6 +426,13 @@ export function assertOpenClawAgentDatabaseLease(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
 ): void {
+  readOpenClawAgentDatabaseLeaseClaim(leaseId, params);
+}
+
+function readOpenClawAgentDatabaseLeaseClaim(
+  leaseId: string,
+  params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+) {
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   const database = openOpenClawStateDatabase({
     env: params.env,
@@ -385,6 +451,7 @@ export function assertOpenClawAgentDatabaseLease(
   ) {
     throw new Error(`Agent database open lost its runtime lease: ${params.path}`);
   }
+  return { database, held };
 }
 
 export type OpenClawAgentDatabaseWorkerLeaseReceipt = ReturnType<
@@ -401,6 +468,12 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
+  startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
+  startupRepair?: (
+    check: SqliteIntegrityCheck,
+    error: unknown,
+    assertCurrent: () => void,
+  ) => boolean;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
   const database = { ...sharedDatabase };
@@ -462,21 +535,13 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
 ) {
-  assertOpenClawAgentDatabaseLease(leaseId, params);
-  const database = openOpenClawStateDatabase({
-    env: params.env,
-    initializationAgentPaths: [params.path],
-  });
-  const row = readAgentDatabaseLeases(database.db, leaseId)[0];
-  if (!row) {
-    throw new Error("SQLite reclamation Worker lost its admitted lease receipt");
-  }
+  const { database, held } = readOpenClawAgentDatabaseLeaseClaim(leaseId, params);
   return {
     leaseId,
-    agentId: row.agent_id,
-    path: row.path,
-    ownerPid: row.owner_pid,
-    ownerStartTime: row.owner_start_time,
+    agentId: held.agent_id,
+    path: held.path,
+    ownerPid: held.owner_pid,
+    ownerStartTime: held.owner_start_time,
     sharedStatePath: database.path,
     sharedStateIdentity: readDatabasePathIdentitySync(database.path).key,
   };
@@ -486,6 +551,7 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
 export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   database: EngineConnection,
   receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
+  outcome: "refused-before-open" | "unknown",
   onInvalidation?: () => void,
 ): void {
   const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
@@ -501,8 +567,10 @@ export function releaseExitedOpenClawAgentDatabaseLeaseInDatabase(
   ) {
     throw new Error("SQLite reclamation Worker lease cleanup receipt no longer matches");
   }
-  onInvalidation?.();
-  clearAgentDatabaseLeaseVerifications(database, receipt.path);
+  if (outcome !== "refused-before-open") {
+    onInvalidation?.();
+    clearAgentDatabaseLeaseVerifications(database, receipt.path);
+  }
   executeSqliteQuerySync(
     database,
     db.deleteFrom("agent_database_leases").where("lease_id", "=", receipt.leaseId),
@@ -516,6 +584,21 @@ function readAgentDatabaseLeases(database: EngineConnection, leaseId?: string) {
     database,
     leaseId === undefined ? query : query.where("lease_id", "=", leaseId),
   ).rows;
+}
+
+function reportPriorBootLeaseRelease(
+  database: EngineConnection,
+  leaseId: string,
+  reason: ReturnType<ReturnType<typeof createAgentDatabaseLeaseStaleReasonReader>>,
+) {
+  if (reason !== "owner-prior-boot") {
+    return;
+  }
+  const publish = () =>
+    log.warn(`Released legacy agent database lease ${leaseId} from a prior boot.`);
+  if (!deferSqlitePostCommitPublication(database, publish)) {
+    publish();
+  }
 }
 
 /** Read-only diagnostic observation; an empty result never grants maintenance authority. */
@@ -541,7 +624,8 @@ export function readActiveOpenClawAgentDatabaseLeasesReadOnly(
       if (!tableExists(db, "agent_database_leases")) {
         return [];
       }
-      return readAgentDatabaseLeases(db).filter((row) => !agentDatabaseLeaseStaleReason(row));
+      const staleReasonFor = createAgentDatabaseLeaseStaleReasonReader();
+      return readAgentDatabaseLeases(db).filter((row) => !staleReasonFor(row));
     };
     return isPostgresSqlConnection(db) ? read() : runWithSqliteBusyTimeout(db, 250, read);
   };
@@ -549,15 +633,14 @@ export function readActiveOpenClawAgentDatabaseLeasesReadOnly(
     return withOpenClawStateReadOnlyLocation(
       ({ db }) => readActiveLeases(db),
       pathname,
-      prepareSqliteReadOnlyLocationSync(pathname),
+      isStatePostgres() ? pathname : prepareSqliteReadOnlyLocationSync(pathname),
       openStateSchemaReadAdmission,
     );
   }
-  const closeSchemaReadAdmission = openStateSchemaReadAdmission
-    ? isPostgresSqlConnection(cached.db)
-      ? requireNativeDatabaseFile("postgres", "repair")
-      : openStateSchemaReadAdmission(cached.db)
-    : undefined;
+  const closeSchemaReadAdmission =
+    !isPostgresSqlConnection(cached.db) && openStateSchemaReadAdmission
+      ? openStateSchemaReadAdmission(cached.db)
+      : undefined;
   try {
     return readActiveLeases(cached.db);
   } finally {
@@ -577,7 +660,7 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
   const [owner] = owners;
   if (owner) {
     throw new OpenClawAgentDatabaseLeaseActiveError(
-      `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
+      `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop the Gateway and other OpenClaw processes, or reboot, then rerun openclaw doctor --fix.`,
       [...new Set(owners.map((row) => row.owner_pid))],
     );
   }
@@ -595,62 +678,36 @@ export function assertNoOpenClawAgentDatabaseLeases(
   }
   const maintenance = typeof agentIdRaw === "string" ? undefined : agentIdRaw;
   const agentId = typeof agentIdRaw === "string" ? normalizeAgentId(agentIdRaw) : undefined;
-  const rows = runOpenClawStateWriteTransaction((database) => {
+  runOpenClawStateWriteTransaction((database) => {
     maintenance?.assertOwnedInTransaction(database.db);
     ensureAgentDatabaseLeaseSchema(database.db);
-    return readAgentDatabaseLeases(database.db);
-  }, options);
-
-  const staleLeaseIds = rows.filter(agentDatabaseLeaseStaleReason).map((row) => row.lease_id);
-  if (staleLeaseIds.length > 0) {
-    runOpenClawStateWriteTransaction((database) => {
-      maintenance?.assertOwnedInTransaction(database.db);
-      ensureAgentDatabaseLeaseSchema(database.db);
-      const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
-      for (const row of rows.filter((candidate) => staleLeaseIds.includes(candidate.lease_id))) {
+    const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
+    const staleReasonFor = createAgentDatabaseLeaseStaleReasonReader();
+    for (const row of readAgentDatabaseLeases(database.db)) {
+      const staleReason = staleReasonFor(row);
+      if (staleReason) {
         clearAgentDatabaseLeaseVerifications(database.db, row.path);
+        executeSqliteQuerySync(
+          database.db,
+          db.deleteFrom("agent_database_leases").where("lease_id", "=", row.lease_id),
+        );
+        reportPriorBootLeaseRelease(database.db, row.lease_id, staleReason);
+        continue;
       }
-      executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("agent_database_leases").where("lease_id", "in", staleLeaseIds),
-      );
-    }, options);
-  }
-  const staleLeaseIdSet = new Set(staleLeaseIds);
-  for (const row of rows) {
-    if (staleLeaseIdSet.has(row.lease_id)) {
-      continue;
-    }
-    const deletionFence = agentId
-      ? prepareAgentDeletionPathFence(
+      if (!agentId || row.agent_id === agentId) {
+        throw new OpenClawAgentDatabaseLeaseActiveError(
+          `Agent ${row.agent_id} database is still open in another process; stop the Gateway and other OpenClaw processes, or reboot, then rerun openclaw doctor --fix.`,
+        );
+      }
+      assertAgentDeletionPathFence(
+        database,
+        prepareAgentDeletionPathFence(
           { agentId: row.agent_id, path: row.path, fenceAgentId: agentId },
           options,
-        )
-      : undefined;
-    let leaseStillExists = false;
-    runOpenClawStateWriteTransaction((database) => {
-      maintenance?.assertOwnedInTransaction(database.db);
-      ensureAgentDatabaseLeaseSchema(database.db);
-      const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db);
-      leaseStillExists =
-        executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("agent_database_leases")
-            .select("lease_id")
-            .where("lease_id", "=", row.lease_id),
-        ) !== undefined;
-      if (leaseStillExists && row.agent_id !== agentId && deletionFence) {
-        assertAgentDeletionPathFence(database, deletionFence);
-      }
-    }, options);
-    if (leaseStillExists && (!agentId || row.agent_id === agentId)) {
-      const remediation = agentId ? "." : "; stop that process and rerun openclaw doctor --fix.";
-      throw new OpenClawAgentDatabaseLeaseActiveError(
-        `Agent ${row.agent_id} database is still open in another process${remediation}`,
+        ),
       );
     }
-  }
+  }, options);
 }
 
 /** Stable existing rows can be drained before the candidate is allowed to migrate. */
@@ -660,16 +717,19 @@ function assertNoExistingAgentDatabaseLeases(
 ): void {
   withExistingAgentLeaseWrite(maintenance, options, (db) => {
     const query = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(db);
+    const staleReasonFor = createAgentDatabaseLeaseStaleReasonReader();
     for (const row of readAgentDatabaseLeases(db)) {
-      if (agentDatabaseLeaseStaleReason(row)) {
+      const staleReason = staleReasonFor(row);
+      if (staleReason) {
         clearAgentDatabaseLeaseVerifications(db, row.path);
         executeSqliteQuerySync(
           db,
           query.deleteFrom("agent_database_leases").where("lease_id", "=", row.lease_id),
         );
+        reportPriorBootLeaseRelease(db, row.lease_id, staleReason);
       } else {
         throw new OpenClawAgentDatabaseLeaseActiveError(
-          `Agent ${row.agent_id} database is still open in another process; stop that process and retry.`,
+          `Agent ${row.agent_id} database is still open in another process; stop the Gateway and other OpenClaw processes, or reboot, then rerun openclaw doctor --fix.`,
         );
       }
     }

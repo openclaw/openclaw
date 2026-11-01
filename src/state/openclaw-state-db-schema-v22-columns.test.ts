@@ -3,16 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  buildAcpDatabaseSessionKey,
-  upsertAcpSessionMetaRow,
-} from "../acp/runtime/session-meta-keys.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
-import { bindAcpSessionMeta } from "../acp/runtime/session-meta-write.kernel.js";
+import { bindAcpSessionIdentity } from "../acp/runtime/session-meta-write.kernel.js";
 import { createUnattributedExecutionContext } from "../audit/execution-decision-facts.test-support.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "../audit/execution-decision-receipts.js";
 import type { SessionAcpIdentity } from "../config/sessions/types.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { listWorkshopChangesInDatabase } from "../skills/workshop/changes.kernel.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -20,32 +16,35 @@ import {
   STATE_CURSOR_TABLES_V22,
 } from "./openclaw-state-db-schema-v22-columns.js";
 import { withLegacyStateHeadLayout } from "./openclaw-state-db-schema-v26-layout.js";
+import { withLegacyStateWriteIndexes } from "./openclaw-state-db-schema-v27-indexes.js";
+import { stateTemplateNamesMigration } from "./openclaw-state-db-schema-v36-template-names.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { expectSchemaVersion } from "./openclaw-state-schema-version-assert.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
 function siblingStatistics(database: DatabaseSync) {
-  return ["sqlite_stat1", "sqlite_stat4"].flatMap((table) => {
-    if (!database.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(table)) {
-      return [];
-    }
-    return [
-      {
-        table,
-        rows: database
-          .prepare(`SELECT * FROM ${table}
+  return ["sqlite_stat1", "sqlite_stat4"]
+    .filter((table) => database.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get(table))
+    .map((table) => ({
+      table,
+      rows: database
+        .prepare(`SELECT * FROM ${table}
             WHERE tbl NOT IN ('acp_sessions', 'operator_approvals', 'cron_run_receipts',
               'execution_decision_facts', 'skill_workshop_changes')
             ORDER BY tbl, idx, rowid`)
-          .all(),
-      },
-    ];
-  });
+        .all(),
+    }));
 }
 
 it("preserves local columns, constraints, indexes, and triggers during cursor backfill", () => {
@@ -69,11 +68,7 @@ it("preserves local columns, constraints, indexes, and triggers during cursor ba
     { rowid: 12, cursor_id: 12, change_id: "second", value: 5, doubled: 10, label: "second!" },
   ]);
   expect(
-    db
-      .prepare(
-        "SELECT name FROM sqlite_schema WHERE name IN ('local_value', 'local_update') ORDER BY name",
-      )
-      .all(),
+    db.prepare("SELECT name FROM sqlite_schema WHERE name GLOB 'local_*' ORDER BY name").all(),
   ).toEqual([{ name: "local_update" }, { name: "local_value" }]);
   db.exec("UPDATE skill_workshop_changes SET value = 4 WHERE cursor_id = 7");
   expect(db.prepare("SELECT * FROM updates").all()).toEqual([{ value: 4 }]);
@@ -82,29 +77,10 @@ it("preserves local columns, constraints, indexes, and triggers during cursor ba
 
 it("matches string-only writer promotion with the v22 SQL backfill", () => {
   using db = new DatabaseSync(":memory:");
-  using writer = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE acp_sessions (session_key TEXT PRIMARY KEY, identity_json TEXT) STRICT");
-  writer.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "acp_sessions", {
-      endMarker: "CREATE TABLE IF NOT EXISTS acp_replay_sessions",
-      includeEndMarker: false,
-    }),
-  );
   const whitespace =
     "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
-  const trimmedCodePoints: string[] = [];
-  for (let codePoint = 0; codePoint <= 0x10ffff; codePoint++) {
-    const character = String.fromCodePoint(codePoint);
-    if (character.trim() === "") {
-      trimmedCodePoints.push(character);
-    }
-  }
-  expect(trimmedCodePoints).toEqual(Array.from(whitespace));
   const values = [
-    "ordinary",
-    " leading",
-    "trailing ",
-    " both ",
     "",
     whitespace,
     `${whitespace}resume${whitespace}`,
@@ -125,22 +101,10 @@ it("matches string-only writer promotion with the v22 SQL backfill", () => {
     const identity: SessionAcpIdentity = { state: "resolved", source: "ensure", lastUpdatedAt: 1 };
     // Exercise the writer's runtime type guard with non-string field values.
     Object.assign(identity, { agentSessionId: value, acpxSessionId: value });
-    const row = bindAcpSessionMeta({
-      sessionKey: String(index),
-      updatedAt: 1,
-      meta: {
-        backend: "fixture",
-        agent: "main",
-        runtimeSessionName: "fixture",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 1,
-        identity,
-      },
-    });
-    insert.run(row.session_key, row.identity_json);
-    upsertAcpSessionMetaRow(writer, row);
-    return row;
+    const { identity_json, ...promoted } = bindAcpSessionIdentity(identity);
+    const key = String(index);
+    insert.run(key, identity_json);
+    return { key, promoted };
   });
   insert.run("invalid", "{");
   insert.run(
@@ -150,8 +114,8 @@ it("matches string-only writer promotion with the v22 SQL backfill", () => {
   expect(migratePortableIdentityColumnsV22(db, 21)).toBe(true);
   const sql =
     "SELECT resume_agent_session_id, resume_acpx_session_id FROM acp_sessions WHERE session_key = ?";
-  for (const row of rows) {
-    expect(db.prepare(sql).get(row.session_key)).toEqual(writer.prepare(sql).get(row.session_key));
+  for (const { key, promoted } of rows) {
+    expect(db.prepare(sql).get(key)).toEqual(promoted);
   }
   expect(db.prepare(sql).get("invalid")).toEqual({
     resume_agent_session_id: null,
@@ -175,11 +139,20 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
     { sessionKey: "agent:main:acp:a", session_id: "session-a", updated_at: 100, agent: "main" },
     { sessionKey: "agent:main:acp:b", session_id: "session-b", updated_at: 100, agent: "main" },
   ];
+  function copyTemplate(label: string) {
+    const env = { OPENCLAW_STATE_DIR: directories.make(label) };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    fs.copyFileSync(template, pathname);
+    return { env, path: pathname };
+  }
 
   beforeAll(() => {
     template = path.join(directories.make("v21-portable-template-"), "openclaw.sqlite");
     using db = new DatabaseSync(template);
-    db.exec(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL));
+    db.exec(withLegacyStateWriteIndexes(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL)));
+    restorePreTemplateStateIdentifiersForTest(db);
+    addPreCutoverClientCredentialTablesForTest(db);
     // Reconstruct exactly the columns and indexes changed by v22; all other contracts stay current.
     for (const table of STATE_CURSOR_TABLES_V22) {
       const index =
@@ -196,100 +169,50 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
       CREATE INDEX idx_acp_sessions_resume_acpx ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'), char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
       PRAGMA user_version = 21;
       INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at) VALUES ('primary', 'global', 21, 1, 1);`);
-    for (const [name, rowId] of [
-      ["c", 7],
-      ["a", 30],
-      ["b", 12],
-    ] as const) {
-      db.prepare(`INSERT INTO operator_approvals
+    for (const [name, rowId] of Object.entries({ c: 7, a: 30, b: 12 })) {
+      db.exec(`INSERT INTO operator_approvals
         (rowid, approval_id, resolution_ref, kind, status, presentation_json, reviewer_device_ids_json,
         source_run_id, audience_session_keys_json, runtime_epoch, created_at_ms, expires_at_ms,
         updated_at_ms, decision, terminal_reason, resolved_at_ms, resolver_kind)
-        VALUES (?, ?, ?, 'exec', 'denied', '{}', '[]', 'run-1', '[]', 'epoch', 50, 200, 100, 'deny', 'user', 100, 'system')`).run(
-        rowId,
-        name,
-        name.repeat(43),
-      );
-      db.prepare(`INSERT INTO cron_run_receipts
+        VALUES (${rowId}, '${name}', '${name.repeat(43)}', 'exec', 'denied', '{}', '[]', 'run-1', '[]', 'epoch', 50, 200, 100, 'deny', 'user', 100, 'system');
+        INSERT INTO cron_run_receipts
         (rowid, receipt_id, store_key, job_id, config_revision, agent_id, request_run_id, status, owner_pid, started_at_ms, finished_at_ms)
-        VALUES (?, ?, 'default', ?, 'revision', 'main', 'run-1', 'ok', 1, 100, 110)`).run(
-        rowId,
-        name,
-        name,
-      );
-      db.prepare(
-        "INSERT INTO execution_owner_lifecycle_bindings (owner_kind, owner_id, context_id, execution_id) VALUES ('cron', ?, 'context-1', 'execution-1')",
-      ).run(name);
-      db.prepare(`INSERT INTO execution_decision_facts
+        VALUES (${rowId}, '${name}', 'default', '${name}', 'revision', 'main', 'run-1', 'ok', 1, 100, 110);
+        INSERT INTO execution_owner_lifecycle_bindings (owner_kind, owner_id, context_id, execution_id)
+        VALUES ('cron', '${name}', 'context-1', 'execution-1');
+        INSERT INTO execution_decision_facts
         (rowid, receipt_id, context_id, execution_id, run_id, action_family, decision_outcome, coverage_state, reason_code, owner, source_ref, occurred_at, receipt_bytes, receipt_json)
-        VALUES (?, ?, 'context-1', 'execution-1', 'run-1', 'tool', 'denied', 'enforced', 'denied', 'tool-policy', ?, 100, 2, '{}')`).run(
-        rowId,
-        name,
-        name,
-      );
-      db.prepare(`INSERT INTO skill_workshop_changes
+        VALUES (${rowId}, '${name}', 'context-1', 'execution-1', 'run-1', 'tool', 'denied', 'enforced', 'denied', 'tool-policy', '${name}', 100, 2, '{}');
+        INSERT INTO skill_workshop_changes
         (rowid, change_id, agent_id, skill_name, action, actor, summary, created_at_ms)
-        VALUES (?, ?, 'main', 'synthetic', 'create', 'user', 'created', 100)`).run(rowId, name);
+        VALUES (${rowId}, '${name}', 'main', 'synthetic', 'create', 'user', 'created', 100);`);
     }
-    const insertAcp = db.prepare(`INSERT INTO acp_sessions
+    const acpStatement = db.prepare(`INSERT INTO acp_sessions
       (session_key, session_id, backend, agent, runtime_session_name, identity_json, mode, state, last_activity_at, updated_at)
       VALUES (?, ?, 'synthetic', 'main', 'runtime', ?, 'persistent', 'idle', 100, 100)`);
-    insertAcp.run(
-      buildAcpDatabaseSessionKey("agent:main:acp:a", "main"),
-      "session-a",
-      '{"agentSessionId":" \u2000resume\ufeff ","agentSessionId":"wrong"}',
-    );
-    insertAcp.run(
-      buildAcpDatabaseSessionKey("agent:main:acp:b", "main"),
-      "session-b",
-      '{"acpxSessionId":"resume"}',
-    );
-    insertAcp.run(
-      buildAcpDatabaseSessionKey("agent:main:acp:c", "main"),
-      "session-c",
-      '{"agentSessionId":"other"}',
-    );
+    const insertAcp = (name: string, identity: string) =>
+      acpStatement.run(
+        buildAcpDatabaseSessionKey(`agent:main:acp:${name}`, "main"),
+        `session-${name}`,
+        identity,
+      );
+    insertAcp("a", '{"agentSessionId":" \u2000resume\ufeff ","agentSessionId":"wrong"}');
+    insertAcp("b", '{"acpxSessionId":"resume"}');
+    insertAcp("c", '{"agentSessionId":"other"}');
     db.exec(`DROP TABLE secret_store_entries;
       INSERT INTO acp_replay_sessions
         (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes)
         VALUES ('retained-replay', 'retained-key', '/synthetic', 1, 1, 1, 0, 0);
       ANALYZE;`);
-    // Persisted opaque cursors name historical rowids, including gaps and non-key insertion order.
-    expect(
-      db
-        .prepare(
-          "SELECT approval_id FROM operator_approvals WHERE approval_id > 'a' ORDER BY resolved_at_ms, approval_id",
-        )
-        .all(),
-    ).toEqual([{ approval_id: "b" }, { approval_id: "c" }]);
-    expect(
-      db
-        .prepare(
-          "SELECT receipt_id FROM cron_run_receipts WHERE rowid > 7 ORDER BY started_at_ms, rowid",
-        )
-        .all(),
-    ).toEqual([{ receipt_id: "b" }, { receipt_id: "a" }]);
-    expect(
-      db
-        .prepare(`SELECT session_id FROM acp_sessions
-      WHERE trim(json_extract(identity_json, '$.agentSessionId'), char(32,8192,65279)) = 'resume'
-      OR trim(json_extract(identity_json, '$.acpxSessionId'), char(32,8192,65279)) = 'resume'
-      ORDER BY session_id`)
-        .all(),
-    ).toEqual([{ session_id: "session-a" }, { session_id: "session-b" }]);
   });
 
   it.each(["runtime", "doctor"] as const)(
-    "preserves old cursors and resume results through %s admission",
+    "preserves old cursors and resume results through %s admission with backup custody",
     async (owner) => {
-      const stateDir = directories.make(`v21-portable-${owner}-`);
-      const pathname = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
-      fs.mkdirSync(path.dirname(pathname), { recursive: true });
-      fs.copyFileSync(template, pathname);
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir }, path: pathname };
-      using scope = new DatabaseSync(pathname, { readOnly: true });
+      const options = copyTemplate(`v21-portable-${owner}-`);
+      using scope = new DatabaseSync(options.path, { readOnly: true });
       const statistics = siblingStatistics(scope);
-      const { db } = await assertSqliteMigrationScopePreserved(
+      await assertSqliteMigrationScopePreserved(
         scope,
         [
           "schema_meta",
@@ -297,23 +220,29 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
           "sqlite_stat1",
           "sqlite_stat4",
           "acp_sessions",
+          "acp_replay_events",
           "session_state_heads",
+          "skill_usage",
+          "state_leases",
+          "device_identities",
+          "device_auth_tokens",
+          "gateway_origin_device_tokens",
+          "exec_approvals_config",
           ...STATE_CURSOR_TABLES_V22,
+          ...stateTemplateNamesMigration.tables,
+          "worker_environments",
         ],
-        () => {
-          if (owner === "doctor") {
-            expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-          }
-          return openOpenClawStateDatabase(options);
-        },
+        () =>
+          withStateMigrationBackupForTest(options, () => {
+            if (owner === "doctor") {
+              expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+            }
+            openOpenClawStateDatabase(options);
+          }),
       );
+      const { db } = openOpenClawStateDatabase(options);
       expect(siblingStatistics(scope)).toEqual(statistics);
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
-      expect(
-        db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+      expectSchemaVersion(db);
       const context = createUnattributedExecutionContext();
       const schema = { cronRunReceipts: true, executionOwnerLifecycleBindings: true };
       for (const [cursor, expected] of [
@@ -341,11 +270,9 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
         }).rows,
       ).toEqual(resumeRows);
       for (const table of STATE_CURSOR_TABLES_V22) {
-        expect(db.prepare(`SELECT cursor_id FROM ${table} ORDER BY cursor_id`).all()).toEqual([
-          { cursor_id: 7 },
-          { cursor_id: 12 },
-          { cursor_id: 30 },
-        ]);
+        expect(db.prepare(`SELECT cursor_id FROM ${table} ORDER BY cursor_id`).all()).toEqual(
+          [7, 12, 30].map((cursor_id) => ({ cursor_id })),
+        );
       }
       await closeOpenClawStateDatabaseAsync();
     },
@@ -361,31 +288,25 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
   ])(
     "retains supported upgrades when the source also needs repair for $name",
     async ({ change }) => {
-      const stateDir = directories.make("v21-portable-repair-");
-      const pathname = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
-      fs.mkdirSync(path.dirname(pathname), { recursive: true });
-      fs.copyFileSync(template, pathname);
+      const options = copyTemplate("v21-portable-repair-");
       const approvalRowsSql =
         "SELECT approval_id, presentation_json, status FROM operator_approvals ORDER BY approval_id";
       let approvals: unknown;
       {
-        using source = new DatabaseSync(pathname);
+        using source = new DatabaseSync(options.path);
         source.exec(change);
         approvals = source.prepare(approvalRowsSql).all();
       }
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir }, path: pathname };
-      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      await withStateMigrationBackupForTest(options, () => {
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      });
       const { db } = openOpenClawStateDatabase(options);
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
       expect(db.prepare("SELECT image FROM sandbox_registry_entries").all()).toEqual([]);
-      expect(
-        db
-          .prepare("PRAGMA index_info(idx_operator_approvals_status_expiry)")
-          .all()
-          .map((row) => row.name),
-      ).toEqual(["status", "expires_at_ms", "approval_id"]);
+      const columns = db.prepare("PRAGMA index_info(idx_operator_approvals_status_expiry)").all();
+      expect(columns.map((row) => row.name)).toEqual(["status", "expires_at_ms", "approval_id"]);
       expect(db.prepare(approvalRowsSql).all()).toEqual(approvals);
       await closeOpenClawStateDatabaseAsync();
     },

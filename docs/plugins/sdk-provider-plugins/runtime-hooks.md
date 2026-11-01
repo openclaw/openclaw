@@ -46,7 +46,31 @@ legacy official Completions adapter, prefers subscription authentication when
 both kinds are eligible, and honors explicit API route intent. These are
 additive fields on the existing contract; they add no hook or user setting.
 
+For prepared Decision execution, `capability: "decision"` requests the physical
+route before auth. Return one candidate; incompatible, indeterminate, or multiple
+candidates are unsupported for this consumer. This does not change ordinary
+chat multi-route selection. A missing hook or null result retains the existing
+provider preparation path, including providers with no chat API.
+
+A candidate can supply `inference` using the canonical model capability shape.
+These facts describe that exact route. The Decision host consumes only
+`inference.decision`; a supplied inference object replaces the previous Decision
+claim, including an omitted decision capability. Without inference, the host
+retains catalog Decision facts only when the physical route is unchanged.
+A changed route needs a fresh capability claim. The host validates input against
+the selected route before selecting credentials and does not normalize that
+route a second time. Do not copy chat costs or credentials into route facts.
+
+`normalizeModelCatalog` from `openclaw/plugin-sdk/provider-model-metadata` accepts
+raw manifest data and an `ownedProviders` set. Use it once when loading static
+route metadata to validate the canonical capability shape, rather than asserting
+JSON types or maintaining a separate capability definition.
+
 ## Credential lookup cancellation
+
+`resolveApiKeyForProvider` and `getRuntimeAuthForModel` load the host's authentication
+runtime lazily. The host build selects that module, so SDK consumers do not need
+to locate JavaScript files on disk, including in standalone executables.
 
 Credential consumers using `resolveApiKeyForProvider` from
 `openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
@@ -69,12 +93,31 @@ Existing one-argument hooks remain compatible, and direct callers can omit confi
 
 ## Hook examples
 
+Use `prepareRuntimeAuthV2` for credential exchange. Its context includes
+`capability: "chat" | "decision"` and a transport model with required `id` and
+`provider`; `name`, `api`, `baseUrl`, and `headers` are optional. Do not require
+chat costs, context windows, or token limits to exchange credentials.
+
+The host prefers V2 when both hooks exist. The shipped `prepareRuntimeAuth`
+hook remains available for chat with its full `ProviderRuntimeModel` context.
+A decision request cannot use a legacy-only exchange and returns
+`unsupported-input`; migrate the hook to V2 before advertising decision support.
+Explicit provider `auth: "none"` skips both hooks. Existing credential ownership
+and caller cancellation checks apply before and after either exchange.
+
+Both exchange contexts accept an optional `signal`. Pass it to token-exchange
+requests and release their resources when it aborts. Embedded runs share their
+existing deadline across credential lookup and exchange, including request-time
+OAuth renewal. A timeout names the provider and auth step and fails the caller;
+it does not install late credentials or continue without authentication. Durable
+OAuth refresh settlement remains owned by the OAuth manager.
+
 <Tabs>
   <Tab title="Token exchange">
     For providers that need a token exchange before each inference call:
 
     ```typescript
-    prepareRuntimeAuth: async (ctx) => {
+    prepareRuntimeAuthV2: async (ctx) => {
       const exchanged = await exchangeToken(ctx.apiKey);
       return {
         apiKey: exchanged.token,
@@ -103,6 +146,13 @@ Existing one-argument hooks remain compatible, and direct callers can omit confi
         });
     },
     ```
+
+    Runtime model and stream-option headers accept `string | null`. Preserve
+    `null` when merging headers: it removes a default header in the OpenAI SDK
+    and is omitted when materializing headers for raw HTTP transports. Saved
+    provider configuration and catalog headers remain string-only. For direct HTTP
+    clients, use `omitNullRequestHeaders` from
+    `openclaw/plugin-sdk/provider-request-headers` after the final header merge.
 
     Existing wrappers may still pass the deprecated `maxRetries` stream option,
     including `0`. Built-in text transports ignore it: the embedded runner owns
@@ -242,7 +292,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `catalog`                         | Model catalog or base URL defaults                                                          |
 | `applyConfigDefaults`             | Provider-owned global defaults during config materialization                                |
 | `normalizeModelId`                | Legacy/preview model-id alias cleanup before lookup                                         |
-| `normalizeTransport`              | Provider-family `api` / `baseUrl` cleanup before generic model assembly                     |
+| `normalizeTransport`              | Same-origin `api` / `baseUrl` cleanup for its transport family before model assembly        |
 | `normalizeConfig`                 | Normalize `models.providers.<id>` config                                                    |
 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers                                 |
 | `resolveConfigApiKey`             | Provider-owned env-marker auth resolution                                                   |
@@ -276,7 +326,8 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `supportsXHighThinking`           | `xhigh` reasoning support compatibility (deprecated - prefer `resolveThinkingProfile`)      |
 | `resolveDefaultThinkingLevel`     | Default `/think` policy compatibility (deprecated - prefer `resolveThinkingProfile`)        |
 | `isModernModelRef`                | Live/smoke model matching                                                                   |
-| `prepareRuntimeAuth`              | Token exchange before inference                                                             |
+| `prepareRuntimeAuthV2`            | Capability-aware token exchange before chat or decision inference                           |
+| `prepareRuntimeAuth`              | Legacy chat exchange with a full runtime model; migrate to V2 for decision support          |
 | `resolveUsageAuth`                | Custom usage credential parsing                                                             |
 | `fetchUsageSnapshot`              | Custom usage endpoint                                                                       |
 | `createEmbeddingProvider`         | Provider-owned embedding adapter for memory/search                                          |
@@ -297,7 +348,7 @@ Runtime fallback notes:
 - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
 - Config assembly calls `normalizeConfig` only through the owning bundled provider's lightweight policy surface, without loading provider runtime or scanning other providers. Google's own hook normalizes `google` / `google-vertex` / `google-antigravity` config entries through that surface.
 - Config assembly likewise uses the lightweight policy surface for `resolveConfigApiKey`. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
-- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile. Without this hook, the ladder is the base levels plus any `xhigh` or `max` declared in catalog `compat.supportedReasoningEfforts` or `thinkingLevelMap`; `supportedReasoningEfforts` alone never removes base levels, while a `thinkingLevelMap` entry set to `null` does. To expose exactly the advertised efforts, return `resolveEffortThinkingProfile(ctx.compat?.supportedReasoningEfforts)` from `openclaw/plugin-sdk/provider-thinking-runtime` instead of a hard-coded level list.
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 

@@ -1,11 +1,11 @@
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createCronViewJob, createCronViewProps, getElement } from "./view.test-support.ts";
 import { CronView } from "./view.tsx";
 
-it("keeps the edited input and focus while its form and validation update", () => {
+it("keeps the edited input and focus while its form and validation update", async () => {
   const initial = createCronViewProps({ createOpen: true });
   const [props, setProps] = createSignal(initial);
   initial.onFormChange = (patch) =>
@@ -15,6 +15,8 @@ it("keeps the edited input and focus while its form and validation update", () =
       fieldErrors: { name: "cron.errors.nameRequired" },
     }));
   const view = mountSolid(() => <CronView {...props()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => expect(view.container.querySelector("#cron-name")).not.toBeNull());
   const input = getElement(view.container, "#cron-name", HTMLInputElement);
   input.focus();
   input.value = "Daily check";
@@ -43,7 +45,27 @@ it("updates a keyed job row from a replacement owner snapshot", () => {
   );
 });
 
-it("publishes refreshed runtime facts from the mutable selected job", () => {
+it("does not reread retained jobs while typing and still dispatches current row actions", () => {
+  const job = createCronViewJob("retained");
+  const state = job.state;
+  const readState = vi.fn(() => state);
+  Object.defineProperty(job, "state", { get: readState });
+  const [props, setProps] = createSignal(
+    createCronViewProps({ jobs: [job, createCronViewJob("sibling")], jobsTotal: 2 }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  const row = view.container.querySelector<HTMLElement>('[data-test-id="cron-row-retained"]')!;
+  const onSelectJob = vi.fn();
+  readState.mockClear();
+  setProps((previous) => ({ ...previous, jobsQuery: "daily", loading: true, onSelectJob }));
+  flush();
+  expect(readState).not.toHaveBeenCalled();
+  expect(view.container.querySelector('[data-test-id="cron-row-retained"]')).toBe(row);
+  row.click();
+  expect(onSelectJob).toHaveBeenCalledExactlyOnceWith(job);
+});
+
+it("publishes refreshed runtime facts from the mutable selected job", async () => {
   const job = createCronViewJob("job-runtime", {
     trigger: { script: "json({ fire: false })" },
     state: { triggerEvalCount: 1 },
@@ -52,6 +74,10 @@ it("publishes refreshed runtime facts from the mutable selected job", () => {
     createCronViewProps({ editingJob: job, detailTab: "history" }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".cron-condition-activity dd")).not.toBeNull(),
+  );
   const counts = () =>
     [...view.container.querySelectorAll(".cron-condition-activity dd")].map(
       (node) => node.textContent,
@@ -63,7 +89,7 @@ it("publishes refreshed runtime facts from the mutable selected job", () => {
   expect(counts()[0]).toBe("2");
 });
 
-it("keeps pagination and suggestion nodes current while a query is pending", () => {
+it("keeps pagination current while a query is pending without mounting editor suggestions", () => {
   const onLoadMoreJobs = vi.fn();
   const [props, setProps] = createSignal(
     createCronViewProps({
@@ -76,9 +102,7 @@ it("keeps pagination and suggestion nodes current while a query is pending", () 
   );
   const view = mountSolid(() => <CronView {...props()} />);
   const button = getElement(view.container, ".cron-load-more", HTMLButtonElement);
-  const timezones = getElement(view.container, "#cron-tz-suggestions", HTMLDataListElement);
-  const options = [...timezones.querySelectorAll("option")];
-  expect(options.map((option) => option.value)).toEqual(["UTC", "Europe/Vienna"]);
+  expect(view.container.querySelector("datalist")).toBeNull();
   expect(view.container.querySelector(".cron-table__footer")?.textContent).toContain("2 of 12");
   button.click();
   expect(onLoadMoreJobs).toHaveBeenCalledOnce();
@@ -93,6 +117,23 @@ it("keeps pagination and suggestion nodes current while a query is pending", () 
   expect(view.container.querySelector(".cron-load-more")).toBe(button);
   expect(button.disabled).toBe(true);
   expect(button.textContent).toContain("Loading");
+  expect(view.container.querySelector("datalist")).toBeNull();
+});
+
+it("retains live suggestions only while the editor is presented", async () => {
+  const [props, setProps] = createSignal(
+    createCronViewProps({ createOpen: true, timezoneSuggestions: ["UTC", "Europe/Vienna"] }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(view.container.querySelector("#cron-tz-suggestions")).not.toBeNull(),
+  );
+  const timezones = getElement(view.container, "#cron-tz-suggestions", HTMLDataListElement);
+  const options = [...timezones.querySelectorAll("option")];
+  expect(options.map((option) => option.value)).toEqual(["UTC", "Europe/Vienna"]);
+  setProps((previous) => ({ ...previous, timezoneSuggestions: [...previous.timezoneSuggestions] }));
+  flush();
   expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
   expect(timezones.querySelectorAll("option")[0]).toBe(options[0]);
   expect(timezones.querySelectorAll("option")[1]).toBe(options[1]);
@@ -103,6 +144,9 @@ it("keeps pagination and suggestion nodes current while a query is pending", () 
     "Europe/Vienna",
     "Asia/Tokyo",
   ]);
+  setProps((previous) => ({ ...previous, createOpen: false }));
+  flush();
+  expect(view.container.querySelector("datalist")).toBeNull();
 });
 
 it("retains history controls and forwards the current transcript target after refresh", () => {
@@ -139,4 +183,54 @@ it("retains history controls and forwards the current transcript target after re
   );
   button.click();
   expect(onViewRunTranscript).toHaveBeenCalledExactlyOnceWith(refreshed, button);
+});
+
+it("keeps retained row controls current across pending queries and access changes", () => {
+  const job = createCronViewJob("retained-actions");
+  const initialRun = vi.fn();
+  const currentRun = vi.fn();
+  const [props, setProps] = createSignal(
+    createCronViewProps({ jobs: [job], jobsTotal: 1, onRun: initialRun }),
+  );
+  const view = mountSolid(() => <CronView {...props()} />);
+  const row = getElement(view.container, ".cron-table__row", HTMLDivElement);
+  const run = getElement(row, ".cron-row-run", HTMLButtonElement);
+  const toggle = getElement(row, "input.settings-toggle__input", HTMLInputElement);
+
+  setProps((previous) => ({ ...previous, jobsQuery: "retained", loading: true, busy: true }));
+  flush();
+  expect(view.container.querySelector(".cron-table__row")).toBe(row);
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(true);
+
+  setProps((previous) => ({ ...previous, toggleSavingJobId: job.id }));
+  flush();
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(false);
+  expect(toggle.getAttribute("aria-disabled")).toBe("true");
+
+  setProps((previous) => ({ ...previous, connected: false }));
+  flush();
+  expect(run.disabled).toBe(true);
+  expect(toggle.disabled).toBe(true);
+
+  setProps((previous) => ({
+    ...previous,
+    busy: false,
+    connected: true,
+    toggleSavingJobId: null,
+    onRun: currentRun,
+  }));
+  flush();
+  expect(row.querySelector(".cron-row-run")).toBe(run);
+  expect(run.disabled).toBe(false);
+  expect(toggle.getAttribute("aria-disabled")).toBeNull();
+  run.click();
+  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job, "force");
+  expect(initialRun).not.toHaveBeenCalled();
+
+  setProps((previous) => ({ ...previous, canManage: false }));
+  flush();
+  expect(view.container.querySelector(".cron-table__row")).toBe(row);
+  expect(row.querySelector(".cron-table__actions")).toBeNull();
 });

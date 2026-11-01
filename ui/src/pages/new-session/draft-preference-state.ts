@@ -2,13 +2,12 @@ import { USER_PREFS_ENTRY_LIMIT } from "../../../../packages/gateway-protocol/sr
 import type { ApplicationContext } from "../../app/context.ts";
 import { saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import * as catalog from "./catalog-target.ts";
 import type { DraftPreferenceOptions } from "./draft-gateway-contract.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { isNewSessionCatalogTarget, type NewSessionRouteData } from "./location.ts";
 import {
   decodeIdentityPreferences,
   encodeIdentityPreferences,
@@ -20,7 +19,7 @@ import {
   type NewSessionPreference,
 } from "./preferences.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 export type SubmittedWorktreePreference = NewSessionPreference & {
   // Fresh drafts know the stored override; recovery only retains the effective create input.
@@ -45,9 +44,8 @@ type PreferenceScope = Pick<
   "source" | "client" | "connected" | "recoveryScope" | "connectionEpoch"
 > & { profileId: string | undefined };
 
-type PreferenceWriter = { write: Promise<void> };
 type PreferenceWrites = {
-  agents: Map<string, PreferenceWriter>;
+  agents: Map<string, { write: Promise<void> }>;
   revision: object;
   listeners: Set<(agentId: string, preference: NewSessionPreference, consumed: boolean) => void>;
 };
@@ -70,6 +68,28 @@ export class DraftPreferenceState {
       onAdoptAgentDefaults: () => void;
     },
   ) {}
+
+  static forChat(context: ApplicationContext, changed: () => void): DraftPreferenceState {
+    return new DraftPreferenceState(
+      () => {
+        const gateway = context.gateway;
+        const snapshot = gateway.snapshot;
+        return {
+          source: gateway,
+          client: snapshot.client,
+          gatewayUrl: gateway.connection.gatewayUrl,
+          recoveryScope: snapshot.hello?.auth?.recoveryScope ?? "",
+          bootId: snapshot.hello?.server?.bootId ?? "",
+          connected: snapshot.phase === "connected",
+          connectionEpoch: 0,
+          data: undefined,
+          pendingPlacementSessionKey: "",
+          agentsHydrated: true,
+        };
+      },
+      { changed, onAdoptAgentDefaults: () => {} },
+    );
+  }
 
   get loading(): boolean {
     return this.preferenceModeValue === "loading";
@@ -147,7 +167,7 @@ export class DraftPreferenceState {
   readPreference(agentId: string): NewSessionPreference | null {
     const snapshot = this.read();
     if (
-      catalog.isTarget(snapshot.data) ||
+      isNewSessionCatalogTarget(snapshot.data) ||
       snapshot.data?.group ||
       snapshot.pendingPlacementSessionKey
     ) {
@@ -187,13 +207,13 @@ export class DraftPreferenceState {
     return this.preparePreferenceWrite(agentId, workspace, { worktreeName: "" }, expected);
   }
 
-  persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {
+  persistPreference(agentId: string, workspace: string | undefined, patch: NewSessionPreference) {
     return this.preparePreferenceWrite(agentId, workspace, patch)?.();
   }
 
   private preparePreferenceWrite(
     agentIdValue: string,
-    workspace: string,
+    workspace: string | undefined,
     patch: NewSessionPreference,
     expected?: SubmittedWorktreePreference,
   ): ((consume?: () => void) => void | Promise<void>) | undefined {
@@ -201,7 +221,7 @@ export class DraftPreferenceState {
       this.read();
     const accepted = expected !== undefined;
     const persist =
-      !catalog.isTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
+      !isNewSessionCatalogTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
     if ((!persist && !accepted) || !source) {
       return undefined;
     }
@@ -226,7 +246,9 @@ export class DraftPreferenceState {
         source.snapshot.hello?.server?.bootId === bootId &&
         source.snapshot.selfUser?.id === profileId,
       );
-    const nextPatch = accepted ? patch : { workspace, ...patch };
+    const nextPatch = accepted
+      ? patch
+      : { ...(workspace === undefined ? {} : { workspace }), ...patch };
     const matchSubmitted = (current: NewSessionPreference | null | undefined) => {
       if (!expected) {
         return "match";
@@ -236,7 +258,7 @@ export class DraftPreferenceState {
         current.worktreeName !== expected.worktreeName ||
         current.worktree !== true ||
         (current.workspace ?? workspace) !== workspace ||
-        resolveNewSessionFolderPreference(current, workspace).folder !== expected.folder ||
+        resolveNewSessionFolderPreference(current, workspace ?? "").folder !== expected.folder ||
         (current.projectId ?? "") !== (expected.projectId ?? "")
       ) {
         return "superseded";

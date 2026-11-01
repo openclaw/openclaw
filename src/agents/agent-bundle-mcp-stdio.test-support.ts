@@ -1,8 +1,17 @@
 import { setTimeout as waitForRuntimeTick } from "node:timers/promises";
-import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/client";
 import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
+
+type FixtureTool = {
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+  outputSchema?: unknown;
+  execution?: { taskSupport?: "forbidden" | "optional" | "required" };
+  _meta?: Record<string, unknown>;
+};
 
 export async function writeListToolsMcpServer(
   params: {
@@ -16,24 +25,8 @@ export async function writeListToolsMcpServer(
     ignoreShutdown?: boolean;
     hangFirstInitializeMarkerPath?: string;
     inputSchema?: unknown;
-    tools?: Array<{
-      name: string;
-      description?: string;
-      inputSchema?: unknown;
-      outputSchema?: unknown;
-      execution?: { taskSupport?: "forbidden" | "optional" | "required" };
-      _meta?: Record<string, unknown>;
-    }>;
-    toolsByList?: Array<
-      Array<{
-        name: string;
-        description?: string;
-        inputSchema?: unknown;
-        outputSchema?: unknown;
-        execution?: { taskSupport?: "forbidden" | "optional" | "required" };
-        _meta?: Record<string, unknown>;
-      }>
-    >;
+    tools?: FixtureTool[];
+    toolsByList?: FixtureTool[][];
     capabilities?: Record<string, unknown>;
     databasePath?: string;
     pidPath?: string;
@@ -42,7 +35,6 @@ export async function writeListToolsMcpServer(
     notifyListChangedOnInitializedReleaseToken?: string;
     notifyListChangedAfterFirstList?: boolean;
     notifyListChangedReleasePath?: string;
-    notifyListChangedBeforeEveryListResponse?: boolean;
     exitOnListCall?: number;
     listToolsMethodNotFound?: boolean;
     listToolsJsonRpcErrorMessage?: string;
@@ -80,7 +72,7 @@ const {
   inputSchema = { type: "object", properties: {} },
   tools = [{ name: "slow_tool", description: "Returned after a slow catalog response.", inputSchema }],
   notifyListChangedOnInitialized = false, notifyListChangedAfterFirstList = false,
-  notifyListChangedBeforeEveryListResponse = false, exitOnListCall = 0,
+  exitOnListCall = 0,
   listToolsMethodNotFound = false, callToolJsonRpcError = false,
   callToolJsonRpcErrorCode = -32000, notifyListChangedOnToolCall = false,
   resourceReadJsonRpcError = false,
@@ -94,6 +86,10 @@ async function waitForPath(filePath) {
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function afterPath(filePath, action) {
+  void waitForPath(filePath).then(action);
 }
 
 let buffer = "";
@@ -135,6 +131,18 @@ function log(line) {
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\\n");
 }
+function reply(id, result) {
+  send({ jsonrpc: "2.0", id, result });
+}
+function fail(id, code, message) {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
+}
+function notifyToolsChanged() {
+  send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+}
+function nextCursor(cursor) {
+  return cursor !== undefined && cursor !== null ? { nextCursor: cursor } : {};
+}
 function handle(message) {
   if (!message || typeof message !== "object") {
     return;
@@ -173,7 +181,7 @@ function handle(message) {
           await awaitRelease(logPath, notifyListChangedOnInitializedReleaseToken);
         }
         log("notify tools/list_changed");
-        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+        notifyToolsChanged();
       })();
     }
     return;
@@ -187,20 +195,12 @@ function handle(message) {
     }
     if (listToolsMethodNotFound) {
       log("reject tools/list method not found");
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32601, message: "Method not found" },
-      });
+      fail(message.id, -32601, "Method not found");
       return;
     }
     if (listToolsJsonRpcErrorMessage) {
       log("reject tools/list with configured error");
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32000, message: listToolsJsonRpcErrorMessage },
-      });
+      fail(message.id, -32000, listToolsJsonRpcErrorMessage);
       return;
     }
     if (hang) {
@@ -212,125 +212,68 @@ function handle(message) {
     const toolPageCursor = toolPageCursors?.[currentListCount - 1];
     log("delay tools/list " + delayMs);
     const sendListResponse = () => {
-      if (notifyListChangedBeforeEveryListResponse) {
-        log("notify tools/list_changed before response");
-        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
-      }
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          tools: toolsByList
+      reply(message.id, {
+        tools: toolsByList
             ? toolsByList[Math.min(currentListCount - 1, toolsByList.length - 1)]
             : toolPageCursors
               ? tools.map((tool) => ({ ...tool, name: tool.name + "-" + currentListCount }))
               : tools,
-          ...(toolPageCursor !== undefined && toolPageCursor !== null
-            ? { nextCursor: toolPageCursor }
-            : {}),
-        },
+        ...nextCursor(toolPageCursor),
       });
       if (notifyListChangedAfterFirstList && currentListCount === 1) {
-        void (async () => {
-          await waitForPath(notifyListChangedReleasePath);
+        afterPath(notifyListChangedReleasePath, () => {
           log("notify tools/list_changed");
-          send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
-        })();
+          notifyToolsChanged();
+        });
       }
     };
-    void (async () => {
-      await waitForPath(listToolsReleasePath);
+    afterPath(listToolsReleasePath, () => {
       pendingTimer = setTimeout(sendListResponse, delayMs);
-    })();
+    });
   }
   if (message.method === "tools/call") {
+    log("call " + String(message.params?.name));
     if (hangToolCallsUntilRestart) {
       log("hang tools/call");
       keepAlive = setInterval(() => {}, 1000);
       return;
     }
     if (callToolJsonRpcError) {
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: callToolJsonRpcErrorCode, message: "tool request failed" },
-      });
+      fail(message.id, callToolJsonRpcErrorCode, "tool request failed");
       return;
     }
     if (notifyListChangedOnToolCall) {
       log("notify tools/list_changed during tools/call");
-      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      notifyToolsChanged();
     }
-    void (async () => {
-      await waitForPath(callToolReleasePath);
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          isError: false,
-          ...(callToolResult ?? {
-            content: [{ type: "text", text: "tool ok" }],
-          }),
-        },
+    afterPath(callToolReleasePath, () => {
+      reply(message.id, {
+        isError: false,
+        ...(callToolResult ?? { content: [{ type: "text", text: "tool ok" }] }),
       });
-    })();
+    });
   }
-  if (message.method === "resources/list") {
-    resourceListCount += 1;
-    const page = resourceListCount;
-    log("resources/list cursor " + JSON.stringify(message.params?.cursor));
-    void (async () => {
-      await waitForPath(utilityListReleasePath);
-      const resourcePageCursor = resourcePageCursors?.[page - 1];
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          resources: resourcePageCursors
-            ? [{ uri: "memo://page-" + page, name: "page-" + page }]
-            : [],
-          ...(resourcePageCursor !== undefined && resourcePageCursor !== null
-            ? { nextCursor: resourcePageCursor }
-            : {}),
-        },
+  if (message.method === "resources/list" || message.method === "prompts/list") {
+    const resources = message.method === "resources/list";
+    const page = resources ? ++resourceListCount : ++promptListCount;
+    const cursors = resources ? resourcePageCursors : promptPageCursors;
+    log(message.method + " cursor " + JSON.stringify(message.params?.cursor));
+    afterPath(utilityListReleasePath, () => {
+      reply(message.id, {
+        ...(resources
+          ? { resources: cursors ? [{ uri: "memo://page-" + page, name: "page-" + page }] : [] }
+          : { prompts: [{ name: "prompt-" + page }] }),
+        ...nextCursor(cursors?.[page - 1]),
       });
-    })();
-    return;
-  }
-  if (message.method === "prompts/list") {
-    promptListCount += 1;
-    const page = promptListCount;
-    log("prompts/list cursor " + JSON.stringify(message.params?.cursor));
-    void (async () => {
-      await waitForPath(utilityListReleasePath);
-      const promptPageCursor = promptPageCursors?.[page - 1];
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          prompts: [{ name: "prompt-" + page }],
-          ...(promptPageCursor !== undefined && promptPageCursor !== null
-            ? { nextCursor: promptPageCursor }
-            : {}),
-        },
-      });
-    })();
+    });
     return;
   }
   if (message.method === "resources/read") {
     if (resourceReadJsonRpcError) {
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32000, message: "resource read failed" },
-      });
+      fail(message.id, -32000, "resource read failed");
       return;
     }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: resourceReadResult ?? { contents: [{ uri: message.params?.uri, text: "resource ok" }] },
-    });
+    reply(message.id, resourceReadResult ?? { contents: [{ uri: message.params?.uri, text: "resource ok" }] });
   }
 }
 process.stdin.setEncoding("utf8");

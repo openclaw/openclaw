@@ -1,28 +1,8 @@
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export const sidebarSnapshot: SidebarSnapshotModel = {
-  routingDefaults: { mainKey: "main", scope: "per-sender" },
-  roster: null,
-  mode: "roster",
-  navigationView: "sessions",
-  pages: [],
-  pageScopeId: null,
-  pinnedSessions: [],
-  entries: [],
-  sessions: [],
-  sections: [],
-  cards: [],
-  collapsedAgentIds: [],
-  collapsedSections: [],
-  plugins: [],
-  onlineUsers: [],
-  onlineCounts: [],
-  peopleSortMode: "presence",
-  peopleStatusFilter: "all",
-  peoplePresenceFilter: "online",
-  offlineUsers: [],
-  ownerId: null,
-  involvingMe: false,
+  ...sidebarBootSnapshot(null),
   footer: { id: "operator", name: "Riley" },
   brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
 };

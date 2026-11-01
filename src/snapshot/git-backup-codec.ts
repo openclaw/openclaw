@@ -19,6 +19,7 @@ import {
 } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { defaultRuntime } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import {
   assertAgentSchemaVersion,
@@ -602,12 +603,13 @@ export async function restoreGitBackupDirectory(params: {
     targetDirectory,
     ".git-backup-restore-",
   );
-  applyPrivateModeSync(stagingDirectory, 0o700);
-  const stagedPath = path.join(stagingDirectory, SNAPSHOT_SQLITE_FILENAME);
-  const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
-  await stagedHandle.close();
-  const database = openNodeSqliteDatabase(stagedPath);
+  let database: DatabaseSync | undefined;
   try {
+    applyPrivateModeSync(stagingDirectory, 0o700);
+    const stagedPath = path.join(stagingDirectory, SNAPSHOT_SQLITE_FILENAME);
+    const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
+    await stagedHandle.close();
+    database = openNodeSqliteDatabase(stagedPath);
     database.exec("PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE;");
     for (const statement of [...plainTables, ...indexes]) {
       database.exec(statement);
@@ -719,11 +721,15 @@ export async function restoreGitBackupDirectory(params: {
       excludedConfigStateKeyPrefixes: manifest.excludedConfigStateKeyPrefixes,
     };
   } catch (error) {
-    if (database.isOpen) {
+    if (database?.isOpen) {
       database.close();
     }
     throw error;
   } finally {
-    await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => {
+      defaultRuntime.error(
+        `Warning: Git backup temporary files may remain under ${stagingDirectory}; cleanup failed: inspect and remove the directory when safe.`,
+      );
+    });
   }
 }

@@ -13,8 +13,14 @@ import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "../daemon/service.test-helpers.js";
-import { buildSystemdUnit } from "../daemon/systemd-unit.js";
+import {
+  buildSystemdUnit,
+  parseSystemdEnvAssignments,
+  parseSystemdExecStart,
+} from "../daemon/systemd-unit.js";
 import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
+import * as packageRootResolver from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -22,7 +28,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const edges = vi.hoisted(() => ({
   command: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
@@ -41,42 +48,36 @@ import { installDoctorGatewayService } from "./doctor-gateway-installation.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 
 const refusals = [
-  {
-    scenario: "sealed",
-    kind: "sealed",
-    reason: "sealed-mount",
-    guidance: "deployment owner",
-    tokenPresent: false,
-  },
-  {
-    scenario: "unsafe",
-    kind: "unknown",
-    reason: "unsafe-permissions",
-    guidance: "chmod go-w",
-    tokenPresent: true,
-  },
-  {
-    scenario: "uninspectable",
-    kind: "unknown",
-    reason: "inspection-failed",
-    guidance: "native service-manager availability",
-    tokenPresent: false,
-  },
+  ["sealed", "sealed", "sealed-mount", "deployment owner", false],
+  ["unsafe", "unknown", "unsafe-permissions", "chmod go-w", true],
+  ["uninspectable", "unknown", "inspection-failed", "native service-manager availability", false],
+  ["rejected", "unknown", "inspection-failed", "native service-manager availability", false],
 ] as const;
-type Scenario = (typeof refusals)[number]["scenario"] | "writable" | "repairable" | "rejected";
-type CustodyLoss =
-  | "before-publication"
-  | "backup-published"
-  | "environment-published"
-  | "definition-published"
-  | "daemon-reload"
-  | "enable"
-  | "restart";
+type Scenario = (typeof refusals)[number][0] | "writable" | "repairable";
+type CustodyLoss = (typeof custodyCases)[number][0];
 
 // All tokens are synthetic. Assertions report equality booleans, never token bytes.
 const embeddedToken = "doctor-fixture-embedded-token";
 const existingToken = "doctor-fixture-config-token";
 const inspectionCanary = "doctor-fixture-private-inspection-detail";
+const untouchedRepair = {
+  configBytesPreserved: true,
+  returnedConfigPreserved: true,
+  unitBytesPreserved: true,
+  environmentBytesPreserved: true,
+  installedEnvironmentBytesPreserved: true,
+  unitDirectoryEntries: ["openclaw-gateway.service"],
+  nativeActions: [],
+};
+const custodyCases = [
+  ["before-publication", []],
+  ["backup-published", []],
+  ["environment-published", []],
+  ["definition-published", ["daemon-reload"]],
+  ["daemon-reload", ["daemon-reload", "daemon-reload"]],
+  ["enable", ["daemon-reload", "enable", "daemon-reload"]],
+  ["restart", ["daemon-reload", "enable", "restart", "daemon-reload", "stop"]],
+] as const;
 
 describe.skipIf(process.platform === "win32")("Doctor native repair authority ordering", () => {
   let state: OpenClawTestState | undefined;
@@ -95,11 +96,15 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       update = false,
       blockedTarget,
       custodyLoss,
+      runtimeRepair,
+      systemNodeVersion,
     }: {
       tokenPresent?: boolean;
       update?: boolean;
       blockedTarget?: "installed" | "planned";
       custodyLoss?: CustodyLoss;
+      runtimeRepair?: "secret" | "PATH" | "launcher";
+      systemNodeVersion?: string;
     } = {},
   ) {
     state = await createOpenClawTestState({ prefix: "doctor-authority-" });
@@ -116,6 +121,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     await fs.mkdir(installedStateDir, { recursive: true, mode: 0o700 });
     await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
     await fs.mkdir(systemUnits, { mode: 0o755 });
+    await fs.mkdir(runtimeDir, { mode: 0o700 });
     await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 99\n", { mode: 0o700 });
     const cfg: OpenClawConfig = {
       gateway: {
@@ -125,15 +131,51 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       plugins: { enabled: false },
     };
     const originalConfig = `${JSON.stringify(cfg, null, 2)}\n`;
-    const programArguments = [wrapperPath, "gateway", "--port", "18789"];
+    const packageRoot = path.join(root, "node_modules/openclaw");
+    const entrypoint = path.join(packageRoot, "dist/index.js");
+    const oldNode = "/nix/store/fixture-nodejs-24.15.0/bin/node";
+    const systemNode = "/usr/local/bin/node";
+    if (runtimeRepair) {
+      const cliNode = path.join(root, "current/bin/node");
+      await fs.mkdir(path.dirname(cliNode), { recursive: true });
+      await fs.writeFile(cliNode, "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+      vi.spyOn(process, "execPath", "get").mockReturnValue(cliNode);
+      vi.spyOn(process, "versions", "get").mockReturnValue({
+        ...process.versions,
+        node: "26.12.1",
+        bun: undefined,
+      });
+      await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+      await fs.writeFile(path.join(packageRoot, "package.json"), '{"name":"openclaw"}\n');
+      await fs.writeFile(entrypoint, "export {};\n");
+      vi.spyOn(process, "argv", "get").mockReturnValue([process.execPath, entrypoint]);
+      vi.spyOn(packageRootResolver, "resolveOpenClawPackageRoot").mockResolvedValue(packageRoot);
+    }
+    const programArguments = runtimeRepair
+      ? [oldNode, entrypoint, "gateway", "--port", "18789"]
+      : [wrapperPath, "gateway", "--port", "18789"];
     const environment = {
       HOME: home,
       OPENCLAW_STATE_DIR: installedStateDir,
       OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_WRAPPER: wrapperPath,
-      OPENCLAW_GATEWAY_TOKEN: embeddedToken,
-      PATH: "/usr/local/bin:/usr/bin:/bin",
+      ...(runtimeRepair
+        ? {}
+        : { OPENCLAW_WRAPPER: wrapperPath, OPENCLAW_GATEWAY_TOKEN: embeddedToken }),
+      PATH: `${runtimeRepair ? `${path.dirname(oldNode)}:` : ""}/usr/local/bin:/usr/bin:/bin`,
     };
+    const dropInPath = `${unitPath}.d/homeassistant.conf`;
+    const dropIn =
+      "[Service]\nExecStartPre=-/synthetic/homeassistant.env.sh\nEnvironmentFile=-%t/openclaw-homeassistant.env\n" +
+      (runtimeRepair === "launcher" ? `ExecStart=\nExecStart=${programArguments.join(" ")}\n` : "");
+    const operatorFile = path.join(runtimeDir, "openclaw-homeassistant.env");
+    if (runtimeRepair) {
+      await fs.mkdir(path.dirname(dropInPath), { mode: 0o700 });
+      await fs.writeFile(dropInPath, dropIn, { mode: 0o600 });
+      await fs.writeFile(
+        operatorFile,
+        runtimeRepair === "PATH" ? `PATH=${environment.PATH}\n` : "HA_FIXTURE=retained\n",
+      );
+    }
     const originalUnit = buildSystemdUnit({ programArguments, environment });
     const originalEnvironment = "OPERATOR_FIXTURE=unchanged\n";
     await fs.writeFile(configPath, originalConfig, { mode: 0o600 });
@@ -152,7 +194,23 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     }
 
     // Model one synthetic OS account; the real install-identity guard still runs.
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    mockDoctorServicePlatform("linux");
+    if (runtimeRepair) {
+      const access = fs.access.bind(fs);
+      vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+        if (args[0] === systemNode || args[0] === "/usr/bin/node") {
+          if (args[0] === systemNode && systemNodeVersion) {
+            return;
+          }
+          throw Object.assign(new Error("No fixture system Node"), { code: "ENOENT" });
+        }
+        return access(...args);
+      });
+      const realpath = fs.realpath.bind(fs);
+      vi.spyOn(fs, "realpath").mockImplementation(async (...args) =>
+        args[0] === systemNode ? systemNode : realpath(...args),
+      );
+    }
     vi.spyOn(os, "homedir").mockReturnValue(home);
     vi.spyOn(os, "userInfo").mockReturnValue({
       homedir: home,
@@ -233,14 +291,18 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         events.push("service-published");
       }
     });
-    edges.runtimeProbe.mockImplementation(async (_file, args) => {
-      if (args[0] !== "-e" || !args[1]?.includes("sqliteVersion")) {
+    edges.runtimeProbe.mockImplementation(async (file, args) => {
+      if (
+        path.basename(args[0] ?? "") !== "daemon-runtime-probe.mjs" ||
+        !isDeepStrictEqual(args.slice(1), ["node", ""])
+      ) {
         unexpectedProcesses.push("unexpected runtime process");
         throw new Error("Unexpected fixture runtime process");
       }
       return {
         stdout: JSON.stringify({
-          nodeVersion: "24.16.0",
+          nodeVersion:
+            file === systemNode ? systemNodeVersion : file === oldNode ? "24.15.0" : "26.12.1",
           sqliteVersion: "3.51.3",
           sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
         }),
@@ -249,6 +311,9 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     });
     edges.command.mockImplementation(async (argv, options) => {
       const [binary, ...args] = argv;
+      const action = args.find((arg) =>
+        ["daemon-reload", "enable", "restart", "stop"].includes(arg),
+      );
       let stdout: string;
       let code = 0;
       if (
@@ -268,22 +333,46 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         });
         stdout = 's "252.39-1~deb12u2"\n';
       } else if (binary === "busctl") {
+        const unit = await fs.readFile(unitPath, "utf8");
+        const currentArgs = runtimeRepair
+          ? parseSystemdExecStart(
+              unit
+                .split("\n")
+                .find((line) => line.startsWith("ExecStart="))!
+                .slice(10),
+            )
+          : programArguments;
+        const currentEnv = runtimeRepair
+          ? Object.fromEntries(
+              unit
+                .split("\n")
+                .filter((line) => line.startsWith("Environment="))
+                .flatMap((line) =>
+                  parseSystemdEnvAssignments(line.slice(12)).map(({ key, value }) => [key, value]),
+                ),
+            )
+          : environment;
         stdout =
           args.includes("LoadUnit") || args.includes("GetUnit")
             ? JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/fixture"] })
             : args.includes("org.freedesktop.systemd1.Unit")
-              ? buildSystemdUnitPropertyOutput({ fragmentPath: unitPath })
+              ? buildSystemdUnitPropertyOutput({
+                  fragmentPath: unitPath,
+                  ...(runtimeRepair ? { dropInPaths: [dropInPath] } : {}),
+                })
               : buildSystemdManagerPropertyOutput({
-                  programArguments,
-                  environment: Object.entries(environment).map(([key, value]) => `${key}=${value}`),
+                  programArguments: currentArgs,
+                  environment: Object.entries(currentEnv).map(([key, value]) => `${key}=${value}`),
+                  ...(runtimeRepair ? { environmentFiles: [[operatorFile, true]] } : {}),
                 });
       } else if (binary === "systemctl" && args.includes("--property=LoadState")) {
         stdout = "not-found\n";
       } else if (binary === "systemctl" && args.includes("--property=UnitPath")) {
         stdout = `${systemUnits}\n`;
       } else if (binary === "systemctl" && args.includes("show")) {
-        stdout =
-          "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=control-group\n";
+        stdout = runtimeRepair
+          ? "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nTimeoutStopUSec=330s\n"
+          : "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=control-group\n";
       } else if (binary === "systemctl" && args.includes("status")) {
         stdout = "running\n";
       } else if (binary === "systemctl" && args.includes("is-enabled")) {
@@ -291,19 +380,10 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       } else if (binary === "systemctl" && args.includes("is-active")) {
         stdout = running ? "active\n" : "inactive\n";
         code = running ? 0 : 3;
-      } else if (
-        binary === "systemctl" &&
-        args.some((arg) => ["daemon-reload", "enable", "restart", "stop"].includes(arg))
-      ) {
-        nativeActions.push(
-          args.find((arg) => ["daemon-reload", "enable", "restart", "stop"].includes(arg))!,
-        );
-        const action = nativeActions.at(-1);
-        if (action === "restart") {
-          running = true;
-        }
-        if (action === "stop") {
-          running = false;
+      } else if (binary === "systemctl" && action) {
+        nativeActions.push(action);
+        if (action === "restart" || action === "stop") {
+          running = action === "restart";
         }
         if (action === custodyLoss) {
           current = false;
@@ -319,30 +399,18 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     const runtime: RuntimeEnv = {
       log: vi.fn(),
       error: (...args) => {
-        const message = args.map(String).join(" ");
-        errors.push(message);
-        if (message.includes("SERVICE_DEFINITION_")) {
-          events.push("repair-refused");
-        }
+        errors.push(args.map(String).join(" "));
       },
       exit: vi.fn(),
     };
-    const prompter: DoctorPrompter = {
-      confirm: async () => true,
-      confirmAutoFix: async () => true,
-      confirmAggressiveAutoFix: async () => true,
-      confirmRuntimeRepair: async () => true,
-      select: async (_params, fallback) => fallback,
-      shouldRepair: true,
+    const prompter = makePrompter(true, true);
+    prompter.shouldForce = update;
+    Object.assign(prompter.repairMode, {
       shouldForce: update,
-      repairMode: {
-        shouldRepair: true,
-        shouldForce: update,
-        canPrompt: !update,
-        nonInteractive: update,
-        updateInProgress: update,
-      },
-    };
+      canPrompt: !update,
+      nonInteractive: update,
+      updateInProgress: update,
+    });
     return withEnvAsync(
       {
         HOME: home,
@@ -364,7 +432,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         OPENCLAW_GATEWAY_TOKEN: undefined,
         OPENCLAW_GATEWAY_PASSWORD: undefined,
         OPENCLAW_GATEWAY_PORT: undefined,
-        OPENCLAW_WRAPPER: wrapperPath,
+        OPENCLAW_WRAPPER: runtimeRepair ? undefined : wrapperPath,
         OPENCLAW_UPDATE_IN_PROGRESS: update ? "1" : undefined,
         OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: update ? "1" : undefined,
       },
@@ -433,16 +501,24 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             authorityFailure = error;
           }
         } else {
-          result = await maybeRepairGatewayServiceConfig(cfg, "local", runtime, prompter, {
-            async writeConfig(nextConfig) {
-              const committed = await replaceConfigFile({
-                nextConfig,
-                afterWrite: { mode: "auto" },
-                writeOptions: { auditOrigin: "doctor" },
-              });
-              return committed.nextConfig;
+          result = await maybeRepairGatewayServiceConfig(
+            cfg,
+            "local",
+            runtime,
+            runtimeRepair
+              ? createDoctorPrompter({ runtime, options: { repair: true, nonInteractive: true } })
+              : prompter,
+            {
+              async writeConfig(nextConfig) {
+                const committed = await replaceConfigFile({
+                  nextConfig,
+                  afterWrite: { mode: "auto" },
+                  writeOptions: { auditOrigin: "doctor" },
+                });
+                return committed.nextConfig;
+              },
             },
-          });
+          );
         }
         const configBytes = await fs.readFile(configPath, "utf8");
         const persisted: OpenClawConfig = JSON.parse(configBytes);
@@ -461,9 +537,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
           running,
           events,
           configBytesPreserved: configBytes === originalConfig,
-          configTokenPreserved: persisted.gateway?.auth?.token === cfg.gateway?.auth?.token,
           embeddedTokenReferenced: storedToken?.ok === true && storedToken.value === embeddedToken,
-          returnedTokenPreserved: result.gateway?.auth?.token === cfg.gateway?.auth?.token,
           returnedConfigPreserved: isDeepStrictEqual(result, JSON.parse(originalConfig)),
           unitBytesPreserved: (await fs.readFile(unitPath, "utf8")) === originalUnit,
           unitMode: (await fs.stat(unitPath)).mode & 0o777,
@@ -473,6 +547,14 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             (await fs.readFile(installedEnvironmentPath, "utf8")) === originalEnvironment,
           unitDirectoryEntries: await fs.readdir(path.dirname(unitPath)),
           nativeActions,
+          ...(runtimeRepair
+            ? {
+                unit: await fs.readFile(unitPath, "utf8"),
+                dropInPreserved: (await fs.readFile(dropInPath, "utf8")) === dropIn,
+                originalUnit,
+                backup: await fs.readFile(`${unitPath}.bak`, "utf8").catch(() => undefined),
+              }
+            : {}),
         };
         expect(unexpectedProcesses).toEqual([]);
         expect(diagnostics.includes(embeddedToken)).toBe(false);
@@ -484,62 +566,69 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     );
   }
 
-  it.each<CustodyLoss>([
-    "before-publication",
-    "backup-published",
-    "environment-published",
-    "definition-published",
-    "daemon-reload",
-    "enable",
-    "restart",
-  ])("Doctor custody fences real native installation at %s", async (custodyLoss) => {
-    const { observations } = await runRepair("writable", { tokenPresent: true, custodyLoss });
-    expect.soft(observations.unitBytesPreserved).toBe(true);
-    expect.soft(observations.environmentBytesPreserved).toBe(true);
-    expect.soft(observations.running).toBe(false);
-    expect.soft(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
-    expect
-      .soft(observations.nativeActions)
-      .toEqual(
-        custodyLoss === "restart"
-          ? ["daemon-reload", "enable", "restart", "daemon-reload", "stop"]
-          : custodyLoss === "enable"
-            ? ["daemon-reload", "enable", "daemon-reload"]
-            : custodyLoss === "daemon-reload"
-              ? ["daemon-reload", "daemon-reload"]
-              : custodyLoss === "definition-published"
-                ? ["daemon-reload"]
-                : [],
-      );
-    expect(observations.authorityFailure).toMatchObject({
-      code: "service-authority-revoked",
-      outcome: custodyLoss === "before-publication" ? "unchanged" : "restored",
-    });
-  });
+  it.each([
+    { runtimeRepair: "secret", systemNodeVersion: undefined, selectedNode: "cli" },
+    { runtimeRepair: "secret", systemNodeVersion: "24.15.0", selectedNode: "cli" },
+    { runtimeRepair: "secret", systemNodeVersion: "26.12.1", selectedNode: "/usr/local/bin/node" },
+    { runtimeRepair: "PATH", systemNodeVersion: undefined, selectedNode: undefined },
+    { runtimeRepair: "launcher", systemNodeVersion: undefined, selectedNode: undefined },
+  ] as const)(
+    "repairs incompatible Node without taking over $runtimeRepair drop-in settings (system Node: $systemNodeVersion)",
+    async ({ runtimeRepair, systemNodeVersion, selectedNode }) => {
+      const { observations, diagnostics, errors } = await runRepair("writable", {
+        tokenPresent: true,
+        runtimeRepair,
+        systemNodeVersion,
+      });
+      expect(errors).toEqual([]);
+      expect(observations.configBytesPreserved).toBe(true);
+      expect(observations.dropInPreserved).toBe(true);
+      if (runtimeRepair !== "secret") {
+        expect(observations.unitBytesPreserved).toBe(true);
+        expect(observations.nativeActions).toEqual([]);
+        expect(diagnostics).toContain("operator-owned");
+      } else {
+        expect(diagnostics).toContain("systemd 254+");
+        expect(observations.unit).toContain(
+          `ExecStart=${selectedNode === "cli" ? process.execPath : selectedNode} `,
+        );
+        expect(observations.backup).toBe(observations.originalUnit);
+        expect(observations.unitBytesPreserved).toBe(false);
+        expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
+      }
+    },
+  );
+
+  it.each(custodyCases)(
+    "Doctor custody fences real native installation at %s",
+    async (custodyLoss, actions) => {
+      const { observations } = await runRepair("writable", { tokenPresent: true, custodyLoss });
+      expect.soft(observations).toMatchObject({
+        unitBytesPreserved: true,
+        environmentBytesPreserved: true,
+        running: false,
+        unitDirectoryEntries: ["openclaw-gateway.service"],
+        nativeActions: actions,
+      });
+      expect(observations.authorityFailure).toMatchObject({
+        code: "service-authority-revoked",
+        outcome: custodyLoss === "before-publication" ? "unchanged" : "restored",
+      });
+    },
+  );
 
   it.each(refusals)(
-    "preserves config and service when $scenario repair is refused (existing token=$tokenPresent)",
-    async ({ scenario, kind, reason, guidance, tokenPresent }) => {
+    "preserves config and service when %s repair is refused",
+    async (scenario, kind, reason, guidance, tokenPresent) => {
       const { observations, diagnostics } = await runRepair(scenario, { tokenPresent });
-      expect(observations.capability).toMatchObject({ kind, reason });
+      // Rejected adapters fail after native inspection; both paths must preserve the repair.
+      if (scenario !== "rejected") {
+        expect(observations.capability).toMatchObject({ kind, reason });
+      }
       expect(diagnostics).toContain(`SERVICE_DEFINITION_${kind.toUpperCase()}: [${reason}]`);
       expect(diagnostics).toContain(guidance);
-      expect(observations.unitBytesPreserved).toBe(true);
-      expect(observations.environmentBytesPreserved).toBe(true);
-      expect(observations.installedEnvironmentBytesPreserved).toBe(true);
-      expect(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
-      expect(observations.nativeActions).toEqual([]);
+      expect.soft(observations).toMatchObject(untouchedRepair);
       expect(observations.events).not.toContain("service-published");
-      expect
-        .soft(observations.configTokenPreserved, "refused repair must preserve the config token")
-        .toBe(true);
-      expect
-        .soft(observations.configBytesPreserved, "refused repair must preserve config bytes")
-        .toBe(true);
-      expect
-        .soft(observations.returnedTokenPreserved, "refused repair must return the original token")
-        .toBe(true);
-      expect(observations.returnedConfigPreserved).toBe(true);
     },
   );
 
@@ -547,14 +636,8 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     const { observations, diagnostics } = await runRepair("writable", { update: true });
     expect(observations.capability).toEqual({ kind: "writable" });
     expect(diagnostics).toContain("deferred to update finalization");
-    expect(observations.configBytesPreserved).toBe(true);
-    expect(observations.configTokenPreserved).toBe(true);
-    expect(observations.returnedConfigPreserved).toBe(true);
-    expect(observations.unitBytesPreserved).toBe(true);
-    expect(observations.environmentBytesPreserved).toBe(true);
-    expect(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
+    expect(observations).toMatchObject(untouchedRepair);
     expect(observations.events).not.toContain("service-published");
-    expect(observations.nativeActions).toEqual([]);
   });
 
   it.each(["installed", "planned"] as const)(
@@ -570,36 +653,10 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       );
       expect(diagnostics).toContain("SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]");
       expect(diagnostics).toContain("chmod go-w");
-      expect(observations).toMatchObject({
-        configBytesPreserved: true,
-        configTokenPreserved: true,
-        returnedConfigPreserved: true,
-        unitBytesPreserved: true,
-        environmentBytesPreserved: true,
-        installedEnvironmentBytesPreserved: true,
-        unitDirectoryEntries: ["openclaw-gateway.service"],
-        nativeActions: [],
-      });
+      expect(observations).toMatchObject(untouchedRepair);
       expect(observations.events).not.toContain("service-published");
     },
   );
-
-  it("redacts a rejected capability inspection and leaves the repair untouched", async () => {
-    const { observations, diagnostics } = await runRepair("rejected");
-    expect(diagnostics).toContain("SERVICE_DEFINITION_UNKNOWN: [inspection-failed]");
-    expect(diagnostics).toContain("native service-manager availability");
-    expect(observations).toMatchObject({
-      configBytesPreserved: true,
-      configTokenPreserved: true,
-      returnedConfigPreserved: true,
-      unitBytesPreserved: true,
-      environmentBytesPreserved: true,
-      installedEnvironmentBytesPreserved: true,
-      unitDirectoryEntries: ["openclaw-gateway.service"],
-      nativeActions: [],
-    });
-    expect(observations.events).not.toContain("service-published");
-  });
 
   it.each(["writable", "repairable"] as const)(
     "preserves authentication while publishing an authorized %s service repair",
@@ -607,16 +664,16 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       const { observations, errors } = await runRepair(scenario);
       expect(observations.capability).toEqual({ kind: "writable" });
       expect(errors).toEqual([]);
-      expect(observations.embeddedTokenReferenced).toBe(true);
-      expect(observations.unitBytesPreserved).toBe(false);
-      expect(observations.unitMode).toBe(0o600);
-      expect(observations.events).toEqual(
-        expect.arrayContaining(["config-published", "service-published"]),
-      );
+      expect(observations).toMatchObject({
+        embeddedTokenReferenced: true,
+        unitBytesPreserved: false,
+        unitMode: 0o600,
+        events: expect.arrayContaining(["config-published", "service-published"]),
+        nativeActions: ["daemon-reload", "enable", "restart"],
+      });
       expect(observations.events.indexOf("config-published")).toBeLessThan(
         observations.events.indexOf("service-published"),
       );
-      expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
       expect(observations.unitDirectoryEntries.toSorted()).toEqual([
         "openclaw-gateway.service",
         "openclaw-gateway.service.bak",

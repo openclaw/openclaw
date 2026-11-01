@@ -1,11 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { NativeWorker } from "./worker-native-handle.js";
 import type { NativeWorkerRuntime } from "./worker-native-lifecycle.types.js";
-import type { bindNativeWorkerResource } from "./worker-native-resource.js";
-
-const resource = vi.hoisted(() => ({ bind: vi.fn() }));
-// mock-isolation: This handle contract supplies independent broker receipts without a live broker.
-vi.mock("./worker-native-resource.js", () => ({ bindNativeWorkerResource: resource.bind }));
 
 it.each(["execution", "resource"] as const)(
   "joins independent %s-first receipts after the resource transport failed",
@@ -13,32 +8,36 @@ it.each(["execution", "resource"] as const)(
     let closeResource: (() => void) | undefined;
     let failResource: ((error: Error) => void) | undefined;
     const release = vi.fn();
-    resource.bind.mockImplementation((options: Parameters<typeof bindNativeWorkerResource>[0]) => {
-      closeResource = () => options.closed();
-      failResource = (error) => options.failed(error);
-      return {
-        attachment: {
-          endpoint: "synthetic-endpoint",
-          secret: "synthetic-secret",
-          generation: 1,
-          id: 1,
-          moduleUrl: "file:///synthetic/resource.mjs",
-          ownerPort: false,
-        },
-        receive: vi.fn(),
-        service: vi.fn(),
-        release,
-        abandonUnattached: vi.fn(),
-        closeAfterSupervisor: vi.fn(),
-      };
-    });
+    type ResourceBroker = ReturnType<NativeWorkerRuntime["resourceBroker"]>;
+    const broker: ResourceBroker = {
+      captureNativeResource: vi.fn<ResourceBroker["captureNativeResource"]>((_input, callbacks) => {
+        closeResource = () => callbacks.message({ type: "resource-closed", id: 1, requestId: 0 });
+        failResource = (error) => callbacks.failed(error);
+        return {
+          attachment: {
+            endpoint: "synthetic-endpoint",
+            secret: "synthetic-secret",
+            generation: 1,
+            id: 1,
+            moduleUrl: "file:///synthetic/resource.mjs",
+            ownerPort: false,
+          },
+          receive: vi.fn(),
+          ownerMessage: vi.fn(() => ({ sequence: 1 })),
+          close: vi.fn(async () => {}),
+          release,
+          abandonUnattached: vi.fn(),
+        };
+      }),
+      sealNativeResources: vi.fn<ResourceBroker["sealNativeResources"]>().mockResolvedValue(),
+    };
     const post = vi.fn();
     const runtime: NativeWorkerRuntime = {
       handles: new Map(),
       service: vi.fn(),
       post,
       refreshReference: vi.fn(),
-      resourceBroker: vi.fn(),
+      resourceBroker: () => broker,
     };
     const worker = new NativeWorker(
       runtime,

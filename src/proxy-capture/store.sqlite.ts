@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import {
@@ -235,23 +236,19 @@ class DebugProxyCaptureStoreImpl extends DebugProxyCaptureKernel {
       return;
     }
     this.closing = true;
-    const errors: unknown[] = [];
-    for (const close of [
-      () => finalizeCaptureStore(this),
-      () => this.releaseIdleReference?.(),
-      () => this.pathBased?.walMaintenance.close(),
-      () => {
-        if (this.pathBased && this.db.isOpen) {
-          this.db.close();
-        }
-      },
-    ]) {
-      try {
-        close();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
+    const errors = collectSynchronousErrors(
+      [
+        () => finalizeCaptureStore(this),
+        () => this.releaseIdleReference?.(),
+        () => this.pathBased?.walMaintenance.close(),
+        () => {
+          if (this.pathBased && this.db.isOpen) {
+            this.db.close();
+          }
+        },
+      ],
+      (close) => close(),
+    );
     this.closed = true;
     this.closing = false;
     if (errors.length) {
@@ -357,14 +354,7 @@ export function closeDebugProxyCaptureStore(): void {
   unregisterExitClose = null;
   const stores = [...cachedStores.values()];
   cachedStores.clear();
-  const errors: unknown[] = [];
-  for (const cached of stores) {
-    try {
-      cached.store.close();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
+  const errors = collectSynchronousErrors(stores, (cached) => cached.store.close());
   if (errors.length) {
     throw new AggregateError(errors, "Capture stores failed to close.");
   }

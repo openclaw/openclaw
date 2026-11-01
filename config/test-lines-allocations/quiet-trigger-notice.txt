@@ -1,0 +1,2 @@
+# Quiet trigger notices and failure-alert job identity retain their owner contracts.
+73

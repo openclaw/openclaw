@@ -1,19 +1,11 @@
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
-const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
-  "a[href]",
-  "button",
-  "input",
-  "select",
-  "textarea",
-  "summary",
-  "[contenteditable='true']",
-  "[role='button']",
-  "[role='menu']",
-  "[role='listbox']",
-  "[role='option']",
-].join(",");
+const COMPOSER_CHROME_INTERACTIVE_SELECTOR =
+  "a[href],button,input,select,textarea,summary,[contenteditable='true'],[role='button'],[role='menu'],[role='listbox'],[role='option']";
 
 type ComposerTextareaResizeObserverState = {
   observer: ResizeObserver | null;
@@ -22,14 +14,19 @@ type ComposerTextareaResizeObserverState = {
   height: number;
   nativeInputPending: boolean;
   hasScrollbarGutter: boolean;
+  // Width a forced scrollbar takes from this textarea; null until first overflow.
+  scrollbarWidth: number | null;
   editing: boolean;
-  events: AbortController;
+  getTranscriptElement: () => HTMLElement | null;
+  getContext: () => HTMLElement | null;
+  // Set by the first connected measurement; pane-owned editors observe their pane.
+  stopPaneLayout?: () => void;
 };
 
 type ComposerPopoverAnchorObserverState = {
   resizeObserver: ResizeObserver | null;
   toggleObserver: MutationObserver | null;
-  viewport: VisualViewport | null;
+  stopViewportListeners: () => void;
   updateFrame: number | null;
   scheduleUpdate: () => void;
 };
@@ -71,7 +68,7 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
   const state: ComposerPopoverAnchorObserverState = {
     resizeObserver: null,
     toggleObserver: null,
-    viewport,
+    stopViewportListeners: () => {},
     updateFrame: null,
     scheduleUpdate: () => {
       if (state.updateFrame !== null) {
@@ -97,9 +94,14 @@ function observeComposerPopoverAnchor(el: HTMLElement) {
       subtree: true,
     });
   }
-  window.addEventListener("resize", state.scheduleUpdate);
-  viewport?.addEventListener("resize", state.scheduleUpdate);
-  viewport?.addEventListener("scroll", state.scheduleUpdate);
+  const stopResize = listen(window, "resize", state.scheduleUpdate);
+  const stopViewportResize = viewport && listen(viewport, "resize", state.scheduleUpdate);
+  const stopViewportScroll = viewport && listen(viewport, "scroll", state.scheduleUpdate);
+  state.stopViewportListeners = () => {
+    stopResize();
+    stopViewportResize?.();
+    stopViewportScroll?.();
+  };
   composerPopoverAnchorObservers.set(el, state);
   updateComposerPopoverAnchor(el);
 }
@@ -112,9 +114,7 @@ export function disconnectComposerPopoverAnchorObserver(el: HTMLElement) {
   }
   state.resizeObserver?.disconnect();
   state.toggleObserver?.disconnect();
-  window.removeEventListener("resize", state.scheduleUpdate);
-  state.viewport?.removeEventListener("resize", state.scheduleUpdate);
-  state.viewport?.removeEventListener("scroll", state.scheduleUpdate);
+  state.stopViewportListeners();
   if (state.updateFrame !== null) {
     cancelAnimationFrame(state.updateFrame);
   }
@@ -139,7 +139,7 @@ function invalidateNativeTextareaLayout(
   state: ComposerTextareaResizeObserverState,
 ) {
   state.nativeInputPending = true;
-  const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread");
+  const thread = state.getTranscriptElement();
   if (thread) {
     publishTranscriptScroll(thread, { type: "composer-input" });
   }
@@ -159,10 +159,64 @@ function scheduleNativeTextareaOverflow(el: HTMLTextAreaElement) {
   }
   state.overflowFrame = requestAnimationFrame(() => {
     state.overflowFrame = null;
-    if (el.isConnected && composerTextareaResizeObservers.get(el) === state) {
+    if (
+      el.isConnected &&
+      !el.closest("[inert], [hidden]") &&
+      composerTextareaResizeObservers.get(el) === state
+    ) {
       updateTextareaOverflow(el, false);
     }
   });
+}
+
+// Scrollable drafts trade end padding for a native gutter of the same width,
+// keeping text width constant. WebKit reserves `scrollbar-gutter: stable` only
+// while a scrollbar is shown, and overlay scrollbars reserve nothing, so the
+// trade would widen the text, remove the overflow and undo itself every frame.
+// A forced scrollbar makes the gutter real; overlay platforms keep the padding.
+function setTextareaScrollbarGutter(
+  el: HTMLTextAreaElement,
+  scrollable: boolean,
+  state: ComposerTextareaResizeObserverState | undefined,
+) {
+  const reserveGutter = scrollable && state?.scrollbarWidth !== 0;
+  const overflow = reserveGutter ? "scroll" : scrollable ? "auto" : "hidden";
+  if (el.style.overflowY !== overflow) {
+    el.style.overflowY = overflow;
+  }
+  el.toggleAttribute("data-composer-scrollable", reserveGutter);
+  if (!reserveGutter || !state || state.scrollbarWidth !== null) {
+    return;
+  }
+  // The scrollbar width is fixed per platform and stylesheet: measure it once.
+  const style = getComputedStyle(el);
+  state.scrollbarWidth =
+    el.offsetWidth -
+    el.clientWidth -
+    Number.parseFloat(style.borderLeftWidth) -
+    Number.parseFloat(style.borderRightWidth);
+  if (state.scrollbarWidth === 0) {
+    el.style.overflowY = "auto";
+    el.removeAttribute("data-composer-scrollable");
+  }
+}
+
+// A surface that declares the compact shape is a fixed CSS box: it holds one
+// line whatever the draft is, so an inline height, scroll offset or overflow
+// left by an earlier measured pass would silently outrank the stylesheet. Which
+// shape a composer is in is declared in its markup, never inferred here from how
+// much text it holds.
+function resetSingleLineTextarea(el: HTMLTextAreaElement) {
+  const singleLine = el.closest('[data-composer-layout="single-line"]');
+  if (singleLine) {
+    el.scrollTop = 0;
+    el.style.height = "";
+    el.style.overflowY = "";
+    el.removeAttribute("data-composer-scrollable");
+    el.removeAttribute("data-scroll-fade-top");
+    el.removeAttribute("data-scroll-fade-bottom");
+  }
+  return singleLine;
 }
 
 function updateTextareaOverflow(
@@ -182,6 +236,39 @@ function updateTextareaOverflow(
   }
   const clientHeight = measured?.clientHeight ?? el.clientHeight;
   const scrollHeight = measured?.scrollHeight ?? el.scrollHeight;
+  const state = composerTextareaResizeObservers.get(el);
+  if (resetSingleLineTextarea(el)) {
+    if (state) {
+      state.height = clientHeight;
+    }
+    return;
+  }
+  // Only a shrinking cap leaves a draft overflowing a shorter box: keep its
+  // visible bottom edge in place unless that would hide the caret line.
+  if (state && clientHeight < state.height && scrollHeight > clientHeight) {
+    let scrollTop = el.scrollTop + state.height - clientHeight;
+    if (document.activeElement === el) {
+      // Textareas expose no caret rectangle; measure the text before it in an
+      // out-of-flow copy with the same wrapping and typography.
+      const style = getComputedStyle(el);
+      // SAFETY: cloneNode preserves the textarea receiver's element type.
+      const copy = el.cloneNode() as HTMLTextAreaElement;
+      copy.value = el.value.slice(
+        0,
+        el.selectionDirection === "backward" ? el.selectionStart : el.selectionEnd,
+      );
+      copy.style.cssText += `;position:fixed;height:0;width:${style.width}`;
+      el.after(copy);
+      scrollTop = Math.min(
+        scrollTop,
+        copy.scrollHeight -
+          Number.parseFloat(style.paddingBottom) -
+          Number.parseFloat(style.lineHeight),
+      );
+      copy.remove();
+    }
+    el.scrollTop = scrollTop;
+  }
   const scrollable = scrollHeight > clientHeight + 1;
   // Two 16px fades need enough vertical runway not to overlap into a narrow
   // opaque strip on short drafts. Small overflows still scroll, just unfaded.
@@ -189,26 +276,24 @@ function updateTextareaOverflow(
     scrollable && clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
   const fadeTop = canFade && el.scrollTop > 1;
   const fadeBottom = canFade && el.scrollTop + clientHeight < scrollHeight - 1;
-  const overflow = scrollable ? "auto" : "hidden";
-  if (el.style.overflowY !== overflow) {
-    el.style.overflowY = overflow;
-  }
+  setTextareaScrollbarGutter(el, scrollable, state);
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
-  const state = composerTextareaResizeObservers.get(el);
   if (state) {
     state.hasScrollbarGutter = false;
     if (scrollable && hasNativeTextareaContentSizing(el)) {
       const style = getComputedStyle(el);
+      // Hiding a reserved gutter cannot free width for intrinsic sizing.
       state.hasScrollbarGutter =
+        !style.getPropertyValue("scrollbar-gutter").includes("stable") &&
         el.offsetWidth - el.clientWidth >
-        Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
+          Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
     }
     const changed = state.height !== clientHeight;
     state.height = clientHeight;
     if (state.nativeInputPending) {
       state.nativeInputPending = false;
-      const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread");
+      const thread = state.getTranscriptElement();
       if (thread) {
         publishTranscriptScroll(thread, { type: "composer-layout", changed });
       }
@@ -218,24 +303,20 @@ function updateTextareaOverflow(
 
 export function adjustTextareaHeight(
   el: HTMLTextAreaElement,
-  options: { nativeInput?: boolean } = {},
+  options: { nativeInput?: boolean; getTranscriptElement?: () => HTMLElement | null } = {},
 ) {
-  // A surface that declares the compact shape is a fixed CSS box: it holds one
-  // line whatever the draft is, so an inline height left by an earlier measured
-  // pass would silently outrank the stylesheet. Which shape a composer is in is
-  // declared in its markup, never inferred here from how much text it holds.
-  if (el.closest('[data-composer-layout="single-line"]')) {
-    el.style.height = "";
-    el.style.overflowY = "";
-    el.removeAttribute("data-scroll-fade-top");
-    el.removeAttribute("data-scroll-fade-bottom");
+  const state = composerTextareaResizeObservers.get(el);
+  if (state && el.isConnected) {
+    // Refs bind before attachment; the first connected measurement sees the pane.
+    state.stopPaneLayout ??= observeComposerPane(el, state);
+  }
+  if (resetSingleLineTextarea(el)) {
     return;
   }
   // Modern engines can size the textarea from its content in the normal layout
   // pass. Do not force repeated transcript and textarea layout reads on every
   // keystroke when that native path is available.
-  const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
-  const state = composerTextareaResizeObservers.get(el);
+  const thread = options.getTranscriptElement?.() ?? state?.getTranscriptElement() ?? null;
   if (options.nativeInput && state && hasNativeTextareaContentSizing(el)) {
     invalidateNativeTextareaLayout(el, state);
     if (el.style.height !== "") {
@@ -325,7 +406,72 @@ export function adjustTextareaHeight(
   }
 }
 
-export function observeTextareaOverflow(el: HTMLTextAreaElement) {
+const EDITOR_HEIGHT_LIMIT = "--chat-composer-editor-height-limit";
+
+// A Chat footer or New Session pane may lower its editor's CSS line cap to the
+// space it leaves; the stylesheet paints the cap first and other composer
+// surfaces keep their own limits. Chat's context keeps its natural height.
+function observeComposerPane(el: HTMLTextAreaElement, state: ComposerTextareaResizeObserverState) {
+  const input = el.closest<HTMLElement>(".agent-chat__input");
+  const shell = el.closest<HTMLElement>(".agent-chat__composer-shell");
+  const pane = shell?.closest(".chat-main__conversation, .new-session-page__scroll");
+  if (!input || !shell || !pane) {
+    return () => {};
+  }
+  const schedule = () =>
+    scheduleLayout(state, () => {
+      const kept = state.getContext() ?? shell;
+      const scroll = shell.closest(".new-session-page__scroll");
+      const style = getComputedStyle(shell);
+      // A Chat footer caps the whole shell. New Session undoes page scrolling so
+      // that scrolling its pane cannot move the boundary again.
+      const space = shell.closest(".chat-footer")
+        ? Number.parseFloat(style.maxHeight)
+        : scroll
+          ? scroll.getBoundingClientRect().bottom -
+            shell.getBoundingClientRect().top -
+            scroll.scrollTop -
+            Number.parseFloat(style.marginTop) -
+            Number.parseFloat(style.marginBottom)
+          : 0;
+      // The rest of the shell keeps its natural height: scrollHeight includes
+      // content overflowing a capped shell, and the context adds what its own
+      // scrollport hides. New Session's shell is never capped or scrolled.
+      const limit = `${Math.max(
+        36,
+        space - shell.scrollHeight + el.offsetHeight - kept.scrollHeight + kept.clientHeight,
+      )}px`;
+      return space > 0 &&
+        el.isConnected &&
+        input.style.getPropertyValue(EDITOR_HEIGHT_LIMIT) !== limit
+        ? () => {
+            input.style.setProperty(EDITOR_HEIGHT_LIMIT, limit);
+            scheduleTextareaHeightAdjustment(el);
+          }
+        : undefined;
+    });
+  // Pane resizing covers the window and an on-screen keyboard that resizes it.
+  const stopResize = observeResize([shell, pane], schedule);
+  // Context can change its natural height while capped, without resizing.
+  const mutations = new MutationObserver(schedule);
+  mutations.observe(state.getContext() ?? shell, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  schedule();
+  return () => {
+    stopResize();
+    mutations.disconnect();
+    cancelLayout(state);
+  };
+}
+
+export function observeTextareaOverflow(
+  el: HTMLTextAreaElement,
+  getTranscriptElement: () => HTMLElement | null = () => null,
+  getContext: () => HTMLElement | null = () => null,
+) {
   if (composerTextareaResizeObservers.has(el)) {
     return;
   }
@@ -336,11 +482,12 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
     height: el.clientHeight,
     nativeInputPending: false,
     hasScrollbarGutter: false,
+    scrollbarWidth: null,
     editing: false,
-    events: new AbortController(),
+    getTranscriptElement,
+    getContext,
   };
   let width = el.getBoundingClientRect().width;
-  const onScroll = () => updateTextareaOverflow(el, false);
   state.observer =
     typeof ResizeObserver === "function"
       ? new ResizeObserver(() => {
@@ -363,41 +510,45 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
           updateTextareaOverflow(el, false);
         })
       : null;
-  // Native caret scrolling can leave the active line inside the fade. Typing
-  // and keyboard selection both need that line unfaded; only pointer browsing
-  // or blur restores fades, not moving the caret within an already visible line.
-  const onInteraction = (event: Event) => {
-    if (
-      event instanceof KeyboardEvent &&
-      (event.isComposing ||
-        !/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End)$/u.test(event.key))
-    ) {
-      return;
-    }
-    state.editing = ["beforeinput", "input", "compositionstart", "keydown"].includes(event.type);
-    if (event.type === "beforeinput" && hasNativeTextareaContentSizing(el)) {
-      // Retain the transcript owner's committed end intent before native caret
-      // scrolling can move an ancestor. This signal performs no layout reads.
-      invalidateNativeTextareaLayout(el, state);
-    }
-    updateTextareaOverflow(el);
-  };
-  const eventOptions = { passive: true, signal: state.events.signal };
-  for (const type of [
-    "beforeinput",
-    "input",
-    "compositionstart",
-    "wheel",
-    "pointerdown",
-    "keydown",
-    "blur",
-  ]) {
-    el.addEventListener(type, onInteraction, eventOptions);
-  }
-  el.addEventListener("scroll", onScroll, eventOptions);
   composerTextareaResizeObservers.set(el, state);
   state.observer?.observe(el);
   updateTextareaOverflow(el);
+}
+
+// Native caret edits stay unfaded until pointer browsing or blur restores the fades.
+type TextareaEvent = Event & { currentTarget: HTMLTextAreaElement };
+
+export function handleTextareaOverflowInteraction(event: TextareaEvent) {
+  const el = event.currentTarget;
+  const state = composerTextareaResizeObservers.get(el);
+  if (!state) {
+    return;
+  }
+
+  if (
+    event instanceof KeyboardEvent &&
+    (event.isComposing ||
+      !/^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|PageUp|PageDown|Home|End)$/u.test(event.key))
+  ) {
+    return;
+  }
+  state.editing = ["beforeinput", "input", "compositionstart", "keydown"].includes(event.type);
+  if (event.type === "beforeinput" && hasNativeTextareaContentSizing(el)) {
+    // Retain the transcript owner's committed end intent before native caret
+    // scrolling can move an ancestor. This signal performs no layout reads.
+    invalidateNativeTextareaLayout(el, state);
+  }
+  // Navigation can blur the field while hiding its retained route. Its fades
+  // need no synchronous layout; a reveal's resize observation restores them.
+  if (event.type === "blur") {
+    scheduleNativeTextareaOverflow(el);
+  } else {
+    updateTextareaOverflow(el);
+  }
+}
+
+export function handleTextareaOverflowScroll(event: TextareaEvent) {
+  updateTextareaOverflow(event.currentTarget, false);
 }
 
 export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
@@ -407,7 +558,7 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
     return;
   }
   state.observer?.disconnect();
-  state.events.abort();
+  state.stopPaneLayout?.();
   for (const frame of [state.adjustmentFrame, state.overflowFrame]) {
     if (frame !== null) {
       cancelAnimationFrame(frame);
@@ -416,8 +567,8 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
 }
 
 export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
-  // Lit invokes ref callbacks before the textarea is connected and before its
-  // controlled value is committed, so measure once the render has settled.
+  // Refs run before connection and before the controlled value commits.
+  // Measure once the render has settled.
   queueMicrotask(() => {
     if (el.isConnected) {
       adjustTextareaHeight(el, { nativeInput: true });
@@ -425,7 +576,11 @@ export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
   });
 }
 
-export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connected: boolean) {
+export function focusComposerFromChrome(
+  event: MouseEvent | PointerEvent,
+  connected: boolean,
+  textarea: HTMLTextAreaElement | null = null,
+) {
   if (event.defaultPrevented) {
     return;
   }
@@ -433,41 +588,26 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   if (!(target instanceof Element)) {
     return;
   }
-  if (event.type === "pointerdown") {
-    // Cancel only pointer focus; click and popover-owned focus still run.
-    if (event.button === 0 && target.closest("summary, .oc-menu-trigger")) {
+  // A menu action can replace its clicked row before this bubbling listener.
+  // The dispatch path still records that the interaction belonged to a control.
+  const interactive = event
+    .composedPath()
+    .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR));
+  if (event.type === "pointerdown" || event.type === "mousedown") {
+    const touch = event instanceof PointerEvent && event.pointerType === "touch";
+    // Blank padding otherwise moves focus to the page before click restores it,
+    // collapsing and reopening the mobile composer during the same gesture.
+    // WebKit also cancels touch activation when the trigger's pointerdown is cancelled.
+    if (
+      event.button === 0 &&
+      ((!touch && target.closest("summary, .oc-menu-trigger")) || (connected && !interactive))
+    ) {
       event.preventDefault();
     }
     return;
   }
-  if (!connected) {
-    return;
-  }
-  // A menu action can replace its clicked row before this bubbling listener.
-  // The dispatch path still records that the interaction belonged to a control.
-  if (
-    event
-      .composedPath()
-      .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR))
-  ) {
-    return;
-  }
-  const currentTarget = event.currentTarget;
-  if (!(currentTarget instanceof HTMLElement)) {
-    return;
-  }
-  currentTarget
-    .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
-    ?.focus({ preventScroll: true });
-}
-
-export function preserveComposerFocusOnPrimaryAction(
-  event: PointerEvent,
-  textarea: HTMLTextAreaElement | null,
-): void {
-  const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
-  if (document.activeElement === textarea && composerShell) {
-    event.preventDefault();
+  if (connected && !interactive) {
+    textarea?.focus({ preventScroll: true });
   }
 }
 

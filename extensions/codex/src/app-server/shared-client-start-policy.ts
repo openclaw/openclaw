@@ -1,5 +1,8 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CodexAppServerStartOptions, CodexPluginConfig } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
+
+export const loadRuntimeArtifact = createLazyRuntimeModule(() => import("./runtime-artifact.js"));
 
 export function shouldTrackDesktopGeneration(
   startOptions: CodexAppServerStartOptions,

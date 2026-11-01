@@ -5,8 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isMissingPathError } from "../../infra/errno.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { ignoreMissingPath, isMissingPathError } from "../../infra/errno.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
@@ -230,12 +229,7 @@ export async function probeWorkspaceGitMode(params: {
   commandOptions: CommandOptions;
   runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
 }): Promise<{ mode: "git" | "plain"; gitRoot: string; baseCommit: string }> {
-  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch(ignoreMissingPath);
   if (!gitAdmin) {
     return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
   }

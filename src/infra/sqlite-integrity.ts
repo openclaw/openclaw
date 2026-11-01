@@ -1,8 +1,22 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
-import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
+import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
+import { quickIntegrityVerificationKey } from "./sqlite-database-admission-seal.js";
+import {
+  publishSqliteDatabaseAdmission,
+  recordSqliteDatabaseIntegrity,
+} from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
+import {
+  consumeSqliteMaintenanceIntegrity,
+  type SqliteIntegrityCheckOptions,
+} from "./sqlite-maintenance-integrity.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
+import { readSqlitePageHeader } from "./sqlite-schema-catalog.js";
+import { findSqlClosingParenthesis, normalizeSchemaSql } from "./sqlite-schema-sql.js";
+import { getMaintenanceSqliteTableChecks } from "./sqlite-table-integrity-cache.js";
+
+export type { SqliteIntegrityCheckOptions } from "./sqlite-maintenance-integrity.js";
 
 type SqliteIntegrityChecks = {
   integrityCheck: "ok";
@@ -12,12 +26,6 @@ export type SqliteIntegrityCheckTiming = {
   syncElapsedMs?: number;
   workerCheckElapsedMs?: number;
   workerLifetimeElapsedMs?: number;
-};
-
-export type SqliteIntegrityCheckOptions = {
-  check?: "quick" | "full";
-  /** Tables rewritten or re-indexed by the migration; absent tables may be created by it. */
-  tables?: readonly string[];
 };
 
 export type SqliteIntegrityCheck = SqliteIntegrityCheckOptions & {
@@ -35,7 +43,7 @@ export type SqliteIntegrityDiagnostics = {
     | "stale-lease-full"
     | "process-death"
     | "dirty-receipt"
-    | "no-proof"
+    | SqliteCleanCloseSealRefusal
     | "lease-class";
   integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;
@@ -56,11 +64,26 @@ export function* sqliteIntegrityCheckSteps(
   diagnostics?: SqliteIntegrityDiagnostics,
   options: SqliteIntegrityCheckOptions = {},
 ): SqliteIntegrityOperation<void> {
+  if (consumeSqliteMaintenanceIntegrity(database, databaseLabel, options)) {
+    if (diagnostics) {
+      diagnostics.integrityGateMode = "quick";
+      diagnostics.integrityGateOutcome = "cached";
+    }
+    return;
+  }
   const startedAt = performance.now();
-  const check: SqliteIntegrityCheck = { database, databaseLabel, ...options };
+  // WAL owner death alone is not corruption evidence. Explicit maintenance keeps its policy.
+  const processDeathQuick =
+    diagnostics?.integrityGateReason === "process-death" && options.check === undefined;
+  const check: SqliteIntegrityCheck = {
+    database,
+    databaseLabel,
+    ...options,
+    check: options.check ?? (processDeathQuick ? "quick" : "full"),
+  };
   if (diagnostics) {
     check.timing = {};
-    diagnostics.integrityGateMode = options.check ?? "full";
+    diagnostics.integrityGateMode = check.check;
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -69,7 +92,19 @@ export function* sqliteIntegrityCheckSteps(
     delete diagnostics.integrityOutsideWorkerMs;
   }
   try {
-    yield check;
+    try {
+      yield check;
+    } catch (error) {
+      if (!processDeathQuick) {
+        throw error;
+      }
+      check.check = "full";
+      diagnostics.integrityGateMode = "full";
+      yield check;
+    }
+    if (processDeathQuick && check.check === "quick") {
+      publishSqliteDatabaseAdmission(database, quickIntegrityVerificationKey, Date.now());
+    }
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "healthy";
     }
@@ -115,18 +150,33 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
 export function runSqliteIntegrityOperationSync<T>(
   operation: SqliteIntegrityOperation<T>,
   beforeResume?: () => void,
+  repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean,
+  runCheck = runSqliteIntegrityCheckSync,
 ): T {
   beforeResume?.();
   let step = operation.next();
   while (!step.done) {
     let failure: { error: unknown } | undefined;
     try {
-      runSqliteIntegrityCheckSync(step.value);
+      runCheck(step.value);
     } catch (error) {
       failure = { error };
     }
     // A blocking check can outlive its caller; both success and failure resume schema work.
     beforeResume?.();
+    if (failure && repairIntegrityError) {
+      const original = failure.error;
+      try {
+        if (repairIntegrityError(step.value, original)) {
+          failure = undefined;
+        }
+      } catch (repairError) {
+        // Keep the original corruption verdict so failed repair retains quarantine policy.
+        if (original instanceof Error) {
+          original.message += ` Startup FTS repair failed: ${String(repairError)}`;
+        }
+      }
+    }
     step = failure ? operation.throw(failure.error) : operation.next();
   }
   return step.value;
@@ -180,14 +230,60 @@ export function isTerminalSqliteIntegrityError(error: Error): boolean {
   return isSqliteCorruptionError(error.cause);
 }
 
+/** SQLite recovers committed WAL frames on open; these probes only check header sanity.
+ * They never walk data pages or publish a full-verification receipt or clean-close seal.
+ */
+export function assertSqliteDatabaseHeader(database: DatabaseSync, databaseLabel: string): void {
+  const { pages, free } = readSqlitePageHeader(database);
+  if (
+    typeof pages !== "number" ||
+    !Number.isSafeInteger(pages) ||
+    pages < 1 ||
+    typeof free !== "number" ||
+    !Number.isSafeInteger(free) ||
+    free < 0 ||
+    free >= pages
+  ) {
+    throw new SqliteIntegrityError(`SQLite database header is inconsistent for ${databaseLabel}`);
+  }
+}
+
 /** Check structure and foreign keys, plus all indexes or the migration's selected tables. */
 export function assertSqliteIntegrity(
   database: DatabaseSync,
   databaseLabel: string,
-  options: SqliteIntegrityCheckOptions = {},
+  options: SqliteIntegrityCheckOptions & {
+    /** Offline repair classification must not omit findings beyond SQLite's default limit. */
+    allFindings?: boolean;
+  } = {},
 ): SqliteIntegrityChecks {
+  if (options.check === "quick" && options.schemaOnly) {
+    // The owner only widens a stored CHECK; unchanged payloads and FKs need no scan.
+    runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
+    return { integrityCheck: "ok" };
+  }
   const check = options.check === "quick" ? "quick_check" : "integrity_check";
-  const integrityCheck = runSqliteCheck(database, databaseLabel, check);
+  let staleFts = false;
+  try {
+    // Classifying derived-only damage needs every finding, not SQLite's first 100.
+    runSqliteCheck(
+      database,
+      databaseLabel,
+      check,
+      undefined,
+      options.allFindings || options.ftsSchemas !== undefined,
+    );
+  } catch (error) {
+    if (
+      !options.ftsSchemas ||
+      !(error instanceof SqliteIntegrityError) ||
+      !error.findings ||
+      !classifySqliteFtsIntegrityFindings(database, error.findings, options.ftsSchemas)
+    ) {
+      throw error;
+    }
+    staleFts = true;
+  }
   if (check === "quick_check" && options.tables?.length) {
     const existing = new Set(
       readSqliteSchemaObjects(database)
@@ -201,10 +297,55 @@ export function assertSqliteIntegrity(
     }
   }
   runSqliteForeignKeyCheck(database, databaseLabel);
-  if (check === "integrity_check") {
+  if (check === "integrity_check" && !staleFts) {
     recordSqliteDatabaseIntegrity(database);
   }
-  return { integrityCheck };
+  return { integrityCheck: "ok" };
+}
+
+/** Only exact, owned FTS definitions may treat their inverted index as derived data. */
+export function classifySqliteFtsIntegrityFindings(
+  database: DatabaseSync,
+  findings: readonly unknown[],
+  schemas: readonly string[],
+): string[] | undefined {
+  const names = new Set<string>();
+  for (const finding of findings) {
+    if (finding === "ok") {
+      continue;
+    }
+    const match =
+      typeof finding === "string"
+        ? /^malformed inverted index for FTS5 table main\.([A-Za-z_][A-Za-z0-9_]*)$/u.exec(finding)
+        : null;
+    if (!match?.[1]) {
+      return undefined;
+    }
+    names.add(match[1]);
+  }
+  if (names.size === 0) {
+    return undefined;
+  }
+  const definitions = new Map<string, Set<string | null>>();
+  for (const schema of schemas) {
+    for (const match of schema.matchAll(
+      /CREATE VIRTUAL TABLE (?:IF NOT EXISTS )?([A-Za-z_][A-Za-z0-9_]*) USING fts5\s*\(/gu,
+    )) {
+      const name = match[1]!;
+      const end = findSqlClosingParenthesis(schema, match.index + match[0].length - 1);
+      const variants = definitions.get(name) ?? new Set<string | null>();
+      variants.add(normalizeSchemaSql(schema.slice(match.index, end + 1)));
+      definitions.set(name, variants);
+    }
+  }
+  const tables = readSqliteSchemaObjects(database).filter((row) => row.type === "table");
+  for (const name of names) {
+    const sql = tables.find((row) => row.name === name)?.sql;
+    if (typeof sql !== "string" || !definitions.get(name)?.has(normalizeSchemaSql(sql))) {
+      return undefined;
+    }
+  }
+  return [...names].toSorted();
 }
 
 /** Require table and associated index consistency before trusting indexed reads. */
@@ -213,7 +354,32 @@ export function assertSqliteTableIntegrity(
   databaseLabel: string,
   tableName: string,
 ): void {
+  const checked = getMaintenanceSqliteTableChecks(database);
+  if (checked?.has(tableName)) {
+    return;
+  }
   runSqliteCheck(database, `${databaseLabel} table ${tableName}`, "integrity_check", tableName);
+  checked?.add(tableName);
+}
+
+/** Maintenance must see every finding before deciding that only derived indexes need repair. */
+export function readSqliteIntegrityFindings(database: DatabaseSync): unknown[] {
+  return readSqliteCheckFindings(database, "integrity_check", undefined, true);
+}
+
+function readSqliteCheckFindings(
+  database: DatabaseSync,
+  pragma: SqliteCheckPragma,
+  tableName?: string,
+  allFindings = false,
+): unknown[] {
+  const argument = tableName
+    ? `('${tableName.replaceAll("'", "''")}')`
+    : allFindings
+      ? "(2147483647)"
+      : "";
+  const rows = database.prepare(`PRAGMA ${pragma}${argument};`).all();
+  return rows.map((row) => row[pragma] ?? Object.values(row)[0]);
 }
 
 function runSqliteCheck(
@@ -221,24 +387,27 @@ function runSqliteCheck(
   databaseLabel: string,
   pragma: SqliteCheckPragma,
   tableName?: string,
+  allFindings = false,
 ): "ok" {
-  const argument = tableName ? `('${tableName.replaceAll("'", "''")}')` : "";
-  let rows: Array<Record<string, unknown>>;
+  let results: unknown[];
   try {
-    rows = database.prepare(`PRAGMA ${pragma}${argument};`).all() as Array<Record<string, unknown>>;
+    results = readSqliteCheckFindings(database, pragma, tableName, allFindings);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw createSqliteIntegrityError(
+    throw new SqliteIntegrityError(
       `SQLite ${pragma} failed for ${databaseLabel}: ${message}`,
       error,
     );
   }
-  const results = rows.map((row) => row[pragma] ?? Object.values(row)[0]);
   if (results.length === 1 && results[0] === "ok") {
     return "ok";
   }
   const details = results.map((result) => String(result)).join("; ") || "no result";
-  throw createSqliteIntegrityError(`SQLite ${pragma} failed for ${databaseLabel}: ${details}`);
+  throw new SqliteIntegrityError(
+    `SQLite ${pragma} failed for ${databaseLabel}: ${details}`,
+    undefined,
+    results,
+  );
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
@@ -266,7 +435,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw createSqliteIntegrityError(
+    throw new SqliteIntegrityError(
       `SQLite foreign_key_check failed for ${databaseLabel}: ${message}`,
       error,
     );
@@ -282,7 +451,7 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
   if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
     details.push("additional violations omitted");
   }
-  throw createSqliteIntegrityError(
+  throw new SqliteIntegrityError(
     `SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`,
   );
 }
@@ -306,15 +475,20 @@ function readTaskDeliveryCascadeForeignKeyId(database: DatabaseSync): bigint | u
     : undefined;
 }
 
-function createSqliteIntegrityError(message: string, cause?: unknown): Error {
-  const error =
-    cause === undefined
-      ? new Error(
-          `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`,
-        )
-      : new Error(message, { cause });
-  error.name = "SqliteIntegrityError";
-  return error;
+export class SqliteIntegrityError extends Error {
+  constructor(
+    message: string,
+    cause?: unknown,
+    readonly findings?: readonly unknown[],
+  ) {
+    super(
+      cause === undefined
+        ? `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`
+        : message,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "SqliteIntegrityError";
+  }
 }
 
 function retainSortedForeignKeyViolation(

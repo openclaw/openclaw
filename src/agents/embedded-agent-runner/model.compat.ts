@@ -1,6 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import { isVllmQwenThinkingCompat } from "../model-compat-catalog.js";
-import { normalizeProviderId } from "../model-selection.js";
 
 export function mergeModelMediaInput(
   base: ModelMediaInputConfig | undefined,

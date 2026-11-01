@@ -38,6 +38,7 @@ export function requestBytes(request: OpenClawStateReadRequest): number {
       request.location,
       request.expectedIdentity,
       request.snapshotRoot,
+      request.postgresSnapshot,
     ])
   );
 }

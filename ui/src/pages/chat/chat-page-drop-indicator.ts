@@ -1,7 +1,7 @@
 import { createSignal, onSettled } from "solid-js";
 import { listen } from "../../lib/reactive/listener.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import type { ChatPaneElement } from "./chat-pane-elements.ts";
 import {
   resolveSplitDropZone,
   splitDropIndicatorRect,

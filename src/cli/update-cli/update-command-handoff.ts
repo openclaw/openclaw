@@ -225,10 +225,7 @@ export async function handoffUpdateFromGateway(params: {
     meta: { runId: params.opts.run?.runId },
   });
   if (started.status === "joined") {
-    throw new UpdatePreMutationError(
-      "managed-service-handoff-already-running",
-      "Another managed update is already running. Check progress with `openclaw update status`.",
-    );
+    throw new UpdatePreMutationError("managed-service-handoff-already-running", started.message);
   }
   const identity = {
     kind: "managed-update-handoff" as const,
@@ -284,7 +281,7 @@ export async function handoffUpdateFromGateway(params: {
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   await printResult(result, params.opts, { nextAction: guidance });

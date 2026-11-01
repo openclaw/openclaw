@@ -1,8 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
-import { registerNodesCameraCommands } from "./register.camera.js";
-import { registerNodesScreenCommands } from "./register.screen.js";
+import { registerNodesCli } from "./register.js";
 import * as rpc from "./rpc.js";
 
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -36,13 +35,13 @@ describe.each([
   beforeEach(() => vi.clearAllMocks());
 
   async function runCommand(duration?: string) {
-    const nodes = new Command("nodes");
-    registerNodesCameraCommands(nodes);
-    registerNodesScreenCommands(nodes);
-    await nodes
+    const program = new Command();
+    await registerNodesCli(program, ["node", "openclaw", "nodes", group]);
+    await program
       .exitOverride()
       .parseAsync(
         [
+          "nodes",
           group,
           action,
           "--node",

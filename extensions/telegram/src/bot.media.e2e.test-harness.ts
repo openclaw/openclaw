@@ -4,6 +4,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helper
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -156,6 +157,8 @@ function installTopicNameRuntimeForTest(): void {
           "telegram",
           options,
         )) as TelegramRuntime["state"]["openKeyedStore"],
+      openKeyedStoreV2: <T>(options: Parameters<TelegramRuntime["state"]["openKeyedStoreV2"]>[0]) =>
+        createPluginStateKeyedStoreV2ForTests<T>("telegram", options, { assertCurrent() {} }),
     },
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as TelegramRuntime);
@@ -401,21 +404,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./bot-handlers.agent.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultModelForAgent: vi.fn(() => ({
-    provider: "openai",
-    model: "gpt-test",
-  })),
-}));
-
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({
     provider: "openai",
     model: "gpt-test",

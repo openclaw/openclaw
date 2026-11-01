@@ -128,8 +128,7 @@ type NativeCapableSessionBindingAdapter = (SessionBindingAdapter | SessionBindin
   NativeSessionBindingReads;
 
 type SessionBindingAdapterRegistration = {
-  adapter: SessionBindingAdapter;
-  normalizedAdapter: NativeCapableSessionBindingAdapter;
+  adapter: NativeCapableSessionBindingAdapter;
 };
 
 const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapterRegistration[]>(
@@ -148,19 +147,11 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
 }
 
 function registerAdapter(adapter: SessionBindingAdapter | SessionBindingAdapterV2): void {
-  const normalizedAdapter: NativeCapableSessionBindingAdapter = {
-    ...adapter,
-    ...normalizeConversationRef({
-      channel: adapter.channel,
-      accountId: adapter.accountId,
-      conversationId: "unused",
-    }),
-  };
-  const key = buildChannelAccountKey(normalizedAdapter);
+  const key = buildChannelAccountKey(adapter);
   // Registrations are stacked so duplicate module graphs can temporarily
   // coexist and unregister without tearing down the active replacement.
   const registrations = ADAPTERS_BY_CHANNEL_ACCOUNT.get(key) ?? [];
-  registrations.push({ adapter, normalizedAdapter });
+  registrations.push({ adapter });
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
 }
 
@@ -194,16 +185,13 @@ export function unregisterSessionBindingAdapter(params: {
 function resolveAdapterForChannelAccount(
   params: SessionBindingScope,
 ): NativeCapableSessionBindingAdapter | null {
-  return (
-    ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.normalizedAdapter ??
-    null
-  );
+  return ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(params))?.at(-1)?.adapter ?? null;
 }
 
 /** Revalidates the exact registration, including its original adapter's retained callbacks. */
 export function isSessionBindingAdapterCurrent(adapter: SessionBindingAdapter): boolean {
   const registration = ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(adapter))?.at(-1);
-  return registration?.adapter === adapter || registration?.normalizedAdapter === adapter;
+  return registration?.adapter === adapter;
 }
 
 function assertAdapterSelectionCurrent(
@@ -220,7 +208,6 @@ function assertAdapterSelectionCurrent(
     throw new SessionBindingError(
       "BINDING_ADAPTER_UNAVAILABLE",
       `Session binding owner changed for ${ref.channel}:${ref.accountId}`,
-      { channel: ref.channel, accountId: ref.accountId },
     );
   }
 }
@@ -250,7 +237,7 @@ function getActiveRegisteredAdapters(
     return adapter ? [adapter] : [];
   }
   return [...ADAPTERS_BY_CHANNEL_ACCOUNT.values()].flatMap(
-    (registrations) => registrations.at(-1)?.normalizedAdapter ?? [],
+    (registrations) => registrations.at(-1)?.adapter ?? [],
   );
 }
 
@@ -507,10 +494,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
   bind: async (input) => {
     const assertCurrent = input.assertCurrent;
     const normalizedConversation = normalizeConversationRef(input.conversation);
-    const scope = {
-      channel: normalizedConversation.channel,
-      accountId: normalizedConversation.accountId,
-    };
     const adapter = resolveAdapterForChannelAccount(normalizedConversation);
     const genericCapabilities = adapter
       ? null
@@ -519,7 +502,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         adapter ? "BINDING_CAPABILITY_UNSUPPORTED" : "BINDING_ADAPTER_UNAVAILABLE",
         `Session binding adapter ${adapter ? "does not support binding" : "unavailable"} for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-        scope,
       );
     }
     const placement =
@@ -532,7 +514,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         "BINDING_CAPABILITY_UNSUPPORTED",
         `Session binding placement "${placement}" is not supported for ${normalizedConversation.channel}:${normalizedConversation.accountId}`,
-        { ...scope, placement },
       );
     }
     const assertBindingCurrent = () => {
@@ -553,7 +534,6 @@ const DEFAULT_SESSION_BINDING_SERVICE: SessionBindingServiceV2 = {
       throw new SessionBindingError(
         "BINDING_CREATE_FAILED",
         "Session binding adapter failed to bind target conversation",
-        { ...scope, placement },
       );
     }
     return bound;

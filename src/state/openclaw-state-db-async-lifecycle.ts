@@ -55,6 +55,8 @@ export type OpenClawStateIntegrityAdmission = {
   readonly proof: SharedArrayBuffer;
 };
 export type OpenClawStateDatabaseAsyncResource = {
+  /** Retain the admission getter so first creation can publish its physical identity. */
+  admission?: Pick<OpenClawStateDatabaseReadAdmission, "identity">;
   /** Shared execution resources close only after accepted owners settle their remaining work. */
   phase?: "after-resources";
   close: (identity?: DatabasePathIdentity) => Promise<void>;
@@ -83,11 +85,13 @@ export function createOpenClawDatabaseMaintenanceScope(
   options?:
     | {
         schemaMaintenance?: false;
+        sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent?: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       }
     | {
         schemaMaintenance: true;
+        sqliteIntegrityCheck?: "quick" | "full";
         assertOwnerCurrent: (access?: "read") => void;
         assertDatabaseAccess?: (databasePath: string) => void;
       },
@@ -116,6 +120,7 @@ export function createOpenClawDatabaseMaintenanceScope(
   const scope: OpenClawDatabaseMaintenanceScope = {
     ownsSchemaMaintenance:
       options?.schemaMaintenance === true || parent?.ownsSchemaMaintenance === true,
+    sqliteIntegrityCheck: options?.sqliteIntegrityCheck ?? parent?.sqliteIntegrityCheck,
     assertOwnerCurrent(access) {
       assertOpen();
       if (checkingOwner) {
@@ -539,14 +544,21 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         ? captureRecord(record, resolveDatabasePath({ path: pathname })).captureIntegrity?.()
         : undefined;
     },
-    publish(pathname: string): {
+    publish(
+      pathname: string,
+      preparedIdentity?: DatabasePathIdentity,
+    ): {
       identity: DatabasePathIdentity;
       admission: OpenClawStateDatabaseReadAdmission;
     } {
       const resolvedPath = resolveDatabasePath({ path: pathname });
-      const identity = readDatabasePathIdentitySync(resolvedPath);
+      const identity = preparedIdentity ?? readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
-      let record = findPhysicalRecord(identity);
+      // Warm worker publication keeps captured facts; cold binding still retires vanished aliases.
+      let record =
+        preparedIdentity && previous?.identity.key === identity.key
+          ? records.get(identity.key)
+          : findPhysicalRecord(identity);
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.
@@ -569,7 +581,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         record = resolve(resolvedPath, identity);
       }
       bindPath(record, resolvedPath);
-      bindPath(record, identity.canonicalPath);
+      // A retained actor's opening path cannot restore an alias retired by relocation.
+      // Native publication has just observed its own canonical alias.
+      bindPath(record, preparedIdentity ? record.identity.canonicalPath : identity.canonicalPath);
       // Private native binding may publish while reads are sealed. Retain its
       // generation now; every later worker use still checks the seal and lifetime.
       return { identity, admission: captureRecord(record, resolvedPath) };
@@ -669,7 +683,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
             await Promise.all(
               batch.map(async (resource) => {
                 try {
-                  await resource.close(record?.identity);
+                  const identity = record?.identity;
+                  if (
+                    !identity ||
+                    !resource.admission ||
+                    identity.key === resource.admission.identity.key
+                  ) {
+                    await resource.close(identity);
+                  }
                   current.retained.delete(resource);
                 } catch (error) {
                   // Unregistration cannot abandon a resource whose close failed.

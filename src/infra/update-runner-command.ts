@@ -1,6 +1,12 @@
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
+import {
+  retryableGitNetworkOperation,
+  UPDATE_GIT_RETRY_DELAYS_MS,
+  withGitNetworkRetry,
+} from "./git-network-retry.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
@@ -24,12 +30,8 @@ const warnedHeartbeats = new WeakSet<() => void>();
 
 function selectCommandFailureMessage(stdout: string, stderr: string): string {
   const lines = stripAnsi(stderr).split(/[\r\n\u2028\u2029]/u);
-  if (
-    !lines
-      .find((line) => line.trim())
-      ?.trimStart()
-      .startsWith("$ ")
-  ) {
+  const firstLine = lines.find((line) => line.trim())?.trimStart();
+  if (!firstLine?.startsWith("$ ")) {
     return stderr;
   }
   // Package-manager banners can hide the child Error from the one-line fact formatter.
@@ -198,18 +200,33 @@ export function normalizeFallbackFailureReason(
 
 export async function buildUpdateCommandRunner(
   runCommand?: CommandRunner,
+  beforeGitNetworkAttempt?: () => void,
 ): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
   return {
     defaultCommandEnv,
     runCommand:
       runCommand ??
-      (async (argv, options) =>
-        await runCommandWithTimeout(argv, {
-          ...options,
-          env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
-          // Package-manager trees must not outlive a timed-out updater.
-          killProcessTree: true,
-        })),
+      ((argv, options) => {
+        const operation =
+          argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined;
+        return withGitNetworkRetry(
+          operation,
+          {
+            timeoutMs: options.timeoutMs,
+            retryDelaysMs: operation === "fetch" ? UPDATE_GIT_RETRY_DELAYS_MS : undefined,
+            signal: resolveCommandProcessSignal(options.signal),
+            beforeRun: operation ? beforeGitNetworkAttempt : undefined,
+          },
+          (timeoutMs) =>
+            runCommandWithTimeout(argv, {
+              ...options,
+              timeoutMs,
+              env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
+              // Package-manager trees must not outlive a timed-out updater.
+              killProcessTree: true,
+            }),
+        );
+      }),
   };
 }

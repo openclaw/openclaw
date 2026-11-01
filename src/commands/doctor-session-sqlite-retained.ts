@@ -7,7 +7,7 @@ import {
   isLegacySessionRecordOwnedByTarget,
   shouldFilterLegacySessionRecordsByTarget,
 } from "../config/sessions/legacy-store-inspection.js";
-import { loadExactSessionEntryCandidates } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { loadExactSessionEntryCandidatesReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import {
   resolveConfiguredAgentDatabaseTargets,
   type SessionStoreTarget,
@@ -17,13 +17,14 @@ import {
   readDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
+import { DeferredPluginSessionImportSchema } from "../infra/deferred-plugin-session-import-schema.js";
+import { readDeferredPluginSessionImportReceipt } from "../infra/deferred-plugin-session-source-read.js";
+import { rebuildDeferredPluginSessionSourceIndex } from "../infra/deferred-plugin-session-source-recovery.js";
 import {
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
-  readDeferredPluginSessionImportReceipt,
   readStaleDeferredPluginSessionImport,
-  rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
   type SessionImportSource,
@@ -52,7 +53,6 @@ import {
   readTranscriptFingerprint,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { DeferredPluginSessionImportSchema } from "../infra/state-migrations.deferred-session-import.js";
 import { markLegacyMigrationSourceRemovedInDatabase } from "../infra/state-migrations.receipts.js";
 import {
   createRetainedAgentDatabaseMatcher,
@@ -125,24 +125,27 @@ export function retireDeferredPluginSessionImport(
   }
   runOpenClawStateWriteTransaction(
     ({ db }) =>
-      withDeferredPluginMigrationsCurrent({ env: params.env, expectedPending }, () => {
-        params.assertCurrent?.();
-        if (
-          !isDeepStrictEqual(
-            readDeferredPluginSessionImportReceipt({ ...params, database: db }),
-            receipt,
-          )
-        ) {
-          throw new Error("Deferred session import receipt changed before retirement.");
-        }
-        if (hasRemainingSources()) {
-          return;
-        }
-        // Diagnostic callbacks and cached verification cannot authorize retirement.
-        const { cfg, env, target, sqlitePath } = params;
-        readDeferredPluginSessionImport({ cfg, env, target, sqlitePath, database: db });
-        markLegacyMigrationSourceRemovedInDatabase(db, receipt.sourceKey);
-      }),
+      withDeferredPluginMigrationsCurrent(
+        { env: params.env, expectedPending, phase: "session source retirement" },
+        () => {
+          params.assertCurrent?.();
+          if (
+            !isDeepStrictEqual(
+              readDeferredPluginSessionImportReceipt({ ...params, database: db }),
+              receipt,
+            )
+          ) {
+            throw new Error("Deferred session import receipt changed before retirement.");
+          }
+          if (hasRemainingSources()) {
+            return;
+          }
+          // Diagnostic callbacks and cached verification cannot authorize retirement.
+          const { cfg, env, target, sqlitePath } = params;
+          readDeferredPluginSessionImport({ cfg, env, target, sqlitePath, database: db });
+          markLegacyMigrationSourceRemovedInDatabase(db, receipt.sourceKey);
+        },
+      ),
     { env: params.env },
     { operationLabel: "state.retire-plugin-session-source" },
   );
@@ -194,6 +197,11 @@ export async function prepareRetainedSessionImport(
     }),
     allowMissingIndex: true,
     onEmptySource: (sourcePath: string, reason: string) => emptySources.set(sourcePath, reason),
+    onMissingSource: (sourcePath: string, reason: string) =>
+      issues.push({
+        code: "retained_missing_transcript_superseded",
+        message: `${sourcePath}: ${reason}`,
+      }),
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
       if (sourceConflicts.has(artifactPath)) {
         return;
@@ -314,7 +322,7 @@ function appendRetainedIndexComparison(
       return;
     }
     const current = new Map(
-      loadExactSessionEntryCandidates({
+      loadExactSessionEntryCandidatesReadOnly({
         readOnly: true,
         env: params.env,
         readSource: {

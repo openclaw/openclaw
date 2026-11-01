@@ -9,12 +9,14 @@ import {
   copyInternalToolResultState,
   runWithAsyncWorkResources,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
   asFiniteNumberInRange,
   floorPositiveFiniteNumber as readPositiveFiniteTimeoutMs,
   parseStrictNonNegativeInteger,
+  MAX_TIMER_TIMEOUT_MS,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
@@ -143,7 +145,8 @@ type DynamicToolCallExecutionParams = {
   toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot"> &
     Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
   signal: AbortSignal;
-  timeoutMs: number;
+  /** Null retains an admitted unlimited parent wait, still subject to cancellation. */
+  timeoutMs: number | null;
   toolMeta?: string;
   toolCallOrdinal?: number;
   onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
@@ -258,7 +261,7 @@ export async function handleDynamicToolCallWithTimeout(
     let toolCallSettled = false;
     let completedSuccessfully = false;
     let operationReleased = false;
-    let resolveAbort: ((response: CodexDynamicToolRuntimeResponse) => void) | undefined;
+    const cancellation = createDeferred<CodexDynamicToolRuntimeResponse>();
     const abortFromRun = () => {
       const message = "OpenClaw dynamic tool call aborted.";
       const terminalReason = resolveCodexToolAbortTerminalReason(params.signal);
@@ -270,7 +273,7 @@ export async function handleDynamicToolCallWithTimeout(
       }
       params.onFallbackSelected?.();
       notifyFailedToolResult(message, terminalReason);
-      resolveAbort?.(createFailedAfterPossibleDispatch(message, terminalReason));
+      cancellation.resolve(createFailedAfterPossibleDispatch(message, terminalReason));
     };
     const releaseOperation = () => {
       if (operationReleased) {
@@ -285,11 +288,8 @@ export async function handleDynamicToolCallWithTimeout(
     // The same signal stays live only through host-owned tracked admission work.
     // No permission is transferred: run/scope/expiry guards still revalidate it.
     onAcquired({ release: releaseOperation, releaseBeforeResultWhenIdle: true });
-    const abortPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-      resolveAbort = resolve;
-    });
-    const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-      const { timeoutMs } = params;
+    const { timeoutMs } = params;
+    if (timeoutMs !== null) {
       timeout = setTimeout(() => {
         timedOut = true;
         const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
@@ -301,10 +301,12 @@ export async function handleDynamicToolCallWithTimeout(
           consoleMessage: timeoutDetails.consoleMessage,
         });
         notifyFailedToolResult(timeoutDetails.responseMessage, "timed_out");
-        resolve(createFailedAfterPossibleDispatch(timeoutDetails.responseMessage, "timed_out"));
+        cancellation.resolve(
+          createFailedAfterPossibleDispatch(timeoutDetails.responseMessage, "timed_out"),
+        );
       }, timeoutMs);
       timeout.unref?.();
-    });
+    }
 
     try {
       params.signal.addEventListener("abort", abortFromRun, { once: true });
@@ -318,8 +320,7 @@ export async function handleDynamicToolCallWithTimeout(
           toolCallOrdinal: params.toolCallOrdinal,
           retainExecutionSnapshot: true,
         }),
-        abortPromise,
-        timeoutPromise,
+        cancellation.promise,
       ]);
       if (!response.success && !didNotifyAgentToolResult) {
         notifyFailedToolResult(
@@ -340,7 +341,6 @@ export async function handleDynamicToolCallWithTimeout(
     } finally {
       clearTimeout(timeout);
       toolCallSettled = true;
-      resolveAbort = undefined;
       if (!completedSuccessfully || timedOut || controller.signal.aborted) {
         // Failure/cancellation does not retain an operation merely because its
         // accepted continuation has not observed the authority failure yet.
@@ -398,7 +398,18 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
   toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
-}): number {
+  parentTimeoutMs?: number;
+}): number | null {
+  if (params.call.tool === "autoreview" && params.parentTimeoutMs !== undefined) {
+    // The canonical helper plans passes after preparation. The admitted parent
+    // owns their total lifetime; its original deadline and abort signal stay live.
+    return params.parentTimeoutMs >= MAX_TIMER_TIMEOUT_MS
+      ? null
+      : addSafeTimeoutDelayGraceMs(
+          params.parentTimeoutMs,
+          CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+        );
+  }
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
   if (params.call.tool === "node_exec") {
     const executionTimeoutMs = params.toolBridge?.availableTools
@@ -456,7 +467,7 @@ export function resolveDynamicToolServerRequestTimeoutMs(
   return (
     Math.max(
       CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-      call ? resolveDynamicToolCallTimeoutMs({ call, config: undefined }) : 0,
+      call ? (resolveDynamicToolCallTimeoutMs({ call, config: undefined }) ?? 0) : 0,
     ) + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
   );
 }

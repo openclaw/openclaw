@@ -48,10 +48,273 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 24      | Retained task indexes replaced with runtime/run lookup and ordered Cron history indexes                                                                                                                                                                                                                                                        | Unreleased          |
 | 25      | Original operator restriction retained for recovered subagent completions; metadata-only downgrade fence                                                                                                                                                                                                                                       | Unreleased          |
 | 26      | Session state heads stored directly by their composite primary key                                                                                                                                                                                                                                                                             | Unreleased          |
+| 27      | Redundant ACP replay and skill-usage indexes removed; lease-owner index no longer includes the renewal timestamp                                                                                                                                                                                                                               | Unreleased          |
+| 28      | GitHub publication requests retain their explicit draft choice across execution and recovery                                                                                                                                                                                                                                                   | Unreleased          |
+| 29      | Client private identities, token caches, and native socket credentials move to a separately versioned local store                                                                                                                                                                                                                              | Unreleased          |
+| 30      | Ordinary automation execution and delivery policies; metadata-only downgrade fence                                                                                                                                                                                                                                                             | Unreleased          |
+| 31      | Local workspace baselines stored by path with subtree digests and recoverable checkpoint deltas                                                                                                                                                                                                                                                | Unreleased          |
+| 32      | Native PostgreSQL index ordering for non-null keys; metadata-only SQLite advance ([#183015](https://github.com/openclaw/openclaw/pull/183015))                                                                                                                                                                                                 | Unreleased          |
+| 33      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                                                                                                        | Unreleased          |
+| 34      | Durable default cron partition binding, independent of the state directory                                                                                                                                                                                                                                                                     | Unreleased          |
+| 35      | Content-addressed local workspace directory packs and source path sets, with compact per-projection file fingerprints                                                                                                                                                                                                                          | Unreleased          |
+| 36      | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged                                                                                                                                                                                             | Unreleased          |
+| 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
+| 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 38
+
+Schema 38 implements the durable authority prerequisite of the
+[accepted disk-authoritative workspace design](https://github.com/openclaw/openclaw/issues/188796).
+It adds nullable `session_repository_workspaces.disk_authority_json` and
+`worker_workspace_pending_results.repository_disk_authority_json` fields.
+The repository owner binds an initialized repository to one exact environment
+and its immutable provider resource receipt. The pending-result owner records
+that authority when it accepts result custody; recovery never infers it from a
+later environment. Binding refuses an active turn or an unsettled mirror result.
+
+Existing repositories and pending results retain `NULL` and their mirrored
+semantics. Disk-bound recovery holds missing or mismatched resources without
+restoring a Gateway checkpoint, replacing the disk, or replaying input. Stored
+file fallback, new publication from an old mirror, and Gateway materialization
+are refused for a disk binding. Previously pinned publication snapshots remain
+usable. There is no user-selectable disk mode in this prerequisite; retained
+lifecycle, explicit export/I/O, and activation are separate implementation steps.
+
+SQLite startup and Doctor add columns only to existing tables; absent first-use
+repository storage remains absent. PostgreSQL supplies the same consecutive
+migration and exact predecessor backup descriptors. No repository or pending
+result payload is rewritten; STRICT validation may scan affected tables. Backup
+scope includes both changed tables and the existing schema/content metadata.
+A refused publication rolls back the DDL and version markers together.
+Older binaries refuse schema 38; rollback restores the verified pre-migration
+backup with its matching binary, not lowered version markers. This step does
+not change the agent schema or delete any provider resource.
+
+### State schema 37
+
+Schema 37 adds nullable `worker_environments.resource_receipt_json`, implementing
+the [accepted retained-resource design](https://github.com/openclaw/openclaw/issues/188796).
+The existing environment writer records a bounded version-1 receipt containing
+the original lease ID and provider-defined string identity fields. It compares
+the original provision operation and any existing lease in its transaction.
+The first receipt is immutable; recording the same receipt, regardless of
+identity-key order, leaves the row unchanged. The existing transaction and
+commit admission retain live caller authority and publish acknowledged facts.
+
+Allocation can record its receipt before node enrollment or readiness. State
+transitions preserve it, including failed teardown that clears the active lease.
+The receipt is removed only when the existing environment-retention owner prunes
+the entire row; there is no separate timer, manager, or sidecar. Corrupt receipts
+refuse inventory admission rather than becoming legacy absence.
+
+SQLite startup and Doctor add the column without inventing identity for existing
+environments: legacy rows retain `NULL`. The nullable addition requires no
+payload rewrite; SQLite STRICT validation and the existing integrity checks can
+still scan the table. The declared backup scope is `worker_environments`, plus
+schema and content-version metadata supplied by the backup owner. PostgreSQL
+adds the equivalent nullable text column through its consecutive migration owner;
+the generated schema remains derived from canonical SQLite DDL.
+
+A refused migration rolls back the column and version publication together.
+Older binaries cannot enforce exact resource matching and must refuse schema 37.
+Rollback restores the verified pre-upgrade backup and matching binary, after
+reconciling provider resources created since that backup. Never lower schema
+markers to bypass the downgrade fence. The agent schema is unchanged.
+
+### State schema 36
+
+Schema 36 migrates the five physical `claw_*` install tables to `template_*`,
+renames their feature-specific columns and record schema identifiers, and maps
+the structured `claw-introduced` origin and `claw` provenance values to their
+Template equivalents. It does not rewrite package identities, paths, content
+digests, JSON payloads, or unrelated strings. Databases with no installed Labs
+content still require this migration because the predecessor tables exist there.
+Optional `agent_provenance` storage remains absent when it was never installed.
+
+SQLite startup and Doctor use the existing schema migration transaction and
+backup owners. PostgreSQL uses its consecutive schema migration owner and
+verifies the predecessor and successor catalogs. A refused publication rolls
+back the cutover. Older binaries refuse schema 36; rollback restores the verified
+pre-migration backup with its matching binary.
+
+### State schema 34
+
+Schema 34 records `cron.defaultStoreKey` in `config_machine_state`. Existing
+partition keys remain unchanged, including keys that spell an old absolute path.
+Fresh databases bind their initial default store path as an opaque identity. Moving an upgraded state directory
+or restoring its backup carries this binding with the jobs, scratch, receipts,
+and run history. Public plugin SDK path arguments continue to select the recorded
+default through the current default path; custom paths retain their own partitions.
+
+SQLite and PostgreSQL publish the binding and schema version in the same migration
+transaction. An older database whose original default cannot be established
+advances without guessing: the Gateway starts, cron reports the partition
+inventory, and `openclaw doctor --fix` offers an explicit interactive selection.
+Other partitions remain unchanged. Rollback restores the verified predecessor
+backup and its matching binary.
+
+### State schema 35
+
+Schema 35 shares immutable directory packs across local workspace projections
+and revisions in `local_workspace_tree_packs`. Each pack holds one directory's
+sibling treap records as JSON TEXT and a small child-pack digest array. Its
+primary key is the sibling root's existing 32-byte digest; the ordinary rowid
+table keeps large payloads outside that digest index. Loads traverse packs level
+by level in one read snapshot, without a root cache or digest recomputation.
+The existing digest definitions and deterministic tree shape are unchanged.
+Projections retain their accepted root in `tree_root_digest`, while
+`baseline_ref` keeps its existing base-commit-bound meaning. Shared,
+digest-addressed zstd blobs in `local_workspace_source_path_sets` replace repeated
+source path arrays; `source_paths_digest` selects a projection's set.
+
+Each projection also has one compact fingerprint blob per scan target. A blob
+binds its filesystem device, path-sorted file count, and inode/ctime records to
+the accepted tree root. Reuse requires a valid matching blob and unchanged inode,
+ctime, and file size, with ctime older than scan start minus two seconds.
+Recent, missing, stale, or malformed fingerprints force hashing;
+the process-local hash memo remains available. Fingerprints publish atomically
+with the root they describe.
+
+The migration adds tables and columns only. It does not scan or rewrite manifest
+data during database open or admission. The existing reconciliation owner
+converts one projection at a time from v31 node rows or legacy `baseline_json`,
+preserving pending receipts and checkpoint recovery. It prepares shared packs in
+bounded transactions before publishing the root, then retires that projection's
+old rows. `local_workspace_manifest_nodes` remains in schema 35 and will be
+dropped in a later version after conversion empties it. The agent schema version
+is unchanged.
+
+Workspace maintenance collects unreachable packs and path sets with an epoch
+grace period, retaining every accepted and pending checkpoint root. Missing roots
+are reconstructed only from an exact digest match in a workspace copy; otherwise,
+reconciliation reports an error and preserves files and the accepted baseline.
+SQLite and the generated PostgreSQL schema use the same representation and migration
+contract. Older workspace writers cannot safely maintain these roots, so builds
+supporting state schema 34 or earlier refuse schema 35. Rollback requires the
+verified pre-upgrade backup and matching build; never lower the schema markers.
+See the [storage contract](/reference/database-schemas/storage-changes#local-workspace-manifest-storage).
+
+### State schemas 32 and 33
+
+Schema 32 gives non-null PostgreSQL index keys native null ordering. Schema 33
+extends that rule to direct keys whose partial-index predicate proves they are
+non-null. The migrations rebuild only changed indexes on tables already present;
+they do not create unused feature fragments or rewrite retained rows. SQLite
+advances metadata only.
+
+With writers stopped, `openclaw doctor --fix` takes the existing exact backup and
+applies consecutive migrations. Direct PostgreSQL Gateway startup refuses older
+schemas. Rollback requires the verified pre-upgrade backup and matching build.
+See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations).
+
+### State schema 31
+
+Schema 31 moves local sandbox checkpoint baselines from complete manifest documents
+to `local_workspace_manifest_nodes`, owned by the existing local workspace
+projection. `checkpoint_json` retains the changed nodes, deletion tombstones,
+and previous and resulting roots needed to settle an interrupted checkpoint.
+Acceptance advances the affected nodes, root, and receipt in one shared-state
+transaction. The agent database version is unchanged.
+
+The backed-up schema migration preserves existing baseline bytes, pending result
+references, rollback journals, and paused-runtime records. It adds the checkpoint
+column and node table only when local projection storage already exists; unused
+installations retain first-use creation. Existing projections convert under their
+reconciliation owner, which clears `baseline_json` only when the corresponding
+node rows and root are durably installed. An interrupted conversion retains its
+legacy input for retry. Pending legacy receipts remain recoverable through the
+same owner until their conversion and settlement finish.
+
+Full baseline replacements build and encode their manifest trees in the existing
+workspace read worker. The Gateway forwards the prepared bytes to the writer,
+which decodes before the same acceptance transaction. Completed conversions do
+not rebuild on restart; new workspaces, base refreshes, and archive recovery can
+still request a full replacement.
+
+Archive and publication operations still materialize the complete manifest format.
+Fresh host Git-index admission remains per operation, and filesystem metadata
+discovery still enumerates additions and deletions. Watch events do not authorize
+skipping that discovery. Older binaries cannot safely advance these baselines;
+rollback requires the verified pre-upgrade backup and its matching build.
+
+### State schema 30
+
+Schema 30 fences ordinary automation policies from older schedulers that cannot
+honor `activeHours`, `idleOnly`, `payload.skipIfScratchEmpty`,
+`payload.includeReasoning`, or owner/direct-message delivery policy. It changes
+no table shape. The existing Cron job definitions remain authoritative, and
+setup/Doctor provisioning receipts use the existing shared config-state owner.
+
+Doctor converts supported heartbeat monitors and task jobs before removing their
+legacy inputs. Current-schema migrations also back up affected shared and agent
+databases through Doctor's existing recovery owner. The agent schema stays at
+31; this change does not remove the legacy `heartbeat_outcomes` source table.
+See [Heartbeat migration](/gateway/heartbeat) for conversion and recovery behavior.
+
+Older builds must refuse the newer shared schema even though the physical tables
+are compatible. Roll back only with the verified pre-upgrade backup and its
+matching build; never lower the schema marker to run an older scheduler against
+jobs whose policies it cannot enforce.
+
+### State schema 29
+
+Schema 29 moves client private material to local SQLite schema 1 at
+`<resolved-client-root>/client/credentials.sqlite` on both SQLite and PostgreSQL
+installations. The shared schema retires `device_identities`, `device_auth_tokens`,
+and `gateway_origin_device_tokens`; `exec_approvals_config` keeps shared approval
+policy with its socket material cleared. Policy semantics do not change.
+
+Updater or Doctor custody captures the source, copies and verifies exact identity
+and token bytes, records a pending receipt, retires the source, and publishes a
+complete receipt. Native bootstrap reads this local receipt without opening the
+selected Gateway database. An old native client refuses the missing shared tables;
+update the app and run the matching `openclaw doctor --fix` for pending migration.
+
+For schema 28→29, the table-scoped SQLite recovery copy contains `device_identities`,
+`device_auth_tokens`, `gateway_origin_device_tokens`, and `exec_approvals_config`,
+plus existing `sqlite_stat1` and `sqlite_stat4` for the removed indexes. Older sources
+also include the scopes declared by intervening migrations. A binary
+rollback requires the pre-upgrade shared database, where those tables still exist.
+Published SQLite drivers ignore the orphaned local store; credentials issued
+between upgrade and rollback are lost and affected clients re-pair. The next
+upgrade rebuilds a stale orphan from the restored shared source, never merges it.
+Engine-aware PostgreSQL drivers also capture and restore the local family.
+See [local client credentials](/reference/database-schemas/versioning#local-client-credentials).
+
+### State schema 28
+
+Schema 28 adds a nullable `draft` field to the existing shared, personal, and
+repository-checkpoint GitHub publication request tables. New requests record
+open or draft creation explicitly. Previously accepted requests retain null,
+their original request digest, and their original draft behavior after recovery.
+Updating an existing PR does not change its state.
+
+SQLite and PostgreSQL add the field transactionally without rewriting retained
+requests. Absent first-use tables remain absent. The declared backup scope is
+these three request tables plus the schema and content-version metadata supplied
+by the backup owner. No credentials, retention policy, or publication authority
+changes. Older builds refuse the new version; rollback restores the verified
+pre-upgrade backup with its matching build.
+
+### State schema 27
+
+Schema 27 removes `idx_acp_replay_events_session_seq` and `idx_skill_usage_key`.
+ACP replay uses its existing `(session_id, seq)` primary key, and skill-usage
+lookups use the `skill_file` primary key. The retained `idx_state_leases_owner`
+index covers only `owner`, avoiding index maintenance when `updated_at` changes.
+All table columns, constraints, lease identities, and retained rows stay unchanged.
+SQLite and PostgreSQL apply the same index changes transactionally.
+
+The declared backup scope is `acp_replay_events`, `skill_usage`, `state_leases`,
+`sqlite_stat1`, and `sqlite_stat4`, plus the schema and content-version metadata
+included by the backup owner. The migration does not backfill table rows;
+it reads lease rows to rebuild only the lease-owner index. Source integrity admission still checks
+the complete database once. Older builds refuse the new version; rollback uses
+the verified pre-upgrade backup and matching build.
 
 ### State schema 26
 
@@ -226,7 +489,8 @@ first repairs the known malformed
 `idx_skill_workshop_collection_reviews_workspace_time` index during its schema
 prelude. Its final Workshop step then writes every `pending` or `quarantined`
 proposal draft, plus its support files, to
-`<agentDir>/workshop-skills/.archive/.retired-proposals/<proposalId>/SKILL.md`
+`<agentDir>/workshop-skills/.drafts/<proposalId>/SKILL.md` (earlier builds used
+`.archive/.retired-proposals/`; Doctor moves those into `.drafts/`)
 for the recorded owner agent, or the default agent when none was recorded.
 Pre-SQLite bundles under `<state-dir>/skill-workshop/proposals/<id>/` with a
 `proposal.json` are exported the same way. An existing export is never
@@ -267,6 +531,8 @@ No agent schema changes are involved.
 Startup and Doctor add the nullable columns without assigning authority to legacy
 rows; unused profile tables remain absent until first use. The current schema
 and the profile owner's first-use initialization share the table and index definitions.
+Upgrades also add nullable `canonical_login TEXT` when a legacy identity table
+predates that profile field, preserving its rows without inferring a login.
 Both published schema markers normally advance to 19. During the existing
 [older-updater publication deferral](/reference/database-schemas/versioning#schema-bumps-and-older-updaters),
 content can be upgraded while older published markers remain. References cannot

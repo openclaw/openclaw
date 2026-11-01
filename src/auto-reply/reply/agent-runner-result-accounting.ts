@@ -1,7 +1,7 @@
+import { createHash } from "node:crypto";
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { persistModelFallbackRestoredTranscriptNotice } from "../../agents/embedded-agent-runner/model-fallback-transcript.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { prepareLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { areRuntimeModelRefsEquivalent } from "../../agents/model-runtime-aliases.js";
@@ -9,9 +9,12 @@ import { resolvePersistedOverrideModelRef } from "../../agents/model-selection-p
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionActorReducer } from "../../config/sessions/session-actor-contract.js";
 import { reduceSessionActorEntry } from "../../config/sessions/session-actor-reducers.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { MODEL_FALLBACK_NOTICE_KIND } from "../../shared/model-fallback-notice.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -20,14 +23,15 @@ import { resolveFallbackOriginModel } from "./agent-runner-core.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
+
+const modelFallbackLog = createSubsystemLogger("model-fallback");
 
 type AgentTurnAccountingContext = Pick<
   FinalizeReplyAgentRunInput,
@@ -37,7 +41,6 @@ type AgentTurnAccountingContext = Pick<
   | "cfg"
   | "defaultModel"
   | "followupRun"
-  | "isHeartbeat"
   | "pendingToolTasks"
   | "preflightCompactionApplied"
   | "resolvedVerboseLevel"
@@ -63,9 +66,12 @@ export async function accountAgentTurnCompaction(params: {
   if (!operation) {
     return undefined;
   }
-  const authorize = () => replyRunRegistry.get(operation.key) === operation;
+  const authorize = () => isCurrentSessionControllerOperation(operation);
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
+    if (fact.count === 0) {
+      continue;
+    }
     const persistedCount = await incrementCompactionCount({
       ...fact.target,
       sessionStore: params.sessionStore,
@@ -89,7 +95,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
     defaultModel,
     followupRun,
-    isHeartbeat,
     pendingToolTasks,
     preflightCompactionApplied,
     resolvedVerboseLevel,
@@ -120,9 +125,11 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     return entry;
   };
   const latestCompaction = execution.compaction?.durable.at(-1);
-  const currentContextSnapshot = execution.compaction
-    ? (latestCompaction?.currentContextSnapshot ?? { tokens: undefined })
-    : undefined;
+  const currentContextSnapshot = latestCompaction
+    ? latestCompaction.currentContextSnapshot
+    : execution.compaction
+      ? { tokens: undefined }
+      : undefined;
   const expectedSession = latestCompaction?.target ?? {
     sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
     lifecycleRevision: activeSessionEntry?.lifecycleRevision,
@@ -159,7 +166,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   if (pendingToolTasks.size > 0) {
     await drainPendingToolTasks({
       tasks: pendingToolTasks,
-      onTimeout: logVerbose,
     });
   }
 
@@ -218,7 +224,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
     followupRun.run.inputProvenance,
   );
-  const fallbackStateEntry =
+  const fallbackStateEntry: InternalSessionEntry | undefined =
     (completion ? await completion.refresh() : activeSessionEntry) ??
     (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
   const configuredFallbackModel = resolveFallbackOriginModel({
@@ -283,21 +289,61 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       fallbackTransition.fallbackCleared = false;
     } else if (completion && sessionKey && context.storePath && !preserveUserFacingSessionState) {
       const fromModel = fallbackTransition.previousState.activeModel!;
-      const recorded = await persistModelFallbackRestoredTranscriptNotice({
-        agentId: followupRun.run.agentId,
-        sessionKey,
-        storePath: context.storePath,
-        entry: fallbackStateEntry,
-        config: cfg,
-        runId,
-        fromModel,
-        toModel: fallbackTransition.selectedModelRef,
-        assertCurrent() {
+      const agentId = followupRun.run.agentId;
+      const storePath = context.storePath;
+      const toModel = fallbackTransition.selectedModelRef;
+      let recorded = false;
+      if (
+        runId &&
+        runId.length <= 4096 &&
+        fromModel &&
+        fromModel.length <= 512 &&
+        toModel &&
+        toModel.length <= 512 &&
+        fromModel !== toModel
+      ) {
+        const assertCurrent = () => {
           operation?.abortSignal.throwIfAborted();
           completion.assertCurrent();
-        },
-      });
-      if (!recorded) {
+        };
+        try {
+          assertCurrent();
+          const { appendAssistantMessageToSessionTranscript } =
+            await import("../../config/sessions/transcript.js");
+          assertCurrent();
+          const transition = createHash("sha256").update(runId).digest("hex");
+          const result = await appendAssistantMessageToSessionTranscript({
+            agentId,
+            sessionKey,
+            storePath,
+            expectedSessionId: fallbackStateEntry.sessionId,
+            expectedLifecycleRevision: fallbackStateEntry.lifecycleRevision ?? null,
+            expectedWriterRunId: fallbackStateEntry.activeWriterRunId,
+            runId,
+            config: cfg,
+            assertCurrent,
+            idempotencyKey: `model-fallback-restored:${transition}`,
+            text: `Selected model ${toModel} restored (was ${fromModel}).`,
+            deliveryMirror: {
+              kind: MODEL_FALLBACK_NOTICE_KIND,
+              phase: "restored",
+              runId,
+              fromModel,
+              toModel,
+            },
+          });
+          recorded = result.ok;
+          if (!result.ok && result.code !== "session-rebound") {
+            modelFallbackLog.warn("Model restoration transcript notice was not persisted.");
+          }
+        } catch {
+          // Keep the successful reply usable; retain fallback state so a later success can record it.
+          modelFallbackLog.warn("Model restoration transcript notice was not persisted.");
+        }
+      }
+      if (recorded) {
+        runResult.meta.modelFallbackTranscriptToModel = toModel;
+      } else {
         fallbackTransition.fallbackCleared = false;
         fallbackTransition.stateChanged = false;
       }
@@ -362,7 +408,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     lastCallUsage,
     currentContextSnapshot,
     promptTokens,
-    isHeartbeat,
     preserveRuntimeModel:
       fallbackExhausted ||
       (fallbackTransition.stateChanged
@@ -398,7 +443,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       }
     });
   }
-  if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
+  if (!preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the
     // pending live-switch flag; CLI harness runs never hit the embedded
     // attempt-recovery clear, so /status would report the switch forever.
@@ -472,6 +517,10 @@ export async function accountFollowupTurn(params: {
     });
     return undefined;
   }
+  if (turn.queued.goalContinuation) {
+    // Queue settlement, not enqueue or native provider subruns, counts one automatic turn.
+    completion?.patch({ kind: "goal-continuation", goalId: turn.queued.goalContinuation.goalId });
+  }
   const resolvedVerboseLevel =
     normalizeVerboseLevel(
       turn.queued.run.verboseLevelOverride ??
@@ -485,7 +534,6 @@ export async function accountFollowupTurn(params: {
     cfg: turn.config,
     defaultModel: defaults.defaultModel,
     followupRun: turn.queued,
-    isHeartbeat: false,
     pendingToolTasks: execution.pendingToolTasks,
     replyOperation: turn.operation,
     completion,

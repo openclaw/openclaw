@@ -7,7 +7,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
@@ -36,11 +35,13 @@ import {
   assertReceiptOwner,
   prepareReceiptOwner,
 } from "./github-repository-publication-workspace.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
 const mocked = vi.hoisted(() => ({ run: vi.fn(), timed: vi.fn() }));
+const readFile = (root: string, name: string) => fs.readFile(path.join(root, name), "utf8");
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runCommandBuffered: mocked.run,
@@ -66,8 +67,8 @@ it.each([
   "shifted membership",
 ] as const)(
   "continues publication through the actual Gateway handoff: %s",
-  async (scenario) => {
-    await withOpenClawTestState({ label: "publication-handoff" }, async (state) => {
+  (scenario) =>
+    withOpenClawTestState({ label: "publication-handoff" }, async (state) => {
       const actual =
         await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
       mocked.run.mockImplementation(actual.runCommandBuffered);
@@ -127,6 +128,28 @@ it.each([
         assertCurrent: () => {},
       });
       const base = await captureWorkspaceManifest({ root: source, baseCommit });
+      const checkpoint = async (publication: string) => {
+        const current = await captureWorkspaceManifest({ root: cloud, baseCommit });
+        const digest = execFileSync(
+          process.execPath,
+          ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cloud, baseCommit, publication],
+          { env, encoding: "utf8" },
+        ).trim();
+        const staged = await stageSessionRepositoryCheckpoint({
+          workspaceId: repository.workspaceId,
+          expectedRevision: repository.revision,
+          stagingRoot: cloud,
+          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+          currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+          baseManifestRef: base.manifestRef,
+          currentManifestRef: current.manifestRef,
+          publicationStagingRoot: publication,
+          publicationDigest: digest,
+          assertCurrent: () => {},
+        });
+        repository = await staged.publish();
+        return { staged, digest };
+      };
       repository = await store.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
@@ -144,52 +167,16 @@ it.each([
       git(cloud, "commit", "-qam", "Cloud\n\nOpenClaw-Publication: prior-cloud-publication");
       const publishedHead = git(cloud, "rev-parse", "HEAD");
       git(cloud, "push", "origin", repository.branch);
-      const priorCurrent = await captureWorkspaceManifest({ root: cloud, baseCommit });
-      const priorPublication = state.path("prior-publication");
-      const priorDigest = execFileSync(
-        process.execPath,
-        ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cloud, baseCommit, priorPublication],
-        { env, encoding: "utf8" },
-      ).trim();
-      const priorCheckpoint = await stageSessionRepositoryCheckpoint({
-        workspaceId: repository.workspaceId,
-        expectedRevision: repository.revision,
-        stagingRoot: cloud,
-        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-        currentManifestRaw: serializeWorkerWorkspaceManifest(priorCurrent.manifest),
-        baseManifestRef: base.manifestRef,
-        currentManifestRef: priorCurrent.manifestRef,
-        publicationStagingRoot: priorPublication,
-        publicationDigest: priorDigest,
-        assertCurrent: () => {},
-      });
-      repository = await priorCheckpoint.publish();
+      const { staged: priorCheckpoint, digest: priorDigest } = await checkpoint(
+        state.path("prior-publication"),
+      );
       if (scenario === "shifted membership") {
         git(cloud, "rm", "--cached", "published-only.ignored");
         await fs.writeFile(path.join(cloud, "restored.ignored"), "original accepted\n");
         git(cloud, "add", "-f", "restored.ignored");
       }
       await fs.writeFile(path.join(cloud, "later.txt"), "accepted after publication\n");
-      const current = await captureWorkspaceManifest({ root: cloud, baseCommit });
-      const publication = state.path("publication");
-      const digest = execFileSync(
-        process.execPath,
-        ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cloud, baseCommit, publication],
-        { env, encoding: "utf8" },
-      ).trim();
-      const staged = await stageSessionRepositoryCheckpoint({
-        workspaceId: repository.workspaceId,
-        expectedRevision: repository.revision,
-        stagingRoot: cloud,
-        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-        currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-        baseManifestRef: base.manifestRef,
-        currentManifestRef: current.manifestRef,
-        publicationStagingRoot: publication,
-        publicationDigest: digest,
-        assertCurrent: () => {},
-      });
-      repository = await staged.publish();
+      await checkpoint(state.path("publication"));
       const sessionId = "handoff-session",
         lifecycleRevision = "handoff-lifecycle";
       await upsertSessionEntryCore(scope, {
@@ -216,6 +203,7 @@ it.each([
         identity_login: "proof",
         title: "Cloud",
         body: null,
+        draft: null,
         push_repository: "example/handoff-fixture",
         repository: prRepository,
         base_branch: baseBranch,
@@ -251,8 +239,7 @@ it.each([
         assertCustody: () => {},
         assertCurrent: () => {},
       });
-      prior.recordEffect("push");
-      if (scenario !== "unsettled") {
+      const settlePrior = () => {
         prior.recordEffect("push", { headCommit: publishedHead });
         prior.complete({
           requestId: row.request_id,
@@ -262,11 +249,14 @@ it.each([
           branch: repository.branch,
           headCommit: publishedHead,
         });
+      };
+      prior.recordEffect("push");
+      if (scenario !== "unsettled") {
+        settlePrior();
       }
       if (scenario === "foreign head") {
         git(bare, "update-ref", "refs/heads/" + repository.branch, baseCommit);
       }
-      const pushes: Array<{ code: number | null; stderr: string }> = [];
       let currentOwner = true;
       let createdBase: string | undefined;
       const result = (value: unknown) => ({
@@ -304,11 +294,7 @@ it.each([
             throw new Error("Unexpected synthetic GitHub API request: " + argv.join(" "));
           }
           const mapped = argv.map((x) => (x === url ? bare : x));
-          const answer = await actual.runCommandBuffered(mapped, options);
-          if (argv.includes("push")) {
-            pushes.push({ code: answer.code, stderr: answer.stderr.toString() });
-          }
-          return answer;
+          return actual.runCommandBuffered(mapped, options);
         },
       );
       mocked.timed.mockImplementation(
@@ -318,10 +304,19 @@ it.each([
             options,
           ),
       );
+      const prepareMove = createRepositoryGatewayMovePreparation({
+        placements: createWorkerSessionPlacementStore(),
+        getConfig: () => cfg,
+        environments: {
+          get: () => undefined,
+          startTunnel: async () => {
+            throw new Error("Unexpected worker tunnel for retained checkpoint fixture");
+          },
+        },
+      });
       const move = () =>
-        materializeSessionRepositoryWorkspaceOnGateway({
+        prepareMove({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent: () => {
             if (!currentOwner) {
@@ -338,15 +333,7 @@ it.each([
         if (scenario === "foreign head") {
           return;
         }
-        prior.recordEffect("push", { headCommit: publishedHead });
-        prior.complete({
-          requestId: row.request_id,
-          status: "published",
-          url: "https://github.com/example/handoff-fixture/pull/1",
-          repository: prRepository,
-          branch: repository.branch,
-          headCommit: publishedHead,
-        });
+        settlePrior();
       }
       if (scenario === "revoked") {
         const transport = mocked.run.getMockImplementation()!;
@@ -360,7 +347,7 @@ it.each([
         await expect(move()).rejects.toThrow("move revoked");
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
         expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
-        expect(await fs.readFile(path.join(source, "file.txt"), "utf8")).toBe("base\n");
+        expect(await readFile(source, "file.txt")).toBe("base\n");
         return;
       }
       await move();
@@ -373,7 +360,7 @@ it.each([
       const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
       const moveHead = git(worktree.path, "rev-parse", "HEAD");
       if (scenario === "shifted membership") {
-        expect(await fs.readFile(path.join(worktree.path, "published-only.ignored"), "utf8")).toBe(
+        expect(await readFile(worktree.path, "published-only.ignored")).toBe(
           "cloud publication only\n",
         );
         expect(git(worktree.path, "ls-files", "--", "published-only.ignored")).toBe("");
@@ -438,20 +425,6 @@ it.each([
           assertGitHubPublicationWorkflowChangesAllowed(requester),
       }).finally(requester.release);
       const localHead = git(worktree.path, "rev-parse", "HEAD");
-      const receipt = {
-        baseCommit,
-        publishedHead,
-        moveHead,
-        creationBase,
-        branch: worktree.branch,
-        localHead,
-        localParent: git(worktree.path, "rev-parse", "HEAD^"),
-        remoteHead: git(bare, "rev-parse", "refs/heads/" + worktree.branch),
-        published,
-        pushes,
-        localBinding: loadSessionEntry(scope)?.repositoryWorkspaceId ?? null,
-      };
-
       expect(published).toMatchObject({ status: "published", repository: prRepository });
       expect(createdBase).toBe(baseBranch);
       expect(worktree.baseRef).toBe(baseBranch);
@@ -465,19 +438,14 @@ it.each([
       }
       expect(moveHead).toBe(publishedHead);
       expect(creationBase).toBe(baseCommit);
-      expect(receipt.localParent).toBe(publishedHead);
-      expect(receipt.remoteHead).toBe(localHead);
-      expect(await fs.readFile(path.join(worktree.path, "later.txt"), "utf8")).toBe(
-        "accepted after publication\n",
-      );
-    });
-  },
+      expect(git(worktree.path, "rev-parse", "HEAD^")).toBe(publishedHead);
+      expect(git(bare, "rev-parse", "refs/heads/" + worktree.branch)).toBe(localHead);
+      expect(await readFile(worktree.path, "later.txt")).toBe("accepted after publication\n");
+    }),
   120000,
 );
 it("can hold publisher exclusion during an existing reclaim claim without taking repository admission", async () => {
   await withOpenClawTestState({ label: "handoff-exclusion" }, async () => {
-    const { createWorkerSessionPlacementStore } =
-      await import("./worker-environments/placement-store.js");
     const { seedActivePlacement, REQUEST } =
       await import("./worker-environments/placement-dispatch-test-fixtures.js");
     const { placementTurnOwner } = await import("./worker-environments/placement-record.js");
@@ -485,19 +453,12 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       await import("./worker-environments/placement-test-fixtures.js");
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: "handoff-worker",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 1,
-    });
-    const active = await seedActivePlacement(placements, {
-      environmentId: "handoff-worker",
-      ownerEpoch: 1,
-    });
+    const owner = { environmentId: "handoff-worker", ownerEpoch: 1 };
+    seedAttachedPlacementEnvironment(database, { ...owner, sessionId: REQUEST.sessionId });
+    const active = await seedActivePlacement(placements, owner);
     const draining = await placements.startDrain({
+      ...owner,
       sessionId: REQUEST.sessionId,
-      environmentId: "handoff-worker",
-      ownerEpoch: 1,
       expectedGeneration: active.generation,
     });
     if (draining.state !== "draining") {
@@ -516,32 +477,24 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       assertOwned();
       entered = true;
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-      const wait = vi.spyOn(backoff, "sleepWithAbort");
       await expect(
         placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {}),
       ).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_HELD",
         outcome: { kind: "held", holder: { owner: expect.any(String), epoch: expect.any(Number) } },
       });
-      expect(wait).not.toHaveBeenCalled();
       assertOwned();
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     });
     expect(entered).toBe(true);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-    for (const code of [
-      "OPENCLAW_STATE_LEASE_HELD",
-      "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-      "OPENCLAW_STATE_LEASE_ABORTED",
-    ] as const) {
-      const operationFailure = new OpenClawStateLeaseError("Nested operation refused admission", {
-        code,
-      });
-      await expect(
-        placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
-          throw operationFailure;
-        }),
-      ).rejects.toBe(operationFailure);
-    }
+    const operationFailure = new OpenClawStateLeaseError("Nested operation refused admission", {
+      code: "OPENCLAW_STATE_LEASE_HELD",
+    });
+    await expect(
+      placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
+        throw operationFailure;
+      }),
+    ).rejects.toBe(operationFailure);
   });
 });

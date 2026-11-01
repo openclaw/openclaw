@@ -1,8 +1,10 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
+import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import {
@@ -14,6 +16,7 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "./sqlite-lifecycle-errors.js";
+import { SQLITE_WORKER_ADMISSION_TIMEOUT_MS } from "./sqlite-worker-broker-admission.js";
 import {
   receiveSqliteWorkerReply,
   type SqliteWorkerReplyOwner,
@@ -28,7 +31,7 @@ import type {
 import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
-import { createCpuTrackedWorker } from "./worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 
 function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
   return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -57,10 +60,12 @@ export function createSqliteWorkerLifecycle({
     inputAdmission,
     operations,
     waiters,
+    beforeSharedStateClose,
   }: {
     inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
+    beforeSharedStateClose?: () => Promise<void>;
   }): Promise<void> {
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     for (const waiting of waiters) {
@@ -68,6 +73,13 @@ export function createSqliteWorkerLifecycle({
         resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));
       }
     }
+    for (const client of stores.values()) {
+      // Retained state leases keep their binding until canonical resources finish.
+      if (!beforeSharedStateClose || !client.actor.stateContext) {
+        client.sealed = true;
+      }
+    }
+    await beforeSharedStateClose?.();
     for (const client of stores.values()) {
       client.sealed = true;
     }
@@ -98,9 +110,9 @@ export function createSqliteWorkerLifecycle({
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    // Agent integrity scans are synchronous; keep durable channel intake on its own carrier.
-    const pool = [...slots].filter((slot) => slot.sharedState === options.sharedState);
-    const maxWorkers = options.sharedState ? 1 : limits.maxWorkers;
+    // Agent integrity scans are synchronous; shared state and plugins need independent carriers.
+    const pool = [...slots].filter((slot) => slot.carrierClass === options.carrierClass);
+    const maxWorkers = options.carrierClass === "shared-state" ? 1 : limits.maxWorkers;
     const available = pool.filter(
       (slot) =>
         !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
@@ -134,9 +146,42 @@ export function createSqliteWorkerLifecycle({
           "overloaded",
         );
       }
-      const selected = available.reduce((left, right) =>
-        left.actors.size <= right.actors.size ? left : right,
-      );
+      const idle = available.filter((slot) => !slot.current);
+      let selected: Slot;
+      if (idle.length === 0) {
+        // Join the first completing carrier's FIFO even if its next job has started.
+        // Requiring an idle window could starve opens behind a steady command stream.
+        selected = await raceWithTimeout(
+          Promise.race(
+            available.map((slot) =>
+              slot.current!.result.then(
+                () => slot,
+                () => slot,
+              ),
+            ),
+          ),
+          SQLITE_WORKER_ADMISSION_TIMEOUT_MS,
+          () => {
+            throw new SqliteWorkerError("SQLite worker queue capacity reached", "overloaded");
+          },
+          {
+            signal: options.signal,
+            onAbort: (signal) => {
+              throw signal.reason;
+            },
+          },
+        );
+        options.signal?.throwIfAborted();
+        options.assertCurrent?.();
+        options.signal?.throwIfAborted();
+        if (selected.failed || selected.retiring || selected.exited) {
+          return acquireSlot(options, limits, createReplyOwner);
+        }
+      } else {
+        selected = idle.reduce((left, right) =>
+          left.actors.size <= right.actors.size ? left : right,
+        );
+      }
       selected.pendingOpens += 1;
       return selected;
     }
@@ -146,7 +191,7 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "sharedState"
+      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "carrierClass"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -160,18 +205,26 @@ export function createSqliteWorkerLifecycle({
     const databaseAdmissionCursor = createSqliteDatabaseAdmissionCursor();
     // The Worker constructor inherits this exact synchronous snapshot.
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
+    const postgresPool = createPostgresPoolEndpoints();
     const { worker, exited } = runInDetachedAsyncContext(() => ({
-      worker: createCpuTrackedWorker(carrierUrl, {
-        // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
-        resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
-        env: resolveNodeCompileCacheEnv(),
-        execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
-      }),
+      worker: createCpuTrackedWorker(
+        carrierUrl,
+        {
+          // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
+          resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
+          env: resolveNodeCompileCacheEnv(),
+          execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
+          workerData: { postgresPool },
+          transferList: postgresPoolTransferList(postgresPool),
+        },
+        () => slot.current?.observation.requestClass,
+      ),
       exited: createDeferredCore(),
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
-      ...(options.sharedState ? { sharedState: true as const } : {}),
+      carrierClass: options.carrierClass,
+      postgresPoolSent: postgresPool !== undefined,
       custody: new SqliteWorkerSlotCustody(),
       databaseAdmissionCursor,
       runtimeGeneration: options.runtimeGeneration,
@@ -186,7 +239,11 @@ export function createSqliteWorkerLifecycle({
     };
     const replyOwner = createReplyOwner(slot);
     slots.add(slot);
-    worker.on("message", (reply: SqliteWorkerReply) => slot.receiveReply(reply));
+    worker.on("message", (reply: SqliteWorkerReply) => {
+      if (!receiveWorkerMemoryPort(worker, reply)) {
+        slot.receiveReply(reply);
+      }
+    });
     worker.on("error", (error) => fail(slot, error));
     worker.on("messageerror", (error) => fail(slot, error));
     worker.once("exit", (code) => {

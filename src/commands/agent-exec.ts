@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import {
@@ -18,6 +19,7 @@ import {
   getInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { applyProcessEnvKeys } from "../infra/process-env.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 import {
   applyExecConfigOverrides,
@@ -49,22 +51,6 @@ function normalizeCodeMode(
   throw new Error("--code-mode must be one of direct, auto, code.");
 }
 
-function normalizeTimeoutSeconds(value: string | undefined): string {
-  const raw = value ?? String(AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS);
-  if (parseStrictNonNegativeInteger(raw) === undefined) {
-    throw new Error("--timeout must be a non-negative integer in seconds.");
-  }
-  return raw;
-}
-
-function normalizeFallbacks(model: string | undefined, values: string[] | undefined): string[] {
-  const fallbacks = (values ?? []).map((value) => value.trim()).filter(Boolean);
-  if (fallbacks.length > 0 && !model?.trim()) {
-    throw new Error("--fallback requires --model so the primary model is explicit.");
-  }
-  return fallbacks;
-}
-
 async function requireDirectory(value: string, label: string): Promise<string> {
   const resolved = path.resolve(value);
   let stat;
@@ -79,27 +65,6 @@ async function requireDirectory(value: string, label: string): Promise<string> {
   return resolved;
 }
 
-function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () => void {
-  const previous = {
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-    OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
-  };
-  // The published runtime snapshot owns config while state/workspace paths are redirected.
-  process.env.OPENCLAW_STATE_DIR = params.stateDir;
-  delete process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
-  return () => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
-}
-
 function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
   return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Omit --state-dir to use isolated temporary state, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
 }
@@ -110,15 +75,10 @@ function isStructuredTimeoutError(error: unknown): boolean {
   }
   let candidate = error;
   for (let depth = 0; depth < 4; depth += 1) {
-    if (!candidate || typeof candidate !== "object") {
+    const record = asOptionalObjectRecord(candidate);
+    if (!record) {
       return false;
     }
-    const record = candidate as {
-      cause?: unknown;
-      code?: unknown;
-      name?: unknown;
-      reason?: unknown;
-    };
     if (
       record.name === "TimeoutError" ||
       record.code === "ETIMEDOUT" ||
@@ -129,38 +89,6 @@ function isStructuredTimeoutError(error: unknown): boolean {
     candidate = record.cause;
   }
   return false;
-}
-
-function errorEnvelope(error: unknown, sessionId: string): AgentExecEnvelope {
-  const status = isStructuredTimeoutError(error) ? "timeout" : "error";
-  return {
-    ok: false,
-    status,
-    final: "",
-    payloads: [],
-    model: null,
-    provider: null,
-    sessionId,
-    error: {
-      message: formatErrorMessage(error),
-      kind: status === "timeout" ? "timeout" : "exception",
-    },
-  };
-}
-
-function writeAgentExecOutput(
-  runtime: RuntimeEnv,
-  envelope: AgentExecEnvelope,
-  json: boolean,
-): void {
-  if (json) {
-    writeRuntimeJson(runtime, envelope);
-  } else if (envelope.final) {
-    writeRuntimeStdout(runtime, envelope.final);
-  }
-  if (!envelope.ok && envelope.error) {
-    runtime.error(envelope.error.message);
-  }
 }
 
 /** Run one isolated embedded agent turn and project its stable CLI result. */
@@ -204,12 +132,12 @@ export async function agentExecCommand(
   try {
     signal.throwIfAborted();
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
-    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile, process.stdin);
+    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
     const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
       await import("../infra/embedded-state-lock.js");
     // Admit cancellation before creating state so signals unwind temporary runs too.
-    signalBridge = createEmbeddedStateSignalBridge(process);
+    signalBridge = createEmbeddedStateSignalBridge();
     abortSignal = AbortSignal.any([signal, signalBridge.signal]);
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
@@ -248,14 +176,24 @@ export async function agentExecCommand(
       }).publish();
     }
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    if (temporaryStateDir || opts.isolated) {
+      // Throwaway state must never create stores in the operator's PostgreSQL namespaces.
+      runConfig.database = { engine: "sqlite" };
+    }
     // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
     const pluginInstallContext = inheritInstalledPlugins
       ? await import("../plugins/install-root-context.js")
       : undefined;
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
-    const timeout = normalizeTimeoutSeconds(opts.timeout);
-    const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
+    const timeout = opts.timeout ?? String(AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS);
+    if (parseStrictNonNegativeInteger(timeout) === undefined) {
+      throw new Error("--timeout must be a non-negative integer in seconds.");
+    }
+    const fallbacks = (opts.fallback ?? []).map((value) => value.trim()).filter(Boolean);
+    if (fallbacks.length > 0 && !opts.model?.trim()) {
+      throw new Error("--fallback requires --model so the primary model is explicit.");
+    }
     const { resolveAgentDir, resolveAmbientOwnerAgentId } =
       await import("../agents/agent-scope-config.js");
     // Credentials follow the inherited agentDir, which runConfig strips for isolation.
@@ -285,7 +223,16 @@ export async function agentExecCommand(
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
     runtimePaths = await import("../config/paths.js");
     const storedAuthStateDir = runtimePaths.resolveStateDir();
-    restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
+    const previous = {
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
+    };
+    // The published runtime snapshot owns config while state/workspace paths are redirected.
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_CONFIG_PATH;
+    process.env.OPENCLAW_WORKSPACE_DIR = cwd;
+    restoreEnvironment = () => applyProcessEnvKeys(Object.keys(previous), previous);
     runtimePaths.pinRuntimePaths();
     if (temporaryStateDir) {
       const { createOpenClawDatabaseMaintenanceScope } =
@@ -293,12 +240,24 @@ export async function agentExecCommand(
       // Temporary runs own their resources without borrowing maintenance schema authority.
       temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
     }
+    const [
+      { resolveDatabaseEngineSelection },
+      { installDatabaseEngineSelection, withDatabaseEngineSelection },
+    ] = await Promise.all([
+      import("../infra/database-engine/config.js"),
+      import("../infra/database-engine/context.js"),
+    ]);
+    const selection = await resolveDatabaseEngineSelection(runConfig);
     if (opts.stateDir) {
-      stateLock = await acquireEmbeddedStateLock({
-        signal: abortSignal,
-        formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
-      });
+      // Lock acquisition reads the existing owner lease using the selected state engine.
+      stateLock = await withDatabaseEngineSelection(selection, () =>
+        acquireEmbeddedStateLock({
+          signal: abortSignal,
+          formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
+        }),
+      );
     }
+    installDatabaseEngineSelection(selection);
     // Publish in memory; a temporary config file would expose resolved provider keys to tools.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
     const [
@@ -336,6 +295,7 @@ export async function agentExecCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
+          operatorDirectRoot: true,
           abortSignal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;
@@ -389,7 +349,20 @@ export async function agentExecCommand(
     }
     commandResult = resultForEnvelope(envelope);
   } catch (error) {
-    commandResult = resultForEnvelope(errorEnvelope(error, sessionId));
+    const status = isStructuredTimeoutError(error) ? "timeout" : "error";
+    commandResult = resultForEnvelope({
+      ok: false,
+      status,
+      final: "",
+      payloads: [],
+      model: null,
+      provider: null,
+      sessionId,
+      error: {
+        message: formatErrorMessage(error),
+        kind: status === "timeout" ? "timeout" : "exception",
+      },
+    });
   }
 
   let cleanupError: unknown =
@@ -478,6 +451,15 @@ export async function agentExecCommand(
     return commandResult;
   }
 
-  writeAgentExecOutput(runtime, commandResult.envelope, opts.json === true);
+  const envelope = commandResult.envelope;
+  const json = opts.json === true;
+  if (json) {
+    writeRuntimeJson(runtime, envelope);
+  } else if (envelope.final) {
+    writeRuntimeStdout(runtime, envelope.final);
+  }
+  if (!envelope.ok && envelope.error) {
+    runtime.error(envelope.error.message);
+  }
   return commandResult;
 }

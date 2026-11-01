@@ -1,17 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Show } from "solid-js";
-import { vi } from "vitest";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { Show } from "solid-js";
+import { onTestFinished, vi } from "vitest";
+import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import {
-  closeTranscriptSearch,
   getTranscriptState,
   type ChatThreadProps,
 } from "../components/chat-thread-interactions.ts";
 import { ChatThread } from "../components/chat-thread-view.tsx";
 import type { ChatTranscript } from "../components/chat-transcript-controller.ts";
+import type { TranscriptRow } from "../components/chat-transcript-layout.ts";
 import { TranscriptSearch } from "../components/chat-transcript-search.tsx";
 import type { ChatTranscriptSession } from "../components/chat-transcript-session.ts";
 import {
@@ -19,56 +20,29 @@ import {
   type TestContentRow,
 } from "../components/chat-transcript.test-support.ts";
 
-class ThreadFixture {
-  constructor(
-    readonly props: ChatThreadProps,
-    readonly transcript: ChatTranscript,
-    readonly search?: () => void,
-  ) {}
-}
-
-class SearchFixture {
+class NativeFixture {
   constructor(
     readonly paneId: string,
-    readonly requestUpdate: () => void,
+    readonly search: boolean,
+    readonly thread?: { props: ChatThreadProps; transcript: ChatTranscript },
   ) {}
 }
 
-type NativeContent = JSX.Element | ThreadFixture | SearchFixture;
-const mounts = new WeakMap<HTMLElement, { update(value: NativeContent): void; unmount(): void }>();
+type NativeContent = JSX.Element | NativeFixture;
+const mounts = new WeakMap<HTMLElement, ReturnType<typeof mountSolid<{ value: NativeContent }>>>();
+const rowContent = (row: TranscriptRow) => (row.kind === "content" ? row.content : null);
 
 function Content(props: { value: NativeContent }) {
-  const thread = () => (props.value instanceof ThreadFixture ? props.value : undefined);
-  const search = createMemo(() => {
-    const value = props.value;
-    if (value instanceof SearchFixture) {
-      return value;
-    }
-    if (value instanceof ThreadFixture && value.search) {
-      return new SearchFixture(value.props.paneId, value.search);
-    }
-    return undefined;
-  });
+  const fixture = () => (props.value instanceof NativeFixture ? props.value : undefined);
   return (
     <>
-      <Show when={search()}>
-        {(value) => (
-          <TranscriptSearch
-            revision={value()}
-            state={getTranscriptState(value().paneId)}
-            requestUpdate={value().requestUpdate}
-            onClose={() =>
-              closeTranscriptSearch(getTranscriptState(value().paneId), value().requestUpdate)
-            }
-          />
-        )}
+      <Show when={fixture()?.search && fixture()}>
+        {(value) => <TranscriptSearch search={getTranscriptState(value().paneId).search} />}
       </Show>
-      <Show when={thread()}>
+      <Show when={fixture()?.thread}>
         {(value) => <ChatThread props={value().props} transcript={value().transcript} />}
       </Show>
-      {props.value instanceof ThreadFixture || props.value instanceof SearchFixture
-        ? undefined
-        : props.value}
+      {props.value instanceof NativeFixture ? undefined : props.value}
     </>
   );
 }
@@ -76,38 +50,41 @@ function Content(props: { value: NativeContent }) {
 export function renderChatThread(
   props: ChatThreadProps,
   transcript: ChatTranscript,
-  options?: { search: () => void },
+  options?: { search: boolean },
 ) {
-  return new ThreadFixture(props, transcript, options?.search);
+  return new NativeFixture(props.paneId, options?.search ?? false, { props, transcript });
 }
 
-export function renderTranscriptSearch(paneId: string, requestUpdate: () => void) {
-  return new SearchFixture(paneId, requestUpdate);
+export function renderTranscriptSearch(paneId: string) {
+  return new NativeFixture(paneId, true);
 }
 
 /** Retain native components between commits, including moves of session-owned row roots. */
 export function render(value: NativeContent, container: HTMLElement): void {
+  const transcript = value instanceof NativeFixture ? value.thread?.transcript : undefined;
+  transcript?.start();
   const existing = mounts.get(container);
   if (value == null) {
-    existing?.unmount();
+    existing?.dispose();
     mounts.delete(container);
     return;
   }
   if (existing) {
-    existing.update(value);
+    existing.update({ value });
   } else {
-    let update!: (next: NativeContent) => void;
-    const view = mountSolid(
-      () => {
-        const [content, setContent] = createSignal<NativeContent>(value);
-        update = (next) => setContent(() => next);
-        return <Content value={content()} />;
-      },
-      { container },
-    );
-    mounts.set(container, { update: (next) => update(next), unmount: view.unmount });
+    mounts.set(container, mountSolid(Content, { value }, container));
   }
-  flush();
+  transcript?.update();
+}
+
+export function mountChatThread(container: HTMLElement, transcript: ChatTranscript) {
+  return {
+    unmount: () => render(null, container),
+    render(next: ChatThreadProps | null) {
+      render(next ? renderChatThread({ ...next }, transcript) : null, container);
+      flush();
+    },
+  };
 }
 
 export class TranscriptTestHost extends HTMLElement {
@@ -116,6 +93,7 @@ export class TranscriptTestHost extends HTMLElement {
   renderTranscript: () => NativeContent = () => null;
   committedRenders = 0;
   private pending: Promise<boolean> | undefined;
+  private stopTranscript?: () => void;
 
   get updateComplete() {
     return this.pending ?? Promise.resolve(true);
@@ -123,11 +101,14 @@ export class TranscriptTestHost extends HTMLElement {
 
   connectedCallback() {
     this.append(this.transcriptRoot);
+    this.stopTranscript = this.transcript?.subscribe(() => this.requestRender());
     this.transcript?.start();
     this.requestRender();
   }
 
   disconnectedCallback() {
+    this.stopTranscript?.();
+    this.stopTranscript = undefined;
     this.transcript?.dispose();
     queueMicrotask(() => {
       if (!this.isConnected) {
@@ -138,14 +119,12 @@ export class TranscriptTestHost extends HTMLElement {
 
   requestRender() {
     this.pending ??= Promise.resolve().then(() => {
-      if (!this.isConnected) {
-        this.pending = undefined;
-        return true;
-      }
       this.pending = undefined;
-      render(this.renderTranscript(), this.transcriptRoot);
-      this.committedRenders += 1;
-      this.transcript?.update();
+      if (this.isConnected) {
+        render(this.renderTranscript(), this.transcriptRoot);
+        this.committedRenders += 1;
+        this.transcript?.update();
+      }
       return true;
     });
   }
@@ -164,25 +143,50 @@ export async function mountTestTranscript(
   transcript: ChatTranscript = createTestTranscript(paneId),
 ) {
   const container = document.body.appendChild(document.createElement("div"));
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, value: 600 },
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        Number.parseFloat(
+          container.querySelector<HTMLElement>(".chat-thread-inner")?.style.height ?? "0",
+        ) || 0,
+    },
+  });
+  container.scrollTo = (options?: ScrollToOptions | number) => {
+    if (typeof options === "object") {
+      const maximum = container.scrollHeight - container.clientHeight;
+      container.scrollTop = Math.max(0, Math.min(options.top ?? container.scrollTop, maximum));
+    }
+  };
+  let currentRows = initialRows;
+  let renderQueued = false;
+  let active = true;
   let currentSession: ChatTranscriptSession;
   container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
   container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
   const renderRows = (rows: readonly TestContentRow[]) => {
-    render(
-      transcript.renderSession(`agent:main:${paneId}`, (session) => {
-        currentSession = session;
-        return session.render(
-          rows,
-          (row) => (row.kind === "content" ? row.content : null),
-          null,
-          false,
-        );
-      }),
-      container,
-    );
+    currentRows = rows;
+    currentSession = transcript.renderSession(`agent:main:${paneId}`, (session) => session);
+    render(currentSession.render(rows, rowContent, null, false), container);
     transcript.update();
     flush();
   };
+  const unsubscribe = transcript.subscribe(() => {
+    if (!renderQueued) {
+      renderQueued = true;
+      queueMicrotask(() => {
+        renderQueued = false;
+        if (active) {
+          renderRows(currentRows);
+        }
+      });
+    }
+  });
+  onTestFinished(() => {
+    active = false;
+    unsubscribe();
+  });
   transcript.start();
   renderRows(initialRows);
   await flushDeferredRowPrune();
@@ -204,27 +208,25 @@ export function stubMcpAppLifecycle(
     container.querySelector<HTMLElement>("mcp-app-view"),
     "mounted MCP app",
   );
-  const lifecycle = {
-    restartAfterTeardown: vi.fn(),
-    teardown: vi.fn(teardown),
-  };
-  return { app: Object.assign(app, lifecycle), ...lifecycle };
+  const lifecycle = { restartAfterTeardown: vi.fn(), teardown: vi.fn(teardown) };
+  const target = Object.assign(app, lifecycle);
+  onTestFinished(registerMcpAppUnmountTarget(target));
+  return { app: target, ...lifecycle };
 }
 
-export function numberedContentRows(length: number): TestContentRow[] {
+export function numberedContentRows(
+  length: number,
+  content: (index: number) => JSX.Element = (index) => <div>row {index}</div>,
+): TestContentRow[] {
   return Array.from({ length }, (_, index) => ({
     kind: "content",
     key: `row:${index}`,
-    content: <div>row {index}</div>,
+    content: content(index),
   }));
 }
 
 export function mcpRangeRows(appContent: JSX.Element): TestContentRow[] {
-  return Array.from({ length: 24 }, (_, index) => ({
-    kind: "content" as const,
-    key: `row:${index}`,
-    content: index === 23 ? appContent : <div>row {index}</div>,
-  }));
+  return numberedContentRows(24, (index) => (index === 23 ? appContent : <div>row {index}</div>));
 }
 
 export const contact = (identifier: number, target: EventTarget): Touch => ({
@@ -241,3 +243,8 @@ export const contact = (identifier: number, target: EventTarget): Touch => ({
   rotationAngle: 0,
   force: 1,
 });
+
+export function renderReadyRows(session: ChatTranscriptSession, rows: readonly TranscriptRow[]) {
+  session.layout.ready = true;
+  return session.render(rows, rowContent, null, false);
+}

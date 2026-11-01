@@ -1,8 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../../../gateway/session-lifecycle-projection.js";
+import * as agentEvents from "../../../infra/agent-events.js";
+import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { buildRunEntryTerminal, resolveRunEntryTerminalOutcome } from "../run-entry-terminal.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -14,13 +19,48 @@ import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./terminal-timeout.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+const timeoutTerminal = {
+  kind: "timeout",
+  phase: "tool_execution",
+  source: "runtime",
+  aborted: true,
+} as const;
+function child(expectsCompletionMessage: boolean) {
+  return { runId: "child-1", childSessionKey: "agent:main:subagent:1", expectsCompletionMessage };
+}
+
 // mock-isolation: Observe bookkeeping calls without profile-store writes or auth-binding effects.
 vi.mock("./auth-profile-success.js", () => ({
   markEmbeddedRunAuthProfileSuccess: vi.fn(),
   reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
 }));
 
-async function resolveTerminal(attempt: EmbeddedRunAttemptResult) {
+async function resolveTerminal(
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+  commentary?: string,
+) {
+  const assistant = buildEmbeddedRunnerAssistant({
+    stopReason: "toolUse",
+    content: [
+      ...(commentary ? [{ type: "text" as const, text: commentary }] : []),
+      { type: "toolCall", id: "read-1", name: "read", arguments: { path: "test.txt" } },
+    ],
+  });
+  const attempt = makeEmbeddedRunnerAttempt({
+    terminal: { ...timeoutTerminal },
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
+    assistantTexts: commentary ? [commentary] : [],
+    messagesSnapshot: [
+      assistant,
+      makeTextToolResult("read-1", "read", "Saved file contents", false, 0),
+    ],
+    toolMetas: [{ toolName: "read", toolCallId: "read-1", isError: false, replaySafe: true }],
+    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    ...overrides,
+  });
+  const messages = [...attempt.messagesSnapshot];
   const input = makeTerminalInput({
     attempt,
     resolveReplayInvalid: (incompleteTurnText) =>
@@ -44,112 +84,144 @@ async function resolveTerminal(attempt: EmbeddedRunAttemptResult) {
   }
   expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
   expect(input.armPostCompactionGuard).not.toHaveBeenCalled();
-  return { input, result: resolved.result };
+  expect(attempt.messagesSnapshot).toEqual(messages);
+  return { input, attempt, result: resolved.result };
 }
 
-function toolAttempt(overrides: Partial<EmbeddedRunAttemptResult> = {}, commentary?: string) {
-  const assistant = buildEmbeddedRunnerAssistant({
-    stopReason: "toolUse",
-    content: [
-      ...(commentary ? [{ type: "text" as const, text: commentary }] : []),
-      { type: "toolCall", id: "read-1", name: "read", arguments: { path: "test.txt" } },
+function sentProgress(sourceProgress: boolean): Partial<EmbeddedRunAttemptResult> {
+  const text = "I am checking.";
+  return {
+    didSendViaMessagingTool: true,
+    didDeliverSourceReplyViaMessageTool: sourceProgress,
+    messagingToolSentTexts: [text],
+    messagingToolSentTargets: [
+      {
+        tool: "message",
+        provider: "telegram",
+        to: sourceProgress ? "source" : "another-conversation",
+        text,
+        ...(sourceProgress ? { sourceReplyFinal: false } : {}),
+      },
     ],
+    messagingToolSourceReplyPayloads: sourceProgress ? [{ text, sourceReplyFinal: false }] : [],
+  };
+}
+
+beforeEach(() => vi.clearAllMocks());
+
+it("keeps an unfinished compaction timeout out of successful command settlement", async () => {
+  const { result } = await resolveTerminal({
+    terminal: { kind: "timeout", phase: "compaction", source: "runtime", aborted: true },
   });
-  return makeEmbeddedRunnerAttempt({
-    terminal: { kind: "timeout", phase: "tool_execution", source: "runtime", aborted: true },
+  expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+  expect(result.payloads).toContainEqual({
+    text: expect.stringContaining("compaction"),
+    isError: true,
+  });
+  const terminal = buildRunEntryTerminal({
+    result,
+    outcome: resolveRunEntryTerminalOutcome({ result, fallbackExhausted: false }),
+    behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+    runId: "compaction-timeout",
+    sessionId: "session",
+    requested: { provider: "openai", model: "synthetic" },
+  });
+  expect(terminal.outcome.status).toBe("timeout");
+  const emitted: agentEvents.AgentEventPayload[] = [];
+  const unsubscribe = agentEvents.onAgentEvent((event) => emitted.push(event));
+  try {
+    createAgentCommandLifecycle({
+      runId: "compaction-timeout",
+      lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration,
+      startedAt: 1,
+      state: {
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    }).emitResultError(result, false, terminal);
+    const event = emitted.find((candidate) => candidate.runId === "compaction-timeout");
+    expect(event).toBeDefined();
+    if (!event) {
+      throw new Error("Missing command terminal event");
+    }
+    expect(deriveGatewaySessionLifecycleSnapshot({ event })).toMatchObject({
+      status: "timeout",
+      lastRunError: expect.stringContaining("compaction"),
+    });
+  } finally {
+    unsubscribe();
+  }
+  expect(result.meta.timeoutPhase).toBeUndefined();
+  expect(result.meta.providerStarted).toBeUndefined();
+  expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
+  expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
+});
+
+it("keeps an external cancellation during compaction distinct from a timeout", async () => {
+  const text = "Completed answer must not escape an external cancellation.";
+  const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+  const { result } = await resolveTerminal({
+    terminal: { kind: "aborted", source: "external", timeoutObservation: "compaction" },
+    assistantTexts: [text],
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
     currentAttemptCompletedAssistant: assistant,
-    assistantTexts: commentary ? [commentary] : [],
-    messagesSnapshot: [
-      assistant,
-      {
-        role: "toolResult",
-        toolCallId: "read-1",
-        toolName: "read",
-        content: [{ type: "text", text: "Saved file contents" }],
-        isError: false,
-        timestamp: 0,
-      },
-    ],
-    toolMetas: [{ toolName: "read", toolCallId: "read-1", isError: false, replaySafe: true }],
-    itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-    ...overrides,
   });
-}
+  expect(result.meta.aborted).toBe(true);
+  expect(resolveRunEntryTerminalOutcome({ result, fallbackExhausted: false })).toMatchObject({
+    reason: "aborted",
+    status: "error",
+  });
+  expect(result.payloads ?? []).toEqual([]);
+});
 
-describe("tool timeout terminal bookkeeping", () => {
-  beforeEach(() => vi.clearAllMocks());
+it.each(["delivered", "pending"] as const)(
+  "preserves %s reply custody after a compaction timeout",
+  async (sourceReplyDeliveryState) => {
+    const { result } = await resolveTerminal({
+      terminal: { kind: "timeout", phase: "compaction", source: "runtime", aborted: true },
+      sourceReplyDeliveryState,
+    });
+    expect(result.meta.error).toBeUndefined();
+  },
+);
 
-  it.each([
-    "plain",
+it.each<[string, number, Partial<EmbeddedRunAttemptResult>?, string?]>([
+  ["plain", 1],
+  [
     "compaction failure",
-    "tool warning",
-    "quiet child",
-    "source progress",
-    "other conversation",
-    "pre-tool commentary",
-    "scheduled job",
-    "tool media",
-  ])("reports an unfinished tool timeout without success bookkeeping (%s)", async (scenario) => {
-    const toolWarning = scenario === "tool warning";
-    const sourceProgress = scenario === "source progress";
-    const sentMessage = sourceProgress || scenario === "other conversation";
-    const attempt = toolAttempt(
-      {
-        lastToolError: toolWarning ? { toolName: "read", error: "Earlier read failed" } : undefined,
-        successfulCronAdds: scenario === "scheduled job" ? 1 : undefined,
-        toolMediaUrls: scenario === "tool media" ? ["https://example.invalid/tool-output.png"] : [],
-        ...(scenario === "quiet child"
-          ? {
-              acceptedSessionSpawns: [
-                {
-                  runId: "quiet-child",
-                  childSessionKey: "agent:main:subagent:quiet",
-                  expectsCompletionMessage: false,
-                },
-              ],
-              replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-            }
-          : {}),
-        ...(sentMessage
-          ? {
-              didSendViaMessagingTool: true,
-              didDeliverSourceReplyViaMessageTool: sourceProgress,
-              messagingToolSentTexts: ["I am checking."],
-              messagingToolSentTargets: [
-                {
-                  tool: "message",
-                  provider: "telegram",
-                  to: sourceProgress ? "source" : "another-conversation",
-                  text: "I am checking.",
-                  ...(sourceProgress ? { sourceReplyFinal: false } : {}),
-                },
-              ],
-              messagingToolSourceReplyPayloads: sourceProgress
-                ? [{ text: "I am checking.", sourceReplyFinal: false }]
-                : [],
-            }
-          : {}),
-        terminal: {
-          kind: "timeout",
-          phase: "tool_execution",
-          source: "runtime",
-          aborted: true,
-          ...(scenario === "compaction failure"
-            ? { failure: { source: "compaction" as const, error: "synthetic bridge interrupted" } }
-            : {}),
-        },
+    1,
+    {
+      terminal: {
+        ...timeoutTerminal,
+        failure: { source: "compaction", error: "synthetic bridge interrupted" },
       },
-      scenario === "pre-tool commentary" ? "I'll read that." : undefined,
+    },
+  ],
+  ["tool warning", 2, { lastToolError: { toolName: "read", error: "Earlier read failed" } }],
+  [
+    "quiet child",
+    1,
+    {
+      acceptedSessionSpawns: [child(false)],
+      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+    },
+  ],
+  ["source progress", 2, sentProgress(true)],
+  ["other conversation", 1, sentProgress(false)],
+  ["pre-tool commentary", 1, {}, "I'll read that."],
+  ["scheduled job", 1, { successfulCronAdds: 1 }],
+  ["tool media", 2, { toolMediaUrls: ["https://example.invalid/tool-output.png"] }],
+])(
+  "reports an unfinished tool timeout without success bookkeeping (%s)",
+  async (name, payloads, overrides, commentary) => {
+    const { input, attempt, result } = await resolveTerminal(
+      { toolMediaUrls: [], ...overrides },
+      commentary,
     );
-    const messages = [...attempt.messagesSnapshot];
-    const { input, result } = await resolveTerminal(attempt);
 
-    expect(result.payloads).toHaveLength(
-      toolWarning || sourceProgress || scenario === "tool media" ? 2 : 1,
-    );
-    if (scenario === "tool media") {
+    expect(result.payloads).toHaveLength(payloads);
+    if (name === "tool media") {
       expect(result.payloads?.[0]?.mediaUrls).toEqual(attempt.toolMediaUrls);
     }
     expect(result.payloads?.at(-1)).toEqual({
@@ -169,86 +241,60 @@ describe("tool timeout terminal bookkeeping", () => {
     );
     expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
     expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
-    expect(attempt.messagesSnapshot).toEqual(messages);
     expect(result.messagingToolSentTargets).toEqual(attempt.messagingToolSentTargets);
-  });
+  },
+);
 
-  it.each(["delivered", "pending"] as const)(
-    "preserves %s source-reply custody after a tool timeout",
-    async (sourceReplyDeliveryState) => {
-      const { result } = await resolveTerminal(toolAttempt({ sourceReplyDeliveryState }));
-      expect(result.meta.error).toBeUndefined();
-      expect(result.payloads ?? []).toEqual([]);
-      expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["quiet child", "scheduled job"])(
-    "preserves a deliberate successful yield with %s work",
-    async (work) => {
-      const { result } = await resolveTerminal(
-        toolAttempt({
-          terminal: { kind: "ok" },
+it.each([
+  "delivered",
+  "pending",
+  "quiet child",
+  "scheduled job",
+  "ok",
+  "timeout",
+  "compaction",
+] as const)("preserves custody or yielded work (%s)", async (work) => {
+  const custody = work === "delivered" || work === "pending";
+  const { result } = await resolveTerminal(
+    custody
+      ? { sourceReplyDeliveryState: work }
+      : {
+          terminal:
+            work === "compaction"
+              ? { ...timeoutTerminal, phase: "compaction" }
+              : work === "timeout"
+                ? { ...timeoutTerminal }
+                : { kind: "ok" },
           yieldDetected: true,
           successfulCronAdds: work === "scheduled job" ? 1 : undefined,
-          acceptedSessionSpawns:
-            work === "quiet child"
-              ? [
-                  {
-                    runId: "quiet-child",
-                    childSessionKey: "agent:main:subagent:quiet",
-                    expectsCompletionMessage: false,
-                  },
-                ]
-              : [],
-        }),
-      );
-      expect(result.meta.error).toBeUndefined();
-      expect(result.meta.livenessState).toBe("paused");
-      expect(result.payloads ?? []).toEqual([]);
-      expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
-    },
+          acceptedSessionSpawns: work === "scheduled job" ? [] : [child(work !== "quiet child")],
+        },
   );
+  expect(result.meta.error).toBeUndefined();
+  if (!custody) {
+    expect(result.meta.livenessState).toBe("paused");
+  }
+  expect(result.payloads ?? []).toEqual([]);
+  expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
+});
 
-  it.each(["ok", "timeout"] as const)(
-    "preserves %s attempts with accepted continuations",
-    async (kind) => {
-      const { result } = await resolveTerminal(
-        toolAttempt({
-          ...(kind === "ok" ? { terminal: { kind } } : {}),
-          yieldDetected: true,
-          acceptedSessionSpawns: [
-            {
-              runId: "child-1",
-              childSessionKey: "agent:main:subagent:1",
-              expectsCompletionMessage: true,
-            },
-          ],
-        }),
-      );
-      expect(result.meta.error).toBeUndefined();
-      expect(result.meta.livenessState).toBe("paused");
-      expect(result.payloads ?? []).toEqual([]);
-      expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("keeps a successful final answer and successful bookkeeping", async () => {
+it.each(["ok", "compaction"] as const)(
+  "keeps a successful final answer after %s and successful bookkeeping",
+  async (phase) => {
     const text = "The file contains Saved file contents.";
     const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
-    const { result } = await resolveTerminal(
-      toolAttempt({
-        terminal: { kind: "ok" },
-        assistantTexts: [text],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: assistant,
-      }),
-    );
-    expect(result.payloads).toEqual([{ text, replyToTag: false }]);
+    const { result } = await resolveTerminal({
+      terminal: phase === "ok" ? { kind: "ok" } : { ...timeoutTerminal, phase },
+      assistantTexts: [text],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptCompletedAssistant: assistant,
+    });
+    expect(result.payloads).toEqual(phase === "ok" ? [{ text, replyToTag: false }] : [{ text }]);
     expect(result.meta.error).toBeUndefined();
-    expect(result.meta.livenessState).toBe("working");
+    expect(result.meta.livenessState).toBe(phase === "ok" ? "working" : "paused");
+    expect(resolveRunEntryTerminalOutcome({ result, fallbackExhausted: false }).status).toBe("ok");
     expect(markEmbeddedRunAuthProfileSuccess).toHaveBeenCalledOnce();
     expect(reportEmbeddedRunSuccessfulAuthBinding).toHaveBeenCalledOnce();
-  });
-});
+  },
+);

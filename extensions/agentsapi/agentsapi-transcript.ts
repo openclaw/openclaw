@@ -401,7 +401,6 @@ export async function recordAgentsApiNativeHistory(
 ): Promise<void> {
   for (const { turn, items } of entries) {
     for (const item of items) {
-      assertCurrent();
       await recordAgentsApiNativeToolTranscript(
         params,
         nativeSessionId,

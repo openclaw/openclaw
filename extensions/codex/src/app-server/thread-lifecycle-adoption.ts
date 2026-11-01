@@ -8,6 +8,7 @@ import {
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
+import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
@@ -206,9 +207,6 @@ async function preparePendingCodexThreadResume(
   ) {
     throw fail("configuration adoption requires an OpenClaw-owned local Codex home");
   }
-  if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
-    throw fail("the thread is claimed by active work; stop that run before resuming");
-  }
   const assertCurrent = captureCodexThreadResumeAuthority(params, binding, "native-process");
   assertCurrent();
   const { thread } = await params.client.request(
@@ -270,6 +268,15 @@ export async function prepareCodexThreadResume(
   } finally {
     // A failed read cannot authorize recovery after its physical or host owner closes.
     assertCurrent();
+  }
+  // Reuse the lifecycle read so a missing unused thread reaches its recovery owner.
+  if (
+    params.inferenceRoute &&
+    binding.clientId === params.client.getInstanceId() &&
+    !getCodexInferenceThread(params.client, binding.threadId) &&
+    thread.status?.type !== "notLoaded"
+  ) {
+    throw new Error("Codex loaded thread has no owned inference route; reconnect before retrying");
   }
   // Known supervision keeps its native home; manual adoption's stricter home and catalog
   // checks remain in preparePendingCodexThreadResume, before this common handoff.

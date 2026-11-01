@@ -110,10 +110,11 @@ shell-completion metadata.
   `image describe`, `image describe-many`, `audio transcribe`, `video generate`, `video describe`,
   `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
   an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
-- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
+- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged. An interrupt stops an in-progress provider-URL video download instead of letting it finish and publish a late result.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
+- Local `model run --file` requires an image-capable model and fails before the provider call when the model's catalog input is text-only. `model run --gateway --file` instead offloads images for text-only models and describes them through the Gateway's media understanding.
 - `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model check: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
 - `model run --gateway --model <provider/model>` requires a trusted-operator gateway credential, because it asks the Gateway to run a one-off provider/model override.
 
@@ -125,6 +126,8 @@ Text inference and model/provider inspection.
 
 ```bash
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
+openclaw infer model run --prompt-file ./prompts/judge.txt --json
+openclaw infer model run --prompt-stdin --json < ./prompts/judge.txt
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
 openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
@@ -155,7 +158,7 @@ Notes:
 - OpenAI ChatGPT/Codex OAuth (`openai-chatgpt-responses` API) local checks add a minimal system instruction so the transport can populate its required `instructions` field — no full agent context, tools, memory, or session transcript.
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model check.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
-- `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
+- Use exactly one of `model run --prompt <text>`, `--prompt-file <path>`, or `--prompt-stdin`. The file path must be relative to the current directory and remain inside it; symlinks and hardlinks are rejected. File and stdin input are read at invocation time as UTF-8 with a 1 MiB limit. Stdin is read only with `--prompt-stdin`; invalid UTF-8, read errors, and overflow fail before inference. Empty or whitespace-only prompts are rejected before any provider or Gateway call. File and stdin input keep prompt text out of process arguments and do not add it to command output or a chat transcript; the selected provider still receives the prompt.
 - Local `model run` exits non-zero for empty output or a failed/aborted response, even when partial text was received. These runs do not emit a successful JSON envelope.
 - `model run --gateway` also exits non-zero when the Gateway reports a failed, timed-out, or cancelled run, preserving its error detail instead of wrapping the reply in a successful JSON envelope.
 - When a completed response contains only reasoning and no final text, local `model run` reports that it returned reasoning but no text output, and notes when it stopped at the output token limit. Failed or aborted responses keep the generic no-text error with any provider error detail. Reasoning content is not printed as the answer.
@@ -186,6 +189,7 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --p
 Notes:
 
 - Use `image edit` when starting from existing input files; `--size`, `--aspect-ratio`, or `--resolution` add geometry hints on providers/models that support them.
+- `image generate` and `image edit` accept positive numeric `W:H` aspect ratios, including `7:5` and `1.5:1`. Malformed values such as `16x9`, `16/9`, or `0:5` fail before a provider request or output file is created.
 - `--output-format png --background transparent` with `--model openai/gpt-image-1.5` gives transparent-background OpenAI PNG output; `--openai-background` is an OpenAI-specific alias for the same hint. Providers that do not declare background support report it as an ignored override (see `ignoredOverrides` in the [JSON envelope](#json-output)).
 - `--quality low|medium|high|auto` works for providers that support image-quality hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto`.
 - `image providers --json` lists which bundled image providers are discoverable, configured, selected, and which generation/edit capabilities each exposes.
@@ -290,6 +294,10 @@ openclaw infer embedding create --text "customer support ticket: delayed shipmen
 openclaw infer embedding providers --agent <id> --json
 ```
 
+`--model` takes `<provider/model>`. When you also pass `--provider`, it must match
+that prefix; model ids that contain a slash keep the provider prefix, for example
+`--model deepinfra/Qwen/Qwen3-Embedding-8B`.
+
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
 Longer vectors end with `...`; use `--json` to retrieve complete vectors.
@@ -317,11 +325,17 @@ Stable top-level fields:
 - `transport`
 - `provider`
 - `model`
+- `usage` (observed model-run usage, when available)
+- `lastCallUsage` (observed usage from the last model API call, when available)
 - `attempts`
 - `inputs` (image attachments sent with the request, when applicable)
 - `outputs`
 - `ignoredOverrides` (hint keys a provider does not support, when applicable)
 - `error`
+
+For `model.run`, both transports expose normalized token counts such as `input`, `output`, `cacheRead`, `cacheWrite`, `reasoningTokens`, and `total`, plus usage availability and recorded cost metadata when supplied. Missing observations are omitted; adapter-default zeros are not treated as measurements. Explicitly measured zero counts are preserved, and explicitly unavailable usage is represented by `usageReport.state: "unavailable"` without invented token counts or cost.
+
+With `--local`, a run is one completion, so `usage` and `lastCallUsage` contain the same snapshot. With `--gateway`, `usage` keeps the runtime's aggregate billing usage (which can span multiple calls or candidates), while `lastCallUsage` describes only the last physical API call. Cost values and their provenance come from the existing runtime accounting; the CLI does not estimate them.
 
 For generated media commands, `outputs` contains files written by OpenClaw. Use the `path`, `mimeType`, `size`, and any media-specific dimensions in that array for automation instead of parsing human-readable stdout.
 

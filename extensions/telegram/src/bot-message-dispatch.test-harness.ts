@@ -5,16 +5,12 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
-import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
 import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
 import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
-import {
-  clearTelegramRuntimeForTest as clearTelegramRuntime,
-  resetTelegramReplyFenceForTest as resetTelegramReplyFenceForTests,
-} from "./runtime.test-support.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 
 export type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotFixtureMocks["dispatchReplyWithBufferedBlockDispatcher"]
@@ -287,15 +283,19 @@ vi.mock("./send.js", async () => ({
   reactMessageTelegram: reactMessageTelegramHoisted,
 }));
 
-// mock-isolation: Keep session database startup outside the command fixture.
-vi.mock("./bot-message-dispatch.runtime.js", () => ({
-  generateTopicLabel: generateTopicLabelHoisted,
-  getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
-  resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
+vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-dispatch-runtime")>()),
+  generateConversationLabel: generateTopicLabelHoisted,
   resolveChunkMode: resolveChunkModeHoisted,
 }));
 
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   resolveAgentDir: resolveAgentDirHoisted,
   resolveHumanDelayConfig: resolveHumanDelayConfigHoisted,
 }));
@@ -455,7 +455,6 @@ async function resetTelegramDispatchTestState() {
   testState = await createOpenClawTestState({ label: "telegram-dispatch", layout: "state-only" });
   resetPluginStateStoreForTests({ closeDatabase: false });
   setTelegramPluginStateRuntimeForTests();
-  resetTelegramReplyFenceForTests();
   createTelegramDraftStream.mockReset();
   dispatchReplyWithBufferedBlockDispatcher.mockReset();
   emitTelegramMessageSentHooks.mockReset();

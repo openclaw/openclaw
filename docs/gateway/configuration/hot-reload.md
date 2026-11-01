@@ -17,6 +17,9 @@ including JSON5, `$include`, and environment substitutions.
 Startup waits for the config watcher's initial reconciliation, queued file-stability
 checks, and any resulting reload attempt before completing. Initial config
 publication cannot race the first request after startup.
+Plugin lifecycle requests such as `plugins.reload` that arrive while startup is
+still settling wait only for that initial reconciliation, then apply the current
+config, including an edit the watcher had queued. Startup completes after them.
 Credential refreshes that leave the effective config unchanged preserve pending
 work instead of invalidating its config snapshot.
 
@@ -76,15 +79,20 @@ failure return `UNAVAILABLE` to waiting config mutations; a later config observa
 can retry the saved change. Shutdown cancels retries and settles waiting mutations.
 Reload failures remain visible in the Gateway log.
 
-If an automatic plugin reload cannot drain active work, the Gateway records the
-failure and keeps the last-good runtime. When the drain timed out on that
-plugin's admitted work, the Gateway retries the replacement automatically once
-the work finishes; no additional config edit is needed. Other drain failures
-wait for `openclaw plugins reload <id> --wait` or a revert of the pending plugin
-settings. Until then, later edits do not repeat the drain, and edits that still
-include the unapplied plugin settings stay pending; they cannot publish those
-settings through an unrelated hot update, and they apply together with the
-retry or recovery. While edits are pending, `config.get` reports an
+If an automatic plugin reload times out on admitted work and successfully rolls
+back, the Gateway records a deferred reload and keeps the last-good runtime.
+It retries the replacement automatically once that plugin's work and cleanup
+finish; no additional config edit is needed. Waiting config mutations still
+return `UNAVAILABLE` after the bounded attempt: keeping their receipt open could
+prevent the writing turn itself from finishing. Run `config.get` to confirm the
+active revision after the work settles. A later config edit also
+retries the full unapplied plugin change through the normal reload transaction.
+Another admitted-work timeout defers again; other failures remain errors.
+A new attempt replaces any earlier idle retry; if it fails for
+another reason, make a new edit or use the manual reload command below after
+fixing the error. Unapplied plugin settings cannot publish through an unrelated
+hot update; all pending changes apply together only after the transaction succeeds.
+While edits are pending, `config.get` reports an
 `appliedConfigHash` that differs from the saved revision, which the Control UI
 shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
 watch a timed-out replacement finish. A Gateway restart applies the saved config
@@ -95,6 +103,8 @@ for editor temp-write/rename churn to settle, reads the final file, and rejects
 invalid external edits without rewriting `openclaw.json`. OpenClaw-owned config
 writes use the same schema gate before writing (see [Strict validation](/gateway/configuration#strict-validation)
 for the clobber/rollback rules that apply to every write).
+Diagnostics for rejected edits reuse the running Gateway's plugin metadata
+without rebuilding the plugin inventory.
 
 The adapter also watches included files and follows editor rename-replace writes.
 Native file events trigger the usual reload debounce. A background reconciliation
@@ -158,7 +168,7 @@ Reload planning classifies each changed path as one of three outcomes:
 - **Gateway restart (`restart`)**: restart the Gateway process.
 - **Hot reload (`hot`)**: apply the change while keeping the Gateway process
   running. This can include restarting the owning subsystem, such as a channel,
-  cron, or heartbeat.
+  or cron.
 - **No reload action (`none`)**: update the runtime config snapshot without
   scheduling a reload action for that path. Consumers that read the current
   config can observe the new value on a later read.
@@ -181,6 +191,26 @@ Changes to `agents.defaults.models`, agent model selection and fallbacks, and
 own plugin settings still follows its plugin reload policy.
 Overlapping model or credential changes use the newer write's runtime application;
 superseding an earlier publication does not itself require a Gateway restart.
+
+Auth-profile edits refresh credential facts without replacing unchanged plugin
+instances. A scheduled session event that has selected its model keeps running
+when another provider's auth profile changes. Changes to its own provider's auth
+policy still invalidate the captured policy. Before execution has started, the
+session-event owner can re-admit the same occurrence under current policy, with
+at most two retries. Once a hook, model, or delivery may have performed work, it
+does not replay the occurrence; a failed scheduled run remains visible in cron
+history and the next schedule is a separate run.
+
+Logging changes never revoke scheduled work. Once a scheduled turn selects its
+model, edits to another provider's model configuration also leave it running.
+Adding models to the allowlist preserves the turn while its selected model remains
+allowed; removing that permission or changing its provider's configuration still
+rechecks the occurrence under current policy. These unrelated edits do not consume
+the occurrence's bounded readmission attempts.
+
+Session detail and process-list reads that encounter a retired model-catalog
+callback refresh their catalog binding once before preparing the response.
+If the replacement is unavailable, the read reports a session-read error.
 
 After a transient connection failure, an in-flight turn using a directly configured
 provider can retry with an endpoint whose hot reload has completed. It keeps the same
@@ -219,7 +249,7 @@ notification handoff.
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
 | Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin                                                           |
 | Agent & models            | `agents`, `models`, `auth.order`, `auth.profiles`, `broadcast`, `worktreeRoot`, `worktreeAcceleration`                                                                                                                                                             | No                                                                                             |
-| Automation                | `hooks`, `cron`, `agents.defaults.heartbeat`                                                                                                                                                                                                                       | No (reloads the owning subsystem)                                                              |
+| Automation                | `hooks`, `cron`                                                                                                                                                                                                                                                    | No (reloads the owning subsystem)                                                              |
 | Sessions & messages       | `session`, `messages`                                                                                                                                                                                                                                              | No                                                                                             |
 | Tools & media             | `tools`, `skills`, `mcp` except Apps listener settings, `audio`, `talk`, `tts`, `memory.citations`, `attachments.ttlHours`                                                                                                                                         | No                                                                                             |
 | Plugin config             | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`, `plugins.slots`, `plugins.load`, legacy `plugins.installs`                                                                                                                                | No (reloads plugin runtime by default)                                                         |
@@ -262,7 +292,7 @@ Discord, Matrix, Signal, Slack, Telegram, or WhatsApp. Other channel plugins
 refresh unless they declare that they read the policy live. Per-channel and
 per-account overrides still take precedence; admitted turns retain their policy.
 
-`diagnostics.enabled` updates diagnostic dispatch and heartbeat ownership live.
+`diagnostics.enabled` updates diagnostic dispatch and its diagnostic heartbeat live.
 With `diagnostics-otel` loaded, `diagnostics.otel` restarts only its exporter service,
 flushing the old generation before starting the new one. Externally preloaded
 OpenTelemetry providers retain their transport and shutdown ownership.
@@ -295,7 +325,7 @@ newly selected workspace. Reload does not replay `gateway:startup`.
 
 Under `gateway.controlUi`, the `enabled`, `environment`, `github`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, `experimental.customPlugins`,
-`experimental.claws`, and
+`experimental.templates`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
 display preference; the Gateway process keeps running. `allowedOrigins` and
@@ -342,8 +372,16 @@ trusted-proxy policies apply live. Transport policy changes can require a new
 handshake without cancelling accepted runs. Proxy headers, OIDC mapping, device
 auto-approval, and proxy-address changes fence connections but preserve accepted
 work when the owner's grant is unchanged. This includes a requested initial turn
-after `sessions.create` commits its new session. Editing another login's identity scopes
-or reordering the same scopes keeps the connection and its accepted runs active.
+after `sessions.create` commits its new session. Editing another login's identity scopes,
+reordering the same scopes, or removing scopes already implied by another grant
+keeps the connection and its accepted runs active. For example, `operator.admin`
+already includes `operator.read`, so removing that redundant read scope does not reconnect clients.
+Role scope edits recheck each connection and accepted run against its own granted
+scopes. Editing another role, reordering equivalent scopes, or widening a role
+keeps existing connections and runs active without granting them additional scopes.
+A narrowing disconnects and stops only affected sources; restoring the role does
+not revive revoked work. Session, agent, sandbox, and access-plugin restrictions
+continue to apply through the role authority.
 Changing the owner's identity-scope grant, removing that identity from the proxy
 allowlist, or disabling its authentication method revokes retained and delegated
 work, even if the grant is restored afterward. Shared-secret rotation also revokes

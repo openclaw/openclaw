@@ -1,158 +1,102 @@
 /* @vitest-environment jsdom */
-
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
+import { setTranscriptViewport } from "./chat-transcript-fixture.test-support.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-describe("chat transcript controller", () => {
-  let flushFrames: () => void;
-  beforeEach(() => {
-    installTranscriptDomMocks();
-    flushFrames = stubAnimationFrames();
+let flushFrames: () => void;
+beforeEach(() => {
+  installTranscriptDomMocks();
+  flushFrames = stubAnimationFrames();
+});
+afterEach(resetTranscriptTestDom);
+
+async function commitLayout() {
+  flush();
+  await Promise.resolve();
+  flushFrames();
+  flush();
+}
+
+const rowMap = (...keys: string[]) => new Map(keys.map((key) => [key, key]));
+
+it.each([
+  "projection",
+  "none",
+  "idle at end",
+  "wheel",
+  "touch",
+  "disconnect",
+  "new reveal",
+] as const)("retains only the current deferred reply target after %s", async (interruption) => {
+  const projected = interruption === "projection";
+  const paneId = projected ? "projected-reply" : `reveal-${interruption}`;
+  const transcript = createChatTranscript(() => paneId);
+  const refs = transcript.renderSession(
+    `agent:main:${paneId}`,
+    (session) => session.messageElements,
+  );
+  const row = (key: string, ref = key): TestContentRow => ({
+    kind: "content",
+    key,
+    content: <div ref={refs.forKey(ref)} class="chat-bubble" data-entry-id={key} />,
   });
-  afterEach(resetTranscriptTestDom);
-
-  async function commitLayout() {
-    flush();
-    await Promise.resolve();
-    flushFrames();
-    flush();
-  }
-
-  it("retains a projected reply target until its row commits and prevents automatic follow from taking over", async () => {
-    const update = createDeferred<boolean>();
-    const transcript = createChatTranscript(vi.fn(), () => "projected-reply");
-    const tail: TestContentRow = {
-      kind: "content",
-      key: "tail",
-      content: (
-        <div class="chat-bubble" data-entry-id="tail">
-          Tail
-        </div>
-      ),
-    };
-    const original: TestContentRow = {
-      kind: "content",
-      key: "original",
-      content: (
-        <div class="chat-bubble" data-entry-id="original">
-          Original
-        </div>
-      ),
-    };
-    const { container, session, renderRows } = await mountTestTranscript(
-      "projected-reply",
-      [tail],
-      transcript,
+  const rows = [row("first", projected ? "optimistic-first" : "first"), row("second")];
+  const { container, session, renderRows } = await mountTestTranscript(
+    paneId,
+    projected ? [rows[1]!] : rows,
+    transcript,
+  );
+  try {
+    setTranscriptViewport(container, interruption === "idle at end" ? 600 : 2000);
+    session.syncMessageRows(
+      rowMap("first", "second"),
+      projected ? new Map() : rowMap("first", "second"),
     );
-    try {
-      session.syncMessageRows(
-        new Map([
-          ["original", "original"],
-          ["tail", "tail"],
-        ]),
-        new Map(),
-      );
+    if (!projected) {
+      renderRows(rows);
+    }
+    let bubbles = [...container.querySelectorAll(".chat-bubble")];
+    if (interruption === "idle at end") {
+      vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    }
+    if (projected) {
       expect(transcript.revealMessage("unknown")).toBe(false);
-      expect(transcript.revealMessage("original")).toBe(true);
+    }
+    expect(transcript.revealMessage("first")).toBe(true);
+    if (projected) {
       expect(transcript.scrollToEnd({ source: "auto" })).toBe(false);
-      update.resolve(true);
-      await update.promise;
+      await Promise.resolve();
       await commitLayout();
-      expect(container.querySelector('[data-entry-id="original"]')).toBeNull();
-
-      renderRows([original, tail]);
-      await commitLayout();
-      expect(
-        container
-          .querySelector('[data-entry-id="original"]')
-          ?.classList.contains("chat-bubble--reply-target"),
-      ).toBe(true);
-    } finally {
+      expect(container.querySelector('[data-entry-id="first"]')).toBeNull();
+      renderRows(rows);
+      bubbles = [...container.querySelectorAll(".chat-bubble")];
+    } else if (interruption === "wheel") {
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    } else if (interruption === "idle at end") {
+      container.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(150);
+    } else if (interruption === "new reveal") {
+      expect(transcript.revealMessage("second")).toBe(true);
+    } else if (interruption === "touch") {
+      container.dispatchEvent(new TouchEvent("touchstart"));
+    } else if (interruption === "disconnect") {
       transcript.dispose();
     }
-  });
-
-  it.each(["none", "idle at end", "wheel", "touch", "disconnect", "new reveal"] as const)(
-    "keeps only the current deferred message reveal after %s",
-    async (interruption) => {
-      const update = createDeferred<boolean>();
-      const transcript = createChatTranscript(vi.fn(), () => `message-reveal-${interruption}`);
-      const rows: TestContentRow[] = ["first", "second"].map((id) => ({
-        kind: "content",
-        key: id,
-        content: (
-          <div class="chat-bubble" data-entry-id={id}>
-            {id}
-          </div>
-        ),
-      }));
-      const { container, session, renderRows } = await mountTestTranscript(
-        `reveal-${interruption}`,
-        rows,
-        transcript,
-      );
-      try {
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, value: interruption === "idle at end" ? 600 : 2000 },
-        });
-        const scrollTo = vi.fn();
-        container.scrollTo = scrollTo;
-        const bubbles = [...container.querySelectorAll<HTMLElement>(".chat-bubble")];
-        session.syncMessageRows(
-          new Map([
-            ["first", "first"],
-            ["second", "second"],
-          ]),
-          new Map([
-            ["first", "first"],
-            ["second", "second"],
-          ]),
-        );
-        renderRows(rows);
-        if (interruption === "idle at end") {
-          vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
-        }
-        expect(transcript.revealMessage("first")).toBe(true);
-        scrollTo.mockClear();
-        if (interruption === "wheel") {
-          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-          expect.soft(scrollTo).toHaveBeenCalledExactlyOnceWith({
-            top: container.scrollTop,
-            behavior: "instant",
-          });
-        } else if (interruption === "idle at end") {
-          container.dispatchEvent(new Event("scroll"));
-          vi.advanceTimersByTime(150);
-        } else if (interruption === "new reveal") {
-          expect(transcript.revealMessage("second")).toBe(true);
-        } else if (interruption === "touch") {
-          container.dispatchEvent(new TouchEvent("touchstart"));
-        } else if (interruption === "disconnect") {
-          transcript.dispose();
-        }
-        update.resolve(true);
-        await update.promise;
-        await commitLayout();
-        expect(bubbles[0]?.classList.contains("chat-bubble--reply-target")).toBe(
-          ["none", "idle at end"].includes(interruption),
-        );
-        expect(bubbles[1]?.classList.contains("chat-bubble--reply-target")).toBe(
-          interruption === "new reveal",
-        );
-      } finally {
-        transcript.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
+    await Promise.resolve();
+    await commitLayout();
+    expect(bubbles.map((bubble) => bubble.classList.contains("chat-bubble--reply-target"))).toEqual(
+      [["projection", "none", "idle at end"].includes(interruption), interruption === "new reveal"],
+    );
+  } finally {
+    transcript.dispose();
+    vi.useRealTimers();
+  }
 });

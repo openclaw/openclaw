@@ -10,6 +10,10 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendPayloadContext,
 } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import {
   buildQaTarget,
@@ -26,8 +30,24 @@ import {
   sendQaChannelMediaBatch,
   sendQaChannelText,
 } from "./outbound.js";
-import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
+
+const qaChannelStatus = createComputedAccountStatusAdapter<ResolvedQaChannelAccount>({
+  defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+  buildChannelSummary: ({ snapshot }) => ({
+    baseUrl: snapshot.baseUrl ?? "[missing]",
+  }),
+  resolveAccountSnapshot: ({ account }) => ({
+    accountId: account.accountId,
+    name: account.name,
+    enabled: account.enabled,
+    configured: account.configured,
+    extra: {
+      baseUrl: account.baseUrl || "[missing]",
+      botUserId: account.botUserId,
+    },
+  }),
+});
 
 type QaChannelPayloadSendContext = Pick<
   ChannelMessageSendPayloadContext,
@@ -42,6 +62,9 @@ type QaChannelPayloadSendContext = Pick<
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"
+  | "signal"
+  | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 >;
 
 function createQaChannelMessageReceipt(
@@ -75,6 +98,9 @@ async function sendQaChannelMessagePayload(
     isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
+    signal: ctx.signal,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   };
   const result =
     mediaUrls.length === 0

@@ -163,7 +163,6 @@ export async function acquireQaLease({
   signal,
   cwd = process.cwd(),
   runConvexCliImpl = defaultRunConvexCli,
-  convexProjectDir,
   fetchImpl = fetch,
   sleepImpl = (ms) => delay(ms, undefined, { signal }),
   randomImpl = Math.random,
@@ -174,7 +173,6 @@ export async function acquireQaLease({
     env,
     cwd,
     runConvexCliImpl,
-    convexProjectDir,
     signal,
   });
   const requestOptions = { broker, fetchImpl, httpTimeoutMs };
@@ -234,7 +232,6 @@ export async function resumeQaLease({
   cwd = process.cwd(),
   fetchImpl = fetch,
   runConvexCliImpl = defaultRunConvexCli,
-  convexProjectDir,
   httpTimeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
 }) {
   signal?.throwIfAborted();
@@ -242,7 +239,6 @@ export async function resumeQaLease({
     env,
     cwd,
     runConvexCliImpl,
-    convexProjectDir,
     signal,
   });
   return await manageQaLease({

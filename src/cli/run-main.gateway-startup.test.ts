@@ -210,6 +210,15 @@ describe("runCli exit behavior", () => {
             code,
           });
           expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(action));
+          const guidance = errorSpy.mock.calls.flat().join("\n");
+          expect(guidance).toContain(
+            service
+              ? "verified pre-update backup"
+              : "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1",
+          );
+          if (service) {
+            expect(guidance).not.toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
+          }
           expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
           expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
           expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
@@ -523,7 +532,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(cliArgs("gateway", "run"));
 
-    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false });
     expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
     expect(startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
     expect(startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);

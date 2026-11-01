@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,12 +10,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readMemoryHostEventRecords } from "openclaw/plugin-sdk/memory-host-events";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
-  createDoctorContext,
   resetDoctorPluginState,
+  useDoctorWorkspace,
   type RawLegacyDoctorConfig,
 } from "./doctor-contract-api.test-support.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.test-support.js";
@@ -268,6 +268,14 @@ function readMemoryCacheRows(agentPath: string) {
     .all();
 }
 
+function readMemoryIndexRevision(agentPath: string): number {
+  using db = new DatabaseSync(agentPath);
+  const row = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+    revision: number;
+  };
+  return row.revision;
+}
+
 function readMemoryFtsSql(agentPath: string): string | undefined {
   using db = new DatabaseSync(agentPath);
   const row = db
@@ -312,46 +320,27 @@ describe("memory-core doctor dreaming migration", () => {
   let eventPath = "";
   let env: NodeJS.ProcessEnv;
 
-  beforeEach(async () => {
-    await resetDoctorPluginState();
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-core-doctor-"));
-    workspaceDir = path.join(rootDir, "workspace");
-    stateDir = path.join(rootDir, "state");
+  const {
+    fixture,
+    context,
+    params: migrationParams,
+  } = useDoctorWorkspace("openclaw-memory-core-doctor-", resetMemoryCoreDreamingStateForTests);
+
+  beforeEach(() => {
+    ({ rootDir, workspaceDir, stateDir, env } = fixture);
     legacyPath = path.join(stateDir, "memory", "main.sqlite");
     agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
-    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
-    env = { ...process.env, OPENCLAW_STATE_DIR: path.join(rootDir, "state") };
-  });
-
-  afterEach(async () => {
-    await resetDoctorPluginState();
-    resetMemoryCoreDreamingStateForTests();
-    await fs.rm(rootDir, { recursive: true, force: true });
   });
 
   function mainAgents(): NonNullable<RawLegacyDoctorConfig["agents"]> {
     return { defaults: {}, list: [{ id: "main", workspace: workspaceDir }] };
   }
 
-  function context(): PluginDoctorStateMigrationContext {
-    return createDoctorContext(env);
-  }
-
-  function migrationParams(
-    config: RawLegacyDoctorConfig = {
-      agents: {
-        list: [{ id: "main", workspace: workspaceDir }],
-      },
-    },
-  ) {
-    return {
-      config,
-      env,
-      stateDir: path.join(rootDir, "state"),
-      oauthDir: path.join(rootDir, "oauth"),
-      context: context(),
-    };
+  function legacyMemorySearchConfig(
+    search: NonNullable<NonNullable<RawLegacyDoctorConfig["memory"]>["search"]>,
+  ): RawLegacyDoctorConfig {
+    return { memory: { search }, agents: mainAgents() };
   }
 
   it("imports legacy memory host events into plugin state", async () => {
@@ -807,6 +796,92 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.access(`${eventPath}.migrated`);
   });
 
+  it.each([false, true])(
+    "cleans archived legacy shadows with configured path=%s",
+    async (custom) => {
+      const base = custom ? path.join(rootDir, "external", "index.db") : legacyPath;
+      const params = custom
+        ? migrationParams(legacyMemorySearchConfig({ store: { path: base } }))
+        : migrationParams();
+      await writeLegacyMemorySidecar(base);
+      await fs.rename(base, `${base}.migrated`);
+      const archive = await fs.readFile(`${base}.migrated`);
+      const uuid = "11111111-2222-3333-4444-555555555555";
+      const shadow = `${base}.tmp-${uuid}`;
+      const survivors = [
+        `${base}.tmp-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`,
+        `${base}.memory-reindex-${uuid}`,
+        `${base}.tmp-not-a-uuid`,
+        `${base}.tmp-${uuid}.backup`,
+      ];
+      const old = new Date(Date.now() - 48 * 60 * 60_000);
+      const removed = ["", "-wal", "-shm", "-journal"].map((suffix) => `${shadow}${suffix}`);
+      for (const file of [...removed, ...survivors]) {
+        await fs.writeFile(file, "preserve or reclaim");
+        await fs.utimes(file, old, old);
+      }
+      // A recent companion protects the entire family, even when its base is old.
+      await fs.writeFile(`${survivors[0]}-wal`, "recent WAL");
+      const linked = `${base}.tmp-22222222-2222-3333-4444-555555555555`;
+      await fs.symlink(`${base}.migrated`, linked);
+      const directory = `${base}.tmp-33333333-2222-3333-4444-555555555555`;
+      await fs.mkdir(directory);
+      const migration = legacyMemoryIndexMigration();
+      expect(await migration.detectLegacyState(params)).not.toBeNull();
+      expect(await migration.collectBackupResources?.(params)).toEqual(
+        expect.arrayContaining(removed.map((file) => ({ path: file, kind: "file" }))),
+      );
+      const reported: string[] = [];
+      const report = vi
+        .spyOn(console, "warn")
+        .mockImplementation((_message: unknown, file: unknown) => {
+          expect(existsSync(String(file))).toBe(true);
+          reported.push(String(file));
+        });
+      try {
+        const result = await migration.migrateLegacyState(params);
+        expect(result.warnings).toEqual([]);
+      } finally {
+        report.mockRestore();
+      }
+      expect(reported.toSorted()).toEqual(removed.toSorted());
+      for (const file of removed) {
+        await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      for (const file of survivors) {
+        await expect(fs.readFile(file, "utf8")).resolves.toBe("preserve or reclaim");
+      }
+      await expect(fs.readFile(`${base}.migrated`)).resolves.toEqual(archive);
+      expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
+      expect((await fs.lstat(directory)).isDirectory()).toBe(true);
+      await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    },
+  );
+
+  it("preserves legacy shadows needed by unresolved or configured recovery", async () => {
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    const shadow = `${legacyPath}.tmp-11111111-2222-3333-4444-555555555555`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    await fs.writeFile(shadow, "only recovery copy");
+    await fs.utimes(shadow, old, old);
+    const migration = legacyMemoryIndexMigration();
+    await migration.migrateLegacyState(migrationParams());
+    await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
+    await fs.writeFile(legacyPath, "unimportable primary");
+    await fs.writeFile(`${legacyPath}.migrated`, "older archive");
+    const result = await migration.migrateLegacyState(migrationParams());
+    expect(result.warnings.length).toBeGreaterThan(0);
+    await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("unimportable primary");
+    await fs.rm(legacyPath);
+    const recoveryAlias = path.join(rootDir, "recovery.sqlite");
+    await fs.symlink(shadow, recoveryAlias);
+    await migration.migrateLegacyState(
+      migrationParams(legacyMemorySearchConfig({ store: { path: recoveryAlias } })),
+    );
+    await expect(fs.readFile(shadow, "utf8")).resolves.toBe("only recovery copy");
+  });
+
   it("removes an empty legacy memory sidecar placeholder without warning", async () => {
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(legacyPath, "");
@@ -883,17 +958,11 @@ describe("memory-core doctor dreaming migration", () => {
 
   it("creates migrated FTS tables with the configured legacy tokenizer", async () => {
     await writeLegacyMemorySidecar(legacyPath);
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            fts: { tokenizer: "trigram" },
-          },
-        },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        fts: { tokenizer: "trigram" },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
 
@@ -1046,19 +1115,13 @@ describe("memory-core doctor dreaming migration", () => {
 
   it("keeps legacy vector sidecars retryable when sqlite-vec cannot load", async () => {
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
 
@@ -1083,20 +1146,14 @@ describe("memory-core doctor dreaming migration", () => {
 
   it("archives legacy vector sidecars when memory search is disabled", async () => {
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          provider: "none",
-          store: {
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      provider: "none",
+      store: {
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
 
@@ -1111,20 +1168,14 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
     await writeLegacyMemorySidecar(retryPath, { vector: "vec0" });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            path: legacyPath,
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        path: legacyPath,
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
     const retryEntries = await fs.readdir(path.join(stateDir, "memory"));
@@ -1133,19 +1184,13 @@ describe("memory-core doctor dreaming migration", () => {
     );
     expect(alternateRetry).toBeDefined();
     const alternateRetryPath = path.join(stateDir, "memory", alternateRetry ?? "");
-    const repairedConfig: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const repairedConfig: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
     const retryPreview = await legacyMemoryIndexMigration().detectLegacyState(
       migrationParams(repairedConfig),
     );
@@ -1187,17 +1232,11 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
     await createCanonicalMemoryIndex(agentPath, env, "conflicting");
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            path: legacyPath,
-          },
-        },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        path: legacyPath,
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
     const repairedConfig: RawLegacyDoctorConfig = {
@@ -1226,17 +1265,11 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
     await fs.mkdir(agentPath, { recursive: true });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            path: legacyPath,
-          },
-        },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        path: legacyPath,
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
     const repairedConfig: RawLegacyDoctorConfig = {
@@ -1291,10 +1324,12 @@ describe("memory-core doctor dreaming migration", () => {
     } finally {
       canonicalDb.close();
     }
+    const revision = readMemoryIndexRevision(agentPath);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision);
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
       chunks: [{ id: "chunk-1", text: "canonical memory remains authoritative" }],
@@ -1512,10 +1547,13 @@ describe("memory-core doctor dreaming migration", () => {
       legacyDb.close();
     }
     await createCanonicalMemoryIndex(agentPath, env, "matching", { ftsText: "stale text" });
+    const revision = readMemoryIndexRevision(agentPath);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
+    // Import and the subsequent provenance backfill each commit one index batch.
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision + 2);
     expect(await searchMigratedKeywordRows(agentPath, "stale")).toEqual([]);
     expect((await searchMigratedKeywordRows(agentPath, "remember")).map((row) => row.id)).toEqual([
       "chunk-1",
@@ -1536,6 +1574,11 @@ describe("memory-core doctor dreaming migration", () => {
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await fs.access(`${legacyPath}.migrated`);
+    expect(await legacyMemoryIndexMigration().migrateLegacyState(migrationParams())).toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision + 2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

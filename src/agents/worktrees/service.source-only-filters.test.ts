@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   resetConfigRuntimeState,
@@ -15,12 +13,12 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
-const exec = promisify(execFile);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
 afterEach(() => {
   vi.restoreAllMocks();
@@ -28,8 +26,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 const initialize = useManagedWorktreeTestRepository();
-const git = async (cwd: string, ...args: string[]) =>
-  (await exec("git", ["-C", cwd, ...args])).stdout.trim();
 let root: string,
   repo: string,
   globalConfig: string,
@@ -305,9 +301,9 @@ it("does not execute a clean filter inserted after publication preflight", async
     await git(created.path, "rev-parse", "--git-path", "index"),
   );
   const before = await fs.readFile(index);
-  const run = commands.runCommandWithTimeout;
+  const run = commands.runCommandBuffered;
   let injected = false;
-  vi.spyOn(commands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+  vi.spyOn(commands, "runCommandBuffered").mockImplementation(async (...args) => {
     if (!injected && args[0][0] === "git" && args[0].includes("add") && args[0].includes("-A")) {
       injected = true;
       await configure("repository", "clean", created.path);

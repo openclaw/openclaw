@@ -254,6 +254,7 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.add",
   "cron.update",
   "cron.remove",
+  "cron.bind",
   "cron.run",
   "cron.runs",
   "secrets.store.delete",
@@ -506,7 +507,6 @@ type MessageActionAgentRuntimeIdentityParams = {
   sessionId?: string;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
-  callerOwnsTerminalReceipt?: boolean;
 };
 
 async function resolveMessageActionIdentity<T>(
@@ -543,7 +543,9 @@ async function resolveMessageActionIdentity<T>(
   });
   if (!messageActionContext) {
     if (terminalSourceReply) {
-      throw new Error("terminal source reply requires an active turn capability");
+      throw new Error(
+        "terminal source reply requires an active turn capability. This run has no live source turn to finish (it ended, or this is a heartbeat or background run), so changing channel or target will not help. To deliver the message anyway, send it again with final=false.",
+      );
     }
     return undefined;
   }
@@ -554,11 +556,8 @@ async function resolveMessageActionIdentity<T>(
     throw new Error("terminal source reply requires source-turn correlation");
   }
   if (usesUntrustedGatewayContext) {
-    if (params.callerOwnsTerminalReceipt !== true) {
-      throw new Error("terminal source reply requires the trusted local gateway context");
-    }
-    // Remote gateways cannot trust caller-supplied turn metadata. The agent
-    // process owns the durable receipt and sends no source authority over RPC.
+    // Remote gateways cannot trust caller-supplied turn metadata. Keep source
+    // completion authority in the originating agent process.
     return undefined;
   }
   if (!identity.operationalRunInstance) {

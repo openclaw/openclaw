@@ -1,5 +1,5 @@
 /** The details a generated compaction boundary persists. */
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 
 /** Longest run-owned request a boundary carries; longer persisted values are dropped on read. */
 export const MAX_LATEST_USER_REQUEST_CHARS = 800;
@@ -18,13 +18,7 @@ export interface CompactionDetails {
 
 export function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
   const details = asOptionalRecord(value);
-  if (
-    !details ||
-    !Array.isArray(details.readFiles) ||
-    !details.readFiles.every((file): file is string => typeof file === "string") ||
-    !Array.isArray(details.modifiedFiles) ||
-    !details.modifiedFiles.every((file): file is string => typeof file === "string")
-  ) {
+  if (!details || !isStringArray(details.readFiles) || !isStringArray(details.modifiedFiles)) {
     return undefined;
   }
   const request = details.latestUnresolvedUserRequest;

@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -127,7 +128,9 @@ export async function backupGitInitCommand(
   if (options.json) {
     writeRuntimeJson(runtime, result);
   } else {
-    runtime.log(`Git backup repository ready: ${shortenHomePath(result.repositoryPath)}`);
+    runtime.log(
+      terminalText`Git backup repository ready: ${shortenHomePath(result.repositoryPath)}`,
+    );
   }
   return result;
 }
@@ -166,15 +169,17 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     if (options.json) {
       writeRuntimeJson(runtime, result);
     } else if (result.noChanges) {
-      runtime.log(`Git backup: no changes (${shortenHomePath(repositoryPath)})`);
+      runtime.log(terminalText`Git backup: no changes (${shortenHomePath(repositoryPath)})`);
     } else {
-      runtime.log(`Git backup committed: ${result.commit}`);
+      runtime.log(terminalText`Git backup committed: ${result.commit}`);
     }
     if (result.pushWarning) {
-      runtime.error(`Warning: Git backup committed, but push failed: ${result.pushWarning}`);
+      // Keep escaped line breaks outside URL query values during console redaction.
+      const warning = result.pushWarning.split("\n").join(" \\n ");
+      runtime.error(terminalText`Warning: Git backup committed, but push failed: ${warning}`);
     }
     for (const warning of result.warnings) {
-      runtime.error(`Warning: ${warning}`);
+      runtime.error(terminalText`Warning: ${warning}`);
     }
     return result;
   } catch (error) {
@@ -196,18 +201,16 @@ export async function backupGitLogCommand(
   options: { repository?: string; limit?: number; json?: boolean },
 ) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  const limit = options.limit ?? 20;
-  if (!Number.isSafeInteger(limit) || limit < 1) {
-    throw new Error("--limit must be a positive integer.");
-  }
-  const entries = await readGitBackupLog({ repositoryPath, limit });
+  const entries = await readGitBackupLog({ repositoryPath, limit: options.limit ?? 20 });
   if (options.json) {
     writeRuntimeJson(runtime, { repositoryPath, entries });
   } else if (entries.length === 0) {
-    runtime.log(`No Git backup commits in ${shortenHomePath(repositoryPath)}.`);
+    runtime.log(terminalText`No Git backup commits in ${shortenHomePath(repositoryPath)}.`);
   } else {
     runtime.log(
-      entries.map((entry) => `${entry.commit}\t${entry.date}\t${entry.message}`).join("\n"),
+      entries
+        .map((entry) => terminalText`${entry.commit}\t${entry.date}\t${entry.message}`)
+        .join("\n"),
     );
   }
   return entries;
@@ -226,9 +229,11 @@ export async function backupGitVerifyCommand(
     writeRuntimeJson(runtime, result);
   } else {
     for (const table of result.tables) {
-      runtime.log(`${table.ok ? "ok" : "failed"}\t${table.table}\t${table.rows}\t${table.sha256}`);
+      runtime.log(
+        terminalText`${table.ok ? "ok" : "failed"}\t${table.table}\t${table.rows}\t${table.sha256}`,
+      );
     }
-    runtime.log(`Git backup verified: ${result.commit}`);
+    runtime.log(terminalText`Git backup verified: ${result.commit}`);
   }
   return result;
 }
@@ -251,15 +256,17 @@ export async function backupGitRestoreCommand(
   if (options.json) {
     writeRuntimeJson(runtime, result);
   } else {
-    runtime.log(`Git backup restored: ${shortenHomePath(result.targetPath)} (${result.commit})`);
+    runtime.log(
+      terminalText`Git backup restored: ${shortenHomePath(result.targetPath)} (${result.commit})`,
+    );
     if (result.excludedTables.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
+        terminalText`Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
       );
     }
     if (result.excludedConfigStateKeyPrefixes.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
+        terminalText`Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
       );
     }
   }

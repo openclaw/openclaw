@@ -58,7 +58,7 @@ async function awaitWithinCompletionBoundary<T>(params: {
   if (signal?.aborted) {
     throw createCopilotAbortError(signal.reason);
   }
-  const remainingMs = params.boundary.deadlineMs - Date.now();
+  const remainingMs = params.boundary.deadlineMs - performance.now();
   if (remainingMs <= 0) {
     throw createTimeoutError(params.boundary.timeoutMs);
   }
@@ -124,7 +124,7 @@ export async function runCopilotIsolatedCompletion(
   const boundary: CompletionBoundary = {
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
-    deadlineMs: Date.now() + params.timeoutMs,
+    deadlineMs: performance.now() + params.timeoutMs,
     timeoutMs: params.timeoutMs,
   };
   if (params.authorization.owner !== "host") {
@@ -163,7 +163,7 @@ export async function runCopilotIsolatedCompletion(
   });
   const byokProxy = await awaitWithinCompletionBoundary({
     boundary,
-    start: async () => await createCopilotByokProxy(resolvedProvider),
+    start: () => createCopilotByokProxy(resolvedProvider),
     cleanupLate: async (proxy) => await proxy?.close(),
   });
   const sessionProvider = byokProxy?.provider ?? resolvedProvider;
@@ -177,8 +177,8 @@ export async function runCopilotIsolatedCompletion(
   try {
     const acquiredHandle = await awaitWithinCompletionBoundary({
       boundary,
-      start: async () =>
-        await pool.acquire(
+      start: () =>
+        pool.acquire(
           {
             agentId: params.agentId,
             authMode: githubAuth ? "gitHubToken" : "byok",
@@ -194,7 +194,7 @@ export async function runCopilotIsolatedCompletion(
             ...(githubAuth ? { gitHubToken: apiKey } : {}),
           },
         ),
-      cleanupLate: async (lateHandle) => await pool.release(lateHandle),
+      cleanupLate: (lateHandle) => pool.release(lateHandle),
     });
     handle = acquiredHandle;
     const sessionConfig: SessionConfig = {
@@ -208,18 +208,18 @@ export async function runCopilotIsolatedCompletion(
     };
     const createdSession = await awaitWithinCompletionBoundary({
       boundary,
-      start: async () => await acquiredHandle.client.createSession(sessionConfig),
+      start: () => acquiredHandle.client.createSession(sessionConfig),
       cleanupLate: async (lateSession) => {
-        startBestEffortCleanup(async () => await lateSession.abort());
-        startBestEffortCleanup(async () => await lateSession.disconnect());
+        startBestEffortCleanup(() => lateSession.abort());
+        startBestEffortCleanup(() => lateSession.disconnect());
       },
     });
     session = createdSession;
     const requestHeaders = sessionProvider.provider?.headers;
     const event = await awaitWithinCompletionBoundary({
       boundary,
-      start: async (remainingMs) =>
-        await createdSession.sendAndWait(
+      start: (remainingMs) =>
+        createdSession.sendAndWait(
           { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
           remainingMs,
         ),
@@ -243,14 +243,14 @@ export async function runCopilotIsolatedCompletion(
     // extends the operation deadline when an SDK cleanup call wedges.
     if (session) {
       const sessionToClose = session;
-      startBestEffortCleanup(async () => await sessionToClose.disconnect());
+      startBestEffortCleanup(() => sessionToClose.disconnect());
     }
     if (byokProxy) {
-      startBestEffortCleanup(async () => await byokProxy.close());
+      startBestEffortCleanup(() => byokProxy.close());
     }
     if (handle) {
       const handleToRelease = handle;
-      startBestEffortCleanup(async () => await pool.release(handleToRelease));
+      startBestEffortCleanup(() => pool.release(handleToRelease));
     }
   }
 }

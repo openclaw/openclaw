@@ -12,28 +12,24 @@ const loadWhatsAppApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
 );
 
-async function prepareWhatsAppApprovalPayloadForDelivery(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
-) {
-  return (await loadWhatsAppApprovalReactionsModule()).prepareWhatsAppApprovalPayloadForDelivery({
-    payload: params.payload,
-    presentation: params.presentation,
-  });
-}
-
-async function registerDeliveredWhatsAppApprovalPayload(
-  params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
-): Promise<void> {
-  await (
-    await loadWhatsAppApprovalReactionsModule()
-  ).registerWhatsAppApprovalReactionTargetForDeliveredPayload(params);
-}
-
 export const whatsappChannelOutbound = {
   ...whatsappOutboundBase,
   sendTextOnlyErrorPayloads: true,
-  renderPresentation: prepareWhatsAppApprovalPayloadForDelivery,
-  afterDeliverPayload: registerDeliveredWhatsAppApprovalPayload,
+  renderPresentation: async (
+    params: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0],
+  ) => {
+    return (await loadWhatsAppApprovalReactionsModule()).prepareWhatsAppApprovalPayloadForDelivery({
+      payload: params.payload,
+      presentation: params.presentation,
+    });
+  },
+  afterDeliverPayload: async (
+    params: Parameters<NonNullable<ChannelOutboundAdapter["afterDeliverPayload"]>>[0],
+  ): Promise<void> => {
+    await (
+      await loadWhatsAppApprovalReactionsModule()
+    ).registerWhatsAppApprovalReactionTargetForDeliveredPayload(params);
+  },
   normalizePayload: ({ payload }: { payload: { text?: string } }) => ({
     ...payload,
     text: normalizeWhatsAppPayloadTextPreservingIndentation(payload.text),

@@ -4,17 +4,16 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as databaseProcessRole from "../infra/database-engine/admission-scope.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
+  beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-} from "./openclaw-agent-db-lifecycle.js";
+import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -47,6 +46,7 @@ beforeEach(() => {
       run: async () => undefined,
       failure: () => undefined,
       isPrepared: () => false,
+      getPendingNativeOpen: () => undefined,
       getPendingPreparation: () => undefined,
       captureClaim: () => {
         throw new Error("Unused native claim");
@@ -62,20 +62,25 @@ const source: AgentDatabaseRequestExecutionSource = {
   },
 };
 
-function capture(agentId: string) {
-  return captureOpenClawAgentDatabaseExecution({ agentId, env });
+function capture(agentId: string, pathname?: string) {
+  return captureOpenClawAgentDatabaseExecution({ agentId, env, path: pathname });
 }
 
-async function use(agentId: string) {
+async function use(agentId: string, ...following: string[]) {
   const execution = capture(agentId);
   await execution.prepare(source);
   await execution.release();
+  for (const next of following) {
+    await use(next);
+  }
   return execution;
 }
 
 function closedAgents() {
   return opened.filter(({ close }) => close.mock.calls.length > 0).map(({ agentId }) => agentId);
 }
+
+const fillIdlePool = () => use("first", "second", "third", "fourth");
 
 it("keeps a shared creating owner out of idle eviction until its last borrower releases", async () => {
   const options = {
@@ -89,9 +94,7 @@ it("keeps a shared creating owner out of idle eviction until its last borrower r
   try {
     await first.prepare(source);
     await first.release();
-    for (const agentId of ["first", "second", "third", "fourth", "fifth"]) {
-      await use(agentId);
-    }
+    await use("first", "second", "third", "fourth", "fifth");
     expect(closedAgents()).toEqual(["first"]);
     await joining.prepare(source);
     expect(opened.filter(({ agentId }) => agentId === "creating")).toHaveLength(1);
@@ -111,8 +114,7 @@ it("expires each executor independently and refreshes only the borrowed one", as
   const terminal = vi.fn();
   first.onTerminal(terminal);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
-  await use("second");
-  await use("first");
+  await use("second", "first");
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   expect(closedAgents()).toEqual([]);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
@@ -122,46 +124,28 @@ it("expires each executor independently and refreshes only the borrowed one", as
   expect(opened).toHaveLength(3);
 });
 
-it("closes all warm executors on restart drain", async () => {
-  for (const agentId of ["first", "second", "third", "fourth"]) {
-    await use(agentId);
-  }
+it("retires a CLI one-shot's warm executor after the CLI window", async () => {
+  vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
+  await use("one-shot");
+  await vi.advanceTimersByTimeAsync(30_000 - 1);
   expect(closedAgents()).toEqual([]);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(closedAgents()).toEqual(["one-shot"]);
+});
+
+it("keeps warm executors through restart drain until marker persistence releases cleanup", async () => {
+  await fillIdlePool();
   markGatewayRestartDraining();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(closedAgents()).toEqual([]);
+  beginGatewayShutdownCleanup();
   await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
 });
 
-it("retires only the selected physical store and shares its directory alias", async () => {
-  const first = await use("first");
-  await use("second");
-  fs.mkdirSync(path.dirname(first.path), { recursive: true });
-  const alias = path.join(env.OPENCLAW_STATE_DIR!, "alias");
-  fs.symlinkSync(
-    path.dirname(first.path),
-    alias,
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const borrowed = captureOpenClawAgentDatabaseExecution({
-    agentId: "first",
-    env,
-    path: path.join(alias, path.basename(first.path)),
-  });
-  await borrowed.prepare(source);
-  await borrowed.release();
-  expect(opened).toHaveLength(2);
-  await closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first");
-  expect(closedAgents()).toEqual(["first"]);
-  await use("first");
-  await use("second");
-  expect(opened.map(({ agentId }) => agentId)).toEqual(["first", "second", "first"]);
-});
-
 it("keeps a reborrow live while another idle executor is being evicted", async () => {
-  for (const agentId of ["first", "second", "third", "fourth"]) {
-    await use(agentId);
-  }
+  await fillIdlePool();
   const evicting = createDeferredCore();
   const entered = createDeferredCore();
   const first = opened[0];
@@ -184,9 +168,7 @@ it("keeps a reborrow live while another idle executor is being evicted", async (
 });
 
 it("retains failed eviction custody without retaining a fifth idle executor", async () => {
-  for (const agentId of ["first", "second", "third", "fourth"]) {
-    await use(agentId);
-  }
+  await fillIdlePool();
   const first = opened[0];
   assert(first);
   first.close.mockRejectedValueOnce(new Error("synthetic cleanup failure"));

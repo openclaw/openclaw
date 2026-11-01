@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractEmbeddingUsage } from "../../packages/llm-core/src/usage-cost.js";
 import { resolveAzureApiVersionRequestTarget } from "../../packages/memory-host-sdk/src/host/azure-api-version-request.js";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import {
@@ -9,13 +10,12 @@ import {
   debugEmbeddingsLog,
   embeddingResponseLogMeta,
 } from "../../packages/memory-host-sdk/src/host/embeddings-debug.js";
-import { extractEmbeddingUsage } from "../../packages/memory-host-sdk/src/host/embeddings-remote-fetch.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
-import { MEMORY_SEARCH_DEADLINE_CONTROL } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import {
   createProviderHttpError,
   readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
+import { attachLocalServiceDiagnostics } from "../agents/provider-local-service-diagnostics.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
@@ -27,17 +27,19 @@ import { readResponseTextPrefix } from "../infra/http-body.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import type {
-  EmbeddingInput,
-  EmbeddingProvider,
-  EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
+import {
+  OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  OPENAI_COMPATIBLE_MODEL_APIS,
+} from "./embedding-provider-config.js";
+import {
+  EMBEDDING_DEADLINE_CONTROL,
+  type EmbeddingInput,
+  type EmbeddingProvider,
+  type EmbeddingProviderAdapter,
+  type EmbeddingProviderCallOptions,
+  type EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
-/** Provider id for OpenAI-compatible remote embedding servers. */
-const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
@@ -66,10 +68,6 @@ type ConfiguredEmbeddingProvider = Partial<
 type ResolvedConfiguredEmbeddingProvider = {
   providerId: string;
   config: ConfiguredEmbeddingProvider;
-};
-
-type LocalServiceAwareEmbeddingOptions = EmbeddingProviderCreateOptions & {
-  acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
 
 function normalizeBaseUrl(value: string | undefined): string {
@@ -111,6 +109,33 @@ function normalizeDimensions(value: number): number {
     throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
   }
   return value;
+}
+
+// Servers that ignore `dimensions` return the model's native size instead of failing.
+// Accepting those vectors would index them under an identity that records the requested size.
+function assertRequestedDimensions(
+  vectors: number[][],
+  dimensions: number | undefined,
+  errorPrefix: string,
+): void {
+  if (dimensions === undefined) {
+    return;
+  }
+  const index = vectors.findIndex((vector) => vector.length !== dimensions);
+  if (index === -1) {
+    return;
+  }
+  const actual = vectors[index]?.length;
+  throw Object.assign(
+    new Error(
+      `${errorPrefix}: expected ${dimensions} dimensions, got ${actual} at index ${index}; the endpoint did not honor the requested dimensions. Remove memory.search.outputDimensionality or request dimensions, or use a server that supports them.`,
+    ),
+    {
+      code: "INVALID_EMBEDDING_RESPONSE",
+      expectedDimensions: dimensions,
+      actualDimensions: actual,
+    },
+  );
 }
 
 function resolveRequestInputType(
@@ -332,7 +357,7 @@ async function postEmbeddingRequest(params: {
   callOptions?: EmbeddingProviderCallOptions;
 }): Promise<number[][]> {
   const { client, input, callOptions } = params;
-  const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+  const deadlineControl = callOptions?.[EMBEDDING_DEADLINE_CONTROL];
   const errorPrefix = "openai-compatible embeddings failed";
   const context = `${client.providerId} embeddings failed (model: ${client.model}, batch size: ${input.length})`;
   const inputType = resolveRequestInputType(client, callOptions?.inputType);
@@ -392,6 +417,7 @@ async function postEmbeddingRequest(params: {
             input.length,
             context,
           );
+          assertRequestedDimensions(vectors, client.dimensions, context);
           callOptions?.onUsage?.(extractEmbeddingUsage(payload));
           return vectors;
         } catch (error) {
@@ -402,6 +428,10 @@ async function postEmbeddingRequest(params: {
         }
       },
     });
+  } catch (error) {
+    throw callOptions?.signal?.aborted
+      ? error
+      : attachLocalServiceDiagnostics(error, localServiceLease);
   } finally {
     localServiceLease?.release();
   }
@@ -450,7 +480,6 @@ async function createOpenAICompatibleEmbeddingClient(
       headers.authorization = `Bearer ${providerApiKey}`;
     }
   }
-  const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
   return {
     providerId,
     baseUrl,
@@ -474,7 +503,7 @@ async function createOpenAICompatibleEmbeddingClient(
             baseUrl,
             headers,
           },
-          acquireLocalService: localServiceOptions.acquireLocalService,
+          acquireLocalService: options.acquireLocalService,
         }
       : {}),
     ...(options.dimensions !== undefined

@@ -18,11 +18,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import type { AgentDatabaseGenerationClaim } from "./openclaw-agent-execution-admission-contract.js";
-import type {
-  AgentDatabaseNativeGeneration,
-  AgentDatabaseExecutionFileIdentity,
-} from "./openclaw-agent-execution-contract.js";
+import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-contract.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceWorkerAccess,
@@ -36,6 +32,21 @@ export type AgentDatabaseExecutionCaptureConstraints = {
   /** The caller's locator before it pinned options.path to the physical file. */
   requestedPath?: string;
 };
+
+export function toAgentExecutionConstraints(
+  identity: DatabasePathIdentity,
+): AgentDatabaseExecutionCaptureConstraints {
+  return identity.key.startsWith("file:")
+    ? {
+        expectedIdentity: {
+          kind: "file",
+          physicalIdentity: identity.key.slice("file:".length),
+          nativeLocation: identity.canonicalPath,
+          birthtime: identity.birthtime,
+        },
+      }
+    : { expectedCreationIdentity: identity };
+}
 
 export type AgentDatabaseExecutionPreparedTarget = {
   agentId: string;
@@ -185,28 +196,4 @@ export function assertBorrowedAgentDatabaseFileIdentity({
       throw new Error("Agent database borrower belongs to another physical file");
     }
   }
-}
-
-/** Bind a native claim to the same borrower and logical generation that captured it. */
-export function captureBorrowedAgentDatabaseGenerationClaim(
-  assertBorrowed: () => void,
-  readGeneration: () => AgentDatabaseNativeGeneration | undefined,
-): AgentDatabaseGenerationClaim {
-  assertBorrowed();
-  const captured = readGeneration();
-  if (!captured) {
-    throw new Error("Agent database execution has no admitted generation");
-  }
-  const claim = captured.captureClaim();
-  return {
-    identity: claim.identity,
-    incarnation: claim.incarnation,
-    assertCurrent() {
-      assertBorrowed();
-      if (readGeneration() !== captured) {
-        throw new Error("Agent database execution generation was replaced");
-      }
-      claim.assertCurrent();
-    },
-  };
 }

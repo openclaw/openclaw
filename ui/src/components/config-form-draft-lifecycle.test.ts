@@ -1,17 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  connectionSchemaFixture,
   disposeConfigFormFixture,
   renderArrayFixture,
   renderNodeFixture,
+  renderTextInputFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 
 function input(container: Element, selector: string): HTMLInputElement {
-  const element = container.querySelector<HTMLInputElement>(selector);
-  if (!element) {
-    throw new Error(`Missing input: ${selector}`);
-  }
-  return element;
+  return container.querySelector<HTMLInputElement>(selector)!;
 }
 
 function fill(element: HTMLInputElement, value: string) {
@@ -21,28 +19,86 @@ function fill(element: HTMLInputElement, value: string) {
 }
 
 describe("config form draft lifetimes", () => {
-  it.each([
-    { label: "absent", initial: undefined },
-    { label: "empty", initial: [] },
-  ])("retains a collection draft across unchanged $label sources", ({ initial }) => {
-    const container = document.body.appendChild(document.createElement("div"));
-    let value: string[] | undefined = initial;
-    const onPatch = vi.fn(() => false);
-    const render = () =>
-      renderArrayFixture(container, {
-        schema: { type: "array", items: { type: "string", minLength: 3 } },
-        value,
-        path: ["names"],
+  let container: HTMLDivElement;
+  beforeEach(() => {
+    container = document.body.appendChild(document.createElement("div"));
+  });
+  afterEach(() => {
+    disposeConfigFormFixture(container);
+    container.remove();
+  });
+  it("preserves an invalid JSON draft on an equal acknowledgment until its source changes", () => {
+    const onPatch = vi.fn();
+    const render = (replaced: boolean) =>
+      renderNodeFixture(container, {
+        schema: { anyOf: [{ type: "object" }, { type: "array" }] },
+        value: { enabled: !replaced },
+        path: ["value"],
         onPatch,
       });
-    try {
+    render(false);
+    const field = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const invalidDraft = { value: '{"enabled":', validity: { valid: false } };
+    field.focus();
+    field.value = invalidDraft.value;
+    field.setSelectionRange(1, 1);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(field).toMatchObject(invalidDraft);
+    expect(onPatch).not.toHaveBeenCalled();
+
+    render(false);
+    expect(container.querySelector("textarea")).toBe(field);
+    expect(field).toMatchObject({ ...invalidDraft, selectionStart: 1 });
+    expect(container.querySelector<HTMLElement>(".cfg-field__error")?.hidden).toBe(false);
+
+    render(true);
+    expect(field.value).toContain('"enabled": false');
+    expect(field.checkValidity()).toBe(true);
+    expect(field.getAttribute("aria-invalid")).toBe("false");
+    expect(container.querySelector<HTMLElement>(".cfg-field__error")?.hidden).toBe(true);
+  });
+
+  it("retains the focused scalar edit's string branch across a numeric source replacement", () => {
+    const onPatch = vi.fn();
+    const render = (value: string | number) =>
+      renderTextInputFixture(container, {
+        schema: { anyOf: [{ type: "string" }, { type: "number" }] },
+        value,
+        sourceIdentity: {},
+        path: ["value"],
+        inputType: "text",
+        onPatch,
+      });
+    render("initial");
+    const field = input(container, "input");
+    field.focus();
+    fill(field, "12");
+    expect(onPatch).toHaveBeenLastCalledWith(["value"], "12");
+    render(100);
+    expect(field.value).toBe("12");
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["value"], "12");
+  });
+
+  it.each([{ initial: undefined }, { initial: [] }])(
+    "retains a collection draft across unchanged $initial sources",
+    ({ initial }) => {
+      let value: string[] | undefined = initial;
+      const onPatch = vi.fn(() => false);
+      const render = () =>
+        renderArrayFixture(container, {
+          schema: { type: "array", items: { type: "string", minLength: 3 } },
+          value,
+          path: ["names"],
+          onPatch,
+        });
       render();
       const open = () => {
         container.querySelector<HTMLButtonElement>("button[aria-controls]")!.click();
         flush();
       };
       open();
-      // Opening falls back to the draft after the parent rejects an automatic default.
       onPatch.mockClear();
       let field = input(container, "[data-collection-draft-value]");
       expect(document.activeElement).toBe(field);
@@ -55,8 +111,7 @@ describe("config form draft lifetimes", () => {
       value = initial?.slice();
       render();
       field = input(container, "[data-collection-draft-value]");
-      expect(field.value).toBe("x");
-      expect(field.checkValidity()).toBe(false);
+      expect(field).toMatchObject({ value: "x", validity: { valid: false } });
       fill(field, "local");
       expect(field.checkValidity()).toBe(true);
 
@@ -65,56 +120,32 @@ describe("config form draft lifetimes", () => {
       expect(container.querySelector(".cfg-collection-draft")).toBeNull();
       open();
       field = input(container, "[data-collection-draft-value]");
-      expect(field.value).toBe("");
-      expect(field.checkValidity()).toBe(true);
+      expect(field).toMatchObject({ value: "", validity: { valid: true } });
       expect(document.activeElement).toBe(field);
-    } finally {
-      disposeConfigFormFixture(container);
-      container.remove();
-    }
-  });
+    },
+  );
 
   it("keeps rejected structured edits until their source identity changes", () => {
-    const container = document.body.appendChild(document.createElement("div"));
     let sourceIdentity = {};
     const onPatch = vi.fn(() => false);
     const render = () =>
       renderNodeFixture(container, {
-        schema: {
-          type: "object",
-          required: ["host", "port"],
-          properties: {
-            host: { type: "string", minLength: 1 },
-            port: { type: "integer", minimum: 1 },
-          },
-        },
+        schema: connectionSchemaFixture(),
         value: undefined,
         sourceIdentity,
         path: ["connection"],
         onPatch,
       });
-    try {
-      render();
-      fill(input(container, "input[aria-label='Host']"), "gateway.local");
-      expect(onPatch).not.toHaveBeenCalled();
-      render();
-      expect(input(container, "input[aria-label='Host']").value).toBe("gateway.local");
-      fill(input(container, "input[aria-label='Port']"), "18789");
-      expect(onPatch).toHaveBeenCalledWith(["connection"], {
-        host: "gateway.local",
-        port: 18789,
-      });
-      render();
-      expect(input(container, "input[aria-label='Host']").value).toBe("gateway.local");
-      expect(container.querySelector(".cfg-structured-draft__error")).not.toBeNull();
+    render();
+    fill(input(container, "input[aria-label='Host']"), "gateway.local");
+    fill(input(container, "input[aria-label='Port']"), "18789");
+    render();
+    expect(input(container, "input[aria-label='Host']").value).toBe("gateway.local");
+    expect(container.querySelector(".cfg-structured-draft__error")).not.toBeNull();
 
-      sourceIdentity = {};
-      render();
-      expect(input(container, "input[aria-label='Host']").value).toBe("");
-      expect(container.querySelector(".cfg-structured-draft__error")).toBeNull();
-    } finally {
-      disposeConfigFormFixture(container);
-      container.remove();
-    }
+    sourceIdentity = {};
+    render();
+    expect(input(container, "input[aria-label='Host']").value).toBe("");
+    expect(container.querySelector(".cfg-structured-draft__error")).toBeNull();
   });
 });

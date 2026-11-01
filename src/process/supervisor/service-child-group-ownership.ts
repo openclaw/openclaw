@@ -1,19 +1,20 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
 
 export type ProcessCommand =
-  | { argv: string[]; executable?: string; serviceMarker?: string; uid?: number }
-  | { argvUnavailable: true; uid: number };
-
-type GroupMember = {
-  pid: number;
-  pgid: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-};
+  | {
+      argv: string[];
+      executable?: string;
+      serviceMarker?: string;
+      uid?: number;
+      owner?: "same" | "different" | "unknown";
+    }
+  | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
+  | { argvUnavailable: true; uid?: never; owner: "different" };
 
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {
@@ -83,13 +84,22 @@ export function killOwnedProcessGroupMembers(): void {
   }
 }
 
-/** The caller supplies native command inspection; the standalone group worker stays dependency-free. */
+/** The caller supplies command inspection; group cleanup only reads native topology. */
 export function* readProcessGroupMembers(
   timeoutMs: number,
   commandInspection?: {
-    readDarwinCommand: (pid: number, uid: number) => ProcessCommand | undefined;
+    readDarwinCommand: (
+      pid: number,
+      owner: "same" | "different" | "unknown",
+    ) => ProcessCommand | undefined;
   },
-): Generator<GroupMember> {
+): Generator<{
+  pid: number;
+  ppid?: number;
+  pgid: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+}> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;
@@ -135,7 +145,8 @@ export function* readProcessGroupMembers(
       }
       // comm can contain spaces, newlines and parentheses; pgrp follows PPID
       // after its final closing parenthesis (Linux procfs stat fields 1..5).
-      const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (\d+)(?:\s|$)/.exec(stat);
+      // A task reaped during do_task_stat can retain the kernel's pgid=-1 sentinel.
+      const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
       if (!match || Number(match[1]) !== pid || Date.now() >= deadline) {
         throw new Error("Process group census is unavailable");
       }
@@ -174,19 +185,28 @@ export function* readProcessGroupMembers(
   }
   if (process.platform === "darwin") {
     for (const member of readDarwinProcessCensus(timeoutMs)) {
-      const command = includeCommand
-        ? member.state.startsWith("Z") || member.pid === 0
-          ? { argv: [] }
-          : commandInspection?.readDarwinCommand(member.pid, member.uid)
-        : undefined;
+      const row = { pid: member.pid, pgid: member.pgid, state: member.state };
+      let command: ProcessCommand | undefined;
+      try {
+        command = includeCommand
+          ? member.state.startsWith("Z") || member.pid === 0
+            ? { argv: [] }
+            : commandInspection?.readDarwinCommand(member.pid, member.owner)
+          : undefined;
+      } catch (error) {
+        if (!(error instanceof ProcSafeError) || error.code !== "incomplete") {
+          throw error;
+        }
+        // Preserve unknown custody for this PID without dropping later observations.
+        yield { ...row, ppid: member.ppid };
+        continue;
+      }
       if (includeCommand && !command) {
         continue;
       }
       yield {
-        pid: member.pid,
-        pgid: member.pgid,
-        state: member.state,
-        ...(command ? { command: { ppid: member.ppid, ...command, uid: member.uid } } : {}),
+        ...row,
+        ...(command ? { command: { ppid: member.ppid, owner: member.owner, ...command } } : {}),
       };
     }
     return;

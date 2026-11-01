@@ -29,6 +29,7 @@ import {
 } from "./session-accessor.sqlite-reset-window.js";
 import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { transcriptPredicateSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 type HistoryBoundaryQueryShape = "markers" | "branch" | "reset";
@@ -102,9 +103,9 @@ function selectVisibleHistoryBoundaries(
       const type = eb.ref("identity.event_type");
       const visible = isVisibleHistoryNonMessageEventSql(
         type,
-        eb.ref("event.navigation_display"),
-        eb.ref("event.navigation_custom_type"),
-        eb.ref("event.navigation_valid"),
+        transcriptPredicateSql(database.db, "navigation_display", "event"),
+        transcriptPredicateSql(database.db, "navigation_custom_type", "event"),
+        transcriptPredicateSql(database.db, "navigation_valid", "event"),
       );
       if (boundaryActivePosition === undefined) {
         return visible;
@@ -145,7 +146,7 @@ function getHistoryCountReader(
         shape === "reset" ? parameter((params) => params.boundaryActivePosition) : undefined,
       ).select((eb) => [
         eb.fn.countAll<number>().as("event_count"),
-        eb.fn.min(historyNavigationValidSql).as("navigation_valid"),
+        eb.fn.min(historyNavigationValidSql(database.db)).as("navigation_valid"),
       ]),
     );
     readers.set(shape, read);
@@ -220,7 +221,7 @@ export function buildVisibleHistoryProjection(
         "following.message_position as following_message_position",
         "identity.event_id",
         "identity.seq",
-        historyNavigationValidSql.as("navigation_valid"),
+        historyNavigationValidSql(projection.database.db).as("navigation_valid"),
         /* kysely-allow-raw: history byte caps include each event's JSONL newline. */
         sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
       ])

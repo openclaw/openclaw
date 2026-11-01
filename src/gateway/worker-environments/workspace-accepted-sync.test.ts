@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import fs, { type FileHandle } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { afterEach, describe, expect, it, type TestContext } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
 import {
@@ -12,17 +12,19 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeSettlement } from "../../agents/promise-settlement.test-support.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
-import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
+import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary, success } from "./tunnel.test-support.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   createAcceptedWorkspacePublisher,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
+import { workspaceManifest } from "./workspace-manifest-fixtures.test-support.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
@@ -40,22 +42,36 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-// Vitest abandons the body at timeout; keep its cleanup joined before removing fixture inputs.
-const ownFixture = (body: (context: TestContext) => Promise<void>) => (context: TestContext) =>
-  lifetime.run(() => body(context));
-
-function createApplyGateRelease(gate: FileHandle) {
+async function gateRelease(gatePath: string, newline = false) {
+  expect((await runCommandWithTimeout(["mkfifo", gatePath], { timeoutMs: 10_000 })).code).toBe(0);
+  const gate = await fs.open(gatePath, "r+");
   let releasing: Promise<void> | undefined;
-  return () => (releasing ??= gate.write("release").then(() => gate.close()));
+  return (message = "release") =>
+    (releasing ??= gate.write(message + (newline ? "\n" : "")).then(() => gate.close()));
+}
+async function seedWorkspace(local: string, workspace: string) {
+  await Promise.all([
+    fs.writeFile(path.join(local, "result.txt"), "local\n"),
+    fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
+  ]);
+}
+function runWorkspaceCommandLocally(
+  command: WorkerWorkspaceCommand,
+  baseEnv: NodeJS.ProcessEnv,
+  preload?: string,
+) {
+  return runCommandWithTimeout(
+    [process.execPath, ...(preload ? ["--require", preload] : []), ...command.argv.slice(1)],
+    { timeoutMs: 10_000, baseEnv, input: command.input },
+  );
 }
 const RECEIVER_ENTRY_PATH = workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH);
-const RECEIVER_RELEASE_CLEANUP_MS = 10_000;
-const RECEIVER_TERMINATION_CLEANUP_MS = 1_000;
+const RECEIVER_CLEANUP_MS = { release: 10_000, termination: 1_000 };
 
-function observeApplyChild(
+function observeChild(
   child: ReturnType<typeof spawn>,
-  onReady: () => void,
-  testSignal: AbortSignal,
+  onReady?: () => void,
+  testSignal?: AbortSignal,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
   if (!child.stderr) {
     throw new Error("fixture child has no stderr pipe");
@@ -63,7 +79,7 @@ function observeApplyChild(
   let stderr = "";
   const lines = createInterface({ input: child.stderr });
   lines.on("line", (line) => {
-    if (line === "openclaw-test:apply-ready") {
+    if (onReady && line === "openclaw-test:apply-ready") {
       onReady();
     } else {
       stderr += `${line}\n`;
@@ -74,44 +90,26 @@ function observeApplyChild(
     const onAbort = () => child.kill("SIGTERM");
     child.once("error", reject);
     child.once("close", (code, signal) => {
-      testSignal.removeEventListener("abort", onAbort);
+      testSignal?.removeEventListener("abort", onAbort);
       lines.close();
       resolve({ code, signal, stderr });
     });
-    testSignal.addEventListener("abort", onAbort, { once: true });
-    if (testSignal.aborted) {
+    testSignal?.addEventListener("abort", onAbort, { once: true });
+    if (testSignal?.aborted) {
       onAbort();
     }
   });
 }
 
 function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
+  return { ...success(), ...overrides };
 }
 
-function manifest(content: string): WorkerWorkspaceManifest {
-  return {
-    version: 1,
-    baseCommit: null,
-    entries: [
-      {
-        path: "result.txt",
-        type: "file",
-        mode: 0o644,
-        size: Buffer.byteLength(content),
-        sha256: createHash("sha256").update(content).digest("hex"),
-      },
-    ],
-  };
+function commandFailure(operation: string, code = 255) {
+  return result({ code, stderr: `${operation} ${code === 255 ? "transport lost" : "rejected"}` });
 }
+
+const manifest = (content: string) => workspaceManifest({ "result.txt": content });
 
 function manifestRef(value: WorkerWorkspaceManifest): string {
   return `sha256:${createHash("sha256").update(serializeWorkerWorkspaceManifest(value)).digest("hex")}`;
@@ -121,41 +119,251 @@ function settlement(outcome: "begun" | "rolled-back" | "applied" | "committed"):
   return result({ stdout: `${JSON.stringify({ version: 1, outcome })}\n` });
 }
 
-function createAcceptedWorkspacePublisherFactory(
-  params: Omit<
-    Parameters<typeof createAcceptedWorkspacePublisher>[0],
-    "hashMemo" | "remoteManifest" | "initialRemoteRef"
-  >,
+const remote = manifest("worker\n");
+const accepted = manifest("local\n");
+const acceptedRef = manifestRef(accepted);
+const acceptedPublication = {
+  manifestRef: acceptedRef,
+  manifest: accepted,
+  conflictPaths: ["result.txt"],
+};
+type PublisherParams = Omit<
+  Parameters<typeof createAcceptedWorkspacePublisher>[0],
+  "hashMemo" | "remoteManifest" | "initialRemoteRef"
+>;
+
+function remoteManifestResult(command: WorkerWorkspaceCommand) {
+  if (command.argv[5] === "publish") {
+    return result();
+  }
+  const output =
+    command.argv.at(-1) === "memo-v1"
+      ? JSON.stringify({
+          version: 1,
+          manifestRef: acceptedRef,
+          memo: [],
+          metrics: {
+            contentHashCount: 0,
+            memoHitCount: 0,
+            memoTruncatedCount: 0,
+          },
+        })
+      : acceptedRef;
+  return result({ stdout: `${output}\n` });
+}
+const resultContents = (directory: string) =>
+  fs.readFile(path.join(directory, "result.txt"), "utf8");
+
+type TransactionCall = { action: string; nonce: string } & Partial<
+  Pick<WorkerWorkspaceCommand, "transportRetry">
+>;
+function expectTransactions(
+  calls: TransactionCall[],
+  actions: string[],
+  transportRetry?: WorkerWorkspaceCommand["transportRetry"],
 ) {
-  const runWorkspaceCommand = params.runWorkspaceCommand;
-  return (remoteManifest: WorkerWorkspaceManifest, initialRemoteRef: string) =>
-    createAcceptedWorkspacePublisher({
-      ...params,
-      remoteManifest,
-      initialRemoteRef,
-      hashMemo: new Map(),
-      runWorkspaceCommand: async (command) => {
-        const response = await runWorkspaceCommand(command);
-        const returnedRef = response.stdout.trim();
-        if (command.argv.at(-1) !== "memo-v1" || !/^sha256:[a-f0-9]{64}$/u.test(returnedRef)) {
-          return response;
-        }
-        return result({
-          stdout: `${JSON.stringify({
-            version: 1,
-            manifestRef: returnedRef,
-            memo: [],
-            metrics: {
-              contentHashCount: 0,
-              contentHashDurationMs: 0,
-              memoHitCount: 0,
-              memoTruncatedCount: 0,
-              totalDurationMs: 0,
-            },
-          })}\n`,
-        });
-      },
+  expect(calls.map(({ action }) => action)).toEqual(actions);
+  expect(new Set(calls.map(({ nonce }) => nonce)).size).toBe(1);
+  if (transportRetry) {
+    expect(calls.every((call) => call.transportRetry === transportRetry)).toBe(true);
+  }
+}
+
+type TransactionOutcome = SpawnResult | Error;
+function mockPublication(
+  outcomes: Record<string, TransactionOutcome | TransactionOutcome[]>,
+  verifyManifest = false,
+) {
+  const transactionCalls: Array<{ action: string; nonce: string }> = [];
+  const publisher = createPublisher({
+    runWorkspaceCommand: async (command) => {
+      if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
+        return verifyManifest ? remoteManifestResult(command) : result();
+      }
+      const action = command.argv[3]!;
+      transactionCalls.push({ action, nonce: command.argv[5]! });
+      if (action === "begin") {
+        return result({ stdout: "/remote/staging\n" });
+      }
+      const configured = outcomes[action];
+      const outcome = Array.isArray(configured)
+        ? configured.length > 1
+          ? configured.shift()
+          : configured[0]
+        : configured;
+      if (outcome instanceof Error) {
+        throw outcome;
+      }
+      return outcome ?? result();
+    },
+  });
+  return {
+    actions: () => transactionCalls.map(({ action }) => action),
+    transactionCalls,
+    publishing: publisher.publishAcceptedManifest(acceptedPublication),
+  };
+}
+
+function createPublisher(
+  params: Pick<PublisherParams, "runWorkspaceCommand"> & Partial<PublisherParams>,
+) {
+  return createAcceptedWorkspacePublisher({
+    receiverEntryPath: RECEIVER_ENTRY_PATH,
+    scpTarget: "test",
+    localPath: "/local",
+    remoteWorkspaceDir: "/remote",
+    runRsync: async () => result(),
+    ...params,
+    remoteManifest: remote,
+    initialRemoteRef: manifestRef(remote),
+    hashMemo: new Map(),
+  });
+}
+
+async function gatedApplyFixture(signal: AbortSignal, deadline = false) {
+  const root = tempDirs.make("openclaw-accepted-apply-");
+  const local = path.join(root, "local");
+  let workspace = path.join(root, "workspace");
+  const gate = path.join(root, "gate.fifo");
+  const applyStarted = createDeferred();
+  const settleStarted = createDeferred();
+  const preload = path.join(root, "gate.cjs");
+  const settlePreload = path.join(root, "settle-clock.cjs");
+  await Promise.all([fs.mkdir(local), fs.mkdir(workspace)]);
+  workspace = await fs.realpath(workspace);
+  await seedWorkspace(local, workspace);
+  const releaseApply = await gateRelease(gate);
+  await fs.writeFile(
+    preload,
+    `const fs = require("node:fs");
+const path = require("node:path");
+const renameSync = fs.renameSync;
+let gated = false;
+fs.renameSync = function(source, destination) {
+  const value = renameSync.apply(this, arguments);
+  if (!gated && process.argv[1] === "apply" && source === process.env.OPENCLAW_TEST_GATE_SOURCE && destination.includes(path.sep + "backup" + path.sep)) {
+    gated = true;
+    // Open before readiness so an immediate release cannot discard the FIFO bytes.
+    const gateReader = fs.openSync(process.env.OPENCLAW_TEST_GATE, "r");
+    fs.writeSync(2, "openclaw-test:apply-ready\\n");
+    fs.readFileSync(gateReader);
+    fs.closeSync(gateReader);
+  }
+  return value;
+};
+`,
+  );
+  if (deadline) {
+    await fs.writeFile(
+      settlePreload,
+      `let now = 0;
+Date.now = () => now;
+Atomics.wait = function(waitArray, index, value, timeout) {
+  now += 9 * 60 * 1000 + Number(timeout || 0) + 1;
+  return "timed-out";
+};
+`,
+    );
+  }
+  const env = {
+    ...process.env,
+    OPENCLAW_TEST_GATE: gate,
+    OPENCLAW_TEST_GATE_SOURCE: path.join(workspace, "result.txt"),
+  };
+  const transactionCalls: TransactionCall[] = [];
+  const manifestCalls: Array<WorkerWorkspaceCommand["transportRetry"]> = [];
+  let stagingRoot: string | undefined;
+  let applyExited: ReturnType<typeof observeChild> | undefined;
+  const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
+    signal.throwIfAborted();
+    const transactionAction =
+      command.argv[2] === REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS ? command.argv[3] : undefined;
+    if (!transactionAction) {
+      if (deadline) {
+        return result();
+      }
+      expect(command.argv[2]).toBe(REMOTE_WORKSPACE_MANIFEST_JS);
+      manifestCalls.push(command.transportRetry);
+      return remoteManifestResult(command);
+    }
+    transactionCalls.push({
+      action: transactionAction,
+      nonce: command.argv[5]!,
+      transportRetry: command.transportRetry,
     });
+    if (transactionAction === "settle") {
+      settleStarted.resolve();
+    }
+    if (transactionAction === "apply") {
+      const child = spawn(process.execPath, ["--require", preload, ...command.argv.slice(1)], {
+        env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      child.stdin.end(command.input);
+      applyExited = observeChild(child, () => applyStarted.resolve(), signal);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          applyStarted.promise,
+          applyExited,
+          `timeout waiting for ${path.join(root, "apply-started")}`,
+        ),
+        signal,
+      );
+      return result({ code: 255, stderr: "connection lost after remote apply started" });
+    }
+    const commandResult = await runWorkspaceCommandLocally(
+      command,
+      env,
+      deadline && transactionAction === "settle" ? settlePreload : undefined,
+    );
+    if (transactionAction === "begin" && commandResult.code === 0) {
+      stagingRoot = commandResult.stdout.trim();
+    }
+    return commandResult;
+  };
+  const runRsync = async (): Promise<SpawnResult> => {
+    if (!stagingRoot) {
+      throw new Error("accepted transaction did not begin before transfer");
+    }
+    await fs.copyFile(path.join(local, "result.txt"), path.join(stagingRoot, "result.txt"));
+    return result();
+  };
+  const publisher = createPublisher({
+    runWorkspaceCommand,
+    runRsync,
+    localPath: local,
+    remoteWorkspaceDir: workspace,
+  });
+
+  return {
+    local,
+    workspace,
+    settleStarted,
+    transactionCalls,
+    manifestCalls,
+    releaseApply,
+    publisher,
+    recover: () =>
+      recoverAcceptedWorkspacePublication({
+        runWorkspaceCommand,
+        remoteWorkspaceDir: workspace,
+      }),
+    async expectApplied() {
+      if (!applyExited) {
+        throw new Error("remote apply process was not started");
+      }
+      await expect(withinTest(applyExited, signal)).resolves.toMatchObject({
+        code: 0,
+        signal: null,
+        stderr: "",
+      });
+    },
+    transactionArtifacts: async () =>
+      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
+    get applyExited() {
+      return applyExited;
+    },
+  };
 }
 
 describe("accepted workspace publication", () => {
@@ -209,35 +417,17 @@ describe("accepted workspace publication", () => {
       home = await fs.realpath(home);
       const workspace = path.join(home, workspaceRelative);
       await fs.mkdir(workspace, { recursive: true });
-      await Promise.all([
-        fs.writeFile(path.join(local, "result.txt"), "local\n"),
-        fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
-      ]);
-      expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-      const gateController = await fs.open(gate, "r+");
+      await seedWorkspace(local, workspace);
+      const releaseReceiver = await gateRelease(gate, true);
       await fs.writeFile(
         path.join(bin, "rsync"),
         '#!/bin/sh\nset -eu\nfor destination do :; done\nprintf "staged\\n" > "$destination/result.txt"\n( : > "$OPENCLAW_TEST_RECEIVER_MARKER"; read -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"; printf "local\\n" > "$destination/result.txt" ) </dev/null >/dev/null 2>&1 &\nexit 0\n',
         { mode: 0o755 },
       );
 
-      const remote = manifest("worker\n");
-      const accepted = manifest("local\n");
-      const acceptedRef = manifestRef(accepted);
       const actions: string[] = [];
       let receiverChild: ReturnType<typeof spawn> | undefined;
-      let receiverExited:
-        | Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }>
-        | undefined;
-      let gateReleased = false;
-      const releaseReceiver = async (message: string) => {
-        if (gateReleased) {
-          return;
-        }
-        gateReleased = true;
-        await gateController.write(`${message}\n`);
-        await gateController.close();
-      };
+      let receiverExited: ReturnType<typeof observeChild> | undefined;
       const env = {
         ...process.env,
         HOME: home,
@@ -247,48 +437,25 @@ describe("accepted workspace publication", () => {
       };
       const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
         if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
-          return result({ stdout: command.argv[5] === "publish" ? "" : `${acceptedRef}\n` });
+          return remoteManifestResult(command);
         }
         const action = command.argv[3]!;
         actions.push(action);
         if (action === "apply") {
           await fs.writeFile(applyMarker, "");
         }
-        return await runCommandWithTimeout([process.execPath, ...command.argv.slice(1)], {
-          timeoutMs: 10_000,
-          baseEnv: env,
-          input: command.input,
-        });
+        return await runWorkspaceCommandLocally(command, env);
       };
-      const publisher = createAcceptedWorkspacePublisherFactory({
-        receiverEntryPath: RECEIVER_ENTRY_PATH,
+      const publisher = createPublisher({
         runWorkspaceCommand,
         runRsync: async (argvForSsh) => {
-          const argv = argvForSsh("ssh");
-          const boundary = await prepareLocalWorkspaceRsyncBoundary(home, argv);
+          const boundary = await prepareLocalWorkspaceRsyncBoundary(home, argvForSsh("ssh"));
           receiverChild = spawn(boundary.argv[0]!, boundary.argv.slice(1), {
             env,
             stdio: ["ignore", "ignore", "pipe"],
           });
-          const receiverStderr = receiverChild.stderr;
-          if (!receiverStderr) {
-            throw new Error("accepted staging receiver has no stderr pipe");
-          }
-          let stderr = "";
-          receiverStderr.setEncoding("utf8");
-          receiverStderr.on("data", (chunk: string) => {
-            stderr += chunk;
-          });
-          const closed = createDeferred<{
-            code: number | null;
-            signal: NodeJS.Signals | null;
-            stderr: string;
-          }>();
-          // Capture close at spawn so teardown can still join it after the test aborts.
-          receiverChild.once("close", (code, exitSignal) =>
-            closed.resolve({ code, signal: exitSignal, stderr }),
-          );
-          receiverExited = closed.promise;
+          // Subscribe at spawn so teardown can join it after the test aborts.
+          receiverExited = observeChild(receiverChild);
           await Promise.race([
             waitForFile(receiverMarker, signal),
             receiverExited.then(({ stderr: receiverError }) => {
@@ -297,25 +464,12 @@ describe("accepted workspace publication", () => {
           ]);
           return result();
         },
-        scpTarget: "test",
         localPath: local,
         remoteWorkspaceDir: workspace,
-      })(remote, manifestRef(remote));
-
-      const publishing = publisher.publishAcceptedManifest({
-        manifestRef: acceptedRef,
-        manifest: accepted,
-        conflictPaths: ["result.txt"],
       });
-      let publishingSettled = false;
-      void publishing.then(
-        () => {
-          publishingSettled = true;
-        },
-        () => {
-          publishingSettled = true;
-        },
-      );
+
+      const publishing = publisher.publishAcceptedManifest(acceptedPublication);
+      const publishingSettled = observeSettlement(publishing);
       try {
         await waitForFile(applyMarker, signal);
         const workspaceKey = createHash("sha256").update(workspace).digest("hex");
@@ -329,10 +483,8 @@ describe("accepted workspace publication", () => {
         expect(Number.isSafeInteger(receiverPid)).toBe(true);
         await waitForDead(receiverPid, signal);
         expect(actions).toEqual(["begin", "apply"]);
-        expect(publishingSettled).toBe(false);
-        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
-          "worker\n",
-        );
+        expect(publishingSettled()).toBe(false);
+        await expect(resultContents(workspace)).resolves.toBe("worker\n");
 
         await releaseReceiver("release");
         if (!receiverExited) {
@@ -343,14 +495,12 @@ describe("accepted workspace publication", () => {
         expect(receiverExit.code).not.toBe(0);
         await expect(publishing).resolves.toBeUndefined();
         expect(actions).toEqual(["begin", "apply", "commit"]);
-        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
-          "local\n",
-        );
+        await expect(resultContents(workspace)).resolves.toBe("local\n");
       } finally {
         await releaseReceiver("cleanup").catch(() => undefined);
         if (receiverExited) {
           // Cleanup hang guard after release was signalled, not a readiness race.
-          await withinTest(receiverExited, AbortSignal.timeout(RECEIVER_RELEASE_CLEANUP_MS)).catch(
+          await withinTest(receiverExited, AbortSignal.timeout(RECEIVER_CLEANUP_MS.release)).catch(
             () => undefined,
           );
         }
@@ -360,7 +510,7 @@ describe("accepted workspace publication", () => {
             // Cleanup hang guard after SIGTERM, not a readiness race.
             await withinTest(
               receiverExited,
-              AbortSignal.timeout(RECEIVER_TERMINATION_CLEANUP_MS),
+              AbortSignal.timeout(RECEIVER_CLEANUP_MS.termination),
             ).catch(() => undefined);
           }
         }
@@ -368,584 +518,133 @@ describe("accepted workspace publication", () => {
     },
   );
 
-  it(
-    "settles a still-running apply after SSH loses its exit status",
-    ownFixture(async ({ signal }) => {
-      const root = tempDirs.make("openclaw-accepted-ssh-loss-");
-      const local = path.join(root, "local");
-      let workspace = path.join(root, "workspace");
-      const gate = path.join(root, "gate.fifo");
-      const applyStarted = createDeferred();
-      const settleStarted = createDeferred();
-      const preload = path.join(root, "gate.cjs");
-      await Promise.all([fs.mkdir(local), fs.mkdir(workspace)]);
-      workspace = await fs.realpath(workspace);
-      await Promise.all([
-        fs.writeFile(path.join(local, "result.txt"), "local\n"),
-        fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
-      ]);
-      expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-      const gateController = await fs.open(gate, "r+");
-      const releaseApply = createApplyGateRelease(gateController);
-      await fs.writeFile(
-        preload,
-        `const fs = require("node:fs");
-const path = require("node:path");
-const renameSync = fs.renameSync;
-let gated = false;
-fs.renameSync = function(source, destination) {
-  const value = renameSync.apply(this, arguments);
-  if (!gated && process.argv[1] === "apply" && source === process.env.OPENCLAW_TEST_GATE_SOURCE && destination.includes(path.sep + "backup" + path.sep)) {
-    gated = true;
-    // Open before readiness so an immediate release cannot discard the FIFO bytes.
-    const gateReader = fs.openSync(process.env.OPENCLAW_TEST_GATE, "r");
-    fs.writeSync(2, "openclaw-test:apply-ready\\n");
-    fs.readFileSync(gateReader);
-    fs.closeSync(gateReader);
-  }
-  return value;
-};
-`,
-      );
-      const env = {
-        ...process.env,
-        OPENCLAW_TEST_GATE: gate,
-        OPENCLAW_TEST_GATE_SOURCE: path.join(workspace, "result.txt"),
-      };
-      const remote = manifest("worker\n");
-      const accepted = manifest("local\n");
-      const acceptedRef = manifestRef(accepted);
-      const transactionCalls: Array<{
-        action: string;
-        nonce: string;
-        transportRetry: WorkerWorkspaceCommand["transportRetry"];
-      }> = [];
-      const manifestCalls: Array<WorkerWorkspaceCommand["transportRetry"]> = [];
-      let stagingRoot: string | undefined;
-      let applyExited: ReturnType<typeof observeApplyChild> | undefined;
-      const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
-        signal.throwIfAborted();
-        const transactionAction =
-          command.argv[2] === REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS
-            ? command.argv[3]
-            : undefined;
-        if (!transactionAction) {
-          expect(command.argv[2]).toBe(REMOTE_WORKSPACE_MANIFEST_JS);
-          manifestCalls.push(command.transportRetry);
-          return result({ stdout: command.argv[5] === "publish" ? "" : `${acceptedRef}\n` });
-        }
-        transactionCalls.push({
-          action: transactionAction,
-          nonce: command.argv[5]!,
-          transportRetry: command.transportRetry,
-        });
-        if (transactionAction === "settle") {
-          settleStarted.resolve();
-        }
-        if (transactionAction === "apply") {
-          const child = spawn(process.execPath, ["--require", preload, ...command.argv.slice(1)], {
-            env,
-            stdio: ["pipe", "pipe", "pipe"],
-          });
-          child.stdin.end(command.input);
-          applyExited = observeApplyChild(child, () => applyStarted.resolve(), signal);
-          await withinTest(
-            awaitGateBeforeSettlement(
-              applyStarted.promise,
-              applyExited,
-              `timeout waiting for ${path.join(root, "apply-started")}`,
-            ),
-            signal,
-          );
-          return result({ code: 255, stderr: "connection lost after remote apply started" });
-        }
-        const commandResult = await runCommandWithTimeout(
-          [process.execPath, ...command.argv.slice(1)],
-          {
-            timeoutMs: 10_000,
-            baseEnv: env,
-            input: command.input,
-          },
-        );
-        if (transactionAction === "begin" && commandResult.code === 0) {
-          stagingRoot = commandResult.stdout.trim();
-        }
-        return commandResult;
-      };
-      const runRsync = async (): Promise<SpawnResult> => {
-        if (!stagingRoot) {
-          throw new Error("accepted transaction did not begin before transfer");
-        }
-        await fs.copyFile(path.join(local, "result.txt"), path.join(stagingRoot, "result.txt"));
-        return result();
-      };
-      const publisher = createAcceptedWorkspacePublisherFactory({
-        receiverEntryPath: RECEIVER_ENTRY_PATH,
-        runWorkspaceCommand,
-        runRsync,
-        scpTarget: "test",
-        localPath: local,
-        remoteWorkspaceDir: workspace,
-      })(remote, manifestRef(remote));
-
-      const publishing = publisher.publishAcceptedManifest({
-        manifestRef: acceptedRef,
-        manifest: accepted,
-        conflictPaths: ["result.txt"],
-      });
-      let publishingSettled = false;
-      void publishing.then(
-        () => {
-          publishingSettled = true;
-        },
-        () => {
-          publishingSettled = true;
-        },
-      );
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            settleStarted.promise,
-            publishing,
-            `timeout waiting for ${path.join(root, "apply-started")}`,
-          ),
-          signal,
-        );
-        expect(transactionCalls.map((entry) => entry.action)).toEqual(["begin", "apply", "settle"]);
-        expect(new Set(transactionCalls.map((entry) => entry.nonce)).size).toBe(1);
-        expect(transactionCalls.every((entry) => entry.transportRetry === "never")).toBe(true);
-        expect(manifestCalls).toEqual(["idempotent"]);
-        expect(publishingSettled).toBe(false);
-        await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
-        expect(transactionCalls.some((entry) => entry.action === "rollback")).toBe(false);
-
-        await releaseApply();
-        await expect(withinTest(publishing, signal)).resolves.toBeUndefined();
-        if (!applyExited) {
-          throw new Error("remote apply process was not started");
-        }
-        await expect(withinTest(applyExited, signal)).resolves.toMatchObject({
-          code: 0,
-          signal: null,
-          stderr: "",
-        });
-        expect(transactionCalls.map((entry) => entry.action)).toEqual([
-          "begin",
-          "apply",
-          "settle",
-          "commit",
-        ]);
-        expect(new Set(transactionCalls.map((entry) => entry.nonce)).size).toBe(1);
-        expect(transactionCalls.every((entry) => entry.transportRetry === "never")).toBe(true);
-        expect(manifestCalls).toEqual(["idempotent", "idempotent"]);
-        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
-          "local\n",
-        );
-        await expect(fs.readFile(path.join(local, "result.txt"), "utf8")).resolves.toBe("local\n");
-
-        await recoverAcceptedWorkspacePublication({
-          runWorkspaceCommand,
-          remoteWorkspaceDir: workspace,
-        });
-        expect(transactionCalls.map((entry) => entry.action)).toEqual([
-          "begin",
-          "apply",
-          "settle",
-          "commit",
-          "recover",
-        ]);
-        expect(transactionCalls.every((entry) => entry.transportRetry === "never")).toBe(true);
-        expect(
-          (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-        ).toEqual([]);
-      } finally {
-        await releaseApply().catch(() => undefined);
-        await applyExited?.catch(() => undefined);
-        await publishing.catch(() => undefined);
-      }
-    }),
-  );
-
-  it(
-    "leaves publication pending when settle reaches its lock deadline behind a live apply",
-    ownFixture(async ({ signal }) => {
-      const root = tempDirs.make("openclaw-accepted-settle-deadline-");
-      const local = path.join(root, "local");
-      let workspace = path.join(root, "workspace");
-      const gate = path.join(root, "gate.fifo");
-      const applyStarted = createDeferred();
-      const applyPreload = path.join(root, "apply-gate.cjs");
-      const settlePreload = path.join(root, "settle-clock.cjs");
-      await Promise.all([fs.mkdir(local), fs.mkdir(workspace)]);
-      workspace = await fs.realpath(workspace);
-      await Promise.all([
-        fs.writeFile(path.join(local, "result.txt"), "local\n"),
-        fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
-      ]);
-      expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-      const gateController = await fs.open(gate, "r+");
-      const releaseApply = createApplyGateRelease(gateController);
-      await Promise.all([
-        fs.writeFile(
-          applyPreload,
-          `const fs = require("node:fs");
-const path = require("node:path");
-const renameSync = fs.renameSync;
-let gated = false;
-fs.renameSync = function(source, destination) {
-  const value = renameSync.apply(this, arguments);
-  if (!gated && process.argv[1] === "apply" && source === process.env.OPENCLAW_TEST_GATE_SOURCE && destination.includes(path.sep + "backup" + path.sep)) {
-    gated = true;
-    // Open before readiness so an immediate release cannot discard the FIFO bytes.
-    const gateReader = fs.openSync(process.env.OPENCLAW_TEST_GATE, "r");
-    fs.writeSync(2, "openclaw-test:apply-ready\\n");
-    fs.readFileSync(gateReader);
-    fs.closeSync(gateReader);
-  }
-  return value;
-};
-`,
-        ),
-        fs.writeFile(
-          settlePreload,
-          `let now = 0;
-Date.now = () => now;
-Atomics.wait = function(waitArray, index, value, timeout) {
-  now += 9 * 60 * 1000 + Number(timeout || 0) + 1;
-  return "timed-out";
-};
-`,
-        ),
-      ]);
-      const env = {
-        ...process.env,
-        OPENCLAW_TEST_GATE: gate,
-        OPENCLAW_TEST_GATE_SOURCE: path.join(workspace, "result.txt"),
-      };
-      const remote = manifest("worker\n");
-      const accepted = manifest("local\n");
-      const transactionCalls: Array<{ action: string; nonce: string }> = [];
-      let stagingRoot: string | undefined;
-      let applyExited: ReturnType<typeof observeApplyChild> | undefined;
-      const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
-        signal.throwIfAborted();
-        const action =
-          command.argv[2] === REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS
-            ? command.argv[3]
-            : undefined;
-        if (!action) {
-          return result();
-        }
-        transactionCalls.push({ action, nonce: command.argv[5]! });
-        if (action === "apply") {
-          const child = spawn(
-            process.execPath,
-            ["--require", applyPreload, ...command.argv.slice(1)],
-            { env, stdio: ["pipe", "pipe", "pipe"] },
-          );
-          child.stdin.end(command.input);
-          applyExited = observeApplyChild(child, () => applyStarted.resolve(), signal);
-          await withinTest(
-            awaitGateBeforeSettlement(
-              applyStarted.promise,
-              applyExited,
-              `timeout waiting for ${path.join(root, "apply-started")}`,
-            ),
-            signal,
-          );
-          return result({ code: 255, stderr: "connection lost after remote apply started" });
-        }
-        const commandResult = await runCommandWithTimeout(
-          [
-            process.execPath,
-            ...(action === "settle" ? ["--require", settlePreload] : []),
-            ...command.argv.slice(1),
-          ],
-          { timeoutMs: 10_000, baseEnv: env, input: command.input },
-        );
-        if (action === "begin" && commandResult.code === 0) {
-          stagingRoot = commandResult.stdout.trim();
-        }
-        return commandResult;
-      };
-      const publisher = createAcceptedWorkspacePublisherFactory({
-        receiverEntryPath: RECEIVER_ENTRY_PATH,
-        runWorkspaceCommand,
-        runRsync: async () => {
-          if (!stagingRoot) {
-            throw new Error("accepted transaction did not begin before transfer");
+  it.for([false, true])(
+    "settles a still-running apply after losing SSH status (lock deadline: %s)",
+    (deadline, { signal }) =>
+      lifetime.run(async () => {
+        const fixture = await gatedApplyFixture(signal, deadline);
+        const {
+          local,
+          workspace,
+          settleStarted,
+          transactionCalls,
+          manifestCalls,
+          releaseApply,
+          publisher,
+        } = fixture;
+        const publishing = publisher.publishAcceptedManifest(acceptedPublication);
+        const publishingSettled = observeSettlement(publishing);
+        try {
+          if (deadline) {
+            await expect(withinTest(publishing, signal)).rejects.toBeInstanceOf(
+              AcceptedWorkspacePublicationIndeterminateError,
+            );
+            expectTransactions(transactionCalls, ["begin", "apply", "settle"]);
+          } else {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                settleStarted.promise,
+                publishing,
+                "publication ended before settlement started",
+              ),
+              signal,
+            );
+            expectTransactions(transactionCalls, ["begin", "apply", "settle"], "never");
+            expect(manifestCalls).toEqual(["idempotent"]);
+            expect(publishingSettled()).toBe(false);
           }
-          await fs.copyFile(path.join(local, "result.txt"), path.join(stagingRoot, "result.txt"));
-          return result();
-        },
-        scpTarget: "test",
-        localPath: local,
-        remoteWorkspaceDir: workspace,
-      })(remote, manifestRef(remote));
-
-      const publishing = publisher.publishAcceptedManifest({
-        manifestRef: manifestRef(accepted),
-        manifest: accepted,
-        conflictPaths: ["result.txt"],
-      });
-      try {
-        const thrown = await withinTest(publishing, signal).catch((error: unknown) => error);
-
-        expect(thrown).toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
-        expect(transactionCalls.map(({ action }) => action)).toEqual(["begin", "apply", "settle"]);
-        expect(new Set(transactionCalls.map(({ nonce }) => nonce)).size).toBe(1);
-        expect(transactionCalls.some(({ action }) => action === "rollback")).toBe(false);
-        await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
-
-        await releaseApply();
-        if (!applyExited) {
-          throw new Error("remote apply process was not started");
+          await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
+          await releaseApply();
+          if (!deadline) {
+            await expect(withinTest(publishing, signal)).resolves.toBeUndefined();
+          }
+          await fixture.expectApplied();
+          await expect(resultContents(workspace)).resolves.toBe("local\n");
+          if (!deadline) {
+            expectTransactions(transactionCalls, ["begin", "apply", "settle", "commit"], "never");
+            expect(manifestCalls).toEqual(["idempotent", "idempotent"]);
+            await expect(resultContents(local)).resolves.toBe("local\n");
+          }
+          await fixture.recover();
+          if (deadline) {
+            await expect(resultContents(workspace)).resolves.toBe("worker\n");
+          } else {
+            expect(transactionCalls.map((entry) => entry.action)).toEqual([
+              "begin",
+              "apply",
+              "settle",
+              "commit",
+              "recover",
+            ]);
+            expect(transactionCalls.at(-1)?.transportRetry).toBe("never");
+          }
+          expect(await fixture.transactionArtifacts()).toEqual([]);
+        } finally {
+          await releaseApply().catch(() => undefined);
+          await fixture.applyExited?.catch(() => undefined);
+          await publishing.catch(() => undefined);
         }
-        await expect(withinTest(applyExited, signal)).resolves.toMatchObject({
-          code: 0,
-          signal: null,
-          stderr: "",
-        });
-        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
-          "local\n",
-        );
-
-        await recoverAcceptedWorkspacePublication({
-          runWorkspaceCommand,
-          remoteWorkspaceDir: workspace,
-        });
-        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
-          "worker\n",
-        );
-        expect(
-          (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-        ).toEqual([]);
-      } finally {
-        await releaseApply().catch(() => undefined);
-        await applyExited?.catch(() => undefined);
-        await publishing.catch(() => undefined);
-      }
-    }),
+      }),
   );
 
-  it("keeps an unobservable apply pending when settlement is unobservable", async () => {
-    const remote = manifest("worker\n");
-    const accepted = manifest("local\n");
-    const actions: string[] = [];
-    const factory = createAcceptedWorkspacePublisherFactory({
-      receiverEntryPath: RECEIVER_ENTRY_PATH,
-      runWorkspaceCommand: async (command) => {
-        if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
-          return result();
-        }
-        const action = command.argv[3];
-        actions.push(action!);
-        if (action === "begin") {
-          return result({ stdout: "/remote/staging\n" });
-        }
-        if (action === "apply") {
-          return result({ code: 255, stderr: "apply transport lost" });
-        }
-        if (action === "settle") {
-          throw new WorkerTunnelOwnerDisconnectedError();
-        }
-        return result();
-      },
-      runRsync: async () => result(),
-      scpTarget: "test",
-      localPath: "/local",
-      remoteWorkspaceDir: "/remote",
-    });
-
-    const publishing = factory(remote, manifestRef(remote)).publishAcceptedManifest({
-      manifestRef: manifestRef(accepted),
-      manifest: accepted,
-      conflictPaths: ["result.txt"],
+  it.each([
+    { name: "unobservable", settle: new WorkerTunnelOwnerDisconnectedError() },
+    {
+      name: "malformed",
+      settle: result({ stdout: '{"version":1,"outcome":"applied","extra":true}\n' }),
+    },
+  ])("keeps an unobservable apply pending when settlement is $name", async ({ settle }) => {
+    const { actions, publishing } = mockPublication({
+      apply: commandFailure("apply"),
+      settle,
     });
     const thrown = await publishing.catch((error: unknown) => error);
     expect(thrown).toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
     expect(thrown).toMatchObject({
-      message: "Accepted workspace publication is indeterminate and requires recovery",
       operation: "apply",
-      cause: expect.objectContaining({
-        message: "Worker workspace sync failed: apply transport lost",
-      }),
-      observationFailure: expect.any(WorkerTunnelOwnerDisconnectedError),
+      cause: { message: "Worker workspace sync failed: apply transport lost" },
     });
-    expect(actions).toEqual(["begin", "apply", "settle"]);
+    expect(actions()).toEqual(["begin", "apply", "settle"]);
   });
 
   it.each([
     {
       name: "an ordinary observed failure",
-      apply: result({ code: 1, stderr: "apply rejected" }),
+      apply: commandFailure("apply", 1),
       settle: undefined,
       actions: ["begin", "apply", "rollback"],
     },
     {
       name: "settlement observes the begun phase",
-      apply: result({ code: 255, stderr: "apply transport lost" }),
+      apply: commandFailure("apply"),
       settle: settlement("begun"),
       actions: ["begin", "apply", "settle", "rollback"],
     },
   ])("uses the safe rollback path after $name", async ({ apply, settle, actions: expected }) => {
-    const remote = manifest("worker\n");
-    const accepted = manifest("local\n");
-    const actions: string[] = [];
-    const publisher = createAcceptedWorkspacePublisherFactory({
-      receiverEntryPath: RECEIVER_ENTRY_PATH,
-      runWorkspaceCommand: async (command) => {
-        if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
-          return result();
-        }
-        const action = command.argv[3]!;
-        actions.push(action);
-        if (action === "begin") {
-          return result({ stdout: "/remote/staging\n" });
-        }
-        if (action === "apply") {
-          return apply;
-        }
-        if (action === "settle") {
-          if (!settle) {
-            throw new Error("unexpected settlement");
-          }
-          return settle;
-        }
-        return result();
-      },
-      runRsync: async () => result(),
-      scpTarget: "test",
-      localPath: "/local",
-      remoteWorkspaceDir: "/remote",
-    })(remote, manifestRef(remote));
-
-    await expect(
-      publisher.publishAcceptedManifest({
-        manifestRef: manifestRef(accepted),
-        manifest: accepted,
-        conflictPaths: ["result.txt"],
-      }),
-    ).rejects.toThrow(/apply (?:rejected|transport lost)/u);
-    expect(actions).toEqual(expected);
-  });
-
-  it("keeps an ambiguous apply pending when settlement output is malformed", async () => {
-    const remote = manifest("worker\n");
-    const accepted = manifest("local\n");
-    const actions: string[] = [];
-    const publisher = createAcceptedWorkspacePublisherFactory({
-      receiverEntryPath: RECEIVER_ENTRY_PATH,
-      runWorkspaceCommand: async (command) => {
-        if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
-          return result();
-        }
-        const action = command.argv[3]!;
-        actions.push(action);
-        if (action === "begin") {
-          return result({ stdout: "/remote/staging\n" });
-        }
-        if (action === "apply") {
-          return result({ code: 255, stderr: "apply transport lost" });
-        }
-        if (action === "settle") {
-          return result({ stdout: '{"version":1,"outcome":"applied","extra":true}\n' });
-        }
-        return result();
-      },
-      runRsync: async () => result(),
-      scpTarget: "test",
-      localPath: "/local",
-      remoteWorkspaceDir: "/remote",
-    })(remote, manifestRef(remote));
-
-    await expect(
-      publisher.publishAcceptedManifest({
-        manifestRef: manifestRef(accepted),
-        manifest: accepted,
-        conflictPaths: ["result.txt"],
-      }),
-    ).rejects.toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
-    expect(actions).toEqual(["begin", "apply", "settle"]);
+    const { actions, publishing } = mockPublication({
+      apply,
+      settle: settle ?? new Error("unexpected settlement"),
+    });
+    await expect(publishing).rejects.toThrow(/apply (?:rejected|transport lost)/u);
+    expect(actions()).toEqual(expected);
   });
 
   it.each([
-    {
-      name: "settlement observes the committed phase",
-      outcome: "committed" as const,
-      retry: false,
-      secondCommit: result(),
-      expected: "success" as const,
-    },
-    {
-      name: "settlement observes applied and retries commit once",
-      outcome: "applied" as const,
-      retry: true,
-      secondCommit: result(),
-      expected: "success" as const,
-    },
-    {
-      name: "the one safe commit retry is unobservable",
-      outcome: "applied" as const,
-      retry: true,
-      secondCommit: result({ code: 255, stderr: "retry transport lost" }),
-      expected: "pending" as const,
-    },
-    {
-      name: "settlement observes the begun phase",
-      outcome: "begun" as const,
-      retry: false,
-      secondCommit: result(),
-      expected: "rollback" as const,
-    },
-    {
-      name: "the one safe commit retry is rejected",
-      outcome: "applied" as const,
-      retry: true,
-      secondCommit: result({ code: 1, stderr: "retry rejected" }),
-      expected: "rollback" as const,
-    },
-  ])(
-    "handles an ambiguous commit when $name",
-    async ({ outcome, retry, secondCommit, expected }) => {
-      const remote = manifest("worker\n");
-      const accepted = manifest("local\n");
-      const acceptedRef = manifestRef(accepted);
-      const transactionCalls: Array<{ action: string; nonce: string }> = [];
-      let commitCount = 0;
-      const publisher = createAcceptedWorkspacePublisherFactory({
-        receiverEntryPath: RECEIVER_ENTRY_PATH,
-        runWorkspaceCommand: async (command) => {
-          if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
-            return result({ stdout: command.argv[5] === "publish" ? "" : `${acceptedRef}\n` });
-          }
-          const action = command.argv[3]!;
-          transactionCalls.push({ action, nonce: command.argv[5]! });
-          if (action === "begin") {
-            return result({ stdout: "/remote/staging\n" });
-          }
-          if (action === "commit") {
-            commitCount += 1;
-            return commitCount === 1
-              ? result({ code: 255, stderr: "commit transport lost" })
-              : secondCommit;
-          }
-          if (action === "settle") {
-            return settlement(outcome);
-          }
-          return result();
+    ["committed", "success", result()],
+    ["applied", "success", result()],
+    ["applied", "pending", commandFailure("retry")],
+    ["begun", "rollback", result()],
+    ["applied", "rollback", commandFailure("retry", 1)],
+  ] as const)(
+    "handles an ambiguous commit in %s as %s (%j)",
+    async (outcome, expected, secondCommit) => {
+      const { transactionCalls, publishing } = mockPublication(
+        {
+          commit: [commandFailure("commit"), secondCommit],
+          settle: settlement(outcome),
         },
-        runRsync: async () => result(),
-        scpTarget: "test",
-        localPath: "/local",
-        remoteWorkspaceDir: "/remote",
-      })(remote, manifestRef(remote));
-
-      const publishing = publisher.publishAcceptedManifest({
-        manifestRef: acceptedRef,
-        manifest: accepted,
-        conflictPaths: ["result.txt"],
-      });
+        true,
+      );
 
       if (expected === "success") {
         await expect(publishing).resolves.toBeUndefined();
@@ -956,18 +655,14 @@ Atomics.wait = function(waitArray, index, value, timeout) {
       } else {
         await expect(publishing).rejects.toThrow(/commit transport lost|retry rejected/u);
       }
-      expect(transactionCalls.map(({ action }) => action)).toEqual([
+      expectTransactions(transactionCalls, [
         "begin",
         "apply",
         "commit",
         "settle",
-        ...(retry ? ["commit"] : []),
+        ...(outcome === "applied" ? ["commit"] : []),
         ...(expected === "rollback" ? ["rollback"] : []),
       ]);
-      expect(new Set(transactionCalls.map(({ nonce }) => nonce)).size).toBe(1);
-      expect(transactionCalls.some(({ action }) => action === "rollback")).toBe(
-        expected === "rollback",
-      );
     },
   );
 });

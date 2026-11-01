@@ -117,7 +117,6 @@
     "enableUltrafast": false,
     "cyberFailover": {
       "mode": "off",
-      "model": "example-model",
       "cooloffMs": 1000
     },
     "networkProxy": {

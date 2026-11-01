@@ -10,6 +10,7 @@ import {
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { log as embeddedAgentLog } from "../embedded-agent-runner/logger.js";
 import {
   PreparedQuestionAnswerRefusedError,
   QuestionDispatchRefusedError,
@@ -135,6 +136,45 @@ describe("gateway harness questions", () => {
       }
       cleanup();
     }),
+  );
+  it.each(["failed", "aborted"] as const)(
+    "records a secret prompt delivery failure only while pending: %s",
+    async (outcome) => {
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+      const prompt = createDeferred();
+      const entered = createDeferred();
+      const controller = new AbortController();
+      const run = startQuestion(
+        "agent:main:secret-delivery-failure",
+        undefined,
+        async () => {
+          entered.resolve();
+          await prompt.promise;
+        },
+        {
+          questions: [{ id: "answer", header: "Answer", question: "Input", isSecret: true }],
+          signal: controller.signal,
+        },
+      );
+      try {
+        await entered.promise;
+        if (outcome === "aborted") {
+          controller.abort();
+        }
+        prompt.reject(new Error("synthetic private prompt delivery payload"));
+        await expect(run).resolves.toEqual({ status: "cancelled" });
+        expect(warn.mock.calls).toEqual(
+          outcome === "failed"
+            ? [["Secret input prompt delivery failed; the pending input request was cancelled."]]
+            : [],
+        );
+      } finally {
+        controller.abort();
+        prompt.resolve();
+        await run;
+        warn.mockRestore();
+      }
+    },
   );
   it.each(["uncommitted", "question-replaced", "creator-closed", "unstaged"] as const)(
     "settles secret input only after current source persistence: %s",
@@ -490,6 +530,50 @@ describe("gateway harness questions", () => {
       }
     },
   );
+
+  it("releases an aborted registration without disturbing its replacement", async () => {
+    const registration = createDeferred<{ id: string }>();
+    const requestStarted = createDeferred();
+    const controller = new AbortController();
+    const sessionKey = "agent:main:aborted-registration";
+    const onBlockReply = vi.fn();
+    const gatewayCall = vi.fn(
+      gatewayStub({
+        "question.request": () => {
+          requestStarted.resolve();
+          return registration.promise;
+        },
+        "question.resolve": () => ({ status: "cancelled" }),
+      }),
+    );
+    const run = startQuestion(sessionKey, gatewayCall, onBlockReply, {
+      signal: controller.signal,
+    });
+    await requestStarted.promise;
+    controller.abort();
+    const replacement = reserveQuestion(
+      sessionKey,
+      gatewayStub({ "question.resolve": () => ({ status: "answered" }) }),
+    );
+    replacement.attachRegistration(Promise.resolve());
+    try {
+      registration.resolve({ id: questionId });
+      await expect(run).resolves.toEqual({ status: "cancelled" });
+      expect(onBlockReply).not.toHaveBeenCalled();
+      const cancellations = gatewayCall.mock.calls.filter(
+        ([method]) => method === "question.resolve",
+      );
+      expect(cancellations.length).toBeGreaterThan(0);
+      for (const call of cancellations) {
+        expect(call[2]).toMatchObject({ id: questionId, resolvedBy: "run-abort" });
+      }
+      await expect(claimQuestion(sessionKey)).resolves.toBe(true);
+    } finally {
+      registration.resolve({ id: questionId });
+      replacement.dispose();
+      await run;
+    }
+  });
 
   it.each(["request", "wait"] as const)("handles an early %s rejection", async (phase) => {
     const error = new Error("gateway disconnected");

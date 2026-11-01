@@ -64,6 +64,8 @@ SQLite target, verifies the target exists and is usable, and reports the physica
 path it actually read. Combine it with `--agent <id>` when you must select the
 configured agent that owns the store.
 
+Human-readable store headers escape terminal controls in paths. JSON output keeps the original path.
+
 `--agent` and `--store` require non-blank values. Selection errors exit non-zero
 and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
 is set.
@@ -210,6 +212,9 @@ openclaw sessions delete "agent:main:scratch-1" --yes --json
 Repeated keys are processed once, in first-occurrence order, after surrounding
 whitespace is removed. This also applies to `sessions archive`.
 
+Human-readable archive/delete reports escape terminal control characters in
+session keys, paths, and diagnostics. JSON output preserves the original values.
+
 <Warning>
   Delete is destructive. In an interactive terminal it asks once before
   deleting the valid keys. Non-interactive and `--json` deletion requires
@@ -328,6 +333,7 @@ openclaw sessions export-trajectory --session-key "agent:main:telegram:direct:12
 This is the command path used by the `/export-trajectory` slash command after
 the owner approves the exec request. The output directory is always resolved
 inside `.openclaw/trajectory-exports/` under the selected workspace.
+Nonblank `--output` names preserve leading and trailing whitespace.
 The file list in text and JSON output reports only artifacts written to the bundle.
 
 For stored keys without an agent prefix, such as `global`, export uses the
@@ -432,6 +438,8 @@ JSON result. Dry runs do not load harness plugins.
 
 Applied artifact cleanup counts only successful file removals. If a file cannot
 be deleted, it contributes no freed bytes and remains part of disk usage.
+Artifacts retained by a deferred plugin import receipt or migration manifest
+remain protected even after their canonical session entry is gone.
 Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
 other eligible files. SQLite archive pruning stops after a deletion
 error to retain its database recovery copy. If usage stays above the target,
@@ -545,6 +553,9 @@ openclaw sessions compact "agent:work:main" --agent work --json
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
 - `--json`: print the raw RPC payload.
+
+Human-readable compaction reports escape terminal control characters in session
+keys and error details. JSON output preserves the original values.
 
 The command exits non-zero when the Gateway reports a failed compaction or is
 unreachable, so crons and scripts never mistake a silent no-op for success.

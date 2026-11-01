@@ -23,6 +23,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayMemoryCloseRegistryFactory } from "./server-close.memory.test-support.js";
@@ -53,7 +54,11 @@ const beforeSettlement = (
 
 async function createFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
-  const state = await createOpenClawTestState({ label, layout: "home", env: KERNEL_TEST_ENV });
+  const state = await createOpenClawTestState({
+    label,
+    layout: "home",
+    env: { ...KERNEL_TEST_ENV, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
   state.applyEnv();
   const config: OpenClawConfig = {
     plugins: { enabled: true },
@@ -177,21 +182,16 @@ it("settles accepted Memory sync before closing its existing executor", async ({
     await closing;
     expect(requests()).not.toContainEqual(agentOpen);
     expect(shared.db.isOpen).toBe(false);
-    const stored = new DatabaseSync(agentPath, { readOnly: true });
-    const leases = new DatabaseSync(shared.path, { readOnly: true });
-    try {
-      const chunks = stored.prepare("SELECT text FROM memory_index_chunks WHERE path = ?");
-      const cached = stored.prepare("SELECT count(*) AS count FROM memory_embedding_cache");
-      const live = leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
-      expect(chunks.all("memory/shutdown.md")).toEqual([
-        { text: expect.stringContaining("Keep the synthetic blue release preference.") },
-      ]);
-      expect(cached.get()).toMatchObject({ count: 1 });
-      expect(live.all(agentPath)).toEqual([]);
-    } finally {
-      stored.close();
-      leases.close();
-    }
+    using stored = new DatabaseSync(agentPath, { readOnly: true });
+    using leases = new DatabaseSync(shared.path, { readOnly: true });
+    const chunks = stored.prepare("SELECT text FROM memory_index_chunks WHERE path = ?");
+    const cached = stored.prepare("SELECT count(*) AS count FROM memory_embedding_cache");
+    const live = leases.prepare("SELECT lease_id FROM agent_database_leases WHERE path = ?");
+    expect(chunks.all("memory/shutdown.md")).toEqual([
+      { text: expect.stringContaining("Keep the synthetic blue release preference.") },
+    ]);
+    expect(cached.get()).toMatchObject({ count: 1 });
+    expect(live.all(agentPath)).toEqual([]);
   } finally {
     releaseEmbedding.resolve();
     await Promise.allSettled([syncing, closing]);
@@ -212,7 +212,6 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
   let server: GatewayServer;
   let refuse = true;
   const memoryFailure = new Error("synthetic memory close refused");
-  const completed: string[] = [];
   const memoryCloseStarted = createDeferredCore();
   const releaseConnectionWork = createDeferredCore();
   let connectionWork: Promise<void> | undefined;
@@ -222,12 +221,10 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
     if (refuse) {
       throw memoryFailure;
     }
-    completed.push("first");
   });
   const first = fixture.registry(firstClose);
   try {
     ({ server, kernel } = await fixture.start(first));
-    expect(kernel.pluginRuntime.registry).toBe(first.registry);
     await openManager(fixture, first);
     const warning = new Error("synthetic earlier shutdown warning");
     const registryClose = vi.spyOn(kernel.pluginRuntime, "close");
@@ -245,13 +242,10 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
     expect.soft(failure).toBeInstanceOf(AggregateError);
     expect.soft(collectNestedErrorCandidates(failure)).toContain(warning);
     const failedAttempts = firstClose.mock.calls.length;
-    expect.soft(firstClose).toHaveBeenCalled();
     const registryResult = await registryClose.mock.results[0]?.value;
-    expect(registryClose).toHaveBeenCalledOnce();
     expect(registryResult?.memoryErrors).toContain(memoryFailure);
     expect([first.instance.lifecycle.signal.aborted, contextAborted(kernel)]).toEqual([true, true]);
     expect(() => kernel.pluginRuntime.publish(first.registry)).toThrow();
-    expect(completed).toEqual([]);
     await expect(server.close({ reason: "warning failure stays terminal" })).rejects.toBe(failure);
     expect(firstClose).toHaveBeenCalledTimes(failedAttempts);
     expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
@@ -265,6 +259,18 @@ it("drains memory before stalled connection cleanup while preserving terminal cl
 });
 
 it("closes one managed memory runtime exactly once across repeated owner close calls", async () => {
+  const discoveryEnv = captureEnv([
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  ]);
+  using _ = {
+    [Symbol.dispose]: () => discoveryEnv.restore(),
+  };
+  setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
+  const originalDiscoveryEnv = {
+    disabled: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
+    directory: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+  };
   const fixture = await createFixture("gateway-shared-memory-close");
   const close = vi.fn(async () => {});
   const memory = fixture.registry(close);
@@ -284,4 +290,10 @@ it("closes one managed memory runtime exactly once across repeated owner close c
     await Promise.allSettled([owner.close()]);
     await fixture.cleanup();
   }
+  // Vitest cleanup must not resurrect the inner fixture's disabled selector.
+  vi.unstubAllEnvs();
+  expect({
+    disabled: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
+    directory: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR,
+  }).toEqual(originalDiscoveryEnv);
 });

@@ -29,6 +29,7 @@ import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-mo
 import {
   invalidUserModelAccounts as invalidAccounts,
   readSelectedUserModelAccountRecords,
+  readUserModelAccountLinksRecord,
   readUserModelAccountRecord as readRecord,
   userModelAccountRecordValue as accountRecordValue,
   type UserModelAccountRecordName as AccountRecordName,
@@ -388,9 +389,9 @@ export function updateUserModelAuthProfile(
     operation: { stage: "transaction" } | { stage: "commit"; profile: UserModelAuthProfile },
   ) => void,
 ): boolean {
+  admit?.({ stage: "transaction" });
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      admit?.({ stage: "transaction" });
       const owner = credentialOwner(db, authProfileId);
       const record = owner ? readProfile(db, owner, authProfileId) : undefined;
       if (!owner || !record) {
@@ -458,6 +459,7 @@ export function connectUserModelAccount(
 ): { authProfileId: string; links: UserProfileAuthLink[] } {
   const credential = credentialSchema.parse(params.credential);
   const replacement = params.replacement;
+  params.assertCurrent("transaction");
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const owner = requireOwner(db, params.ownerProfileId);
@@ -472,7 +474,6 @@ export function connectUserModelAccount(
           JSON.stringify(replacement.credential);
       const authProfileId = canReplace ? replacement.id : `personal:${owner}:${randomUUID()}`;
       record.links[credential.provider] = { authProfileId, updatedAt: Date.now() };
-      params.assertCurrent("transaction");
       writeProfile(db, owner, authProfileId, { credential }, randomUUID(), true);
       writeLinks(db, owner, record);
       params.assertCurrent("commit");
@@ -516,8 +517,8 @@ export function listUserProfileAuthLinksInDatabase(
   db: EngineConnection,
   profileId: string,
 ): UserProfileAuthLink[] {
-  const owner = resolveOwner(db, profileId);
-  return owner ? accountLinks(readLinks(db, owner)) : [];
+  const raw = readUserModelAccountLinksRecord(db, profileId);
+  return raw === undefined ? [] : accountLinks(parseRecord(raw, linksSchema));
 }
 
 const userProfileAuthLinks = new Map<
@@ -630,6 +631,7 @@ export function setUserProfileAuthLink(
   },
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
+  params.assertCurrent?.("transaction");
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const owner = requireOwner(db, params.profileId);
@@ -645,7 +647,6 @@ export function setUserProfileAuthLink(
         authProfileId: params.authProfileId,
         updatedAt: Date.now(),
       };
-      params.assertCurrent?.("transaction");
       writeLinks(db, owner, record);
       params.assertCurrent?.("commit");
       return accountLinks(record);
@@ -659,6 +660,7 @@ export function clearUserProfileAuthLink(
   params: Omit<Parameters<typeof setUserProfileAuthLink>[0], "authProfileId">,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
+  params.assertCurrent?.("transaction");
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const owner = requireOwner(db, params.profileId);
@@ -666,7 +668,6 @@ export function clearUserProfileAuthLink(
       // Keep an explicit disconnect so a later identity merge cannot resurrect a link.
       // Existing sessions retain their exact credential; new sessions use shared defaults.
       record.links[params.provider] = null;
-      params.assertCurrent?.("transaction");
       writeLinks(db, owner, record);
       params.assertCurrent?.("commit");
       return accountLinks(record);

@@ -1,85 +1,34 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import * as gitExec from "../../infra/git-exec.js";
 import * as gitWorkerContext from "../../infra/git-worker-context.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import {
-  CommandProcessCleanupError,
-  readCommandProcessFailure,
-  recordCommandProcessFailure,
-} from "../../process/exec-result.js";
 import * as execRunner from "../../process/exec-runner.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import {
-  InvalidWorktreeBaseRefError,
-  resolveWorktreeBase,
-  withWorktreeBasePreparation,
-  type WorktreeBasePreparation,
-} from "./base-ref.js";
+import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "./base-ref.js";
 import { readRepositoryBranches } from "./branches.runtime.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
-import { hasWorktreeUnknownOutcome } from "./errors.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
-
-function trackBaseLookupCallers(repo: string, count: number) {
-  const current = new AsyncLocalStorage<number>();
-  const seen = new Set<number>();
-  const ready = createDeferred();
-  const observe = () => {
-    const caller = current.getStore();
-    if (caller !== undefined) {
-      seen.add(caller);
-      if (seen.size === count) {
-        ready.resolve();
-      }
-    }
-  };
-  const realpath = fs.realpath;
-  vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
-    const result = await realpath(...args);
-    if (result === repo) {
-      observe();
-    }
-    return result;
-  });
-  return {
-    ready: ready.promise,
-    run: <T>(index: number, run: () => T) => current.run(index, run),
-    observeCommand: (args: string[]) => {
-      // Uncoalesced implementations reach discovery without resolving a sharing key.
-      if (args[0] === "symbolic-ref" && args[1] === "--quiet") {
-        observe();
-      }
-    },
-  };
-}
 
 describe("ManagedWorktreeService branch discovery", () => {
   let root: string;
@@ -124,6 +73,8 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-worktree-branches-", await fs.realpath(os.tmpdir()));
+    // Inherited command-line config disables the worker's filesystem cache admission.
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "global.gitconfig"));
     const template = path.join(root, "git-template");
@@ -144,223 +95,13 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
     vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
   });
-
-  it("coalesces default discovery and refreshes settled refs after their freshness window", async ({
-    signal,
-  }) => {
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const remote = await createRemote();
-    const head = await git(repo, "rev-parse", "HEAD");
-    const nested = path.join(repo, "nested");
-    await fs.mkdir(nested);
-    const callers = 40;
-    const admission = trackBaseLookupCallers(repo, callers);
-    const release = createDeferred();
-    const execute = gitExec.executeGitCommand;
-    let discoveries = 0;
-    let fetches = 0;
-    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      admission.observeCommand(args);
-      if (args[0] === "ls-remote" && ++discoveries === 1) {
-        await release.promise;
-      }
-      if (args[0] === "fetch") {
-        fetches++;
-      }
-      return await execute(cwd, args, options);
-    });
-    const pending = Array.from({ length: callers }, (_, index) =>
-      admission.run(index, () => resolveWorktreeBase(index % 2 ? `${nested}${path.sep}..` : repo)),
-    );
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          admission.ready,
-          Promise.all(pending),
-          "base lookup did not reach every caller",
-        ),
-        signal,
-      );
-      release.resolve();
-      expect(await Promise.all(pending)).toMatchObject(
-        Array.from({ length: callers }, () => ({
-          commit: head,
-          gitOperand: "refs/remotes/origin/main",
-          recordRef: "origin/main",
-          fetchSucceeded: true,
-        })),
-      );
-      expect({ discoveries, fetches }).toEqual({ discoveries: 1, fetches: 1 });
-      await expect(resolveWorktreeBase(repo, "main")).resolves.toMatchObject({ commit: head });
-      expect({ discoveries, fetches }).toEqual({ discoveries: 1, fetches: 1 });
-
-      const next = await git(
-        remote,
-        "-c",
-        "user.name=OpenClaw Test",
-        "-c",
-        "user.email=openclaw-test@example.invalid",
-        "commit-tree",
-        "HEAD^{tree}",
-        "-p",
-        "HEAD",
-        "-m",
-        "next default",
-      );
-      await git(remote, "update-ref", "refs/heads/next", next);
-      await git(remote, "symbolic-ref", "HEAD", "refs/heads/next");
-      clock.mockReturnValue(now + 30_000);
-      await expect(resolveWorktreeBase(repo)).resolves.toMatchObject({
-        commit: next,
-        recordRef: "origin/next",
-      });
-      expect({ discoveries, fetches }).toEqual({ discoveries: 2, fetches: 2 });
-      expect(await git(repo, "rev-parse", "main")).toBe(head);
-    } finally {
-      release.resolve();
-      await Promise.allSettled(pending);
-    }
-  });
-
-  it("closes an unused base preparation without allowing later Git effects", async () => {
-    let expired: WorktreeBasePreparation | undefined;
-    const execute = vi.spyOn(gitExec, "executeGitCommand");
-    await withWorktreeBasePreparation(
-      { repoRoot: repo, commonDir: path.join(repo, ".git") },
-      async (resolve) => {
-        expired = resolve;
-      },
-    );
-    await expect(expired!({})).rejects.toThrow("Worktree base preparation is closed");
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it.for([
-    ...["aborted", "revoked"].flatMap((mode) =>
-      [
-        "settled",
-        "uncertain-result",
-        "uncertain-error",
-        "uncertain-metadata",
-        "outcome-unknown",
-      ].map((outcome) => ({ mode, outcome })),
-    ),
-    { mode: "active", outcome: "uncertain-result" },
-  ])(
-    "settles shared default fetching after its owner is $mode ($outcome)",
-    async ({ mode, outcome }, { signal }) => {
-      await createRemote();
-      const entered = createDeferred();
-      const joined = createDeferred();
-      const release = createDeferred();
-      const controller = new AbortController();
-      const failure = new Error("default lookup authority ended");
-      const uncertain =
-        outcome === "uncertain-metadata"
-          ? recordCommandProcessFailure(new Error("fetch process settlement failed"), {
-              pid: 123,
-              code: null,
-              cleanup: "uncertain",
-              termination: "signal",
-            })
-          : outcome === "outcome-unknown"
-            ? new SqliteWorkerError("fetch owner outcome unknown", "outcome-unknown")
-            : new CommandProcessCleanupError();
-      let revoked = false;
-      const assertCurrent = () => {
-        if (revoked) {
-          throw failure;
-        }
-      };
-      const execute = gitExec.executeGitCommand;
-      let discoveries = 0;
-      let fetches = 0;
-      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "ls-remote") {
-          discoveries++;
-        }
-        if (args[0] === "fetch" && ++fetches === 1) {
-          entered.resolve();
-          await release.promise;
-          if (outcome === "uncertain-result") {
-            return {
-              stdout: "",
-              stderr: "",
-              code: null,
-              signal: null,
-              killed: false,
-              termination: "signal",
-              cleanup: "uncertain",
-              timeoutMs: options?.timeoutMs ?? 60_000,
-            };
-          }
-          if (outcome !== "settled") {
-            throw uncertain;
-          }
-        }
-        return await execute(cwd, args, options);
-      });
-      const first = resolveWorktreeBase(repo, undefined, controller.signal, assertCurrent);
-      const firstResult = first.catch((error: unknown) => error);
-      let second: ReturnType<typeof resolveWorktreeBase> | undefined;
-      let secondResult: Promise<unknown> | undefined;
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, first, "first fetch did not start"),
-          signal,
-        );
-        second = withWorktreeBasePreparation(
-          { repoRoot: repo, commonDir: path.join(repo, ".git") },
-          (resolve) => {
-            joined.resolve();
-            return resolve({});
-          },
-        );
-        secondResult = second.catch((error: unknown) => error);
-        await withinTest(
-          awaitGateBeforeSettlement(joined.promise, second, "second lookup did not join"),
-          signal,
-        );
-        if (mode === "aborted") {
-          controller.abort(failure);
-        } else if (mode === "revoked") {
-          revoked = true;
-        }
-        release.resolve();
-        const [firstOutcome, secondOutcome] = await withinTest(
-          Promise.all([firstResult, secondResult]),
-          signal,
-        );
-        if (outcome === "settled") {
-          expect(firstOutcome).toBe(failure);
-          expect(secondOutcome).toBe(failure);
-          expect({ discoveries, fetches }).toEqual({ discoveries: 1, fetches: 1 });
-        } else {
-          expect(hasWorktreeUnknownOutcome(firstOutcome)).toBe(true);
-          expect(hasWorktreeUnknownOutcome(secondOutcome)).toBe(true);
-          if (outcome === "uncertain-metadata") {
-            expect(firstOutcome).toMatchObject({ cause: uncertain });
-            expect(readCommandProcessFailure(firstOutcome)).toEqual(
-              readCommandProcessFailure(uncertain),
-            );
-          } else if (outcome !== "uncertain-result") {
-            expect(firstOutcome).toBe(uncertain);
-          }
-          expect({ discoveries, fetches }).toEqual({ discoveries: 1, fetches: 1 });
-        }
-      } finally {
-        release.resolve();
-        await Promise.allSettled([firstResult, secondResult]);
-      }
-    },
-  );
 
   it.each([
     { offline: false, dirty: false, switching: false },
@@ -452,19 +193,48 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
+  it.each([false, true])(
+    "checks linked reservations without rejected missing-file reads (unreadable: %s)",
+    async (unreadable) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await createChildCommit();
+      await createRemote(remoteHead);
+      const linked = path.join(root, "idle-linked");
+      await git(repo, "worktree", "add", "--detach", linked);
+      const gitDir = await git(linked, "rev-parse", "--absolute-git-dir");
+      if (unreadable) {
+        // A directory produces EISDIR, which must not be treated as an absent reservation.
+        await fs.mkdir(path.join(gitDir, "BISECT_START"));
+      }
+      const reads = vi.spyOn(fs, "readFile");
+      const selected = await resolveWorktreeBase(
+        repo,
+        undefined,
+        undefined,
+        undefined,
+        "fast-forward",
+      );
+      expect(selected.commit).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(unreadable ? localHead : remoteHead);
+      if (unreadable) {
+        expect(selected.warning).toContain("Git worktree operation state could not be checked");
+      } else {
+        expect(selected.warning).toBeUndefined();
+        expect(
+          reads.mock.calls.filter(
+            ([file]) => typeof file === "string" && file.startsWith(`${gitDir}${path.sep}`),
+          ),
+        ).toHaveLength(0);
+      }
+    },
+  );
+
   it("discovers a renamed remote default without substituting local HEAD", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-      type: disk.type,
-      files: disk.files,
-      frsize: disk.frsize,
-      ffree: disk.ffree,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: (100 * 1024 ** 3) / 4096,
-      bfree: (100 * 1024 ** 3) / 4096,
-    });
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+      createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3),
+    );
     const remote = await createRemote();
     await git(repo, "fetch", "origin");
     await git(repo, "remote", "set-head", "origin", "-a");
@@ -488,11 +258,18 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   it("warns when the fetched default commit is more than seven days old", async () => {
-    const timestamp = Number(await git(repo, "show", "-s", "--format=%ct", "HEAD"));
+    const timestamp = Math.floor(Date.now() / 1000) - 8 * 86_400;
+    const date = new Date(timestamp * 1000).toISOString();
+    await execFileAsync(
+      "git",
+      ["-C", repo, "commit", "--allow-empty", "-m", "old default fixture"],
+      {
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      },
+    );
     await createRemote();
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
-      now: () => (timestamp + 8 * 86_400) * 1000,
     });
     const logs = createWarnLogCapture("worktree-base-age");
     try {
@@ -787,8 +564,16 @@ describe("ManagedWorktreeService branch discovery", () => {
       ),
     );
     const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
-    await expectWarmBranchAdmission(repo, () => run.mockClear());
+    const directories = vi.spyOn(fsSync, "readdirSync");
+    syncBuiltinESMExports();
+    await expectWarmBranchAdmission(repo, () => {
+      run.mockClear();
+      directories.mockClear();
+    });
     expect(run).toHaveBeenCalledTimes(0);
+    expect(directories.mock.calls.filter(([dir]) => dir === path.join(repo, ".git"))).toHaveLength(
+      1,
+    );
     await git(repo, "branch", "new-branch");
     expireBranchSuggestions();
     expect((await readRepositoryBranches(repo)).branches).toContainEqual({

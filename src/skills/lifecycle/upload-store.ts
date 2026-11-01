@@ -38,8 +38,6 @@ const uploads = new KeyedAsyncQueue();
 
 type SkillUploadRecord = ReturnType<typeof toSkillUploadRecord>;
 
-export type SkillUploadStore = typeof defaultSkillUploadStore;
-
 export function normalizeSkillUploadSha256(value: string | undefined): string | undefined {
   if (value === undefined) {
     return undefined;

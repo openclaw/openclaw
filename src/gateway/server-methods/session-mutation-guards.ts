@@ -271,21 +271,31 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
   return options;
 }
 
-/** Retain the request authority after the router composes profile selection. */
+/** Bind router invocation checks separately from the source retained by accepted input. */
 export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequestHandlerOptions>(
   request: GatewayRequestOptions,
   handler: T,
   expectedProfileBinding: ExpectedProfileBinding | undefined,
   sessionScope?: SessionOperatorScope,
+  assertInvocationCurrent?: SessionSourceAssertion,
 ): T {
   const source = readGatewayRequestMutationAuthority(request);
   const retainedProfileBinding = expectedProfileBinding ?? source.expectedProfileBinding;
   const retainedSessionScope = sessionScope ?? source.sessionScope;
   const transport = captureRequestMutationOptions(handler);
+  if (assertInvocationCurrent) {
+    handler.sessionMutationCommitGuard = composeSessionSourceAssertion([
+      assertInvocationCurrent,
+      captureExternalSessionCommitGuard(transport.sessionMutationCommitGuard),
+    ]);
+  }
   const assertCurrent = composeSessionSourceAssertion([
     source.assertOperatorCurrent,
     source.family === "worker" ? source.assertWorkerCurrent : undefined,
-    captureRequestAuthorityAssertion(transport, source.family === "native-compatibility"),
+    captureRequestAuthorityAssertion(
+      captureRequestMutationOptions(handler),
+      source.family === "native-compatibility",
+    ),
   ]);
   const authority: GatewayRequestMutationAuthority = {
     assertPreparationCurrent: source.assertPreparationCurrent,

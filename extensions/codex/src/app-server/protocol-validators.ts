@@ -1,16 +1,17 @@
 import path from "node:path";
-import { normalizeJsonSchemaForTypeBox } from "openclaw/plugin-sdk/json-schema-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Compile } from "typebox/compile";
+import { Errors } from "typebox/schema";
 import { readCodexNotificationScope } from "./notification-correlation.js";
-import rawDynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
-import sharedDefinitionsSchema from "./protocol-generated/json/v2/CodexAppServerProtocolDefinitions.json" with { type: "json" };
-import rawErrorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
-import rawModelListResponseSchema from "./protocol-generated/json/v2/ModelListResponse.json" with { type: "json" };
-import rawThreadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResumeResponse.json" with { type: "json" };
-import rawThreadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
-import rawTurnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
-import rawTurnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
+import {
+  isCodexDynamicToolCallParams,
+  isCodexErrorNotification,
+  isCodexModelListResponse,
+  isCodexThreadResumeResponse,
+  isCodexThreadStartResponse,
+  isCodexTurnCompletedNotification,
+  isCodexTurnStartResponse,
+} from "./protocol-validators.generated.js";
+import diagnosticSchemas from "./protocol-validators.generated.json" with { type: "json" };
 import {
   isJsonObject,
   type CodexDynamicToolCallParams,
@@ -25,6 +26,7 @@ import {
   type CodexThreadStartResponse,
   type CodexTurnCompletedNotification,
   type CodexTurnStartResponse,
+  type CodexUserInput,
 } from "./protocol.js";
 
 export function readSupervisionResponseThreadId(value: unknown): unknown {
@@ -55,58 +57,45 @@ type CodexValidator<T> = {
   errors: (value: unknown) => ValidationError[];
 };
 
-// Compilation-only resource IDs let TypeBox resolve the generated relative refs.
-const schemaBaseUrl = "https://openclaw.invalid/codex/";
-const sharedDefinitionsId = new URL("v2/CodexAppServerProtocolDefinitions.json", schemaBaseUrl)
-  .href;
-const schemaContext = {
-  [sharedDefinitionsId]: normalizeJsonSchemaForTypeBox({
-    ...sharedDefinitionsSchema,
-    $id: sharedDefinitionsId,
-  }),
-};
+type CodexValidationSchemaName = keyof typeof diagnosticSchemas.schemas;
 
-function compileCodexSchema<T>(
-  rawSchema: Record<string, unknown>,
-  name: string,
+function createCodexValidator<T>(
+  check: (value: unknown) => value is T,
+  name: CodexValidationSchemaName,
 ): CodexValidator<T> {
-  const validator = Compile(
-    schemaContext,
-    normalizeJsonSchemaForTypeBox({ ...rawSchema, $id: new URL(name, schemaBaseUrl).href }),
-  );
   return {
-    check: (value): value is T => validator.Check(value),
-    errors: (value) => [...validator.Errors(value)],
+    check,
+    errors: (value) => Errors(diagnosticSchemas.context, diagnosticSchemas.schemas[name], value)[1],
   };
 }
 
-const validateDynamicToolCallParams = compileCodexSchema<CodexDynamicToolCallParams>(
-  rawDynamicToolCallParamsSchema,
-  "DynamicToolCallParams.json",
+const validateDynamicToolCallParams = createCodexValidator(
+  isCodexDynamicToolCallParams,
+  "CodexDynamicToolCallParams",
 );
-const validateErrorNotification = compileCodexSchema<CodexErrorNotification>(
-  rawErrorNotificationSchema,
-  "v2/ErrorNotification.json",
+const validateErrorNotification = createCodexValidator(
+  isCodexErrorNotification,
+  "CodexErrorNotification",
 );
-const validateModelListResponse = compileCodexSchema<CodexModelListResponse>(
-  rawModelListResponseSchema,
-  "v2/ModelListResponse.json",
+const validateModelListResponse = createCodexValidator(
+  isCodexModelListResponse,
+  "CodexModelListResponse",
 );
-const validateThreadResumeResponse = compileCodexSchema<CodexThreadResumeResponse>(
-  rawThreadResumeResponseSchema,
-  "v2/ThreadResumeResponse.json",
+const validateThreadResumeResponse = createCodexValidator(
+  isCodexThreadResumeResponse,
+  "CodexThreadResumeResponse",
 );
-const validateThreadStartResponse = compileCodexSchema<CodexThreadStartResponse>(
-  rawThreadStartResponseSchema,
-  "v2/ThreadStartResponse.json",
+const validateThreadStartResponse = createCodexValidator(
+  isCodexThreadStartResponse,
+  "CodexThreadStartResponse",
 );
-const validateTurnCompletedNotification = compileCodexSchema<CodexTurnCompletedNotification>(
-  rawTurnCompletedNotificationSchema,
-  "v2/TurnCompletedNotification.json",
+const validateTurnCompletedNotification = createCodexValidator(
+  isCodexTurnCompletedNotification,
+  "CodexTurnCompletedNotification",
 );
-const validateTurnStartResponse = compileCodexSchema<CodexTurnStartResponse>(
-  rawTurnStartResponseSchema,
-  "v2/TurnStartResponse.json",
+const validateTurnStartResponse = createCodexValidator(
+  isCodexTurnStartResponse,
+  "CodexTurnStartResponse",
 );
 
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
@@ -145,10 +134,10 @@ export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResp
   return assertCodexShape(validateTurnStartResponse, value, "turn/start response");
 }
 
-/** Prompt echoes and attested managed-hook continuations cannot admit native capabilities. */
+/** Exact input echoes and attested managed-hook continuations cannot admit native capabilities. */
 export function assertCodexPassiveTurnItems(
   items: readonly CodexThreadItem[],
-  prompt: string,
+  submittedInput: readonly CodexUserInput[],
   taskLabel: string,
   options: { allowManagedHookPrompts?: boolean } = {},
 ): void {
@@ -174,12 +163,18 @@ export function assertCodexPassiveTurnItems(
     }
     if (item.type === "userMessage" && !promptEchoSeen) {
       const content = Array.isArray(item.content) ? item.content : [];
-      const input = content[0];
       if (
-        content.length === 1 &&
-        isJsonObject(input) &&
-        input.type === "text" &&
-        input.text === prompt
+        submittedInput.length > 0 &&
+        content.length === submittedInput.length &&
+        submittedInput.every((expected, index) => {
+          const echoed = content[index];
+          return (
+            expected.type === "text" &&
+            isJsonObject(echoed) &&
+            echoed.type === "text" &&
+            echoed.text === expected.text
+          );
+        })
       ) {
         promptEchoSeen = true;
         continue;

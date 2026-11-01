@@ -1,8 +1,14 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import packageManifest from "../../package.json" with { type: "json" };
 import { getAiTransportHost } from "../host.js";
-import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-import type { Context, Model } from "../types.js";
+import { transformProviderMessages } from "../provider-transcript-transform.js";
+import {
+  PROVIDER_MODEL_INPUT,
+  type ProviderContext,
+  type ProviderModel,
+  type ProviderStreamOptions,
+} from "../provider-types.js";
+import type { Model, ModelRequestHeaders } from "../types.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -10,36 +16,32 @@ import {
   type GoogleApiType,
   type GoogleProviderOptions,
 } from "./google-shared.js";
-
-const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com";
+import {
+  createGoogleVideoPlaceholder,
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  type GoogleVideoSlots,
+} from "./google-video-slots.js";
 
 let packageVersionMemo: string | undefined;
 
-function resolvePackageVersion(): string {
-  if (!packageVersionMemo) {
-    packageVersionMemo =
-      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) || packageManifest.version;
-  }
-  return packageVersionMemo;
-}
-
-export function resolveGoogleApiClientHeaders(params?: {
-  api?: string;
-  baseUrl?: string;
-  model?: Model;
-}): Record<string, string> {
+export function resolveGoogleApiClientHeaders(params: {
+  baseUrl: string;
+  model: Model;
+}): ModelRequestHeaders {
   const hostHeaders = getAiTransportHost().resolveProviderRequestHeaders({
     provider: "google",
-    api: params?.api ?? params?.model?.api ?? "google-generative-ai",
-    baseUrl: params?.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL,
-    model: params?.model,
+    api: "google-generative-ai",
+    baseUrl: params.baseUrl,
+    model: params.model,
   });
   if (hostHeaders?.["x-goog-api-client"]) {
     return hostHeaders;
   }
   return {
     ...hostHeaders,
-    "x-goog-api-client": `openclaw/${resolvePackageVersion()}`,
+    "x-goog-api-client": `openclaw/${(packageVersionMemo ||=
+      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) ||
+      packageManifest.version)}`,
   };
 }
 
@@ -47,7 +49,9 @@ type GoogleInteractionsStep =
   | {
       type: "user_input";
       content: Array<
-        { type: "text"; text: string } | { type: "image"; mime_type: string; data: string }
+        | { type: "text"; text: string }
+        | { type: "image"; mime_type: string; data: string }
+        | { type: "video"; mime_type: string; data: string; processing?: Record<string, unknown> }
       >;
     }
   | {
@@ -91,18 +95,22 @@ export type GoogleInteractionsRequestBody = {
     stop_sequences?: string[];
     thinking_level?: string;
     thinking_summaries?: "auto" | "none";
-    tool_choice?: "auto" | "none" | "any";
+    tool_choice?: GoogleInteractionsToolChoice;
   };
   store: boolean;
   stream: boolean;
 };
 
 function convertMessages<T extends GoogleApiType>(
-  model: Model<T>,
-  context: Context,
+  model: ProviderModel<T>,
+  context: ProviderContext,
+  videoSlots?: GoogleVideoSlots,
 ): GoogleInteractionsStep[] {
   const steps: GoogleInteractionsStep[] = [];
-  const messages = transformMessages(context.messages, model);
+  const transformed = transformProviderMessages(context.messages, model);
+  // Canonical transcript types omit video, as on the GenerateContent projection.
+  // SAFETY: transformProviderMessages keeps only video blocks the provider input admits.
+  const messages = transformed as ProviderContext["messages"];
 
   for (const message of messages) {
     if (message.role === "user") {
@@ -112,10 +120,18 @@ function convertMessages<T extends GoogleApiType>(
           ? [{ type: "text" as const, text: sourceContent }]
           : sourceContent;
       const content: Extract<GoogleInteractionsStep, { type: "user_input" }>["content"] = parts.map(
-        (item) =>
-          item.type === "text"
-            ? { type: "text", text: sanitizeSurrogates(item.text) || " " }
-            : { type: "image", mime_type: item.mimeType, data: item.data },
+        (item) => {
+          if (item.type === "text") {
+            return { type: "text", text: sanitizeSurrogates(item.text) || " " };
+          }
+          if (item.type === "video") {
+            return createGoogleVideoPlaceholder(item, videoSlots, {
+              type: "text" as const,
+              text: GOOGLE_VIDEO_SLOT_OMISSION,
+            });
+          }
+          return { type: "image", mime_type: item.mimeType, data: item.data };
+        },
       );
       steps.push({
         type: "user_input",
@@ -204,23 +220,40 @@ function convertMessages<T extends GoogleApiType>(
   return steps;
 }
 
+/** Interactions tool choice; a named function becomes `allowed_tools` with mode `any`. */
+export type GoogleInteractionsToolChoice =
+  | "auto"
+  | "none"
+  | "any"
+  | { allowed_tools: { mode: "any"; tools: string[] } };
+
+/** Maps the shared tool-choice vocabulary (as GenerateContent does) to Interactions. */
+export function normalizeGoogleInteractionsToolChoice(
+  choice: unknown,
+): GoogleInteractionsToolChoice | undefined {
+  if (choice === "auto" || choice === "none" || choice === "any") {
+    return choice;
+  }
+  if (choice === "required") {
+    return "any";
+  }
+  const name = asRecord(asRecord(choice).function).name;
+  return asRecord(choice).type === "function" && typeof name === "string" && name
+    ? { allowed_tools: { mode: "any", tools: [name] } }
+    : undefined;
+}
+
+export type GoogleInteractionsOptions = Omit<GoogleProviderOptions, "toolChoice"> &
+  ProviderStreamOptions & {
+    toolChoice?: GoogleInteractionsToolChoice;
+  };
+
 export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   model: Model<T>,
-  context: Context,
-  options: GoogleProviderOptions = {},
+  context: ProviderContext,
+  options: GoogleInteractionsOptions = {},
+  videoSlots?: GoogleVideoSlots,
 ): GoogleInteractionsRequestBody {
-  const optionRecord = asRecord(options);
-  if (optionRecord.cachedContent || optionRecord.cached_content) {
-    throw new Error(
-      "Explicit prompt caching ('cachedContent') is not supported with the Gemini Interactions API. The Interactions API handles caching implicitly on the server.",
-    );
-  }
-  if (optionRecord.videoMetadata || optionRecord.video_metadata) {
-    throw new Error(
-      "video_metadata clipping offsets are not supported with the Gemini Interactions API.",
-    );
-  }
-
   const generationConfig: NonNullable<GoogleInteractionsRequestBody["generation_config"]> = {};
   if (options.temperature !== undefined) {
     generationConfig.temperature = options.temperature;
@@ -254,7 +287,13 @@ export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   }));
   return {
     model: model.id,
-    input: convertMessages(model, context),
+    // Video admission follows the provider-normalized input (official AI Studio
+    // Flash models), not the canonical text/image model input.
+    input: convertMessages(
+      { ...model, input: options[PROVIDER_MODEL_INPUT] ?? model.input },
+      context,
+      videoSlots,
+    ),
     ...(context.systemPrompt
       ? {
           system_instruction: sanitizeSurrogates(

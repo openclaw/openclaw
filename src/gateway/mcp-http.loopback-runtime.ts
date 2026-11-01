@@ -28,7 +28,6 @@ type McpLoopbackToolCallObservers = {
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
-  onRequestFinish?: () => void;
   onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
   onToolCallUpdate?: (calls: {
     previous: McpLoopbackToolCallStart;
@@ -175,7 +174,6 @@ export function markMcpLoopbackRequestFinished(
   markMcpLoopbackRequestClassified(captureHandle);
   captureHandle.finished = true;
   const { capture } = captureHandle;
-  observeCapture(() => capture.onRequestFinish?.());
   capture.inFlight = Math.max(0, capture.inFlight - 1);
   notifyMcpLoopbackToolCallCaptureActivity(capture);
 }
@@ -338,13 +336,13 @@ const MCP_CAPTURE_HEADERS = {
   "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
 } as const;
 
-function createMcpServerConfig(port: number, headers: Record<string, string>) {
+function createMcpServerConfig(port: number, headers: Record<string, string>, alwaysLoad = true) {
   return {
     mcpServers: {
       openclaw: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
-        alwaysLoad: true,
+        alwaysLoad,
         headers,
       },
     },
@@ -352,8 +350,12 @@ function createMcpServerConfig(port: number, headers: Record<string, string>) {
 }
 
 /** Build the MCP server config injected into agents for loopback tool access. */
-export function createMcpLoopbackServerConfig(port: number) {
-  return createMcpServerConfig(port, { ...MCP_AUTH_HEADERS, ...MCP_CAPTURE_HEADERS });
+export function createMcpLoopbackServerConfig(port: number, options?: { deferTools?: boolean }) {
+  return createMcpServerConfig(
+    port,
+    { ...MCP_AUTH_HEADERS, ...MCP_CAPTURE_HEADERS },
+    !options?.deferTools,
+  );
 }
 
 export function createMcpAttachGrantServerConfig(port: number) {

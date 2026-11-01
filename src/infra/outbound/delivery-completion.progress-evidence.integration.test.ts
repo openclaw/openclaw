@@ -1,7 +1,4 @@
-import path from "node:path";
 import { assert, expect, it, vi } from "vitest";
-import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "../../agents/pending-final-recovery-source.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type {
@@ -9,19 +6,18 @@ import type {
   ChannelMessageSendTextContext as SendContext,
 } from "../../channels/message/types.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
-import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
-import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
-import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
-  createRecoveryLog,
-  installDeliveryCompletionHooks,
-  loadPendingDeliveries,
-} from "./delivery-queue.test-helpers.js";
+  installRecoveryHooks,
+  markFinal,
+  seedDeliverySession,
+} from "./delivery-completion.shard-test-support.js";
+import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 type Receipt = ChannelMessageSendResult & { messageId: string };
 function receipt(target?: string, threadId?: string): Receipt {
@@ -80,7 +76,8 @@ function placementCases(): Record<string, [boolean, Receipt?, Receipt?]> {
   };
 }
 
-const { tmpDir, deliver: deliverOutboundPayloads } = installDeliveryCompletionHooks();
+const fixtures = installRecoveryHooks(false);
+const { tmpDir, deliver: deliverOutboundPayloads } = fixtures;
 
 it.each(
   (["live", "recovery"] as const).flatMap((mode) =>
@@ -90,33 +87,9 @@ it.each(
   "retains reported placement across same-ID final replacement (%s, %s)",
   async (mode, placement, eligible) => {
     const [, progress = receipt(), final = receipt()] = placementCases()[placement]!;
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:progress-evidence",
-      storePath: path.join(tmpDir(), "sessions.json"),
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: "session",
-      updatedAt: 1,
-      restartRecoveryDeliveryRunId: "run",
-      restartRecoveryDeliverySourceRunId: "source",
-      restartRecoveryDeliveryContext: context,
-    });
-    const entry = loadSessionEntry(scope);
-    assert(entry, "missing fixture session");
+    const { scope, entry } = await seedDeliverySession(tmpDir());
     const payloads = [{ text: "final" }];
-    await persistPendingFinalDeliveryMarker({
-      ...scope,
-      deliver: true,
-      sessionEntry: entry,
-      sessionStore: { [scope.sessionKey]: entry },
-      admittedRecoverySource: capturePendingFinalRecoverySource(entry),
-      suppressVisibleSessionEffects: false,
-      sessionReboundDuringRun: false,
-      payloads,
-      deliveryContext: context,
-      runOwnedSessionId: entry.sessionId,
-    });
+    await markFinal(scope, entry, payloads, context);
     const completion = resolvePendingFinalDeliveryCompletion(payloads);
     assert(completion, "missing final custody");
     const committed = vi.fn();
@@ -168,13 +141,7 @@ it.each(
           await params.onDeliveryResult?.(result);
         },
       });
-    const recover = () =>
-      recoverPendingDeliveries({
-        cfg: {},
-        stateDir: tmpDir(),
-        log: createRecoveryLog(),
-        deliver: runDelivery,
-      });
+    const recover = () => fixtures.recover(runDelivery);
     const params = {
       cfg: {},
       ...context,
@@ -189,19 +156,14 @@ it.each(
       await enqueueDeliveryOnce(params, completion.deliveryId, tmpDir());
       await recover();
     }
-    const evidence = getRestartRecoveryTerminalDeliveryEvidence(loadSessionEntry(scope), "source");
+    const settledReceipt = loadSessionEntry(scope)?.pendingFinalDelivery?.deliveries?.[0]?.receipt;
     if (eligible) {
-      expect(evidence).toMatchObject({
-        deliveryStatus: {
-          status: "sent",
-          resultCount: placement === "aggregate-complete" ? 2 : 1,
-        },
-        durableFinalReceipt: {
-          platformMessageId: placement === "aggregate-complete" ? "first" : "m",
-        },
+      expect(settledReceipt).toMatchObject({
+        resultCount: placement === "aggregate-complete" ? 2 : 1,
+        platformMessageId: placement === "aggregate-complete" ? "first" : "m",
       });
     } else {
-      expect(evidence).toBeUndefined();
+      expect(settledReceipt).toBeUndefined();
     }
     expect(seen).toEqual(["m"]);
     expect(committed).toHaveBeenCalledTimes(legacy ? 0 : 1);

@@ -5,6 +5,12 @@ import type {
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 const loaders = {
+  durableProcess: () =>
+    import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessOperations),
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.worker.js").then(
+      (m) => m.sandboxPersistentExecOperations,
+    ),
   sandboxRegistry: () =>
     import("../agents/sandbox/registry-write.worker.js").then((m) => m.sandboxRegistryOperations),
   workspace: () =>
@@ -30,9 +36,13 @@ const loaders = {
     ),
   sessionGroups: () =>
     import("../gateway/session-group-catalog.kernel.js").then((m) => m.sessionGroupOperations),
-  claws: () =>
-    import("../claws/provenance-runtime-read.worker.js").then((m) => m.clawInstallSchemaOperations),
+  templates: () =>
+    import("../templates/provenance-runtime-read.worker.js").then(
+      (m) => m.templateInstallSchemaOperations,
+    ),
   backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
+  quarantine: () =>
+    import("./openclaw-quarantine-store.worker.js").then((m) => m.quarantineOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
   localOnboarding: () =>
@@ -62,8 +72,6 @@ const loaders = {
     import("../gateway/worker-environments/prepared-pool-presence.worker.js").then(
       (m) => m.preparedPoolPresenceOperations,
     ),
-  clawProvenance: () =>
-    import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>
     import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
   operatorApprovals: () =>
@@ -121,12 +129,15 @@ const loaders = {
   mcpOAuth: () => import("../agents/mcp-oauth-store.worker.js").then((m) => m.mcpOAuthOperations),
   legacyMcpOAuth: () =>
     import("../infra/state-migrations.mcp-oauth.worker.js").then((m) => m.legacyMcpOAuthOperations),
+  deferredSessionImport: () =>
+    import("../infra/deferred-plugin-session-source-recovery.worker.js").then(
+      (m) => m.deferredSessionImportOperations,
+    ),
   nativeHookRelay: () =>
     import("../agents/harness/native-hook-relay-store.worker.js").then(
       (m) => m.nativeHookRelayOperations,
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
-  promotions: () => import("../infra/promotions-feed.worker.js").then((m) => m.promotionOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
   doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>

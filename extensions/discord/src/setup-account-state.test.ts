@@ -1,98 +1,71 @@
-// Discord tests cover setup account state plugin behavior.
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectDiscordSetupAccount,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
 
+const config = (discord: NonNullable<OpenClawConfig["channels"]>["discord"]): OpenClawConfig => ({
+  channels: { discord },
+});
+const inspectToken = (token: DiscordAccountConfig["token"], rootToken?: string) =>
+  inspectDiscordSetupAccount({
+    cfg: config({ token: rootToken, accounts: { work: { token } } }),
+    accountId: "work",
+  });
+
 describe("discord setup account state", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("resolves setup account config when account key casing differs from normalized id", () => {
     const resolved = resolveDiscordSetupAccountConfig({
-      cfg: {
-        channels: {
-          discord: {
-            allowFrom: ["top"],
-            accounts: {
-              Work: { name: "Work", allowFrom: ["acct"] },
-            },
-          },
-        },
-      },
+      cfg: config({
+        allowFrom: ["top"],
+        accounts: { Work: { name: "Work", allowFrom: ["acct"] } },
+      }),
       accountId: "work",
     });
 
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.config.name).toBe("Work");
-    expect(resolved.config.allowFrom).toEqual(["acct"]);
+    expect(resolved).toMatchObject({
+      accountId: "work",
+      config: { name: "Work", allowFrom: ["acct"] },
+    });
   });
 
   it("uses configured defaultAccount for omitted setup account resolution", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          defaultAccount: "work",
-          allowFrom: ["top"],
-          accounts: {
-            alerts: { allowFrom: ["alerts-only"] },
-            work: { name: "Work", allowFrom: ["work-only"] },
-          },
-        },
-      },
-    };
-
     const resolved = resolveDiscordSetupAccountConfig({
-      cfg,
+      cfg: config({
+        defaultAccount: "work",
+        allowFrom: ["top"],
+        accounts: {
+          alerts: { allowFrom: ["alerts-only"] },
+          work: { name: "Work", allowFrom: ["work-only"] },
+        },
+      }),
     });
-
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.config.name).toBe("Work");
-    expect(resolved.config.allowFrom).toEqual(["work-only"]);
+    expect(resolved).toMatchObject({
+      accountId: "work",
+      config: { name: "Work", allowFrom: ["work-only"] },
+    });
   });
 
   it("treats explicit blank account tokens as missing without falling back", () => {
-    const inspected = inspectDiscordSetupAccount({
-      cfg: {
-        channels: {
-          discord: {
-            token: "top-level-token",
-            accounts: {
-              work: { token: "" },
-            },
-          },
-        },
-      },
+    expect(inspectToken("", "top-level-token")).toMatchObject({
       accountId: "work",
+      token: "",
+      tokenSource: "none",
+      tokenStatus: "missing",
+      configured: false,
     });
-
-    expect(inspected.accountId).toBe("work");
-    expect(inspected.token).toBe("");
-    expect(inspected.tokenSource).toBe("none");
-    expect(inspected.tokenStatus).toBe("missing");
-    expect(inspected.configured).toBe(false);
   });
 
   it("reports unresolved SecretRef account tokens as configured but unavailable", () => {
-    const inspected = inspectDiscordSetupAccount({
-      cfg: {
-        channels: {
-          discord: {
-            accounts: {
-              work: {
-                token: { source: "exec", provider: "vault", id: "discord/work" },
-              },
-            },
-          },
-        },
-      },
-      accountId: "work",
+    expect(inspectToken({ source: "exec", provider: "vault", id: "discord/work" })).toMatchObject({
+      token: "",
+      tokenSource: "config",
+      tokenStatus: "configured_unavailable",
+      configured: true,
     });
-
-    expect(inspected.token).toBe("");
-    expect(inspected.tokenSource).toBe("config");
-    expect(inspected.tokenStatus).toBe("configured_unavailable");
-    expect(inspected.configured).toBe(true);
   });
 
   it("keeps the runtime resolver's default-account-only environment fallback", () => {
@@ -105,7 +78,7 @@ describe("discord setup account state", () => {
     });
     expect(
       inspectDiscordSetupAccount({
-        cfg: { channels: { discord: { accounts: { work: {} } } } },
+        cfg: config({ accounts: { work: {} } }),
         accountId: "work",
       }),
     ).toMatchObject({ token: "", tokenSource: "none", configured: false });

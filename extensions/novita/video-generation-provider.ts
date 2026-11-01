@@ -1,4 +1,4 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -137,21 +137,6 @@ function resolveModel(req: VideoGenerationRequest): string {
   return images.length > 0 ? model.replace(/-t2v$/, "-i2v") : model;
 }
 
-function resolveImage(req: VideoGenerationRequest): string | undefined {
-  const image = req.inputImages?.[0];
-  if (!image) {
-    return undefined;
-  }
-  const url = normalizeOptionalString(image.url);
-  if (url) {
-    return url;
-  }
-  if (!image.buffer) {
-    throw new Error("Novita image-to-video input is missing image data.");
-  }
-  return toImageDataUrl({ ...image, buffer: image.buffer, defaultMimeType: "image/png" });
-}
-
 function resolveResolution(req: VideoGenerationRequest, wan: boolean): string {
   const resolution = normalizeOptionalString(req.resolution)?.toUpperCase();
   return resolution === "1080P" ? "1080P" : wan ? "720P" : "768P";
@@ -170,7 +155,10 @@ function resolveWanSize(req: VideoGenerationRequest): string {
 
 function buildBody(req: VideoGenerationRequest, model: string): Record<string, unknown> {
   const wan = model.startsWith("wan");
-  const image = resolveImage(req);
+  const image = resolveImageSourceUrl(
+    req.inputImages?.[0],
+    "Novita image-to-video input is missing image data.",
+  );
   const options = req.providerOptions ?? {};
   const mode = image ? "imageToVideo" : "generate";
   const schema = MODEL_CATALOG[model]?.capabilities?.[mode]?.providerOptions ?? {};
@@ -234,16 +222,20 @@ function buildBody(req: VideoGenerationRequest, model: string): Record<string, u
   };
 }
 
-function readTask(payload: Record<string, unknown>): Record<string, unknown> {
+function isTaskComplete(payload: Record<string, unknown>): boolean {
   if (!isRecord(payload.task)) {
     throw new Error("Novita video status response missing task.");
   }
   switch (payload.task.status) {
     case "TASK_STATUS_QUEUED":
     case "TASK_STATUS_PROCESSING":
+      return false;
     case "TASK_STATUS_SUCCEED":
+      return true;
     case "TASK_STATUS_FAILED":
-      return payload.task;
+      throw new Error(
+        `Novita video generation failed: ${normalizeOptionalString(payload.task.reason) ?? "task failed"}`,
+      );
     default:
       throw new Error("Novita video status response returned an unknown task status.");
   }
@@ -315,19 +307,13 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
+        ssrfPolicy: { allowPrivateNetwork },
         dispatcherPolicy,
         maxAttempts: 120,
         pollIntervalMs: 5_000,
         requestFailedMessage: "Novita video status request failed",
         timeoutMessage: `Novita video generation task ${taskId} did not finish in time`,
-        isComplete: (payload) => readTask(payload).status === "TASK_STATUS_SUCCEED",
-        getFailureMessage: (payload) => {
-          const task = readTask(payload);
-          return task.status === "TASK_STATUS_FAILED"
-            ? `Novita video generation failed: ${normalizeOptionalString(task.reason) ?? "task failed"}`
-            : undefined;
-        },
+        isComplete: isTaskComplete,
       });
       const output = Array.isArray(completed.videos) ? completed.videos[0] : undefined;
       const videoUrl = isRecord(output) ? normalizeOptionalString(output.video_url) : undefined;

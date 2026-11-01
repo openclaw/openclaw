@@ -1,5 +1,21 @@
+import { createTestEntrypoint } from "../infra/runtime-entrypoint.test-support.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "plugins");
+
 // The child probes share invocation-owned preparation and module state.
 export const pluginProcessRuntimeEntrypoints = {
+  installRecordCommit: entrypoint("install-record-commit"),
+  lifecycleLease: entrypoint("plugin-lifecycle-lease"),
+  installedPluginIndex: entrypoint("installed-plugin-index-store"),
+  installedPluginIndexWrite: entrypoint("installed-plugin-index-store-write"),
+  sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
+  sourceCapture: entrypoint("plugin-generation-capture"),
+  snapshotPreparation: entrypoint("plugin-generation-worker"),
+  directoryInventory: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/directory-walk",
+    distWorkerPath: "infra/directory-walk.js",
+  },
   installCommand: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../cli/plugins-install-command",

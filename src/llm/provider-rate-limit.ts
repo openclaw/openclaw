@@ -1,16 +1,21 @@
-import { createHash, randomInt } from "node:crypto";
+import { randomInt } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { FailoverError } from "../agents/failover/error.js";
 import {
   hasOrganizationTpmRateLimitEvidence,
   resolveRetryAfterMs,
 } from "../agents/failover/retry-evidence.js";
+import { AsyncContext } from "../shared/async-context.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "./types.js";
 
 type Waiter = {
   order: number;
   priority: "interactive" | "background";
   maxRetryDelayMs: number;
+  retryDeadline?: number;
   gate: Gate;
   signal?: AbortSignal;
   abort: () => void;
@@ -22,6 +27,7 @@ type Waiter = {
 };
 
 type Gate = {
+  // Gate deadlines stay monotonic; status boundaries project them to epoch timestamps.
   keys: Set<string>;
   retryAt: number;
   nextAt: number;
@@ -37,6 +43,31 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.providerRateLimit"), (
 }));
 const { gates } = state;
 const admittedAccount = Symbol.for("openclaw.providerRateLimit.admittedAccount");
+const retryDeadlineContext = new AsyncContext<{ pendingUntil?: number }>(
+  Symbol.for("openclaw.providerRateLimit.retryDeadline"),
+);
+
+/** Bound only the next admission with a monotonic deadline, not useful responses or later tools. */
+export function withProviderRateLimitRetryDeadline<T>(
+  deadline: number | undefined,
+  run: () => T,
+): T {
+  return retryDeadlineContext.run(
+    deadline === undefined ? undefined : { pendingUntil: deadline },
+    run,
+  );
+}
+
+function retryDeadlineError() {
+  return new FailoverError(
+    "429 Shared organization token rate limit exceeded the same-model retry wait budget.",
+    {
+      reason: "rate_limit",
+      status: 429,
+      code: "rate_limit_exceeded",
+    },
+  );
+}
 
 function stopWaiting(waiter: Waiter) {
   try {
@@ -49,7 +80,16 @@ function stopWaiting(waiter: Waiter) {
 
 function notify(waiter: Waiter) {
   stopWaiting(waiter);
-  const floorMs = waiter.gate.retryAt - Date.now();
+  const now = monotonicNow();
+  if (
+    waiter.retryDeadline !== undefined &&
+    Math.max(now, waiter.gate.retryAt, waiter.gate.nextAt) >= waiter.retryDeadline
+  ) {
+    waiter.gate.queue.splice(waiter.gate.queue.indexOf(waiter), 1);
+    finish(waiter, retryDeadlineError());
+    return;
+  }
+  const floorMs = waiter.gate.retryAt - now;
   if (waiter.maxRetryDelayMs > 0 && floorMs > waiter.maxRetryDelayMs) {
     waiter.gate.queue.splice(waiter.gate.queue.indexOf(waiter), 1);
     finish(
@@ -62,7 +102,9 @@ function notify(waiter: Waiter) {
     return;
   }
   try {
-    waiter.stopWaiting = waiter.onWait?.(Math.max(waiter.gate.retryAt, waiter.gate.nextAt));
+    waiter.stopWaiting = waiter.onWait?.(
+      Date.now() + Math.max(waiter.gate.retryAt, waiter.gate.nextAt) - now,
+    );
   } catch {
     // Status reporting is best effort; the queue still owns admission.
   }
@@ -85,27 +127,39 @@ function finish(waiter: Waiter, error?: unknown) {
 function schedule(gate: Gate) {
   clearTimeout(gate.timer);
   const admissionAt = Math.max(gate.retryAt, gate.nextAt);
-  const wakeAt = gate.queue.length ? Math.min(admissionAt, gate.expiresAt) : gate.expiresAt;
-  gate.timer = setTimeout(
-    () => {
-      if (Date.now() >= gate.expiresAt) {
-        for (const key of gate.keys) {
-          gates.delete(key);
+  const deadline = Math.min(...gate.queue.map((waiter) => waiter.retryDeadline ?? Infinity));
+  const wakeAt = gate.queue.length
+    ? Math.min(admissionAt, gate.expiresAt, deadline)
+    : gate.expiresAt;
+  // Shared recovery outlives the request that last adjusted its floor.
+  gate.timer = runInDetachedAsyncContext(() =>
+    setTimeout(
+      () => {
+        for (const waiter of gate.queue.slice()) {
+          if (waiter.retryDeadline !== undefined && monotonicNow() >= waiter.retryDeadline) {
+            gate.queue.splice(gate.queue.indexOf(waiter), 1);
+            finish(waiter, retryDeadlineError());
+          }
         }
-        gate.queue.splice(0).forEach((waiter) => finish(waiter));
-        return;
-      }
-      if (Date.now() < admissionAt || !gate.queue.length) {
+        if (monotonicNow() >= gate.expiresAt) {
+          for (const key of gate.keys) {
+            gates.delete(key);
+          }
+          gate.queue.splice(0).forEach((waiter) => finish(waiter));
+          return;
+        }
+        if (monotonicNow() < admissionAt || !gate.queue.length) {
+          schedule(gate);
+          return;
+        }
+        const interactive = gate.queue.findIndex((waiter) => waiter.priority === "interactive");
+        const released = gate.queue.splice(Math.max(0, interactive), 1);
+        gate.nextAt = monotonicNow() + randomInt(100, 251);
         schedule(gate);
-        return;
-      }
-      const interactive = gate.queue.findIndex((waiter) => waiter.priority === "interactive");
-      const released = gate.queue.splice(Math.max(0, interactive), 1);
-      gate.nextAt = Date.now() + randomInt(100, 251);
-      schedule(gate);
-      released.forEach((waiter) => finish(waiter));
-    },
-    Math.min(2_147_483_647, Math.max(0, wakeAt - Date.now())),
+        released.forEach((waiter) => finish(waiter));
+      },
+      Math.min(2_147_483_647, Math.max(0, wakeAt - monotonicNow())),
+    ),
   );
   if (!gate.queue.length) {
     gate.timer.unref();
@@ -128,12 +182,8 @@ function merge(gate: Gate, other: Gate) {
   gate.queue.sort((a, b) => a.order - b.order);
 }
 
-function hash(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function requestIdentity(
-  model: Pick<Model, "provider" | "baseUrl" | "headers">,
+  model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
   options?: Pick<SimpleStreamOptions, "apiKey" | "headers">,
 ) {
   const headers = new Map(
@@ -141,31 +191,53 @@ function requestIdentity(
       ([name, value]) => [name.toLowerCase(), value] as const,
     ),
   );
-  const scope = hash(JSON.stringify([model.provider, model.baseUrl]));
+  const scope = sha256Hex(JSON.stringify([model.provider, model.baseUrl, model.id]));
   const organization = headers.get("openai-organization");
   const credential = headers.get("authorization") ?? options?.apiKey;
   // Explicit organization selection can put the same credential in different buckets.
   const key = organization
-    ? `${scope}:org:${hash(organization)}`
+    ? `${scope}:org:${sha256Hex(organization)}`
     : credential
-      ? `${scope}:credential:${hash(credential.replace(/^Bearer\s+/i, ""))}`
+      ? `${scope}:credential:${sha256Hex(credential.replace(/^Bearer\s+/i, ""))}`
       : undefined;
   return { scope, key };
 }
 
+/** Recent shared TPM exhaustion remains saturated through the gate's recovery window. */
+export function getProviderRateLimitState(
+  model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
+  options?: Pick<SimpleStreamOptions, "apiKey" | "headers">,
+): { retryAt: number; expiresAt: number } | undefined {
+  const { key } = requestIdentity(model, options);
+  const gate = key ? gates.get(key) : undefined;
+  if (!gate) {
+    return undefined;
+  }
+  const now = monotonicNow();
+  if (gate.expiresAt <= now) {
+    return undefined;
+  }
+  const epochOffset = Date.now() - now;
+  return {
+    retryAt: epochOffset + Math.max(gate.retryAt, gate.nextAt),
+    expiresAt: epochOffset + gate.expiresAt,
+  };
+}
+
 /** Coordinates known shared TPM exhaustion; the caller remains the sole retry owner. */
 export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
-  model: Pick<Model, "provider" | "baseUrl" | "headers">,
+  model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
   options: T & { [admittedAccount]?: string },
 ) {
   const { scope, key } = requestIdentity(model, options);
   const signal = options?.signal;
   const inherited = key !== undefined && options?.[admittedAccount] === key;
+  const retryDeadline = retryDeadlineContext.getStore();
 
   return {
     // Delegating transports carry one admission to the physical request. A different
-    // account must enter its own gate; unrelated calls do not inherit ambient admission.
-    options: key ? { ...options, [admittedAccount]: key } : options,
+    // account or model must enter its own gate; unrelated calls do not inherit admission.
+    options: key && !inherited ? { ...options, [admittedAccount]: key } : options,
     async wait(
       onWait?: (retryAt: number) => () => void,
       priority: "interactive" | "background" = "background",
@@ -173,6 +245,9 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
       signal?.throwIfAborted();
       const gate = key && !inherited ? gates.get(key) : undefined;
       if (!gate) {
+        if (retryDeadline && !inherited) {
+          retryDeadline.pendingUntil = undefined;
+        }
         return;
       }
       await new Promise<void>((resolve, reject) => {
@@ -180,6 +255,7 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
           order: state.waiterOrder++,
           priority,
           maxRetryDelayMs: options.maxRetryDelayMs ?? 60_000,
+          retryDeadline: retryDeadline?.pendingUntil,
           gate,
           signal,
           resolve,
@@ -198,52 +274,54 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
         notify(waiter);
         schedule(gate);
       });
+      if (retryDeadline) {
+        retryDeadline.pendingUntil = undefined;
+      }
     },
-    observe(message: AssistantMessage): void {
-      if (
-        !key ||
-        inherited ||
-        message.stopReason !== "error" ||
-        !hasOrganizationTpmRateLimitEvidence(message.errorMessage) ||
-        message.retryAfterMs === null
-      ) {
-        return;
-      }
-      const delay =
-        message.retryAfterMs ??
-        resolveRetryAfterMs(message.errorMessage, Date.now(), message.errorBody) ??
-        1_000;
-      if (!Number.isFinite(delay)) {
-        return;
-      }
-      const org = message.errorMessage?.match(
-        /\bin organization\s+(\S+)\s+on tokens per min/i,
-      )?.[1];
-      const orgKey = org ? `${scope}:org:${hash(org)}` : undefined;
-      const gate = gates.get(key) ?? {
-        keys: new Set([key]),
-        retryAt: 0,
-        nextAt: 0,
-        expiresAt: 0,
-        queue: [],
-      };
-      gates.set(key, gate);
-      const orgGate = orgKey ? gates.get(orgKey) : undefined;
-      if (orgGate && orgGate !== gate) {
-        merge(gate, orgGate);
-      }
-      if (orgKey) {
-        gate.keys.add(orgKey);
-        gates.set(orgKey, gate);
-      }
-      gate.retryAt = Math.max(gate.retryAt, Date.now() + Math.max(0, delay));
-      // Successful traffic must not perpetuate recovery pacing indefinitely.
-      gate.expiresAt = gate.retryAt + 60_000;
-      // A longer floor can remove waiters whose configured delay cap it exceeds.
-      for (const waiter of gate.queue.slice()) {
-        notify(waiter);
-      }
-      schedule(gate);
-    },
+    // Observation can outlive consumption; never capture request options or its signal.
+    observe: key && !inherited ? observeProviderRateLimit.bind(undefined, scope, key) : undefined,
   };
+}
+
+function observeProviderRateLimit(scope: string, key: string, message: AssistantMessage): void {
+  if (
+    message.stopReason !== "error" ||
+    !hasOrganizationTpmRateLimitEvidence(message.errorMessage) ||
+    message.retryAfterMs === null
+  ) {
+    return;
+  }
+  const delay =
+    message.retryAfterMs ??
+    resolveRetryAfterMs(message.errorMessage, Date.now(), message.errorBody) ??
+    1_000;
+  if (!Number.isFinite(delay)) {
+    return;
+  }
+  const org = message.errorMessage?.match(/\bin organization\s+(\S+)\s+on tokens per min/i)?.[1];
+  const orgKey = org ? `${scope}:org:${sha256Hex(org)}` : undefined;
+  const gate = gates.get(key) ?? {
+    keys: new Set([key]),
+    retryAt: 0,
+    nextAt: 0,
+    expiresAt: 0,
+    queue: [],
+  };
+  gates.set(key, gate);
+  const orgGate = orgKey ? gates.get(orgKey) : undefined;
+  if (orgGate && orgGate !== gate) {
+    merge(gate, orgGate);
+  }
+  if (orgKey) {
+    gate.keys.add(orgKey);
+    gates.set(orgKey, gate);
+  }
+  gate.retryAt = Math.max(gate.retryAt, monotonicNow() + Math.max(0, delay));
+  // Successful traffic must not perpetuate recovery pacing indefinitely.
+  gate.expiresAt = gate.retryAt + 60_000;
+  // A longer floor can remove waiters whose configured delay cap it exceeds.
+  for (const waiter of gate.queue.slice()) {
+    notify(waiter);
+  }
+  schedule(gate);
 }

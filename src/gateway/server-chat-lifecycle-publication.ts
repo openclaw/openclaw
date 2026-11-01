@@ -13,6 +13,7 @@ import { prepareSessionEventProjection } from "./session-event-projection.js";
 import type { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -24,10 +25,11 @@ export type SessionEventSnapshotDependencies = {
       ownerEvent?: AgentEventPayload;
       sessionRows?: SessionRowReadView;
     },
-  ) => { row: GatewaySessionRow | null; lifecycleRunId?: string };
+  ) => { row: GatewaySessionRow | null; lifecycleRunId?: string; storePath?: string };
   resolveSessionActiveRunState?: (params: {
     requestedKey: string;
     canonicalKey: string;
+    storePath?: string;
     sessionId?: string;
     agentId?: string;
   }) => { active: boolean; runIds?: string[] };
@@ -63,6 +65,7 @@ function createSessionEventSnapshotBuilder({
       ? resolveSessionActiveRunState?.({
           requestedKey: sessionKey,
           canonicalKey: row?.key ?? sessionKey,
+          ...(lifecycleSnapshot.storePath ? { storePath: lifecycleSnapshot.storePath } : {}),
           ...(row?.sessionId ? { sessionId: row.sessionId } : {}),
           ...(agentId ? { agentId } : {}),
         })
@@ -70,7 +73,6 @@ function createSessionEventSnapshotBuilder({
     return buildGatewaySessionSnapshot({
       sessionRow: row,
       agentId,
-      includeSession: true,
       lifecycle: lifecycleProjection,
       event: evt,
       lifecycleRunId,
@@ -111,6 +113,7 @@ export function createSessionLifecyclePublisher(
       sessionEventConnIds: ReadonlySet<string>,
       projection: SessionRowProjection | undefined,
       read?: SessionRowReadView,
+      ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>,
     ) =>
       deps.broadcastToConnIds(
         "sessions.changed",
@@ -134,8 +137,16 @@ export function createSessionLifecyclePublisher(
         sessionEventConnIds,
         {
           dropIfSlow: true,
+          sessionEventSubscriptionKeys: [
+            agentId ? resolveSessionSubscriptionKey(sessionKey, agentId) : sessionKey,
+          ],
           ...(read && projection
-            ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+            ? {
+                prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+                  ancestors,
+                  reuseEnvelope: true,
+                }),
+              }
             : {}),
         },
       );
@@ -144,13 +155,13 @@ export function createSessionLifecyclePublisher(
       case "error": {
         const { persistence, projection } = params;
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) =>
-          withPreparedSessionEventRow(projection, sessionKey, agentId, (read) => {
+          withPreparedSessionEventRow(projection, sessionKey, agentId, (read, ancestors) => {
             if (params.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
               return;
             }
             const sessionEventConnIds = deps.sessionEventSubscribers.getAll();
             if (hasSessionChangeReceivers(sessionEventConnIds)) {
-              broadcastSnapshot(snapshotEvent, sessionEventConnIds, projection, read);
+              broadcastSnapshot(snapshotEvent, sessionEventConnIds, projection, read, ancestors);
             }
           });
         // Terminal writes serialize with restart markers. Reload only after the
@@ -182,10 +193,8 @@ export function createSessionLifecyclePublisher(
             .persistGatewaySessionLifecycleEventForEvent({
               sessionKey,
               agentId,
-              event: {
-                ...event,
-                ...(clientRunId !== event.runId ? { clientRunId } : {}),
-              },
+              event,
+              ...(clientRunId !== event.runId ? { clientRunId } : {}),
             })
             .catch((err: unknown) => {
               logError(
@@ -210,12 +219,15 @@ export function createSessionLifecyclePublisher(
           return;
         }
         const projection = deps.getSessionRowProjection?.();
-        const publishPrepared = (read?: SessionRowReadView) => {
+        const publishPrepared: Parameters<typeof withPreparedSessionEventRow>[3] = (
+          read,
+          ancestors,
+        ) => {
           const modelInput = readModelInput();
           if (runContext && modelInput && publishedModelInputs.get(runContext) === modelInput) {
             return;
           }
-          broadcastSnapshot(event, sessionEventConnIds, projection, read);
+          broadcastSnapshot(event, sessionEventConnIds, projection, read, ancestors);
           // Failed preparation/publication must leave the next observation publishable.
           if (runContext && modelInput) {
             publishedModelInputs.set(runContext, modelInput);

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithSessionControllerCleanup } from "../sessions/session-controller.cleanup-context.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -184,7 +185,10 @@ export class GatewayScheduler {
         params.phase !== "maintenance" && (relative || params.everyMs !== undefined)
           ? this.clock.monotonicNow() + Math.max(0, atMs - nowMs)
           : undefined,
-      context: runOutsideAsyncWorkScope(() => AsyncLocalStorage.snapshot()),
+      // Jobs outlive their registrant: keep its request context, not its work or turn custody.
+      context: runOutsideAsyncWorkScope(() =>
+        runWithSessionControllerCleanup(() => AsyncLocalStorage.snapshot()),
+      ),
       cancelled,
       owner,
     };

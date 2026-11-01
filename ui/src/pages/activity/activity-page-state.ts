@@ -2,18 +2,17 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { RouteLocation } from "@openclaw/uirouter";
 import { onCleanup } from "solid-js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-} from "../../api/gateway.ts";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { createLiveActivity } from "./live-activity.ts";
 import {
@@ -52,48 +51,32 @@ export function createActivityPageState(context: ApplicationContext) {
   let presencePayload: PresencePayload | undefined;
   let sessionActivityRevision = -1;
   let inspectorAbort: AbortController | null = null;
+  let inspectorRead:
+    | {
+        kind: "executions" | "decisions" | "refresh";
+        completion: ReturnType<typeof createDeferredCore<void>>;
+      }
+    | undefined;
   let inspectorClient: GatewayBrowserClient | null = null;
   let inspectorEpoch = 0;
   let inspectorSelectorKey: string | null = null;
   let presenceClient: GatewayBrowserClient | null = null;
+  let presentationScope = gatewayPresentationScope(context.gateway);
   let active = true;
   let publish = () => {};
   const sessionActivity = createSessionActivity(reconcileSessions);
   const liveActivity = createLiveActivity(context.gateway, context.sessions);
-  const projection = projectSource(context, {
-    read: () => ({
-      context,
-      routeLocation,
-      routeData,
-      presentedRoute,
-      runInspector,
-      presencePayload,
-      sessionActivity,
-    }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
-  function setRouteLocation(location: RouteLocation | undefined) {
-    routeLocation = location;
-    routeData = location
-      ? resolveActivityRouteData(
-          location.search,
-          activityPersonFromPath(location.pathname, context.basePath),
-        )
-      : undefined;
-    if (location && routeData) {
-      presentedRoute = { location, data: routeData };
-    }
-    syncSessionActivity();
-    bindInspectorRoute();
-    reconcileSessions();
-  }
-
+  const projection = projectMutableSource(context, () => ({
+    context,
+    routeLocation,
+    routeData,
+    presentedRoute,
+    runInspector,
+    inspectorRead,
+    presencePayload,
+    sessionActivity,
+  }));
+  publish = projection.publish;
   function reconcileSessions() {
     if (!active) {
       return;
@@ -119,28 +102,39 @@ export function createActivityPageState(context: ApplicationContext) {
     snapshot: ApplicationGatewaySnapshot,
     sourceChanged: boolean,
   ) {
-    if (sourceChanged || gateway.eventLogRevision !== sessionActivityRevision) {
+    const nextPresentationScope = gatewayPresentationScope(gateway);
+    const identityChanged =
+      sourceChanged ||
+      nextPresentationScope !== presentationScope ||
+      snapshot.client !== presenceClient ||
+      gateway.eventLogRevision !== sessionActivityRevision;
+    presentationScope = nextPresentationScope;
+    if (identityChanged) {
       sessionActivityRevision = gateway.eventLogRevision;
       presentedRoute = undefined;
       void sessionActivity.load(null, null);
-    }
-    if (sourceChanged || snapshot.client !== presenceClient) {
+      cancelInspectorRequest();
+      inspectorClient = null;
+      runInspector = { status: "empty" };
       presenceClient = snapshot.client;
       const presence =
         snapshot.phase === "connected" ? readPresenceEntries(snapshot.hello?.snapshot) : undefined;
       presencePayload = presence ? { presence } : undefined;
-    } else if (snapshot.phase !== "connected" && presencePayload) {
-      presencePayload = undefined;
     }
-    syncRunInspector(gateway, snapshot, sourceChanged);
+    syncRunInspector(gateway, snapshot, identityChanged);
     syncSessionActivity();
     reconcileSessions();
   }
 
   function syncSessionActivity(reason: "query" | "retry" = "query") {
     const snapshot = context.gateway.snapshot;
+    // Session-scoped operators may read sessions.list, matching the roster activity store.
+    const accessLost =
+      snapshot.phase === "connected" &&
+      snapshot.hello !== null &&
+      !hasOperatorSelfReadAccess(snapshot.hello.auth ?? null);
     void sessionActivity.load(
-      snapshot.phase === "connected" ? snapshot.client : null,
+      accessLost ? null : snapshot.client,
       routeData?.mode === "sessions"
         ? routeData.filters
         : routeData?.mode === "live"
@@ -150,27 +144,14 @@ export function createActivityPageState(context: ApplicationContext) {
       canCallGatewayMethod(snapshot, ACTIVITY_SUMMARY_ENSURE_METHOD, "operator.write", {
         requireAdvertisement: false,
       }),
+      snapshot.phase === "connected",
     );
-  }
-
-  function bindInspectorRoute() {
-    const route = routeData;
-    const selector = route?.mode === "run" ? route.selector : null;
-    const nextSelectorKey = inspectorRequestKey(route);
-    if (nextSelectorKey === inspectorSelectorKey && route?.mode === "run") {
-      return;
-    }
-    inspectorSelectorKey = nextSelectorKey;
-    cancelInspectorRequest();
-    inspectorClient = null;
-    runInspector = selector ? { status: "loading", waitingForGateway: true } : { status: "empty" };
-    if (route?.mode === "run") {
-      syncRunInspector(context.gateway, context.gateway.snapshot, true);
-    }
   }
 
   function cancelInspectorRequest() {
     inspectorEpoch += 1;
+    inspectorRead?.completion.resolve();
+    inspectorRead = undefined;
     inspectorAbort?.abort();
     inspectorAbort = null;
   }
@@ -181,6 +162,13 @@ export function createActivityPageState(context: ApplicationContext) {
     force = false,
   ) {
     const route = routeData;
+    const selectorKey = inspectorRequestKey(route);
+    if (selectorKey !== inspectorSelectorKey) {
+      cancelInspectorRequest();
+      inspectorClient = null;
+      runInspector = { status: "empty" };
+      inspectorSelectorKey = selectorKey;
+    }
     if (route?.mode !== "run") {
       return;
     }
@@ -190,11 +178,13 @@ export function createActivityPageState(context: ApplicationContext) {
       publish();
       return;
     }
-    inspectorSelectorKey = inspectorRequestKey(route);
     if (snapshot.phase !== "connected" || !snapshot.client) {
       cancelInspectorRequest();
       inspectorClient = null;
-      runInspector = { status: "disconnected" };
+      runInspector =
+        runInspector.status === "ready"
+          ? { ...runInspector, executionPageStatus: undefined, decisionPageStatus: undefined }
+          : { status: "disconnected" };
       publish();
       return;
     }
@@ -218,15 +208,12 @@ export function createActivityPageState(context: ApplicationContext) {
     ) {
       return;
     }
-    void loadRunInspector(gateway, snapshot.client, selector);
-  }
-
-  function isUnknownInspectMethod(error: unknown): boolean {
-    return (
-      error instanceof GatewayRequestError &&
-      error.gatewayCode === "INVALID_REQUEST" &&
-      (error.message === "unknown method: audit.run.inspect" ||
-        error.message === "missing scope: operator.admin")
+    void loadRunInspector(
+      gateway,
+      snapshot.client,
+      selector,
+      runInspector.status === "ready" ? runInspector : undefined,
+      "refresh",
     );
   }
 
@@ -235,17 +222,23 @@ export function createActivityPageState(context: ApplicationContext) {
     client: GatewayBrowserClient,
     selector: RunInspectorSelector,
     previousState?: Extract<RunInspectorState, { status: "ready" }>,
-    pageKind: "executions" | "decisions" = "executions",
+    pageKind: "executions" | "decisions" | "refresh" = "executions",
   ) {
     cancelInspectorRequest();
     const epoch = inspectorEpoch;
     const abort = new AbortController();
     inspectorAbort = abort;
+    const read = { kind: pageKind, completion: createDeferredCore() };
+    inspectorRead = read;
+    // Inspection may settle after its route retires; preserve its error for an active reader.
+    void read.completion.promise.catch(() => undefined);
     inspectorClient = client;
     const pageStatus = pageKind === "decisions" ? "decisionPageStatus" : "executionPageStatus";
     runInspector = previousState
-      ? { ...previousState, [pageStatus]: "loading" }
-      : { status: "loading", waitingForGateway: false };
+      ? pageKind === "refresh"
+        ? { ...previousState, refreshError: undefined }
+        : { ...previousState, [pageStatus]: "loading" }
+      : { status: "loading" };
     publish();
     const requestSelectorKey = inspectorRequestKey(routeData);
     const isCurrent = () =>
@@ -282,17 +275,26 @@ export function createActivityPageState(context: ApplicationContext) {
         return;
       }
       let cursors: ReturnType<typeof receiptPageCursors>;
-      if (previousState && pageKind === "decisions") {
+      if (
+        previousState &&
+        (pageKind === "decisions" ||
+          (pageKind === "refresh" && previousState.result.identity.state === "present"))
+      ) {
         const merged = mergeDecisionPage(previousState.result, result);
-        if (!merged) {
+        if (!merged && pageKind === "decisions") {
           runInspector = { ...previousState, decisionPageStatus: "error" };
+          read.completion.reject(new Error("The decision page no longer matches this execution."));
           return;
         }
-        cursors = new Map([
-          ...previousState.receiptPageCursors,
-          ...receiptPageCursors(result.decisionDisplays, decisionCursor ?? undefined),
-        ]);
-        result = merged;
+        cursors = merged
+          ? new Map([
+              ...previousState.receiptPageCursors,
+              ...receiptPageCursors(result.decisionDisplays, decisionCursor ?? undefined),
+            ])
+          : receiptPageCursors(result.decisionDisplays, decisionCursor ?? undefined);
+        if (merged) {
+          result = merged;
+        }
       } else if (
         previousState?.result.identity.state === "ambiguous" &&
         result.identity.state === "ambiguous"
@@ -317,57 +319,26 @@ export function createActivityPageState(context: ApplicationContext) {
       }
       runInspector = isMissingOperatorReadScopeError(error)
         ? { status: "unauthorized" }
-        : isUnknownInspectMethod(error)
-          ? { status: "unsupported" }
-          : previousState
-            ? { ...previousState, [pageStatus]: "error" }
-            : {
-                status: "error",
-                recovery:
+        : previousState
+          ? pageKind === "refresh"
+            ? {
+                ...previousState,
+                refreshError:
                   decisionCursor && isExpiredDecisionCursorError(error) ? "restart" : "retry",
-              };
+              }
+            : { ...previousState, [pageStatus]: "error" }
+          : {
+              status: "error",
+              recovery: decisionCursor && isExpiredDecisionCursorError(error) ? "restart" : "retry",
+            };
+      read.completion.reject(error);
     } finally {
       if (inspectorAbort === abort) {
         inspectorAbort = null;
         publish();
       }
+      read.completion.resolve();
     }
-  }
-
-  function loadMoreInspectorPage(kind: "executions" | "decisions") {
-    const route = routeData;
-    const gateway = context.gateway;
-    const snapshot = gateway.snapshot;
-    const inspectorState = runInspector;
-    if (
-      route?.mode !== "run" ||
-      !route.selector ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
-      inspectorState.status !== "ready"
-    ) {
-      return;
-    }
-    const available =
-      kind === "executions"
-        ? route.selector.kind === "run" &&
-          inspectorState.executionPageStatus !== "loading" &&
-          inspectorState.result.identity.state === "ambiguous" &&
-          inspectorState.result.nextExecutionCursor
-        : inspectorState.decisionPageStatus !== "loading" &&
-          inspectorState.result.identity.state === "present" &&
-          inspectorState.result.nextDecisionCursor;
-    if (available) {
-      void loadRunInspector(gateway, snapshot.client, route.selector, inspectorState, kind);
-    }
-  }
-
-  function restartRunInspector() {
-    const route = routeData;
-    if (route?.mode !== "run" || !route.selector) {
-      return;
-    }
-    context.navigate("activity", { search: activityRunInspectorSearch(route.selector) });
   }
 
   function applyGatewayEvent(gateway: ApplicationContext["gateway"], event: GatewayEventFrame) {
@@ -412,10 +383,66 @@ export function createActivityPageState(context: ApplicationContext) {
     agents: projectOwner(context.agents, (source) => source.state),
     read: projection.read,
     revision: projection.revision,
-    setRouteLocation,
+    subscribe: projection.subscribe,
+    setRouteLocation(location: RouteLocation | undefined) {
+      routeLocation = location;
+      routeData = location
+        ? resolveActivityRouteData(
+            location.search,
+            activityPersonFromPath(location.pathname, context.basePath),
+          )
+        : undefined;
+      if (location && routeData) {
+        presentedRoute = { location, data: routeData };
+      }
+      // Receipt focus must not retry a failed inspection of the same evidence page.
+      if (inspectorRequestKey(routeData) !== inspectorSelectorKey) {
+        syncRunInspector(context.gateway, context.gateway.snapshot);
+      }
+      syncSessionActivity();
+      reconcileSessions();
+    },
     syncSessionActivity,
     syncRunInspector,
-    loadMoreInspectorPage,
-    restartRunInspector,
+    loadMoreInspectorPage(kind: "executions" | "decisions") {
+      const route = routeData;
+      const inspectorGateway = context.gateway;
+      const snapshot = inspectorGateway.snapshot;
+      const inspectorState = runInspector;
+      if (
+        route?.mode !== "run" ||
+        !route.selector ||
+        snapshot.phase !== "connected" ||
+        !snapshot.client ||
+        inspectorState.status !== "ready"
+      ) {
+        return;
+      }
+      const available =
+        kind === "executions"
+          ? route.selector.kind === "run" &&
+            inspectorState.executionPageStatus !== "loading" &&
+            inspectorState.result.identity.state === "ambiguous" &&
+            inspectorState.result.nextExecutionCursor
+          : inspectorState.decisionPageStatus !== "loading" &&
+            inspectorState.result.identity.state === "present" &&
+            inspectorState.result.nextDecisionCursor;
+      if (available) {
+        void loadRunInspector(
+          inspectorGateway,
+          snapshot.client,
+          route.selector,
+          inspectorState,
+          kind,
+        );
+      }
+    },
+    restartRunInspector() {
+      const route = routeData;
+      if (route?.mode !== "run" || !route.selector) {
+        return;
+      }
+      context.navigate("activity", { search: activityRunInspectorSearch(route.selector) });
+    },
   };
 }

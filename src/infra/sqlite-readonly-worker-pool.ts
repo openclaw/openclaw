@@ -3,7 +3,9 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { throwSettledAggregate } from "./error-graph-internal.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { sqliteReadOnlyOperationRequiresProcessRetirement } from "./sqlite-readonly-operation-lifecycle.js";
 import {
   readOnlyWorkerScope,
   type SqliteReadOnlyWorkerScope,
@@ -18,7 +20,8 @@ import type {
   SqliteReadOnlyWorkerSession,
 } from "./sqlite-readonly-worker-session-types.js";
 import { isSameSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker-session.js";
-import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
+import { classifyWorkerRequest } from "./sqlite-worker-request-class.js";
+import { trackWorkerRequest } from "./worker-request-diagnostics.js";
 
 const log = createSubsystemLogger("state/sqlite");
 
@@ -259,7 +262,9 @@ export function createSqliteReadOnlyWorkerPool(
           options.signal?.throwIfAborted();
           if (
             !stateful &&
-            !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+            ((options.mode === "operation" &&
+              sqliteReadOnlyOperationRequiresProcessRetirement(options.command.type)) ||
+              !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources)
           ) {
             await closeSlot(selected);
           }
@@ -315,12 +320,7 @@ export function createSqliteReadOnlyWorkerPool(
           )
           .map(retireIdleSlot),
       );
-      const failures = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "SQLite read-only broker worker cleanup failed");
-      }
+      throwSettledAggregate(outcomes, "SQLite read-only broker worker cleanup failed");
     },
   };
 }

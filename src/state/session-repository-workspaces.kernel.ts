@@ -1,15 +1,34 @@
 import { randomUUID } from "node:crypto";
 import type { Selectable, Updateable } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "../config/repository-branch-prefix.js";
+import { readWorkerPlacementMovesReadOnly } from "../gateway/worker-environments/placement-move-row-codec.js";
+import { getRequired } from "../gateway/worker-environments/placement-row-codec.js";
+import {
+  matchesWorkspaceResultClaim,
+  pendingResultFromRow,
+} from "../gateway/worker-environments/placement-workspace-result-owner.js";
+import { findWorkerEnvironment } from "../gateway/worker-environments/store-row-codec.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+  prepareSqliteQueryTakeFirstSync,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { ensureSessionRepositoryWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB, SessionRepositoryWorkspaces } from "./openclaw-state-db.generated.js";
+import {
+  assertRepositoryWorkspaceDiskIdentity,
+  requireRepositoryWorkspaceDiskAuthority,
+} from "./session-repository-workspaces.authority.js";
 import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceDiskBinding,
+  RepositoryWorkspaceDiskRetirement,
   RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
@@ -18,6 +37,26 @@ import type {
 
 const table = "session_repository_workspaces";
 const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const findByOwner = createSqliteQueryCache((db) =>
+  prepareSqliteQueryTakeFirstSync<
+    RepositoryWorkspaceOwner,
+    Selectable<SessionRepositoryWorkspaces>
+  >(db, (parameter) =>
+    query(db)
+      .selectFrom(table)
+      .selectAll()
+      .where(
+        "agent_id",
+        "=",
+        parameter((owner) => owner.agentId),
+      )
+      .where(
+        "session_key",
+        "=",
+        parameter((owner) => owner.sessionKey),
+      ),
+  ),
+);
 const manifestPattern = /^sha256:[a-f0-9]{64}$/u;
 const resultRefPattern = /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u;
 
@@ -42,6 +81,13 @@ function project(row: Selectable<SessionRepositoryWorkspaces>): SessionRepositor
     branch: row.branch,
     checkpointRef: row.checkpoint_ref,
     manifestHash: row.manifest_hash,
+    ...(row.disk_authority_json !== null
+      ? {
+          diskAuthority: requireRepositoryWorkspaceDiskAuthority(
+            JSON.parse(row.disk_authority_json),
+          ),
+        }
+      : {}),
     revision: row.revision,
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms,
@@ -69,14 +115,7 @@ export function findSessionRepositoryWorkspaceInDatabase(
   if (!tableExists(db, table)) {
     return undefined;
   }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    query(db)
-      .selectFrom(table)
-      .selectAll()
-      .where("agent_id", "=", owner.agentId)
-      .where("session_key", "=", owner.sessionKey),
-  );
+  const row = findByOwner(db)(owner);
   return row ? project(row) : undefined;
 }
 
@@ -119,6 +158,10 @@ export function createSessionRepositoryWorkspaceInDatabase(
     }
     return { ...changed(db, existing), changed: false };
   }
+  const branchPrefix = input.branchPrefix ?? "openclaw";
+  if (branch === undefined && !REPOSITORY_BRANCH_PREFIX_PATTERN.test(branchPrefix)) {
+    throw new Error("Repository branch prefix is invalid");
+  }
   const workspaceId = randomUUID();
   const inserted = executeSqliteQueryTakeFirstSync(
     db,
@@ -133,7 +176,7 @@ export function createSessionRepositoryWorkspaceInDatabase(
         run_setup_script: input.runSetupScript ? 1 : 0,
         base_commit: null,
         base_manifest_hash: null,
-        branch: branch ?? `openclaw/${workspaceId}`,
+        branch: branch ?? `${branchPrefix}/${workspaceId}`,
         checkpoint_ref: null,
         manifest_hash: null,
         revision: 0,
@@ -213,10 +256,140 @@ export function acceptSessionRepositoryWorkspaceCheckpointInDatabase(
     throw new Error("Repository workspace checkpoint is invalid");
   }
   return mutate(db, input, nowMs, (current) => {
+    if (current.diskAuthority) {
+      throw new Error("A disk-authoritative repository cannot accept a mirrored checkpoint");
+    }
     if (!current.baseCommit || !current.baseManifestHash) {
       throw new Error("Repository workspace base has not been captured");
     }
     return { checkpoint_ref: input.checkpointRef, manifest_hash: input.manifestHash };
+  });
+}
+
+/** No runtime selector calls this until explicit I/O and publication support is installed. */
+export function bindSessionRepositoryWorkspaceDiskInDatabase(
+  db: EngineConnection,
+  input: RepositoryWorkspaceDiskBinding,
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  const authority = requireRepositoryWorkspaceDiskAuthority(input.diskAuthority);
+  return mutate(db, input, nowMs, (current) => {
+    if (current.diskAuthority) {
+      throw new Error("Repository workspace disk authority is immutable");
+    }
+    if (!current.baseCommit || !current.baseManifestHash) {
+      throw new Error("Repository workspace base has not been captured");
+    }
+    const placements = getNodeSqliteKysely<DB>(db);
+    const placement = executeSqliteQueryTakeFirstSync(
+      db,
+      placements
+        .selectFrom("worker_session_placements")
+        .selectAll()
+        .where("environment_id", "=", authority.environmentId)
+        .where("agent_id", "=", current.agentId)
+        .where("session_key", "=", current.sessionKey),
+    );
+    const environment = findWorkerEnvironment(db, authority.environmentId);
+    assertRepositoryWorkspaceDiskIdentity(authority, environment);
+    if (
+      !placement ||
+      placement.state !== "active" ||
+      placement.environment_id !== authority.environmentId ||
+      placement.active_owner_epoch !== environment?.ownerEpoch ||
+      environment?.state !== "attached" ||
+      environment.destroyRequestedAtMs !== null ||
+      environment.attachedSessionIds.length !== 1 ||
+      environment.attachedSessionIds[0] !== placement.session_id
+    ) {
+      throw new Error("Repository workspace disk has no exact session attachment");
+    }
+    if (
+      executeSqliteQueryTakeFirstSync(
+        db,
+        placements
+          .selectFrom("worker_workspace_pending_results")
+          .innerJoin(
+            "worker_session_placements",
+            "worker_session_placements.session_id",
+            "worker_workspace_pending_results.session_id",
+          )
+          .select("worker_workspace_pending_results.session_id")
+          .where("worker_session_placements.agent_id", "=", current.agentId)
+          .where("worker_session_placements.session_key", "=", current.sessionKey),
+      )
+    ) {
+      throw new Error("Settle the pending mirrored workspace result before binding disk authority");
+    }
+    if (placement.turn_claim_id !== null) {
+      throw new Error("Finish the active workspace turn before binding disk authority");
+    }
+    return { disk_authority_json: JSON.stringify(authority) };
+  });
+}
+
+/** Local session binding is verified by the materializer's retained source at both grants. */
+export function retireSessionRepositoryWorkspaceDiskInDatabase(
+  db: EngineConnection,
+  input: RepositoryWorkspaceDiskRetirement,
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  if (!resultRefPattern.test(input.checkpointRef) || !manifestPattern.test(input.manifestHash)) {
+    throw new Error("Repository disk export is invalid");
+  }
+  return mutate(db, input, nowMs, (repository) => {
+    const { claim } = input;
+    const placement = getRequired(db, claim.sessionId);
+    const pending = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .selectFrom("worker_workspace_pending_results")
+        .selectAll()
+        .where("session_id", "=", claim.sessionId),
+    );
+    const move = readWorkerPlacementMovesReadOnly(db, [claim.sessionId]).get(claim.sessionId);
+    if (
+      !repository.diskAuthority ||
+      placement.state !== "draining" ||
+      !pending ||
+      !matchesWorkspaceResultClaim(placement, pendingResultFromRow(pending), claim) ||
+      placement.agentId !== repository.agentId ||
+      placement.sessionKey !== repository.sessionKey ||
+      move?.target.kind !== "gateway" ||
+      move.abandonSource ||
+      move.source.environmentId !== placement.environmentId ||
+      move.source.ownerEpoch !== placement.activeOwnerEpoch ||
+      move.source.generation + 1 !== placement.generation ||
+      claim.claimId !== claim.runId ||
+      !claim.claimId.startsWith("reclaim-") ||
+      pending.repository_workspace_id !== repository.workspaceId ||
+      pending.staged_result_ref !== input.checkpointRef ||
+      pending.repository_disk_authority_json === null
+    ) {
+      throw new Error("Repository disk retirement lost its exact Gateway move result");
+    }
+    const environment = findWorkerEnvironment(db, placement.environmentId);
+    assertRepositoryWorkspaceDiskIdentity(repository.diskAuthority, environment);
+    assertRepositoryWorkspaceDiskIdentity(
+      requireRepositoryWorkspaceDiskAuthority(JSON.parse(pending.repository_disk_authority_json)),
+      environment,
+    );
+    if (
+      environment?.state !== "attached" ||
+      environment.ownerEpoch !== placement.activeOwnerEpoch ||
+      environment.destroyRequestedAtMs !== null ||
+      environment.attachedSessionIds.length !== 1 ||
+      environment.attachedSessionIds[0] !== placement.sessionId
+    ) {
+      throw new Error("Repository disk retirement lost its original attachment");
+    }
+    // The local worktree is already bound. This export is a retained handoff receipt,
+    // not a new mirror source; pending-result custody still owns physical retirement.
+    return {
+      disk_authority_json: null,
+      checkpoint_ref: input.checkpointRef,
+      manifest_hash: input.manifestHash,
+    };
   });
 }
 

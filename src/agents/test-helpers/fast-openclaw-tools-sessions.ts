@@ -53,7 +53,14 @@ vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: () => [],
 }));
 
+// mock-isolation: Keep session-tool fixtures independent of activated channel registries and artifact fallback.
 vi.mock("../../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
+    id: rawId,
+    threadId: undefined,
+    baseConversationId: rawId,
+    parentConversationCandidates: [],
+  }),
   resolveSessionConversationRef: (sessionKey: string) => {
     const match =
       /^(?:agent:[^:]+:)?(?<channel>[^:]+):(?<kind>group|channel):(?<id>[^:]+)(?::topic:(?<threadId>[^:]+))?$/u.exec(

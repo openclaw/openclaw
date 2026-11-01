@@ -6,16 +6,12 @@ export async function resolveFeishuReasoningPreviewEnabled(params: {
   cfg: ClawdbotConfig;
   agentId: string;
   storePath: string;
-  sessionKey?: string;
+  sessionKey: string;
 }): Promise<boolean> {
   const configDefault =
     resolveAgentConfig(params.cfg, params.agentId)?.reasoningDefault ??
     params.cfg.agents?.defaults?.reasoningDefault ??
     "off";
-
-  if (!params.sessionKey) {
-    return configDefault === "stream";
-  }
 
   try {
     const level = (

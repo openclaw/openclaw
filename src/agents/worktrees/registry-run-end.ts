@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { SqliteWorkerError, type SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import {
+  wrapSqliteWorkerError,
+  type SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionFactory,
@@ -83,9 +86,12 @@ export async function runWorktreeRegistryCommand<T>(
   options.mutation.settle(outcome?.kind === "unknown");
   options.onSettlement?.(outcome?.kind ?? "not-entered");
   if (outcome?.kind === "unknown") {
-    throw Object.assign(new SqliteWorkerError(options.unknownMessage, "outcome-unknown"), {
-      cause: ("error" in result ? result.error : undefined) ?? outcome.error,
-    });
+    throw wrapSqliteWorkerError(
+      options.unknownMessage,
+      "outcome-unknown",
+      "error" in result ? result.error : undefined,
+      outcome.error,
+    );
   }
   if ("value" in result) {
     return result.value;

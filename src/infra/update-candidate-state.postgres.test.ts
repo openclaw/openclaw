@@ -6,17 +6,24 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { checkTargetDatabaseSchemasForContexts } from "../cli/update-cli/schema-preflight.js";
+import { checkTargetDatabaseSchemasForContexts as checkSchemas } from "../cli/update-cli/schema-preflight.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBackupEngine } from "../snapshot/database-backup.js";
-import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { withArtifactPreservingStateReads as preserveArtifacts } from "../state/artifact-preserving-state-reads.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION as AGENT_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION as STATE_VERSION } from "../state/openclaw-state-db-contract.js";
 import { agentPortProvider } from "./database-engine/agent-port.js";
+import { writePortAnchor } from "./database-engine/port-backup.test-support.js";
 import { materializeDatabasePort } from "./database-engine/port.worker.js";
 import { statePortProvider } from "./database-engine/state-port.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import { ignoreMissingPath } from "./errno.js";
+import { openNodeSqliteDatabase as openDatabase } from "./node-sqlite.js";
+import {
+  prepareSqliteDatabaseCleanClose,
+  recordSqliteDatabaseIntegrity,
+} from "./sqlite-database-admission.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
+import { readUpdateStateSchemaVersions as readVersions } from "./update-candidate-state.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -28,33 +35,40 @@ const choices = [
   "retained-postgres-agent",
   "retained-sqlite-agent",
 ] as const;
+const schemaVersions = { state: STATE_VERSION, agent: AGENT_VERSION };
+type Fixture = { stateDir: string; shared: string; agent: string; config: OpenClawConfig };
+const contextFor = ({ stateDir, config }: Fixture) => ({
+  config,
+  env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+});
+const inspect = (fixture: Fixture) =>
+  readVersions({
+    ...fixture,
+    ...contextFor(fixture),
+    additionalPaths: [],
+    preserveSourceArtifacts: true,
+  });
+const admit = (fixture: Fixture, versions = schemaVersions) =>
+  preserveArtifacts(() => checkSchemas(versions, [contextFor(fixture)]));
 
 async function readArtifacts(files: string[]) {
   return Promise.all(
-    files.map(async (file) => {
-      const base = path.basename(file);
-      const names = (await fs.readdir(path.dirname(file)))
-        .filter((name) => [base, `${base}-wal`, `${base}-shm`].includes(name))
-        .toSorted();
-      return {
-        file,
-        names,
-        bytes: await Promise.all(
-          names.map((name) => fs.readFile(path.join(path.dirname(file), name))),
-        ),
-      };
-    }),
+    files.map((file) =>
+      Promise.all(
+        ["", "-wal", "-shm"].map(async (suffix) => [
+          suffix,
+          await fs.readFile(file + suffix).catch(ignoreMissingPath),
+        ]),
+      ),
+    ),
   );
 }
 
 describe.skipIf(!connection)("mixed-engine update inventory", () => {
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
-  let walAgent: ReturnType<typeof openNodeSqliteDatabase> | undefined;
-  const fixtures = new Map<
-    string,
-    { stateDir: string; shared: string; agent: string; config: OpenClawConfig }
-  >();
+  let walAgent: ReturnType<typeof openDatabase> | undefined;
+  const fixtures = new Map<string, Fixture>();
   beforeAll(async () => {
     await client.connect();
     const stateDescriptor = await statePortProvider.loadDescriptor();
@@ -65,8 +79,8 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
       const agent = path.join(stateDir, "retained", "agent.sqlite");
       await fs.mkdir(path.dirname(shared));
       await fs.mkdir(path.dirname(agent));
-      const defaultPg = choice === "postgres-agents" || choice === "retained-sqlite-agent";
-      const statePg = choice === "postgres-state" || defaultPg;
+      const defaultPg = choice === "retained-sqlite-agent";
+      const statePg = choice === "postgres-state" || choice === "postgres-agents" || defaultPg;
       const agentPg = choice === "postgres-agents" || choice === "retained-postgres-agent";
       const config: OpenClawConfig = {
         database: {
@@ -75,6 +89,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
             ? undefined
             : {
                 state: { engine: statePg ? "postgres" : "sqlite" },
+                agent: { engine: choice === "postgres-agents" ? "postgres" : "sqlite" },
                 workboard: { engine: "postgres" },
               },
           postgres: { connection: connection! },
@@ -85,21 +100,21 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
         [agent, agentDescriptor, agentPg],
       ] as const) {
         const source = postgres ? `${file}.source` : file;
-        using db = openNodeSqliteDatabase(source);
+        using db = openDatabase(source);
         db.exec(descriptor.sqlite);
         for (const fragment of descriptor.fragments ?? []) {
           db.exec(fragment.sqlite);
         }
         if (file === shared) {
-          db.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION};
-            INSERT INTO schema_meta VALUES ('primary','global',${OPENCLAW_STATE_SCHEMA_VERSION},NULL,NULL,1,1);
-            INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${OPENCLAW_STATE_SCHEMA_VERSION}',1)`);
+          db.exec(`PRAGMA user_version=${STATE_VERSION};
+            INSERT INTO schema_meta VALUES ('primary','global',${STATE_VERSION},NULL,NULL,1,1);
+            INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${STATE_VERSION}',1)`);
           db.prepare(
             "INSERT INTO agent_databases (agent_id,path,schema_version,last_seen_at) VALUES ('retained',?,?,1)",
-          ).run(agent, OPENCLAW_AGENT_SCHEMA_VERSION);
+          ).run(agent, AGENT_VERSION);
         } else {
-          db.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION};
-            INSERT INTO schema_meta VALUES ('primary','agent',${OPENCLAW_AGENT_SCHEMA_VERSION},'retained',NULL,1,1)`);
+          db.exec(`PRAGMA user_version=${AGENT_VERSION};
+            INSERT INTO schema_meta VALUES ('primary','agent',${AGENT_VERSION},'retained',NULL,1,1)`);
         }
         if (postgres) {
           const storeId = randomUUID();
@@ -112,17 +127,17 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
             storeId,
             assertCurrent() {},
           });
-          using anchor = openNodeSqliteDatabase(file);
-          anchor.exec(
-            "CREATE TABLE openclaw_engine_anchor(store_id TEXT, engine TEXT, schema TEXT)",
-          );
-          anchor
-            .prepare("INSERT INTO openclaw_engine_anchor VALUES (?,'postgres',?)")
-            .run(storeId, namespace);
+          writePortAnchor(file, storeId, namespace, true);
+          using anchor = openDatabase(file);
+          admitSqliteSchema(anchor);
+          recordSqliteDatabaseIntegrity(anchor);
+          using seal = prepareSqliteDatabaseCleanClose(anchor);
+          anchor.close();
+          expect(seal.publish()).toBe(true);
         }
       }
       if (choice === "retained-sqlite-agent") {
-        walAgent = openNodeSqliteDatabase(agent);
+        walAgent = openDatabase(agent);
         walAgent.exec(
           "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE retained_wal_probe(value TEXT); INSERT INTO retained_wal_probe VALUES ('retained')",
         );
@@ -139,74 +154,35 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
     await client.end();
   });
 
-  it.each(choices)("inspects selected state and physical retained agents: %s", async (choice) => {
+  it.each(choices)("inspects and admits selected state and retained agents: %s", async (choice) => {
     const fixture = fixtures.get(choice)!;
     const files = [fixture.shared, fixture.agent];
     const before = await readArtifacts(files);
-    const versions = await readUpdateStateSchemaVersions({
-      ...fixture,
-      env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-      additionalPaths: [],
-      preserveSourceArtifacts: true,
+    const versions = await inspect(fixture);
+    expect(versions.find((entry) => entry.path === fixture.shared)).toMatchObject({
+      userVersion: STATE_VERSION,
+      contentVersion: STATE_VERSION,
     });
-    expect(versions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: fixture.shared,
-          userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-          contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        }),
-        { path: fixture.agent, userVersion: OPENCLAW_AGENT_SCHEMA_VERSION },
-      ]),
-    );
+    expect(versions.find((entry) => entry.path === fixture.agent)?.userVersion).toBe(AGENT_VERSION);
+    expect(await readArtifacts(files)).toEqual(before);
+    for (const kind of ["state", "agent"] as const) {
+      const incompatible = [
+        {
+          kind,
+          path: kind === "state" ? fixture.shared : fixture.agent,
+          foundVersion: schemaVersions[kind],
+          supportedVersion: schemaVersions[kind] - 1,
+        },
+      ];
+      const result = await admit(fixture, { ...schemaVersions, [kind]: schemaVersions[kind] - 1 });
+      expect(result).toMatchObject({ indeterminate: [], incompatible });
+    }
+    expect(await admit(fixture)).toMatchObject({ indeterminate: [], incompatible: [] });
     expect(await readArtifacts(files)).toEqual(before);
   });
 
-  it.each(choices)(
-    "public update admission inspects the selected state and physical agent: %s",
-    async (choice) => {
-      const fixture = fixtures.get(choice)!;
-      const files = [fixture.shared, fixture.agent];
-      const before = await readArtifacts(files);
-      const versions = {
-        state: OPENCLAW_STATE_SCHEMA_VERSION,
-        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-      };
-      for (const kind of ["state", "agent"] as const) {
-        const result = await withArtifactPreservingStateReads(() =>
-          checkTargetDatabaseSchemasForContexts({ ...versions, [kind]: versions[kind] - 1 }, [
-            {
-              config: fixture.config,
-              env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-            },
-          ]),
-        );
-        expect(result.indeterminate).toEqual([]);
-        expect(result.incompatible).toEqual([
-          expect.objectContaining({
-            kind,
-            path: kind === "state" ? fixture.shared : fixture.agent,
-            foundVersion: versions[kind],
-            supportedVersion: versions[kind] - 1,
-          }),
-        ]);
-      }
-      const compatible = await withArtifactPreservingStateReads(() =>
-        checkTargetDatabaseSchemasForContexts(versions, [
-          {
-            config: fixture.config,
-            env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-          },
-        ]),
-      );
-      expect(compatible.indeterminate).toEqual([]);
-      expect(compatible.incompatible).toEqual([]);
-      expect(await readArtifacts(files)).toEqual(before);
-    },
-  );
-
-  it.each([OPENCLAW_AGENT_SCHEMA_VERSION - 1, OPENCLAW_AGENT_SCHEMA_VERSION + 1])(
-    "reports a retained PostgreSQL agent's physical version %s instead of the descriptor version",
+  it.each([AGENT_VERSION - 1, AGENT_VERSION + 1])(
+    "admits an older selected PostgreSQL agent and refuses a newer server version: %s",
     async (version) => {
       const fixture = fixtures.get("postgres-agents")!;
       const anchor = readBackupEngine(fixture.agent);
@@ -214,27 +190,21 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
         throw new Error("Expected the retained PostgreSQL agent fixture");
       }
       const before = await fs.readFile(fixture.agent);
-      await client.query(
-        `UPDATE "${anchor.namespace}".openclaw_schema_meta SET version = $1 WHERE store = 'agent'`,
-        [version],
-      );
+      const setVersion = (physicalVersion: number) =>
+        client.query(
+          `UPDATE "${anchor.namespace}".openclaw_schema_meta SET version = $1 WHERE store = 'agent'`,
+          [physicalVersion],
+        );
+      await setVersion(version);
       try {
-        const versions = await readUpdateStateSchemaVersions({
-          ...fixture,
-          env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-          additionalPaths: [],
-          preserveSourceArtifacts: true,
-        });
-        expect(versions.find((entry) => entry.path === fixture.agent)).toEqual({
-          path: fixture.agent,
-          userVersion: version,
-        });
+        const versions = await inspect(fixture);
+        expect(versions.find((entry) => entry.path === fixture.agent)?.userVersion).toBe(version);
+        const result = await admit(fixture);
+        expect(result.indeterminate).toEqual([]);
+        expect(result.incompatible).toHaveLength(version > AGENT_VERSION ? 1 : 0);
         expect(await fs.readFile(fixture.agent)).toEqual(before);
       } finally {
-        await client.query(
-          `UPDATE "${anchor.namespace}".openclaw_schema_meta SET version = $1 WHERE store = 'agent'`,
-          [OPENCLAW_AGENT_SCHEMA_VERSION],
-        );
+        await setVersion(AGENT_VERSION);
       }
     },
   );

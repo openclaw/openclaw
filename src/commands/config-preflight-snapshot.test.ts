@@ -4,11 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as retry from "@openclaw/retry";
 import { expect, it, vi } from "vitest";
+import { expectBytesEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
@@ -16,6 +18,7 @@ import {
   readDeferredPluginMigrationsAsync,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteReadOnlyWorkerError } from "../infra/sqlite-readonly-worker-protocol.js";
@@ -37,6 +40,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createConfigPreflightSnapshotReader,
   readAdmittedConfigSnapshot,
@@ -50,7 +54,7 @@ function writeConfig(
 ) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  writeFixtureJsonSync(configPath, config);
   return configPath;
 }
 
@@ -66,9 +70,56 @@ async function retiredDatabase(revoke = false) {
 function databaseFamily(databasePath: string) {
   return ["", "-wal", "-shm"].map((suffix) => {
     const pathname = databasePath + suffix;
-    return fs.existsSync(pathname) ? fs.readFileSync(pathname) : null;
+    return { bytes: fs.existsSync(pathname) ? fs.readFileSync(pathname) : null };
   });
 }
+
+const metadataOptions = {
+  allowCurrentPluginMetadata: false,
+  includePluginMetadata: true,
+  skipPluginValidation: false,
+  observe: false,
+} as const;
+const readCore = () => readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
+const admissionRefusal = (
+  options: Partial<Parameters<typeof createAgentDatabaseInspectionRefusal>[0]>,
+) =>
+  new AgentDatabaseAdmissionError(
+    createAgentDatabaseInspectionRefusal({
+      agentId: "requested",
+      paths: ["/synthetic/agent.sqlite"],
+      reason: "storage unavailable",
+      ...options,
+    }),
+  );
+
+it("reports completed plugin metadata work in startup admission traces", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    writeConfig(home);
+    await withEnvAsync({ OPENCLAW_GATEWAY_STARTUP_TRACE: "1" }, async () => {
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        await using snapshots = createConfigPreflightSnapshotReader();
+        const result = await readAdmittedConfigSnapshot({
+          env: process.env,
+          readSnapshot: () =>
+            snapshots.read({
+              ...metadataOptions,
+              purpose: "startup",
+            }),
+        });
+        expect(result.snapshot.valid).toBe(true);
+        const trace = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(trace).toMatch(/cli\.bootstrap\.admission\.plugin-metadata-completion [\d.]+ms/);
+        expect(trace).toMatch(
+          /cli\.bootstrap\.admission\.plugin-config [^\n]+ registrySnapshotMs=[\d.]+[^\n]+ indexPluginCount=\d+ manifestPluginCount=\d+/,
+        );
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+  });
+});
 
 it("preserves a proven schema failure while completing plugin metadata", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
@@ -92,7 +143,7 @@ it("preserves a proven schema failure while completing plugin metadata", async (
       name: "SqliteSchemaMismatchError",
       message: expect.stringContaining("Invalid shared state schema content version"),
     });
-    expect(fs.readFileSync(pathname)).toEqual(before);
+    expectBytesEqual(fs.readFileSync(pathname), before, pathname);
   });
 });
 
@@ -156,14 +207,7 @@ it.each([
             ? new AggregateError([inspectionFailure, mismatch], "read admission failed")
             : mismatch;
     } else if (phase === "pending inspection" || phase === "failed inspection") {
-      failure = new AgentDatabaseAdmissionError(
-        createAgentDatabaseInspectionRefusal({
-          agentId: "requested",
-          paths: ["/synthetic/agent.sqlite"],
-          reason: "storage unavailable",
-          pending: phase === "pending inspection",
-        }),
-      );
+      failure = admissionRefusal({ pending: phase === "pending inspection" });
     } else if (phase === "proven integrity damage" || phase === "unavailable integrity check") {
       const integrity = new Error(
         "SQLite integrity_check failed",
@@ -172,14 +216,7 @@ it.each([
           : undefined,
       );
       integrity.name = "SqliteIntegrityError";
-      failure = new AgentDatabaseAdmissionError(
-        createAgentDatabaseInspectionRefusal({
-          agentId: "requested",
-          paths: ["/synthetic/agent.sqlite"],
-          reason: integrity.message,
-          cause: integrity,
-        }),
-      );
+      failure = admissionRefusal({ reason: integrity.message, cause: integrity });
     }
     const read = readAdmittedConfigSnapshot({
       env: process.env,
@@ -237,24 +274,22 @@ it("waits through temporary schema custody before reading startup configuration 
     const before = fs.readFileSync(databasePath);
     const marker = resolveGatewayStateOwnerPath(databasePath);
     fs.mkdirSync(path.dirname(marker), { recursive: true });
-    fs.writeFileSync(
-      marker,
-      JSON.stringify({
-        pid: process.ppid,
-        ownerId: "synthetic-schema-owner",
-        createdAt: new Date().toISOString(),
-        configPath,
-        role: "sqlite-maintenance",
-        stateOwnerKind: "schema",
-      }),
-    );
+    writeFixtureJsonSync(marker, {
+      pid: process.ppid,
+      ownerId: "synthetic-schema-owner",
+      processNamespace: readGatewayLockProcessNamespace(),
+      createdAt: new Date().toISOString(),
+      configPath,
+      role: "sqlite-maintenance",
+      stateOwnerKind: "schema",
+    });
     const readSnapshot = vi.fn(async () => ({
-      snapshot: await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" }),
+      snapshot: await readCore(),
     }));
     const now = vi.spyOn(performance, "now").mockReturnValue(0);
     const wait = vi.spyOn(retry, "sleepWithAbort").mockImplementation(async () => {
       expect(readSnapshot).not.toHaveBeenCalled();
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       if (wait.mock.calls.length === 1) {
         now.mockReturnValue(9_000);
       } else {
@@ -267,7 +302,7 @@ it("waits through temporary schema custody before reading startup configuration 
       expect(result.snapshot.valid).toBe(true);
       expect(wait).toHaveBeenCalledTimes(2);
       expect(readSnapshot).toHaveBeenCalledOnce();
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
     } finally {
       wait.mockRestore();
       now.mockRestore();
@@ -368,17 +403,14 @@ it("shares startup validation and discovery reads, then releases them before rea
           expect(readBundledDiscoveryMode(options)).toBe("compat");
         },
         readSnapshot: async () => {
-          const snapshot = await readConfigFileSnapshot({
-            observe: false,
-            pluginValidation: "core-only",
-          });
+          const snapshot = await readCore();
           expect(readBundledDiscoveryMode(options)).toBe("compat");
-          expect(family()).toEqual(before);
+          expectFilesEqual(family(), before);
           // A different owner commits between the two metadata reads.
           setMetadata.run('"allowlist"', '{"generation":"after"}');
           afterWrite = family();
           expect(readIndex()).toBe('{"generation":"before"}');
-          expect(family()).toEqual(afterWrite);
+          expectFilesEqual(family(), afterWrite);
           return { snapshot };
         },
         beforeStatePreparation: async () => {
@@ -389,7 +421,7 @@ it("shares startup validation and discovery reads, then releases them before rea
       });
       expect(result.snapshot.valid).toBe(true);
       expect(validations).toEqual(['{"generation":"before"}', '{"generation":"before"}']);
-      expect(family()).toEqual(afterWrite);
+      expectFilesEqual(family(), afterWrite);
     } finally {
       writer.close();
       closeOpenClawStateDatabaseForTest();
@@ -427,10 +459,7 @@ it.each([
     });
     fs.writeFileSync(configPath, activeRaw);
     fs.writeFileSync(`${configPath}.bak`, backupRaw);
-    const initial = await readConfigFileSnapshot({
-      observe: false,
-      pluginValidation: "core-only",
-    });
+    const initial = await readCore();
     expect(initial.valid).toBe(legacyIdentity);
 
     await recordDeferredPluginMigrations({
@@ -464,18 +493,15 @@ it.each([
         runStartupConfigPreflight({ gateway: true, observe: false }),
       ).rejects.toMatchObject({
         code: 78,
-        message: expect.stringContaining("Legacy device identity exists"),
+        message: expect.stringContaining("Legacy client credentials require migration"),
       });
       expect(fs.readFileSync(identityPath, "utf8")).toBe(identityRaw);
     } else {
       await using snapshots = createConfigPreflightSnapshotReader();
       const result = await withArtifactPreservingStateReads(async () =>
         snapshots.read({
+          ...metadataOptions,
           purpose: "doctor",
-          allowCurrentPluginMetadata: false,
-          includePluginMetadata: true,
-          skipPluginValidation: false,
-          observe: false,
           deferredPluginMigrations: await readDeferredPluginMigrationsAsync(),
         }),
       );
@@ -490,6 +516,6 @@ it.each([
     }
     expect(fs.readFileSync(configPath, "utf8")).toBe(activeRaw);
     expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backupRaw);
-    expect(databaseFamily(databasePath)).toEqual(before);
+    expectFilesEqual(databaseFamily(databasePath), before);
   });
 });

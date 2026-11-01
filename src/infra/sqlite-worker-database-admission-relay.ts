@@ -2,13 +2,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromise } from "node:util/types";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   readSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,
 } from "./sqlite-database-admission-record.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
-import { readSqliteWorkerMonotonicNs, SqliteWorkerError } from "./sqlite-worker-contract.js";
+import {
+  readSqliteWorkerMonotonicNs,
+  SqliteWorkerError,
+  wrapSqliteWorkerError,
+} from "./sqlite-worker-contract.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
@@ -61,17 +65,18 @@ export function readSqliteDatabaseAdmissionDeadline(): number | undefined {
   return deadline;
 }
 
-function assertAdmissionWaitActive(): void {
+export function assertSqliteDatabaseAdmissionWaitActive(): void {
   try {
     for (let scope = admissionWait.getStore(); scope; scope = scope.parent) {
       if (scope.active) {
         scope.wait.assertActive?.();
       }
     }
-  } catch {
-    throw new SqliteWorkerError(
+  } catch (error) {
+    throw wrapSqliteWorkerError(
       "SQLite admission facts exchange cancelled by its caller",
       "unavailable",
+      error,
     );
   }
 }
@@ -129,7 +134,7 @@ export function exchangeDatabaseAdmissions(
       : Math.max(0, deadlineAtMs - Date.now());
   const deadlineNs = readSqliteWorkerMonotonicNs() + BigInt(Math.ceil(timeoutMs)) * 1_000_000n;
   const remaining = () => {
-    assertAdmissionWaitActive();
+    assertSqliteDatabaseAdmissionWaitActive();
     const remainingMs = Number(deadlineNs - readSqliteWorkerMonotonicNs()) / 1e6;
     if (remainingMs <= 0) {
       throw new SqliteWorkerError(

@@ -2,6 +2,7 @@ import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+import type { CliBackendTurnStatus } from "./cli-backend-turn-status.types.js";
 
 type CliBackendNoOutputWatchdog = {
   /** Fraction of overall timeout used when fixed timeout is not set. */
@@ -129,6 +130,8 @@ export type CliBackendExecutionMode = "agent" | "side-question";
 /** Exact backend-native plus canonical OpenClaw tool surface for one CLI run. */
 export type CliBackendToolAvailability = {
   native: readonly string[];
+  /** Read-only native discovery of the already-authorized catalog; grants no execution authority. */
+  discovery?: readonly string[];
   /** Canonical OpenClaw tool names served through the host-isolated transport. */
   openClaw: readonly string[];
 };
@@ -210,7 +213,18 @@ export type CliBackendMessageInjection = {
    * Ask the host to prepare current authority and invoke the synchronous native write.
    * Resolve only after the runtime acknowledges consumption, not after the write.
    */
-  queueMessage(text: string, withCurrent: (submit: () => void) => Promise<void>): Promise<void>;
+  queueMessage(
+    text: string,
+    withCurrent: (submit: () => void) => Promise<void>,
+    /** Per-input attribution and private context; never inherit the initial turn's. */
+    options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
+  ): Promise<void>;
+};
+
+/** Graceful end of the admitted turn without retiring its reusable native session. */
+export type CliBackendTurnInterrupt = {
+  /** Request the turn end; its execution stream must then finish normally. */
+  interrupt(reason: "yield"): Promise<void>;
 };
 
 /** Turn-only context that must not become an operator-authored native transcript row. */
@@ -229,6 +243,12 @@ export type CliBackendExecuteContext = {
   env: Record<string, string>;
   prompt: string;
   promptContext?: CliBackendPromptContext;
+  /**
+   * `host`: OpenClaw generated or forwarded this input, rather than a person
+   * typing it in this session. Apply the native non-user input marker when available.
+   * Canonical transcript provenance owns its visibility and sender attribution.
+   */
+  promptOrigin?: "host";
   modelId: string;
   systemPrompt: string;
   sessionId?: string;
@@ -243,6 +263,10 @@ export type CliBackendExecuteContext = {
   liveSession?: CliBackendLiveSessionCapability;
   /** Offers same-turn input for this run; the host drops it when the run closes. */
   registerMessageInjection?: (injection: CliBackendMessageInjection) => void;
+  /** Offers graceful turn interruption; the host drops the registration when this run closes. */
+  registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt) => void;
+  /** Optional read-only assessment outside the prompt queue; the host owns its time bound. */
+  registerTurnStatus?: (status: CliBackendTurnStatus) => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,
@@ -260,11 +284,15 @@ export type CliBackendResolveExecutionArgsContext = Omit<
   CliBackendPrepareExecutionContext,
   "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
 > & {
+  /** Agent identity used to resolve per-agent execution policy. */
+  agentId?: string;
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
   /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
   hostOwnedTools?: readonly string[];
   useResume: boolean;
+  /** The backend process is executing a native control operation. */
+  controlOperation?: "compact";
   baseArgs: readonly string[];
 };
 
@@ -514,6 +542,19 @@ type CliBackendPluginBase = {
    * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /** Native tool that only discovers schemas from the authorized MCP catalog. */
+  nativeToolSearch?: string;
+  /**
+   * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
+   * otherwise expose no native tools. Core applies the same list to ordinary and
+   * verified completion turns, so return only tools that confer no capability
+   * through `projectNativeToolAuthority`; caller caps, restricted senders,
+   * delegated execution, and workspace-only runs still receive none.
+   */
+  resolveManagedNativeTools?: (ctx: {
+    config?: OpenClawConfig;
+    agentId: string;
+  }) => readonly string[];
   /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *
@@ -521,6 +562,8 @@ type CliBackendPluginBase = {
    * renders them but does not treat them as host tool execution or delivery evidence.
    */
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  /** Normalize backend-native failures into diagnostic codes without changing retry policy. */
+  classifyErrorCode?: (message: string) => string | undefined;
   /**
    * Optional lifecycle parser kept separate from the legacy JSONL event union.
    * Existing plugins can continue exhaustively matching `parseJsonlEvent` results.

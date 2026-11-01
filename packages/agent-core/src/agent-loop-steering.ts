@@ -1,4 +1,8 @@
-import { getInternalSyncSteeringGetter } from "./internal-hooks.js";
+import {
+  attachInternalSteeringQueueObserver,
+  getInternalSteeringQueueObserver,
+  getInternalSyncSteeringGetter,
+} from "./internal-hooks.js";
 import type { AgentLoopConfig, AgentMessage } from "./types.js";
 
 export function getSteeringAtCheckpoint(
@@ -36,6 +40,12 @@ export function createStreamedSteeringConfig(config: AgentLoopConfig) {
       return messages;
     },
   };
+  if (streamedConfig.getSteeringMessages) {
+    attachInternalSteeringQueueObserver(
+      streamedConfig.getSteeringMessages,
+      getInternalSteeringQueueObserver(config.getSteeringMessages),
+    );
+  }
   return {
     config: streamedConfig,
     getTerminalConfig: () => (streamedSteering ? streamedConfig : config),

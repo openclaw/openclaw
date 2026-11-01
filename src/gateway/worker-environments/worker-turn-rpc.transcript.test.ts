@@ -1,7 +1,6 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -11,10 +10,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { SqliteWorkerOperations } from "../../infra/sqlite-worker-contract.js";
@@ -23,288 +18,300 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentWorkerStore from "../../state/openclaw-agent-worker-store.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createPlacementTurnClaimFixtureOps } from "./placement-test-fixtures.js";
-import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
-import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
+import {
+  bindClaimOwner,
+  claimAdmission,
+  claimService,
+  claimTarget,
+  seedClaim,
+  turnRequests,
+} from "./worker-turn-rpc-fixtures.test-support.js";
 import { prepareWorkerTurnTranscriptSource } from "./worker-turn-transcript-target.js";
 
-describe("worker transcript claim fences", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+type Owner = Awaited<ReturnType<typeof bindClaimOwner>>;
+function transcriptService(
+  store: Awaited<ReturnType<typeof seedClaim>>["store"],
+  getConfig: Parameters<typeof createWorkerTranscriptCommitter>[0]["getConfig"],
+) {
+  const committer = createWorkerTranscriptCommitter({
+    getConfig,
+    store: createWorkerTranscriptCommitStore({ database: support.testState.stateDb }),
+  });
+  return claimService(store, { applyTranscriptCommit: committer.commit });
+}
 
-  it.each(["replaced", "preparation"] as const)(
-    "does not persist or publish a transcript after its worker claim is fenced: %s",
-    async (scenario) => {
-      const identity = await support.seedAttachedIdentity(
-        "worker-commit-race",
-        "session-commit-race",
-      );
-      const { claim, store } = await claimWorkerPlacement({
-        environmentId: identity.environmentId,
-        ownerEpoch: identity.ownerEpoch,
-        sessionId: "session-commit-race",
-      });
-      identity.turnClaim = claim;
-      const target = {
-        agentId: "main",
-        sessionId: claim.sessionId,
-        sessionKey: `agent:main:${claim.sessionId}`,
-        storePath: path.join(support.testState.root, "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(target, {
-        sessionId: claim.sessionId,
-        lifecycleRevision: "unchanged-lifecycle",
-        updatedAt: 1,
-      });
-      const entryBefore = loadSessionEntry(target);
-      const applicationQueued = createDeferredCore();
-      const transcriptWorkerUrl = resolveRuntimeWorkerUrl(
-        runtimeProcessEntrypoints.workerTranscriptCommit,
-      ).href;
-      const openWorker = agentWorkerStore.openOpenClawAgentSqliteWorkerStore;
-      const openingWorker = vi
-        .spyOn(agentWorkerStore, "openOpenClawAgentSqliteWorkerStore")
-        .mockImplementation(
-          async <Operations extends SqliteWorkerOperations>(
-            ...args: Parameters<typeof openWorker<Operations>>
-          ) => {
-            const worker = await openWorker<Operations>(...args);
-            if (args[2].moduleUrl.href !== transcriptWorkerUrl) {
-              return worker;
-            }
-            return {
-              ...worker,
-              run<T>(...runArgs: Parameters<typeof worker.run<T>>): Promise<T> {
-                const pending = worker.run<T>(...runArgs);
-                // The real run queues synchronously behind the held transcript writer.
-                applicationQueued.resolve();
-                return pending;
-              },
-            };
-          },
-        );
-      const committer = createWorkerTranscriptCommitter({
-        getConfig: () => ({ session: { store: target.storePath } }),
-        store: createWorkerTranscriptCommitStore({ database: support.testState.stateDb }),
-      });
-      const workerService = support.createService(support.createProvider(), {
-        placementStore: createWorkerSessionPlacementGate(store),
-        applyTranscriptCommit: committer.commit,
-      });
-      const updates: unknown[] = [];
-      const unsubscribe = onSessionTranscriptUpdate((update) => {
-        if (update.sessionId === claim.sessionId) {
-          updates.push(update);
-        }
-      });
-      const instance = createOperationalRunInstanceRef(claim.runId);
-      const authority = claimAgentRunDelegatedAuthority(instance);
-      const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
-      const prepare = vi.fn((message: ReturnType<typeof makeAgentAssistantMessage>) => {
-        claimOps.releaseTurn(claim);
-        return message;
-      });
-      const writerHeld = createDeferredCore();
-      const releaseWriter = createDeferredCore();
-      const blocker = runExclusiveSqliteSessionWrite(
-        { agentId: target.agentId, path: target.storePath },
-        async () => {
-          writerHeld.resolve();
-          await releaseWriter.promise;
+async function transcriptFixture(name: string) {
+  const { claim, store, environmentIdentity } = await seedClaim(
+    `worker-${name}`,
+    `session-${name}`,
+  );
+  return { claim, store, identity: { ...environmentIdentity, turnClaim: claim } };
+}
+
+support.setupWorkerEnvironmentServiceSuite();
+
+it.each(["replaced", "preparation"] as const)(
+  "does not persist or publish a transcript after its worker claim is fenced: %s",
+  async (scenario) => {
+    const { claim, store, identity } = await transcriptFixture("commit-race");
+    const target = claimTarget(claim.sessionId, "openclaw-agent.sqlite");
+    await upsertSessionEntryCore(target, {
+      sessionId: claim.sessionId,
+      lifecycleRevision: "unchanged-lifecycle",
+      updatedAt: 1,
+    });
+    const entryBefore = loadSessionEntry(target);
+    const applicationQueued = createDeferredCore();
+    const transcriptWorkerUrl = resolveRuntimeWorkerUrl(
+      runtimeProcessEntrypoints.workerTranscriptCommit,
+    ).href;
+    const openWorker = agentWorkerStore.openOpenClawAgentSqliteWorkerStore;
+    const openingWorker = vi
+      .spyOn(agentWorkerStore, "openOpenClawAgentSqliteWorkerStore")
+      .mockImplementation(
+        async <Operations extends SqliteWorkerOperations>(
+          ...args: Parameters<typeof openWorker<Operations>>
+        ) => {
+          const worker = await openWorker<Operations>(...args);
+          if (args[2].moduleUrl.href !== transcriptWorkerUrl) {
+            return worker;
+          }
+          return {
+            ...worker,
+            run<T>(...runArgs: Parameters<typeof worker.run<T>>): Promise<T> {
+              const pending = worker.run<T>(...runArgs);
+              // The real run queues synchronously behind the held transcript writer.
+              applicationQueued.resolve();
+              return pending;
+            },
+          };
         },
-        "session.transcript.batch",
       );
-      let replacement: WorkerSessionTurnClaim | undefined;
-      let replacementAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
-      let commit: ReturnType<typeof workerService.commitTranscript> | undefined;
-      try {
-        await bindWorkerTurnOwner(
-          store,
-          claim,
-          undefined,
-          instance,
-          target,
-          () => {},
-          scenario === "preparation" ? prepare : undefined,
+    const workerService = transcriptService(store, () => ({
+      session: { store: target.storePath },
+    }));
+    const updates: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      if (update.sessionId === claim.sessionId) {
+        updates.push(update);
+      }
+    });
+    const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
+    const prepare = (message: ReturnType<typeof makeAgentAssistantMessage>) => {
+      claimOps.releaseTurn(claim);
+      return message;
+    };
+    const writerHeld = createDeferredCore();
+    const releaseWriter = createDeferredCore();
+    const blocker = runExclusiveSqliteSessionWrite(
+      { agentId: target.agentId, path: target.storePath },
+      async () => {
+        writerHeld.resolve();
+        await releaseWriter.promise;
+      },
+      "session.transcript.batch",
+    );
+    let replacement: WorkerSessionTurnClaim | undefined;
+    let owner: Owner | undefined;
+    let commit: ReturnType<typeof workerService.commitTranscript> | undefined;
+    const claimReplacement = () =>
+      store.claimTurn({
+        ...target,
+        claimId: "replacement-claim",
+        runId: "replacement-run",
+        owner: claim.owner,
+      });
+    try {
+      owner = await bindClaimOwner(store, claim, {
+        target,
+        prepare: scenario === "preparation" ? prepare : undefined,
+      });
+      await writerHeld.promise;
+      const request = support.transcriptRequest(identity, "queued before claim closure");
+      if (scenario === "preparation") {
+        request.messages.push(
+          makeAgentAssistantMessage({ content: [{ type: "text", text: "prepared after user" }] }),
         );
-        await writerHeld.promise;
-        const request = support.transcriptRequest(identity, "queued before claim closure");
-        if (scenario === "preparation") {
-          request.messages.push(
-            makeAgentAssistantMessage({ content: [{ type: "text", text: "prepared after user" }] }),
-          );
-        }
-        commit = workerService.commitTranscript(identity, request);
-        await awaitGateBeforeSettlement(
-          applicationQueued.promise,
-          commit,
-          "transcript commit settled before queuing its writer",
-        );
-        expect(await loadTranscriptEvents(target)).toEqual([]);
-        if (scenario !== "preparation") {
-          await store.releaseTurn(claim);
-          replacement = await store.claimTurn({
-            ...target,
-            claimId: "replacement-claim",
-            runId: "replacement-run",
-            owner: claim.owner,
-          });
-        }
-        releaseWriter.resolve();
-        await blocker;
-        await expect(commit).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-        expect(SessionManager.open(target).getEntries()).toEqual([]);
-        expect(loadSessionEntry(target)).toEqual(entryBefore);
-        expect(updates).toEqual([]);
-        expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
-        expect(prepare).toHaveBeenCalledTimes(scenario === "preparation" ? 1 : 0);
+      }
+      commit = workerService.commitTranscript(identity, request);
+      await awaitGateBeforeSettlement(
+        applicationQueued.promise,
+        commit,
+        "transcript commit settled before queuing its writer",
+      );
+      expect(await loadTranscriptEvents(target)).toEqual([]);
+      if (scenario !== "preparation") {
+        await store.releaseTurn(claim);
+        replacement = await claimReplacement();
+      }
+      releaseWriter.resolve();
+      await blocker;
+      await expect(commit).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      expect({
+        entries: SessionManager.open(target).getEntries(),
+        entry: loadSessionEntry(target),
+        updates,
+        cursor: store.get(claim.sessionId)?.lastTranscriptAckCursor,
+      }).toEqual({ entries: [], entry: entryBefore, updates: [], cursor: null });
+    } finally {
+      releaseWriter.resolve();
+      await blocker;
+      await Promise.allSettled([commit]);
+      openingWorker.mockRestore();
+      unsubscribe();
+      if (store.validateTurnClaim(replacement ?? claim)) {
+        await store.releaseTurn(replacement ?? claim);
+      }
+      owner?.release();
+    }
+  },
+);
 
-        replacement ??= await store.claimTurn({
-          ...target,
-          claimId: "replacement-claim",
-          runId: "replacement-run",
-          owner: claim.owner,
-        });
-        const replacementInstance = createOperationalRunInstanceRef(replacement.runId);
-        replacementAuthority = claimAgentRunDelegatedAuthority(replacementInstance);
-        await bindWorkerTurnOwner(
-          store,
-          replacement,
-          undefined,
-          replacementInstance,
-          target,
-          () => {},
-        );
-        const credential = await workerService.acquireTurnCredential(replacement);
-        expect(credential.ownerEpoch).toBe(identity.ownerEpoch);
-        expect(await workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
-        const admitted = await workerService.admitWorker({
-          environmentId: identity.environmentId,
-          credential: credential.credential,
-          sessionId: claim.sessionId,
-          runId: replacement.runId,
-          ownerEpoch: credential.ownerEpoch,
-          rpcSetVersion: 1,
-          handshake: support.BOOTSTRAP_RECEIPT,
-        });
-        expect(admitted.ok).toBe(true);
-        if (!admitted.ok) {
-          throw new Error("replacement worker was not admitted");
+it.each(["released", "replaced"] as const)(
+  "preserves committed progress when publication closes its worker claim: %s",
+  async (scenario) => {
+    const { claim, store, identity } = await transcriptFixture("publication-race");
+    const target = claimTarget(claim.sessionId, "openclaw-agent.sqlite");
+    await upsertSessionEntryCore(target, {
+      sessionId: claim.sessionId,
+      lifecycleRevision: "publication-race-lifecycle",
+      updatedAt: 1,
+    });
+    const workerService = transcriptService(store, () => ({
+      session: { store: target.storePath },
+    }));
+    const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
+    let replacement: WorkerSessionTurnClaim | undefined;
+    let owner: Owner | undefined;
+    let replacementOwner: Owner | undefined;
+    const replacementInput = {
+      ...target,
+      claimId: "replacement-publication-claim",
+      runId: "replacement-publication-run",
+      owner: claim.owner,
+    };
+    const updates: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      if (update.sessionId !== claim.sessionId) {
+        return;
+      }
+      updates.push(update);
+      if (updates.length === 1) {
+        claimOps.releaseTurn(claim);
+        if (scenario === "replaced") {
+          replacement = claimOps.claimTurn(replacementInput);
         }
-        const seq = (store.get(claim.sessionId)?.lastTranscriptAckCursor ?? 0) + 1;
-        expect(seq).toBe(request.seq);
+      }
+    });
+    try {
+      owner = await bindClaimOwner(store, claim, { target });
+      const firstRequest = support.transcriptRequest(identity, "committed before closure");
+      await expect(workerService.commitTranscript(identity, firstRequest)).resolves.toEqual({
+        ok: false,
+        closeReason: "placement-mismatch",
+      });
+      expect(SessionManager.open(target).getEntries()).toHaveLength(1);
+      expect(updates).toHaveLength(1);
+      expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(firstRequest.seq);
+
+      replacement ??= await store.claimTurn(replacementInput);
+      replacementOwner = await bindClaimOwner(store, replacement, { target });
+      const credential = await workerService.acquireTurnCredential(replacement);
+      expect(await workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
+      const admitted = await workerService.admitWorker(
+        claimAdmission(replacement, credential.credential),
+      );
+      assert(admitted.ok, "replacement worker was not admitted");
+      const nextSeq = (store.get(claim.sessionId)?.lastTranscriptAckCursor ?? 0) + 1;
+      expect(nextSeq).toBe(firstRequest.seq + 1);
+      const nextRequest = support.transcriptRequest(admitted.identity, "replacement progresses", {
+        seq: nextSeq,
+        baseLeafId: SessionManager.open(target).getLeafId(),
+      });
+      const result = await workerService.commitTranscript(admitted.identity, nextRequest);
+      expect(result).toMatchObject({ ok: true });
+      expect(SessionManager.open(target).getEntries()).toHaveLength(2);
+      expect(updates).toHaveLength(2);
+      expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(nextSeq);
+    } finally {
+      unsubscribe();
+      if (store.validateTurnClaim(replacement ?? claim)) {
+        await store.releaseTurn(replacement ?? claim);
+      }
+      owner?.release();
+      replacementOwner?.release();
+    }
+  },
+);
+
+it.each(["current", "deleted"] as const)(
+  "keeps an admitted transcript on its original store after configuration changes: %s",
+  async (scenario) => {
+    const { claim, store, identity } = await transcriptFixture("source");
+    const original = {
+      ...claimTarget(claim.sessionId, "original/sessions.json"),
+      expectedLifecycleRevision: "source-lifecycle",
+      expectedWriterRunId: claim.runId,
+    };
+    const replacement = {
+      ...original,
+      storePath: claimTarget(claim.sessionId, "replacement/sessions.json").storePath,
+    };
+    const entry = {
+      sessionId: claim.sessionId,
+      lifecycleRevision: original.expectedLifecycleRevision,
+      activeWriterRunId: claim.runId,
+      updatedAt: 1,
+    };
+    for (const target of [original, replacement]) {
+      await upsertSessionEntryCore(target, entry);
+    }
+    const replacementBefore = loadSessionEntry(replacement);
+    support.testState.config.session = { store: original.storePath };
+    const workerService = transcriptService(store, () => support.testState.config);
+    await using source = await prepareWorkerTurnTranscriptSource(original);
+    let owner: Owner | undefined;
+    try {
+      owner = await bindClaimOwner(store, claim, { target: original, assertCurrent: source });
+      support.testState.config.session = { store: replacement.storePath };
+      if (scenario === "deleted") {
         await expect(
-          workerService.commitTranscript(
-            admitted.identity,
-            support.transcriptRequest(admitted.identity, "replacement can commit", { seq }),
-          ),
-        ).resolves.toMatchObject({ ok: true });
-        expect(SessionManager.open(target).getEntries()).toHaveLength(1);
-        expect(updates).toHaveLength(1);
-        expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(seq);
-      } finally {
-        releaseWriter.resolve();
-        await blocker;
-        await Promise.allSettled([commit]);
-        openingWorker.mockRestore();
-        unsubscribe();
-        if (store.validateTurnClaim(replacement ?? claim)) {
-          await store.releaseTurn(replacement ?? claim);
-        }
-        releaseAgentRunDelegatedAuthority(authority);
-        if (replacementAuthority) {
-          releaseAgentRunDelegatedAuthority(replacementAuthority);
-        }
+          deleteSessionEntryLifecycle({
+            agentId: original.agentId,
+            storePath: original.storePath,
+            archiveTranscript: false,
+            target: { canonicalKey: original.sessionKey, storeKeys: [original.sessionKey] },
+          }),
+        ).resolves.toMatchObject({ deleted: true });
       }
-    },
-  );
-
-  it.each(["current", "deleted"] as const)(
-    "keeps an admitted transcript on its original store after configuration changes: %s",
-    async (scenario) => {
-      const identity = await support.seedAttachedIdentity("worker-source", "session-source");
-      const { claim, store } = await claimWorkerPlacement({
-        environmentId: identity.environmentId,
-        ownerEpoch: identity.ownerEpoch,
-        sessionId: "session-source",
-      });
-      identity.turnClaim = claim;
-      const original = {
-        agentId: "main",
-        sessionId: claim.sessionId,
-        sessionKey: `agent:main:${claim.sessionId}`,
-        storePath: path.join(support.testState.root, "original", "sessions.json"),
-        expectedLifecycleRevision: "source-lifecycle",
-        expectedWriterRunId: claim.runId,
-      };
-      const replacement = {
-        ...original,
-        storePath: path.join(support.testState.root, "replacement", "sessions.json"),
-      };
-      const entry = {
-        sessionId: claim.sessionId,
-        lifecycleRevision: original.expectedLifecycleRevision,
-        activeWriterRunId: claim.runId,
-        updatedAt: 1,
-      };
-      await upsertSessionEntryCore(original, entry);
-      await upsertSessionEntryCore(replacement, entry);
-      const replacementBefore = loadSessionEntry(replacement);
-      support.testState.config.session = { store: original.storePath };
-      const committer = createWorkerTranscriptCommitter({
-        getConfig: () => support.testState.config,
-        store: createWorkerTranscriptCommitStore({ database: support.testState.stateDb }),
-      });
-      const workerService = support.createService(support.createProvider(), {
-        placementStore: createWorkerSessionPlacementGate(store),
-        applyTranscriptCommit: committer.commit,
-      });
-      const instance = createOperationalRunInstanceRef(claim.runId);
-      const authority = claimAgentRunDelegatedAuthority(instance);
-      await using source = await prepareWorkerTurnTranscriptSource(original);
-      try {
-        await bindWorkerTurnOwner(store, claim, undefined, instance, original, source);
-        support.testState.config.session = { store: replacement.storePath };
-        if (scenario === "deleted") {
-          await expect(
-            deleteSessionEntryLifecycle({
-              agentId: original.agentId,
-              storePath: original.storePath,
-              archiveTranscript: false,
-              target: { canonicalKey: original.sessionKey, storeKeys: [original.sessionKey] },
+      const text = "Write only to the admitted source";
+      const result = turnRequests(identity, workerService).transcript(text);
+      if (scenario === "current") {
+        await expect(result).resolves.toMatchObject({ ok: true });
+        expect(SessionManager.open(original).getEntries()).toEqual([
+          expect.objectContaining({
+            message: expect.objectContaining({
+              role: "user",
+              content: [{ type: "text", text }],
             }),
-          ).resolves.toMatchObject({ deleted: true });
-        }
-        const result = workerService.commitTranscript(
-          identity,
-          support.transcriptRequest(identity, "Write only to the admitted source"),
-        );
-        if (scenario === "current") {
-          await expect(result).resolves.toMatchObject({ ok: true });
-          expect(SessionManager.open(original).getEntries()).toEqual([
-            expect.objectContaining({
-              message: expect.objectContaining({
-                role: "user",
-                content: [{ type: "text", text: "Write only to the admitted source" }],
-              }),
-            }),
-          ]);
-          expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(1);
-        } else {
-          await expect(result).rejects.toThrow("transcript identity is no longer current");
-          expect(loadSessionEntry(original)).toBeUndefined();
-          expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
-        }
-        expect(SessionManager.open(replacement).getEntries()).toEqual([]);
-        expect(loadSessionEntry(replacement)).toEqual(replacementBefore);
-      } finally {
-        if (store.validateTurnClaim(claim)) {
-          await store.releaseTurn(claim);
-        }
-        releaseAgentRunDelegatedAuthority(authority);
+          }),
+        ]);
+        expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(1);
+      } else {
+        await expect(result).rejects.toThrow("transcript identity is no longer current");
+        expect(loadSessionEntry(original)).toBeUndefined();
+        expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
       }
-    },
-  );
-});
+      expect(SessionManager.open(replacement).getEntries()).toEqual([]);
+      expect(loadSessionEntry(replacement)).toEqual(replacementBefore);
+    } finally {
+      if (store.validateTurnClaim(claim)) {
+        await store.releaseTurn(claim);
+      }
+      owner?.release();
+    }
+  },
+);

@@ -1,19 +1,29 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { withoutAgentColdArchiveChunks } from "./openclaw-agent-cold-archive-chunks-schema.js";
+import { withoutAgentColdNavigation } from "./openclaw-agent-cold-navigation-schema.js";
 import {
+  AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
+  AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
+  AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   SESSION_PARTICIPANTS_TABLE,
 } from "./openclaw-agent-db-contract.js";
+import { withLegacyAgentIndexes } from "./openclaw-agent-index-retirement-migration.js";
+import { withLegacyAgentMemoryRevisionTriggers } from "./openclaw-agent-memory-revision-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
   withoutSessionEntrySnapshotsSchema,
 } from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
+import { withoutTrajectoryPayloadColumns } from "./openclaw-agent-trajectory-storage-migration.js";
 
 // Schema 21–24 kept every raw writer observable through this required trigger group.
 export const LEGACY_ENTRY_VALIDITY_TRIGGERS_SQL = `
@@ -297,12 +307,40 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
+// Same-version schema-39 additions must not rewrite earlier admission contracts.
+const AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES = OPENCLAW_AGENT_SCHEMA_SQL.replace(
+  /\nCREATE INDEX IF NOT EXISTS idx_agent_(?:session_input_completions_session_key|conversation_deliveries_source_session)\b[^;]*;\n/gu,
+  "",
+);
+
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const schemaSql =
+    targetVersion < 39 ? AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES : OPENCLAW_AGENT_SCHEMA_SQL;
+  const navigationSchemaSql =
+    targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
+      ? withoutAgentColdNavigation(schemaSql)
+      : schemaSql;
+  const coldArchiveSchemaSql =
+    targetVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
+      ? withoutAgentColdArchiveChunks(navigationSchemaSql)
+      : navigationSchemaSql;
+  const revisionSchemaSql =
+    targetVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION
+      ? withLegacyAgentMemoryRevisionTriggers(coldArchiveSchemaSql)
+      : coldArchiveSchemaSql;
+  const trajectorySchemaSql =
+    targetVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION
+      ? withoutTrajectoryPayloadColumns(revisionSchemaSql)
+      : revisionSchemaSql;
+  const indexSchemaSql =
+    targetVersion < AGENT_INDEX_RETIREMENT_SCHEMA_VERSION
+      ? withLegacyAgentIndexes(trajectorySchemaSql)
+      : trajectorySchemaSql;
   const layoutSchemaSql =
     targetVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION
-      ? withLegacyAgentWriteLayout(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withLegacyAgentWriteLayout(indexSchemaSql)
+      : indexSchemaSql;
   const sequenceSchemaSql =
     targetVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION
       ? withoutOutboxEnqueueSequence(layoutSchemaSql)
@@ -340,10 +378,13 @@ export const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = extractSqliteTableSchema(
   },
 );
 export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
-const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = OPENCLAW_AGENT_SCHEMA_SQL.replace(
-  OPENCLAW_AGENT_BOARD_SCHEMA_SQL,
-  "",
-);
+const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = withLegacyAgentIndexes(
+  withoutTrajectoryPayloadColumns(
+    withLegacyAgentMemoryRevisionTriggers(
+      withoutAgentColdArchiveChunks(AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES),
+    ),
+  ),
+).replace(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "");
 
 export const SESSION_PROGRESS_CARDS_TABLE = "session_progress_cards";
 export const AGENT_PROGRESS_CARD_SCHEMA_SQL = extractSqliteTableSchema(

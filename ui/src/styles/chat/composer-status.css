@@ -16,17 +16,6 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
-.compaction-indicator svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
 .chat-compaction {
   margin: var(--space-5) 8px;
 }

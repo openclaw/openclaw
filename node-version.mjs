@@ -1,12 +1,17 @@
 // Zero-dependency runtime version contract shared by source and packaged entry points.
-export const MINIMUM_BUN_VERSION = { major: 1, minor: 4, patch: 3 };
+export const MINIMUM_BUN_VERSION = { major: 1, minor: 4, patch: 4 };
 
 const NODE_RELEASE_VERSION_RE =
-  /^v?((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+  /^v?((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 const NODE_RELEASE_FLOORS = [
   { major: 24, minor: 16, patch: 0 },
   { major: 26, minor: 1, patch: 0 },
+];
+// These security patches are strongly recommended, not runtime admission floors.
+const NODE_SECURITY_RELEASE_FLOORS = [
+  { major: 24, minor: 22, patch: 1 },
+  { major: 26, minor: 12, patch: 1 },
 ];
 const HIGHEST_RELEASE_FLOOR = NODE_RELEASE_FLOORS[NODE_RELEASE_FLOORS.length - 1];
 
@@ -33,6 +38,24 @@ export function formatUnsupportedNodeVersionMessage(version) {
 
 export function formatUnsupportedNodeDiagnosticWarning(version) {
   return `Running on an unsupported Node (${version}); diagnostics may show truncated text`;
+}
+
+export function formatNodeSecurityWarning(value) {
+  const version = parseNodeReleaseVersion(value);
+  if (!version) {
+    return null;
+  }
+  const minimum = NODE_SECURITY_RELEASE_FLOORS.find((floor) => floor.major === version.major);
+  if (
+    minimum ? isNodeVersionAtLeast(version, minimum) : version.major > HIGHEST_RELEASE_FLOOR.major
+  ) {
+    return null;
+  }
+  return (
+    `Node.js ${value} is below the recommended security patch level. ` +
+    "Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+ to reject the public keys " +
+    "compromised in the October 2026 eMudhra incident."
+  );
 }
 
 const ROOT_BOOLEAN_OPTIONS = ["--dev", "--no-color"];
@@ -146,7 +169,7 @@ export function canRunOpenClawNodeDiagnostics(value, hasNodeSqlite) {
   );
 }
 
-/** Parses an anchored release SemVer, allowing a leading v and valid build metadata. */
+/** Parses release SemVer; future-major prereleases use their numeric core for admission. */
 export function parseNodeReleaseVersion(value) {
   if (typeof value !== "string") {
     return null;
@@ -160,7 +183,12 @@ export function parseNodeReleaseVersion(value) {
     minor: Number(match[2]),
     patch: Number(match[3]),
   };
-  return Object.values(version).every(Number.isSafeInteger) ? version : null;
+  // Existing lines retain their release floors; development builds of the next
+  // major must not be locked out of installation and updates.
+  return Object.values(version).every(Number.isSafeInteger) &&
+    (!match[4] || version.major > HIGHEST_RELEASE_FLOOR.major)
+    ? version
+    : null;
 }
 
 export function isNodeVersionAtLeast(version, minimum) {
@@ -176,7 +204,7 @@ export function isNodeVersionAtLeast(version, minimum) {
   return version.patch >= minimum.patch;
 }
 
-/** Checks OpenClaw's supported release lines. Older Node lines with lossy SQLite TEXT reads are unsupported. */
+/** Checks compatibility floors; recommended security patches are reported separately. */
 export function isSupportedOpenClawNodeVersion(value) {
   const version = parseNodeReleaseVersion(value);
   if (!version) {
@@ -198,6 +226,7 @@ function renderProcessNodeVersionCheck() {
   const version = { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
   if (!Object.values(version).every(Number.isSafeInteger)) return false;
   const floors = ${releaseFloors};
+  if (match[4] && version.major <= floors[floors.length - 1].major) return false;
   const minimum = floors.find((floor) => floor.major === version.major);
   const atLeast = (floor) =>
     version.major > floor.major ||

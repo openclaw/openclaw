@@ -3,14 +3,21 @@
  * user-installed Codex from PATH when it passes the version policy and an
  * app-server handshake, otherwise the package shipped beside the Codex plugin.
  */
-import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
-import { access, open, realpath } from "node:fs/promises";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  openSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { parse as parseSemver } from "semver";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
@@ -49,7 +56,6 @@ const registeredCodexPlugin = resolveGlobalSingleton<{ root?: string }>(
 type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
   pluginRoot?: string;
-  pathExists?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
   /** False pins the shipped package, for callers that verify or mirror it. */
   preferInstalled?: boolean;
   /** Remaining allowance for installed selection, before bundled startup. */
@@ -84,13 +90,6 @@ const installedCodex = resolveGlobalSingleton<InstalledCodexAppServerState>(
   },
 );
 
-type InstalledCodexAppServerProbes = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  runVersion?: (nativeCommand: string) => Promise<string>;
-  probeHandshake?: (command: string) => Promise<string | undefined>;
-};
-
 type ResolveManagedCodexNativeCommandOptions = {
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
@@ -109,12 +108,7 @@ export function setManagedCodexPluginRoot(pluginRoot: string | undefined): void 
  */
 export async function resolveManagedCodexClientVersion(
   order: CodexManagedCommandOrder,
-  options: Pick<
-    ResolveManagedCodexAppServerOptions,
-    "platform" | "pathExists" | "selectionTimeoutMs"
-  > & {
-    probes?: InstalledCodexAppServerProbes;
-  } = {},
+  options: Pick<ResolveManagedCodexAppServerOptions, "platform" | "selectionTimeoutMs"> = {},
 ): Promise<string> {
   return (await resolveInstalledCodexForOrder(order, options))?.version ?? CODEX_APP_SERVER_VERSION;
 }
@@ -125,36 +119,28 @@ export async function resolveManagedCodexClientVersion(
  */
 async function resolveInstalledCodexForOrder(
   order: CodexManagedCommandOrder,
-  options: Pick<
-    ResolveManagedCodexAppServerOptions,
-    "platform" | "pathExists" | "selectionTimeoutMs"
-  > & {
-    probes?: InstalledCodexAppServerProbes;
-  },
+  options: Pick<ResolveManagedCodexAppServerOptions, "platform" | "selectionTimeoutMs">,
 ): Promise<InstalledCodexAppServer | undefined> {
   const platform = options.platform ?? process.platform;
-  const pathExists = options.pathExists ?? commandPathExists;
   if (order === "desktop-first") {
     for (const command of resolveMacOSDesktopCodexAppServerCommandCandidates(platform)) {
-      if (await pathExists(command, platform)) {
+      if (await commandPathExists(command, platform)) {
         return undefined;
       }
     }
   }
-  return resolveInstalledCodexAppServer(options.probes, options.selectionTimeoutMs);
+  return resolveInstalledCodexAppServer(options.selectionTimeoutMs);
 }
 
 /**
- * Selects the installed Codex once per process; later callers reuse the
- * decision, so probes only apply to the call that makes it.
+ * Selects the installed Codex once per process; later callers reuse the decision.
  */
 async function resolveInstalledCodexAppServer(
-  probes: InstalledCodexAppServerProbes = {},
   timeoutMs = INSTALLED_CODEX_PROBE_TIMEOUT_MS,
 ): Promise<InstalledCodexAppServer | undefined> {
   if (!installedCodex.selection) {
     installedCodex.pending = true;
-    const selection = decideInstalledCodexAppServer(probes).then((decision) => {
+    const selection = decideInstalledCodexAppServer().then((decision) => {
       if (installedCodex.selection !== selection) {
         return undefined;
       }
@@ -246,23 +232,22 @@ export function readInstalledCodexAppServerStatus(
   return installedCodex.rejected === command ? "rejected" : undefined;
 }
 
-async function decideInstalledCodexAppServer(
-  probes: InstalledCodexAppServerProbes,
-): Promise<{ found: string; selected: InstalledCodexAppServer } | { reason: string }> {
-  const env = probes.env ?? process.env;
-  const platform = probes.platform ?? process.platform;
+async function decideInstalledCodexAppServer(): Promise<
+  { found: string; selected: InstalledCodexAppServer } | { reason: string }
+> {
+  const env = process.env;
   const selectionDeadline = performance.now() + INSTALLED_CODEX_PROBE_TIMEOUT_MS;
   const found = resolveNodeHostExecutable("codex", { env, strategy: "direct" })?.executable;
   if (!found) {
     return { reason: "no codex on PATH" };
   }
-  const launcher = await resolveInstalledCodexLauncher(found, platform);
+  const launcher = resolveInstalledCodexLauncher(found, process.platform);
   if (!launcher) {
     return {
       reason: `installed ${found} is not a native Codex executable or the official ${MANAGED_CODEX_APP_SERVER_PACKAGE} launcher`,
     };
   }
-  if (isManagedCodexDesktopCommand(launcher.command, platform)) {
+  if (isManagedCodexDesktopCommand(launcher.command, process.platform)) {
     return { reason: `installed ${found} belongs to a macOS desktop app` };
   }
   let output: string;
@@ -271,9 +256,7 @@ async function decideInstalledCodexAppServer(
     return { reason: `installed ${found} selection timed out before the version check` };
   }
   try {
-    output = probes.runVersion
-      ? await probes.runVersion(launcher.nativeCommand)
-      : await runCodexVersionCommand(launcher.nativeCommand, process.env, versionTimeoutMs);
+    output = await runCodexVersionCommand(launcher.nativeCommand, process.env, versionTimeoutMs);
   } catch (error) {
     return { reason: `installed ${found} --version failed: ${coerceErrorMessage(error)}` };
   }
@@ -300,15 +283,10 @@ async function decideInstalledCodexAppServer(
   }
   let handshakeVersion: string | undefined;
   try {
+    // Lazy: the probe spawns through transport-stdio, which imports this module.
     handshakeVersion = await (
-      probes.probeHandshake ??
-      // Lazy: the probe spawns through transport-stdio, which imports this module.
-      (async (command) =>
-        (await import("./installed-probe.js")).probeCodexAppServerHandshake(
-          command,
-          handshakeTimeoutMs,
-        ))
-    )(launcher.command);
+      await import("./installed-probe.js")
+    ).probeCodexAppServerHandshake(launcher.command, handshakeTimeoutMs);
   } catch (error) {
     return {
       reason: `installed ${found} ${version} failed the app-server handshake: ${coerceErrorMessage(error)}`,
@@ -323,16 +301,16 @@ async function decideInstalledCodexAppServer(
 }
 
 /** Accepts native executables and the official npm launcher, never other script wrappers. */
-async function resolveInstalledCodexLauncher(
+function resolveInstalledCodexLauncher(
   found: string,
   platform: NodeJS.Platform,
-): Promise<{ command: string; nativeCommand: string } | undefined> {
+): { command: string; nativeCommand: string } | undefined {
   let command: string;
   try {
-    command = await realpath(found);
+    command = realpathSync(found);
     if (platform === "win32" && /\.(?:cmd|bat|ps1)$/iu.test(command)) {
       // npm's Windows shims sit beside the global node_modules directory.
-      command = await realpath(
+      command = realpathSync(
         path.join(path.dirname(command), "node_modules", "@openai", "codex", "bin", "codex.js"),
       );
     }
@@ -343,23 +321,24 @@ async function resolveInstalledCodexLauncher(
   if (packagedNative) {
     return { command, nativeCommand: packagedNative };
   }
-  if (/\.(?:[cm]?js|cmd|bat|ps1)$/iu.test(command) || (await startsWithShebang(command))) {
+  if (/\.(?:[cm]?js|cmd|bat|ps1)$/iu.test(command) || startsWithShebang(command)) {
     return undefined;
   }
   return { command, nativeCommand: command };
 }
 
-async function startsWithShebang(filePath: string): Promise<boolean> {
-  const handle = await open(filePath, "r").catch(() => undefined);
-  if (!handle) {
+function startsWithShebang(filePath: string): boolean {
+  let fd: number;
+  try {
+    fd = openSync(filePath, "r");
+  } catch {
     return true;
   }
   try {
     const buffer = Buffer.alloc(2);
-    const { bytesRead } = await handle.read(buffer, 0, 2, 0);
-    return bytesRead === 2 && buffer.toString("latin1") === "#!";
+    return readSync(fd, buffer, 0, 2, 0) === 2 && buffer.toString("latin1") === "#!";
   } finally {
-    await handle.close();
+    closeSync(fd);
   }
 }
 
@@ -413,14 +392,12 @@ export async function resolveManagedCodexAppServerStartOptions(
     );
   }
   const platform = options.platform ?? process.platform;
-  const pathExists = options.pathExists ?? commandPathExists;
   const managedCommandOrder = startOptions.managedCommandOrder ?? "package-first";
   const installed =
     options.preferInstalled === false
       ? undefined
       : await resolveInstalledCodexForOrder(managedCommandOrder, {
           platform,
-          pathExists,
           selectionTimeoutMs: options.selectionTimeoutMs,
         });
   const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
@@ -433,8 +410,8 @@ export async function resolveManagedCodexAppServerStartOptions(
   for (const commandPath of candidateCommandPaths) {
     const isInstalled = commandPath === installed?.command;
     if (
-      (await pathExists(commandPath, platform)) &&
-      (!isInstalled || (await pathExists(installed.nativeCommand, platform)))
+      (await commandPathExists(commandPath, platform)) &&
+      (!isInstalled || (await commandPathExists(installed.nativeCommand, platform)))
     ) {
       commandPaths.push(commandPath);
     } else if (isInstalled) {
@@ -603,11 +580,26 @@ export function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string
   }
 }
 
-async function commandPathExists(filePath: string, platform: NodeJS.Platform): Promise<boolean> {
-  try {
-    await access(filePath, platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
+/** Presence only: version and initialize health remain startup's responsibility. */
+export function hasManagedCodexAppServerBinary(): boolean {
+  const root = registeredCodexPlugin.root;
+  if (
+    root &&
+    resolveManagedCodexAppServerCommandCandidates(
+      root,
+      process.platform,
+      "package-first",
+      installedCodex.selected?.command,
+    ).some((command) => existsSync(command) && resolveManagedCodexNativeCommand(command))
+  ) {
     return true;
-  } catch {
-    return false;
   }
+  const found = resolveNodeHostExecutable("codex", { strategy: "direct" })?.executable;
+  return (
+    found !== undefined && resolveInstalledCodexLauncher(found, process.platform) !== undefined
+  );
+}
+
+async function commandPathExists(filePath: string, platform: NodeJS.Platform): Promise<boolean> {
+  return canAccess(filePath, platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
 }

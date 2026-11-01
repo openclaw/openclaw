@@ -13,20 +13,20 @@
 
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
-| state    | table         |   134 |        134 |        0 |
-| state    | column        |  1396 |       1394 |        2 |
-| state    | index         |   289 |        289 |        0 |
-| state    | foreignKey    |    32 |         32 |        0 |
-| state    | check         |   293 |        293 |        0 |
+| state    | table         |   136 |        136 |        0 |
+| state    | column        |  1418 |       1416 |        2 |
+| state    | index         |   291 |        291 |        0 |
+| state    | foreignKey    |    33 |         33 |        0 |
+| state    | check         |   299 |        299 |        0 |
 | state    | trigger       |     0 |          0 |        0 |
 | state    | virtualTable  |     0 |          0 |        0 |
 | state    | internalTable |     1 |          0 |        1 |
-| agent    | table         |    45 |         45 |        0 |
-| agent    | column        |   417 |        381 |       36 |
-| agent    | index         |   100 |         96 |        4 |
-| agent    | foreignKey    |    28 |         28 |        0 |
-| agent    | check         |    66 |         66 |        0 |
-| agent    | trigger       |    14 |         10 |        4 |
+| agent    | table         |    46 |         46 |        0 |
+| agent    | column        |   430 |        394 |       36 |
+| agent    | index         |   105 |         99 |        6 |
+| agent    | foreignKey    |    29 |         29 |        0 |
+| agent    | check         |    73 |         73 |        0 |
+| agent    | trigger       |     8 |          4 |        4 |
 | agent    | virtualTable  |     2 |          0 |        2 |
 | agent    | internalTable |    10 |          0 |       10 |
 
@@ -35,8 +35,6 @@
 - audit_events.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - audit_identity_keys.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - capture_events.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
-- claw_mcp_server_refs.independent_owner: 0/1 boolean candidate retained as bigint.
-- claw_package_refs.independent_owner: 0/1 boolean candidate retained as bigint.
 - config_revision_keys.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - cron_job_runtime_authorities.recovery_required: 0/1 boolean candidate retained as bigint.
 - macos_port_guardian_records.pid: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
@@ -46,6 +44,8 @@
 - outbound_message_progress.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - session_repository_workspaces.run_setup_script: 0/1 boolean candidate retained as bigint.
 - session_state_events.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
+- template_mcp_server_refs.independent_owner: 0/1 boolean candidate retained as bigint.
+- template_package_refs.independent_owner: 0/1 boolean candidate retained as bigint.
 - internalTable `sqlite_sequence.sqlite_sequence`: SQLite-owned storage is not translated. Source: `CREATE TABLE sqlite_sequence(name,seq)`
 - column `sqlite_sequence.name`: Parent table omitted. Source: ``
 - column `sqlite_sequence.seq`: Parent table omitted. Source: ``
@@ -65,6 +65,8 @@
 - session_windows.acp_owned: 0/1 boolean candidate retained as bigint.
 - standing_intents.intent_key: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - Voice indexes: the sole writer (src/talk/client-voice-session-store.ts) uses JSON.stringify; agentId/sessionKey are strings, origin is client/relay, status is open/closed. src/talk/client-voice-session-lookup.worker.ts compares strings only. Non-string members cannot match; no boolean/numeric coercion is needed. Duplicate-key JSON is unreachable from writers: SQLite resolves first-wins, PostgreSQL last-wins. P3-6 preflight must refuse duplicate-key voice rows before copying, with row evidence. Canonical JSON remains text.
+- index `conversation_deliveries.idx_agent_conversation_deliveries_source_session`: Lead-approved 2026-10-31 SQLite additive index; PostgreSQL adoption waits for the next agent migration so existing v39 catalog seals remain compatible.; same-version SQLite index. Source: `CREATE INDEX idx_agent_conversation_deliveries_source_session   ON conversation_deliveries(source_session_key, operation_id)`
+- index `session_input_completions.idx_agent_session_input_completions_session_key`: Lead-approved 2026-10-31 SQLite additive index; PostgreSQL adoption waits for the next agent migration so existing v39 catalog seals remain compatible.; same-version SQLite index. Source: `CREATE INDEX idx_agent_session_input_completions_session_key   ON session_input_completions(session_key)`
 - virtualTable `session_transcript_fts.session_transcript_fts`: FTS5 is not translated; pendingCapability: search; FTS sync; tsvector + GIN; preserve tokenizer/ranking semantics separately. Source: `CREATE VIRTUAL TABLE session_transcript_fts USING fts5(   text,   session_id UNINDEXED,   message_id UNINDEXED,   role UNINDEXED,   timestamp UNINDEXED,   tokenize = 'unicode61 remove_diacritics 2' )`
 - column `session_transcript_fts.text`: Parent table omitted; pendingCapability: search. Source: ``
 - column `session_transcript_fts.session_id`: Parent table omitted; pendingCapability: search. Source: ``

@@ -2,8 +2,9 @@ import "./server-worker-free.test-support.js";
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
@@ -12,12 +13,14 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { sleep } from "../utils/sleep.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -35,12 +38,86 @@ const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
   drainRetainedEmbeddingProviders: async () => {},
 });
 
+function closeGateway(
+  params = createGatewayCloseTestDeps(),
+  options: Parameters<typeof prepareGatewayClose>[1] = { reason: "test" },
+) {
+  return prepareGatewayClose(params, options).then((preparation) =>
+    completeGatewayClose(params, preparation),
+  );
+}
+
+async function observeMediaDrain(entered: Deferred) {
+  const media = await import("./server-media-cleanup-lifecycle.js");
+  const wait = media.waitForMediaCleanupDrainsToSettle;
+  vi.spyOn(media, "waitForMediaCleanupDrainsToSettle").mockImplementation(() => {
+    entered.resolve();
+    return wait();
+  });
+  return wait;
+}
+
 beforeEach(() => {
   sharedStateLifecycle.set("open", true);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
+});
+
+it.each(
+  ["session persistence", "subagent settlement"].flatMap((step) =>
+    ["rejected", "slow", "timed out"].map((outcome) => ({ step, outcome })),
+  ),
+)("closes its listener and resources after $step $outcome", async ({ step, outcome }) => {
+  const { listener, releaseListener, claim } = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => createServer(),
+  });
+  const committed = createDeferredCore();
+  const settle = async (signal?: AbortSignal) => {
+    if (outcome === "rejected") {
+      throw new Error("store refused");
+    }
+    await committed.promise;
+    signal?.throwIfAborted();
+  };
+  const marker = step === "session persistence";
+  const params = createGatewayCloseTestDeps({
+    httpServer: listener,
+    channelIds: ["telegram"],
+    persistRunningSessionsForRestart: marker ? settle : () => sleep(500),
+    terminateRunningSubagentsForShutdown: marker ? undefined : settle,
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const closing = runWithProcessCleanupBudget(
+    { deadline: performance.now() + 3_000, warn() {} },
+    () => closeGateway(params).catch((error: unknown) => error),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(outcome === "timed out" ? 2_500 : 1_500);
+    committed.resolve();
+    const expected =
+      outcome === "rejected"
+        ? "store refused"
+        : `Shutdown ${step} did not settle within ${marker ? 3_000 : 2_500}ms`;
+    expect(await closing).toMatchObject(
+      outcome === "slow" ? { warnings: [] } : new Error(expected),
+    );
+    expect(listener.listening).toBe(false);
+    expect(params.stopChannel).toHaveBeenCalledWith("telegram");
+    expect(sharedStateLifecycle.size).toBe(0);
+  } finally {
+    committed.resolve();
+    vi.useRealTimers();
+    if (listener.listening) {
+      await releaseListener();
+    }
+    await claim.release();
+  }
 });
 
 it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
@@ -48,13 +125,7 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
   const releaseMedia = createDeferredCore();
   const drainEntered = createDeferredCore();
   mediaCleanup.registerMediaCleanupDrain(releaseMedia.promise);
-  const waitForDrains = mediaCleanup.waitForMediaCleanupDrainsToSettle;
-  const drainSpy = vi
-    .spyOn(mediaCleanup, "waitForMediaCleanupDrainsToSettle")
-    .mockImplementation(() => {
-      drainEntered.resolve();
-      return waitForDrains();
-    });
+  await observeMediaDrain(drainEntered);
   const captureEntered = createDeferredCore();
   const releaseCapture = createDeferredCore();
   const finalizeCapture = vi.fn(async () => {
@@ -73,12 +144,10 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
     },
   });
   let closed = false;
-  const closing = prepareGatewayClose(params, { reason: "test" })
-    .then((preparation) => completeGatewayClose(params, preparation))
-    .then((result) => {
-      closed = true;
-      return result;
-    });
+  const closing = closeGateway(params).then((result) => {
+    closed = true;
+    return result;
+  });
   try {
     await Promise.race([drainEntered.promise, captureEntered.promise, closing]);
     expect(finalizeCapture).not.toHaveBeenCalled();
@@ -96,7 +165,6 @@ it("finalizes capture after media drains even when stopping media cleanup fails"
     releaseCapture.resolve();
     await closing.catch(() => {});
     unregisterCapture();
-    drainSpy.mockRestore();
   }
 });
 
@@ -107,10 +175,7 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const completed = vi.fn();
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id: "drain-cleanup", status: "loaded" });
-  registry.plugins.push(record);
-  const instance = new PluginInstance(record.id, { record, registry });
+  const { registry, record, instance } = createOwnedInstance("drain-cleanup");
   const cleanup = vi.fn(async () => {
     await trackAsyncWork(async () => {});
     void trackAsyncWork(async () => {
@@ -135,11 +200,8 @@ it("owns plugin cleanup and its descendants after the requesting connection drai
     closePluginRegistry: owner.close,
     pluginMetadata: metadata,
   });
-  const closing = requestContext(async () =>
-    completeGatewayClose(
-      params,
-      await prepareGatewayClose(params, { restartExpectedMs: 0, drainTimeoutMs: 0 }),
-    ),
+  const closing = requestContext(() =>
+    closeGateway(params, { restartExpectedMs: 0, drainTimeoutMs: 0 }),
   );
   try {
     await Promise.race([entered.promise, closing]);
@@ -160,7 +222,6 @@ it("joins detached request attachment cleanup before shared state closes", async
   const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
   const attachments = await import("./chat-attachments.js");
   const mediaStore = await import("../media/store.js");
-  const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const parsed = await attachments.parseMessageWithAttachments(
       "read this",
@@ -179,29 +240,18 @@ it("joins detached request attachment cleanup before shared state closes", async
     const deletionEntered = createDeferredCore();
     const releaseDeletion = createDeferredCore();
     const deleteMediaBuffer = mediaStore.deleteMediaBuffer;
-    const deleteSpy = vi
-      .spyOn(mediaStore, "deleteMediaBuffer")
-      .mockImplementation(async (id, subdir) => {
-        if (id === uploaded.id) {
-          deletionEntered.resolve();
-          await releaseDeletion.promise;
-        }
-        await deleteMediaBuffer(id, subdir);
-      });
+    vi.spyOn(mediaStore, "deleteMediaBuffer").mockImplementation(async (id, subdir) => {
+      if (id === uploaded.id) {
+        deletionEntered.resolve();
+        await releaseDeletion.promise;
+      }
+      await deleteMediaBuffer(id, subdir);
+    });
     const drainEntered = createDeferredCore();
-    const waitForDrains = mediaCleanup.waitForMediaCleanupDrainsToSettle;
-    const drainSpy = vi
-      .spyOn(mediaCleanup, "waitForMediaCleanupDrainsToSettle")
-      .mockImplementation(() => {
-        drainEntered.resolve();
-        return waitForDrains();
-      });
+    const waitForDrains = await observeMediaDrain(drainEntered);
     const discarded = attachments.discardPreparedInboundMedia(parsed.offloadedRefs);
     await deletionEntered.promise;
-    const deps = createGatewayCloseTestDeps();
-    const closing = prepareGatewayClose(deps, { reason: "test" }).then((preparation) =>
-      completeGatewayClose(deps, preparation),
-    );
+    const closing = closeGateway();
     let observedDrain: Promise<void> | undefined;
     try {
       await drainEntered.promise;
@@ -219,8 +269,6 @@ it("joins detached request attachment cleanup before shared state closes", async
       await discarded;
       await observedDrain;
       await closing;
-      drainSpy.mockRestore();
-      deleteSpy.mockRestore();
     }
     await expect(fs.stat(uploaded.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(sharedStateLifecycle.size).toBe(0);

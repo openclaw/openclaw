@@ -11,6 +11,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveAssistantResultText } from "./agent-event-assistant-text.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
@@ -64,12 +65,21 @@ export function resolveOpenAiCompatibleAgentError(
 
 export function readOpenAiHttpRunTerminal(result: unknown): {
   runFailed: boolean;
+  incompleteTurnText?: string;
   stopReason: string | undefined;
   pendingToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
 } {
   const meta = asOptionalRecord(asOptionalRecord(result)?.meta);
   const stopReasonRaw = meta?.stopReason;
   const stopReason = typeof stopReasonRaw === "string" ? stopReasonRaw : undefined;
+  const runFailed = readAgentRunTerminalOutcome(result) === "failed";
+  // Other failures must not expose diagnostic payloads as assistant recovery text.
+  const incompleteTurnText =
+    runFailed &&
+    stopReason === "length" &&
+    asOptionalRecord(meta?.error)?.kind === "incomplete_turn"
+      ? resolveAssistantResultText(result)
+      : undefined;
   const pendingRaw = meta?.pendingToolCalls;
   const pendingToolCalls = Array.isArray(pendingRaw)
     ? pendingRaw.flatMap((call): OpenAiCompatiblePendingToolCall[] => {
@@ -87,7 +97,8 @@ export function readOpenAiHttpRunTerminal(result: unknown): {
       })
     : undefined;
   return {
-    runFailed: readAgentRunTerminalOutcome(result) === "failed",
+    runFailed,
+    ...(incompleteTurnText ? { incompleteTurnText } : {}),
     stopReason,
     pendingToolCalls,
   };
@@ -179,7 +190,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       },
       defaultRuntime,
       createDefaultDeps(),
-      {},
     );
     captured?.authority.assertCurrent();
     return result;

@@ -39,6 +39,9 @@ or discover descendants that independently reparented before inspection.
 
 Linux reads process identities directly from `/proc`, including the boot ID
 and process start ticks, so Alpine/BusyBox installations do not need `procps`.
+These asynchronous reads do not launch helper processes or block the Gateway
+while reading another process. If filesystem workers are saturated, inspection
+still fails at its deadline; retry once the host is responsive.
 Startup identity and command inspection share a 10-second deadline. During Linux
 startup, an empty command line waits within that deadline while the same live
 process identity remains valid. Registration still

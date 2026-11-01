@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { notifyListeners, registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
@@ -125,8 +125,7 @@ function isBootRecord(value: unknown): value is BootRecord {
       (group: unknown) =>
         isRecord(group) && typeof group.name === "string" && typeof group.position === "number",
     ) &&
-    Array.isArray(value.sectionOrder) &&
-    value.sectionOrder.every((section: unknown) => typeof section === "string")
+    isStringArray(value.sectionOrder)
   );
 }
 

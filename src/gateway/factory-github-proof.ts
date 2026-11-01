@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "../agents/github-host-runtime.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
@@ -29,10 +29,6 @@ export type FactoryGitHubProofVerdict = FactoryGitHubProofClaim & {
   actorPrincipal: string;
   profileId: string;
 };
-
-export function factoryGitHubRequestDigest(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
 
 /** Capture only handshake-authenticated Factory identity, never a request field. */
 export function factoryGitHubClientProof(input: {
@@ -159,7 +155,6 @@ export function redeemFactoryGitHubProof(proof: string): FactoryGitHubProofVerdi
 /** Retain original caller, profile bindings and issuer through one broker-owned operation. */
 export async function withFactoryGitHubProof<T>(
   input: {
-    env?: NodeJS.ProcessEnv;
     actorId: number;
     profileId: string;
     claim: FactoryGitHubProofClaim;
@@ -199,7 +194,7 @@ export async function withFactoryGitHubProof<T>(
       assertCurrent,
     });
     const env = {
-      ...(input.env ?? process.env),
+      ...process.env,
       GH_TOKEN: undefined,
       GH_ENTERPRISE_TOKEN: undefined,
       GITHUB_TOKEN: undefined,
