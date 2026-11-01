@@ -169,16 +169,12 @@ it("normalizes Windows discovery before SQLite exclusions and source loading", (
   vi.spyOn(fs, "readFileSync").mockImplementation((file, options) =>
     read(String(file).replaceAll("\\", "/"), options),
   );
-  const relative = path.relative;
-  vi.spyOn(path, "relative").mockImplementation((from, to) =>
-    path.win32.normalize(relative(from, to)),
-  );
-  const separator = path.sep;
-  Object.defineProperty(path, "sep", { value: path.win32.sep });
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "win32" });
   try {
     expect([...loadInventorySources(root)]).toEqual([["src/runtime.ts", "export {};\n"]]);
   } finally {
-    Object.defineProperty(path, "sep", { value: separator });
+    Object.defineProperty(process, "platform", { value: platform });
     vi.mocked(childProcess.spawnSync).mockReset();
   }
 });

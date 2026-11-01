@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
-import { normalizeRepoPath } from "./lib/guard-inventory-utils.mjs";
+import { normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
 const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set(["codex", "openclaw", "steipete"]);
@@ -104,7 +104,7 @@ export async function main(argv = process.argv.slice(2)) {
   const artifacts = path.join(root, "CHANGELOG");
   if (path.basename(absolutePath) === "CHANGELOG.md" && fs.existsSync(artifacts)) {
     for (const { relativePath: entry } of listDirectoryTreeStrictSync(artifacts)) {
-      const relative = normalizeRepoPath(root, path.join(artifacts, entry));
+      const relative = normalizeChangedPath(path.join("CHANGELOG", entry));
       if (isReleaseChangelogPath(relative)) {
         paths.push(path.join(root, relative));
       }
@@ -112,7 +112,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const violations = findChangelogAttributionViolations(
     paths.map((file) => ({
-      path: normalizeRepoPath(process.cwd(), file),
+      path: normalizeChangedPath(path.relative(process.cwd(), file)),
       content: fs.readFileSync(file, "utf8"),
     })),
   );

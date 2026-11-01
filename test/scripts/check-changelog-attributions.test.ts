@@ -58,8 +58,8 @@ describe("check-changelog-attributions", () => {
     );
     vi.spyOn(process, "cwd").mockReturnValue(repo);
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const separator = path.sep;
-    Object.defineProperty(path, "sep", { value: path.win32.sep });
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
     try {
       await main();
       expect(process.exitCode ?? 0).toBe(frozen ? 1 : 0);
@@ -67,7 +67,7 @@ describe("check-changelog-attributions", () => {
         expect(errors).toHaveBeenCalledWith(`- CHANGELOG/${artifact}:2 uses Thanks @steipete`);
       }
     } finally {
-      Object.defineProperty(path, "sep", { value: separator });
+      Object.defineProperty(process, "platform", { value: platform });
     }
   });
   it.each([false, true])("rejects forbidden CLI credit through a symlink: %s", (symlink) => {
