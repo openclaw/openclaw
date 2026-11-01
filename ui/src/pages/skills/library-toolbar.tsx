@@ -56,7 +56,7 @@ export function SkillLibraryPageMenu(
       id={id}
       lazy
       class="skill-library-search__action"
-      label={t("skillLibrary.library")}
+      label={t("browser.moreActions")}
       placement="bottom-end"
       pointerFocus="trigger"
       triggerClass="btn btn--sm skill-library-search__icon"

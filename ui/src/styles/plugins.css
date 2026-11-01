@@ -1470,12 +1470,20 @@ openclaw-plugins-page
     white-space: normal;
   }
 
-  openclaw-skills-page .settings-page:has(> .skill-library-search) {
+  /* Every library tab keeps one rhythm under the tabs; groups stay apart. */
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) {
     gap: var(--space-3);
   }
 
-  openclaw-skills-page .settings-page:has(> .skill-library-search) > p.muted {
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) > p.muted {
     margin: 0;
+  }
+
+  openclaw-skills-page
+    .settings-page:has(> .skill-library-toolbar__actions)
+    > .skills-group
+    + .skills-group {
+    margin-top: var(--space-4);
   }
 
   openclaw-skills-page :is(.skill-library-toolbar__actions, .skill-library-toolbar__refresh) {

@@ -21,7 +21,6 @@ import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
