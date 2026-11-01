@@ -407,6 +407,7 @@ function SystemsWorkspace(props: {
         <select
           class="settings-select systems-mobile-picker"
           aria-label={t("systems.select")}
+          title={row() ? systemName(row()!) : undefined}
           onChange={(event) => controller().select(event.currentTarget.value)}
         >
           <option value="" disabled selected={!row()}>
@@ -416,6 +417,7 @@ function SystemsWorkspace(props: {
             {(entry) => (
               <option
                 value={entry.environment.id}
+                title={systemName(entry)}
                 selected={entry.environment.id === controller().state.selectedId}
               >
                 {systemName(entry)}

@@ -16,6 +16,7 @@ export function SettingsSelect(
             value={option().value}
             selected={props.value === option().value}
             disabled={option().disabled}
+            title={typeof option().label === "string" ? (option().label as string) : undefined}
           >
             {option().label}
           </option>
