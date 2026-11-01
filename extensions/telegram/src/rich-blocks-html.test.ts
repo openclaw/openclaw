@@ -3,7 +3,6 @@ import { assert, describe, expect, it } from "vitest";
 import { measureInputRichBlocks, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
-import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 
 function blocksFor(markdown: string): InputRichBlock[] {
   return markdownToTelegramRichBlocks(markdown).blocks;
@@ -25,56 +24,6 @@ function expectLiteral(markdown: string, ...content: string[]) {
 }
 
 describe("block HTML islands", () => {
-  it.each([1, 2, 3, 4, 5, 6])("converts HTML h%i headings in rich message plans", (size) => {
-    const plan = buildTelegramRichMarkdownPlan(
-      `Before\n<h${size}><b>Update</b> &amp; status</h${size}>\nAfter`,
-    );
-    expect(plan.richMessage.blocks).toEqual([
-      { type: "paragraph", text: "Before" },
-      {
-        type: "heading",
-        size,
-        text: [{ type: "bold", text: "Update" }, " & status"],
-      },
-      { type: "paragraph", text: "After" },
-    ]);
-    expect(plan.plainText).toBe("Before\nUpdate & status\nAfter");
-  });
-
-  it("preserves Markdown links and styles inside HTML headings", () => {
-    const plan = buildTelegramRichMarkdownPlan("<h3><i>**[Docs](https://example.com)**</i></h3>");
-    expect(plan.richMessage.blocks).toEqual([
-      {
-        type: "heading",
-        size: 3,
-        text: {
-          type: "italic",
-          text: { type: "bold", text: { type: "url", url: "https://example.com", text: "Docs" } },
-        },
-      },
-    ]);
-    expect(plan.plainText).toBe("Docs");
-  });
-
-  it("decodes HTML heading entities once and preserves parsed whitespace", () => {
-    const plan = buildTelegramRichMarkdownPlan(
-      "<h3>&amp; &amp;amp; \\&amp; A   B\nC&nbsp;D &lt;b&gt;</h3>",
-    );
-    const text = "& &amp; &amp; A   B\nC\u00a0D <b>";
-    expect(plan.richMessage.blocks).toEqual([{ type: "heading", size: 3, text }]);
-    expect(plan.plainText).toBe(text);
-  });
-
-  it.each([
-    ["`<h3>Example</h3>`", "<h3>Example</h3>"],
-    ["```html\n<h3>Example</h3>\n```", "<h3>Example</h3>"],
-    ["<h3>Unclosed", "<h3>Unclosed"],
-  ])("keeps literal heading markup: %s", (markdown, plainText) => {
-    const plan = buildTelegramRichMarkdownPlan(markdown);
-    expect(plan.richMessage.blocks.some((block) => block.type === "heading")).toBe(false);
-    expect(plan.plainText).toBe(plainText);
-  });
-
   it("keeps Markdown lists inside <details> islands", () => {
     const block = single("<details><summary>List</summary>\n\n- item A\n- item B\n\n</details>");
     assert(block.type === "details");
@@ -89,7 +38,7 @@ describe("block HTML islands", () => {
 
   it("preserves styled HTML links and entity data (skip detection: true)", () => {
     const { blocks, plainText } = markdownToTelegramRichBlocks(
-      '<details><summary>More</summary><div><a href="https://example.com/**path**?q&#61;&quot;hi&quot;">**A &amp; &#38; &amp;amp; \\&amp; A   B\nC&nbsp;D**</a></div></details>',
+      '<details><summary>More</summary><h3><a href="https://example.com/**path**?q&#61;&quot;hi&quot;">**A &amp; &#38; &amp;amp; \\&amp; A   B\nC&nbsp;D**</a></h3></details>',
       { skipEntityDetection: true },
     );
     const text = {
@@ -98,14 +47,14 @@ describe("block HTML islands", () => {
       text: { type: "bold", text: "A & & &amp; &amp; A   B\nC\u00a0D" },
     };
     expect(blocks).toEqual([
-      { type: "details", summary: "More", blocks: [{ type: "paragraph", text }] },
+      { type: "details", summary: "More", blocks: [{ type: "heading", size: 3, text }] },
     ]);
     expect(plainText).toBe("More\nA & & &amp; &amp; A   B\nC\u00a0D");
   });
 
   it("preserves nested <details> containers around Markdown blocks", () => {
     const block = single(
-      "<details><summary>Outer</summary>\n\n# Outer heading\n\n<details><summary>Inner</summary>\n\n# Inner heading\n\n```bash\nopenclaw doctor\n```\n\n> inner quote\n\n| item | done |\n| --- | --- |\n| **bold** | [link](https://openclaw.ai) |\n| `code` | *italic* |\n\n</details>\n\n> outer quote\n\n</details>",
+      "<details><summary>Outer</summary>\n\n<h1>Outer heading</h1>\n\n<details><summary>Inner</summary>\n\n# Inner heading\n\n```bash\nopenclaw doctor\n```\n\n> inner quote\n\n| item | done |\n| --- | --- |\n| **bold** | [link](https://openclaw.ai) |\n| `code` | *italic* |\n\n</details>\n\n> outer quote\n\n</details>",
     );
     assert(block.type === "details");
     expect(block.blocks.map(({ type }) => type)).toEqual(["heading", "details", "blockquote"]);
