@@ -34,6 +34,7 @@ struct GatewayConnectConfig: Sendable {
         let tlsExpectedFingerprint: String?
         let tlsAllowTOFU: Bool?
         let tlsStoreKey: String?
+        let tlsAllowsApprovedAlternates: Bool?
         let token: String?
         let password: String?
         let clientId: String
@@ -55,6 +56,7 @@ struct GatewayConnectConfig: Sendable {
             tlsExpectedFingerprint: self.tls?.expectedFingerprint,
             tlsAllowTOFU: self.tls?.allowTOFU,
             tlsStoreKey: self.tls?.storeKey,
+            tlsAllowsApprovedAlternates: self.tls?.allowsApprovedAlternates,
             token: self.token,
             password: self.password,
             clientId: self.nodeOptions.clientId,
