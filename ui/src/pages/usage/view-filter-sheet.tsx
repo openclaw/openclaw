@@ -101,7 +101,7 @@ function UsageFilterSheetSurface(props: {
           <button
             ref={(element) => (closeButton = element)}
             type="button"
-            class="btn btn--sm btn--icon usage-filter-sheet__close"
+            class="usage-filter-sheet__close"
             aria-label={t("common.close")}
             title={t("common.close")}
             onClick={slideOutAndDismiss}
