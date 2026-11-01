@@ -64,6 +64,10 @@ export function createTeamScaleHistoryFixture(options: {
   const lateRowFacts = options.lateRowFacts
     ? {
         sessionTitle: "Synthetic linked research",
+        updateSources: [1, 2].map((index) => ({
+          sessionKey: `agent:main:dashboard:synthetic-update-source-${index}`,
+          title: `Synthetic verification ${index}`,
+        })),
         prUrl: "https://github.com/example/cold-load-fixture/pull/42",
         artifactId: "synthetic-late-row-thumbnail",
         cacheableImageSource: "media://inbound/synthetic-l245-cacheable.png",
@@ -221,6 +225,28 @@ export function createTeamScaleHistoryFixture(options: {
       }),
     );
   }
+  if (lateRowFacts) {
+    for (const [index, source] of lateRowFacts.updateSources.entries()) {
+      const id = `synthetic-update-${index}`;
+      messageIds.push(id);
+      historyMessages.push(
+        Object.assign(
+          {
+            role: "assistant",
+            content: [
+              { type: "text" as const, text: `Synthetic verification receipt ${index + 1}.` },
+            ],
+            __openclaw: { id, seq: historyMessages.length + 1, turnBoundary: true },
+            timestamp: options.now + 2 + index,
+          },
+          {
+            senderSession: { sessionKey: source.sessionKey, agentId: "main" },
+            provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+          },
+        ),
+      );
+    }
+  }
   const deltaCursor = JSON.stringify([
     "team-scale-history-v1",
     options.sessionInfo.key,
@@ -291,6 +317,10 @@ export function createTeamScaleHistoryFixture(options: {
         ? {
             "controlUi.sessionPreview": {
               cases: [
+                ...lateRowFacts.updateSources.map((source) => ({
+                  match: { sessionKey: source.sessionKey },
+                  response: { status: "ok", ...source, agentId: "main" },
+                })),
                 {
                   match: { sessionKey },
                   response: {

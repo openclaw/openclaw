@@ -129,6 +129,8 @@ A previously recorded supervisor cleanup failure is reported as retained resourc
 with its original owner details; it does not fail a later external stop. The Gateway
 still joins the supervisor before retiring database admission, read-only workers,
 and the spawn broker, even when that join rejects.
+A settled process-supervisor failure no longer prevents agent-database close;
+supervisor cleanup still pending past its grace retains those databases.
 
 Reversible suspension and host freeze preparation keep their own semantics. A
 suspension does not mark sessions or abort them. Preparation with `drain: true`

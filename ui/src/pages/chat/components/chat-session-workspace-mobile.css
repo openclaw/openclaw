@@ -71,7 +71,7 @@
   min-height: 36px;
   padding: 7px 8px;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -212,7 +212,7 @@
   margin: 0;
   padding: 0;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-hover);
   list-style: none;
 }

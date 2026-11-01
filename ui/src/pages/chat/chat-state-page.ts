@@ -705,6 +705,9 @@ export function createPageState(
       });
     }
   }
+  Object.defineProperty(state, "sessionWorkspaceReadDisabledReason", {
+    get: () => selectedChatSessionRow(state)?.workspaceReadDisabledReason,
+  });
   return projectChatFields(
     state,
     // SAFETY: This literal owns every enumerable key passed to the projection.

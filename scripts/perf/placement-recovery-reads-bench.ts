@@ -121,6 +121,7 @@ try {
       profileSnapshot: { settings: {}, executionMode: "remote-exec" },
       preparation: null,
       provisionOperationId: `synthetic-provision-${index}`,
+      resourceReceipt: null,
       nodeSetupId: null,
       nodeDeviceId: null,
       sharedHost: false,

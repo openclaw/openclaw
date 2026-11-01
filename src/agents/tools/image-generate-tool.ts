@@ -1,6 +1,7 @@
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { Type } from "typebox";
+import { sniffImageMimeType } from "../../image-generation/image-assets.js";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { generateImage } from "../../image-generation/runtime.js";
 import type {
@@ -13,7 +14,11 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { withImageGenerationProviders } from "../../media-generation/registry.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { encodeImageWithinBytes, getImageMetadata } from "../../media/media-services.js";
+import {
+  encodeImageWithinBytes,
+  getImageMetadata,
+  readImageMetadataFromHeader,
+} from "../../media/media-services.js";
 import { formatMediaSize } from "../../media/store.shared.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
@@ -43,7 +48,6 @@ import {
 import {
   buildMediaGenerateToolExecutionResult,
   buildSavedMediaAttachment,
-  buildMediaGenerationGeometryDetails,
 } from "./media-generate-result-shared.js";
 import { createMediaGenerateExecute } from "./media-generate-tool-actions-shared.js";
 import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
@@ -549,10 +553,14 @@ export function createImageGenerateTool(
                     provider: result.provider,
                     model: result.model,
                   });
-                  const geometryDetails = buildMediaGenerationGeometryDetails("image", result, {
+                  const requested = {
                     size,
                     aspectRatio,
-                  });
+                    resolution: explicitResolution,
+                    quality,
+                    outputFormat,
+                    background,
+                  };
                   const maxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
                   const fitted = await fitGeneratedImagesToMaxBytes(
                     result.images.map((image) => ({
@@ -572,6 +580,19 @@ export function createImageGenerateTool(
                   const attachments = savedImages.map((image) =>
                     buildSavedMediaAttachment("image", image),
                   );
+                  const outputs = fitted.images.map((image, index) => {
+                    const dimensions = readImageMetadataFromHeader(image.buffer);
+                    const format = sniffImageMimeType(image.buffer, "").mimeType.split("/")[1];
+                    const returnedQuality = SUPPORTED_QUALITIES.find(
+                      (value) => value !== "auto" && value === image.metadata?.quality,
+                    );
+                    return {
+                      path: savedImages[index]?.path,
+                      ...(dimensions ? { size: `${dimensions.width}x${dimensions.height}` } : {}),
+                      ...(returnedQuality ? { quality: returnedQuality } : {}),
+                      ...(format ? { outputFormat: format } : {}),
+                    };
+                  });
                   const execution = await buildMediaGenerateToolExecutionResult({
                     kind: "image",
                     result,
@@ -579,14 +600,18 @@ export function createImageGenerateTool(
                     mediaUrls: savedImages.map((media) => media.path),
                     sandbox: context.acquireOutputSandbox,
                     maxBytes,
-                    messages: fitted.messages,
+                    messages: [
+                      ...fitted.messages,
+                      ...outputs.map(
+                        (output, index) =>
+                          `Output ${index + 1}: size=${output.size ?? "unknown"}; quality=${output.quality ?? "unknown"}; format=${output.outputFormat ?? "unknown"}.`,
+                      ),
+                    ],
                     taskHandle,
                     details: {
                       ...buildMediaReferenceDetails(loadedReferenceImages, "image"),
-                      ...geometryDetails,
-                      ...(quality ? { quality } : {}),
-                      ...(outputFormat ? { outputFormat } : {}),
-                      ...(background ? { background } : {}),
+                      requested,
+                      outputs,
                       ...(filename ? { filename } : {}),
                       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
                     },

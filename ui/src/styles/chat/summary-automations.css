@@ -64,7 +64,7 @@ openclaw-chat-summary-automations {
   min-height: 32px;
   gap: 8px;
   padding: 4px 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   color: var(--text);
   font-size: 12px;
   line-height: 24px;

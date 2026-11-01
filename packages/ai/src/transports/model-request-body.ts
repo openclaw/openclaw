@@ -1,4 +1,17 @@
 const REQUEST_BODY = Symbol("modelRequestBody");
+const payloadObservers = new WeakSet<object>();
+
+/** Observing wrappers inherit mutation requirements from the hook they delegate to. */
+export function markModelPayloadObserver<T extends object>(observer: T, wrapped?: object): T {
+  if (!hasMutableModelPayloadHook(wrapped)) {
+    payloadObservers.add(observer);
+  }
+  return observer;
+}
+
+export function hasMutableModelPayloadHook(hook: object | undefined): boolean {
+  return hook !== undefined && !payloadObservers.has(hook);
+}
 
 export type EncodedModelRequestBody = { body: Uint8Array<ArrayBuffer>; stream: boolean };
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
 import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   createRetainedOperation,
@@ -484,8 +485,8 @@ export function preparationCleanupError(errors: unknown[], operation: string): A
 /** Failed copy attempts discard their files without retiring the caller's directory token. */
 export function discardPreparedCopyPayload(directory: string, error: unknown): void {
   try {
-    for (const name of ["first", "database.sqlite", "database.sqlite.partial"]) {
-      for (const suffix of name === "first" ? [""] : ["", "-wal", "-shm", "-journal"]) {
+    for (const name of ["database.sqlite", "database.sqlite.partial"]) {
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
         const location = path.join(directory, `${name}${suffix}`);
         retireSqliteDatabaseAdmissionForPath(location);
         fs.rmSync(location, { force: true });
@@ -524,7 +525,22 @@ export function publishPreparedCopy(
   for (const suffix of ["-wal", "-shm", "-journal", ""]) {
     const staged = `${location}.partial${suffix}`;
     if (fs.existsSync(staged)) {
-      fs.renameSync(staged, `${location}${suffix}`);
+      const published = `${location}${suffix}`;
+      try {
+        fs.renameSync(staged, published);
+      } catch (error) {
+        if (!hasErrnoCode(error, "EXDEV")) {
+          throw error;
+        }
+        // EFS can reject same-directory renames. Readers see this private family only after return.
+        using target = copyRootFileSync({
+          source: { rootPath: directory, absolutePath: staged },
+          destination: { rootPath: directory, absolutePath: published },
+          mode: 0o600,
+        });
+        fs.fsyncSync(target.fd);
+        fs.unlinkSync(staged);
+      }
     }
   }
   let journalFreeContent: PreparedSqliteReadOnlyLocation["journalFreeContent"];

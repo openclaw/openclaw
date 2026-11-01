@@ -415,9 +415,6 @@ describe("command palette people mentions", () => {
         const agent = f.query("openclaw-agent-select")!;
         await agent.updateComplete;
         expect(agent.value).toBe("main");
-        for (const item of agent.querySelectorAll<HTMLElement>("[role='menuitemradio']")) {
-          item.scrollIntoView = vi.fn();
-        }
         agent.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
         await waitForSolid(() =>
           expect(agent.querySelector(".agent-select__menu")?.matches(":popover-open")).toBe(true),
@@ -429,7 +426,7 @@ describe("command palette people mentions", () => {
         reviewer.click();
         await waitForSolid(() => expect(agent.value).toBe("reviewer"));
         expect(f.context.agentSelection.state.selectedId).toBe("main");
-        expect(f.menu()).toBeNull();
+        await waitForSolid(() => expect(f.menu()).toBeNull());
       } else {
         f.context.gateway.snapshot.phase = "reconnecting";
         f.publish();

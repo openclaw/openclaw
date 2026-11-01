@@ -35,8 +35,8 @@ it.each([
 );
 
 // Native preparation compiles the full worker inventory, including string-named
-// entries. Guard excluded CI planners and standalone PR tests; the wrapper
-// inventory owns its broader closure independently.
+// entries. Guard excluded namespaces and shared helpers against routing gaps;
+// the wrapper inventory owns its broader closure independently.
 it("retains Darwin inputs inside excluded namespaces", () => {
   const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
   const paths = workflow.on.pull_request.paths as string[];
@@ -94,6 +94,7 @@ it("retains Darwin inputs inside excluded namespaces", () => {
     (file) =>
       /^scripts\/lib\/ci-.*\.(?:mts|mjs)$/u.test(file) ||
       file.startsWith("test/scripts/pr-ci-sweeper") ||
+      file.startsWith("test/helpers/") ||
       /^test\/scripts\/pr-.*\.test\.ts$/u.test(file),
   );
   expect(excludedInputs.length).toBeGreaterThan(0);

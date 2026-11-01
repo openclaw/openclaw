@@ -199,6 +199,10 @@ retain their existing lookup fallbacks and may scan the vault.
 Wiki-page reads support large files and hard links. Reads refuse paths that
 escape the vault or pass through a symbolic link inside it.
 
+Pagination counts real body lines, not the empty split element after a terminal
+newline. A read ending on the last line reports `truncated: false`; intentional
+blank lines are preserved.
+
 ```bash
 openclaw wiki get entity.alpha
 openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80

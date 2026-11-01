@@ -13,7 +13,11 @@ async function avatarConfig(home: string): Promise<OpenClawConfig> {
   return {
     meta: {
       lastTouchedVersion: VERSION,
-      migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
+      migrations: {
+        modelPolicyAllowlist: true,
+        utilityModelSeparation: true,
+        skillWorkshopPlugin: true,
+      },
     },
     gateway: { mode: "local" },
     agents: {

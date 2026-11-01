@@ -207,7 +207,7 @@ describe("CommandPalette search", () => {
       const { context, palette, provider, query } = harness;
       await searchPalette(palette, "needle");
       expect(findPaletteOption(palette, "Needle old")).toBeDefined();
-      harness.emit("config.changed");
+      harness.emit("chat.metadata.changed", { modelCatalogChanged: true });
       await vi.advanceTimersByTimeAsync(200);
       if (replacement === "agent") {
         context.agentSelection.set("reviewer");
@@ -310,8 +310,8 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "n");
 
     expect(list).not.toHaveBeenCalled();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    expect(query('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
+    expect(query('.cmd-palette__results[role="listbox"]')?.getAttribute("aria-label")).toBe(
       query("textarea")?.getAttribute("aria-label"),
     );
     expect(palette.textContent).not.toContain("Searching sessions");

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   attachActiveEmbeddedRun,
@@ -20,6 +21,7 @@ import type {
 import {
   abortSessionControllerInput,
   clearSessionControllerMailbox,
+  releaseSessionControllerClaim,
   reserveSessionControllerSource,
   retireSessionControllerInput,
   tryClaimSessionControllerTask,
@@ -723,5 +725,7 @@ it("returns a proven withdrawn accepted steer to runnable followup custody", asy
     reason: "injection_unavailable",
   });
   operation.complete();
-  expect(tryClaimSessionControllerTask(input)).toBeDefined();
+  const claim = expectDefined(tryClaimSessionControllerTask(input), "withdrawn followup claim");
+  releaseSessionControllerClaim(claim);
+  await claim.settlement.promise;
 });
