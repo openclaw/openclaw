@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   auditGatewayNodeVersionChange,
-  describeGatewayNodePrefixSkew,
   describeGatewayNodeVersionRepair,
   formatGatewayNodePrefixStartupWarning,
   GATEWAY_NODE_PREFIX_SKEW,
@@ -49,7 +48,7 @@ describe("gateway node version prefix", () => {
       auditGatewayNodeVersionChange({ nodePath, entrypointPath }),
     ).resolves.toBeUndefined();
     expect(
-      describeGatewayNodePrefixSkew({
+      formatGatewayNodePrefixStartupWarning({
         nodePath,
         packageRoot: path.dirname(path.dirname(path.dirname(entrypointPath))),
       }),
@@ -155,7 +154,7 @@ describe("gateway node version prefix", () => {
   });
 
   it("reports fnm installs split across node-versions directories", () => {
-    const message = describeGatewayNodePrefixSkew({
+    const message = formatGatewayNodePrefixStartupWarning({
       nodePath: "/home/example/.local/share/fnm/node-versions/v24.22.1/installation/bin/node",
       packageRoot:
         "/home/example/.local/share/fnm/node-versions/v22.22.0/installation/lib/node_modules/openclaw",

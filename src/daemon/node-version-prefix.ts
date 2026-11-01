@@ -56,9 +56,7 @@ const VERSION_PREFIXES: Array<{
 ];
 
 /** Version directory of an nvm, fnm, Volta, asdf, mise, nodenv, or nodebrew path. */
-export function resolveNodeVersionPrefix(
-  filePath: string | undefined,
-): NodeVersionPrefix | undefined {
+function resolveNodeVersionPrefix(filePath: string | undefined): NodeVersionPrefix | undefined {
   if (!filePath) {
     return undefined;
   }
@@ -87,7 +85,7 @@ function nodeBinaryForPrefix(prefix: NodeVersionPrefix): string {
   return `${prefix.root}/${spec?.binary ?? "bin/node"}`;
 }
 
-export function formatGatewayNodePrefixSkew(
+function formatGatewayNodePrefixSkew(
   node: NodeVersionPrefix,
   installed: NodeVersionPrefix,
 ): string {
@@ -95,7 +93,7 @@ export function formatGatewayNodePrefixSkew(
 }
 
 /** Startup warning when the running Node and this package sit under different version directories. */
-export function describeGatewayNodePrefixSkew(params: {
+function describeGatewayNodePrefixSkew(params: {
   nodePath: string;
   packageRoot: string;
 }): string | undefined {
@@ -107,7 +105,7 @@ export function describeGatewayNodePrefixSkew(params: {
   return formatGatewayNodePrefixSkew(node, installed);
 }
 
-export type GatewayNodeVersionRepair = {
+type GatewayNodeVersionRepair = {
   /** True when the planned Node binary sits in the install's version directory. */
   resolvesSplit: boolean;
   /** What Doctor keeps. Empty when the plan already selects the install's Node. */
