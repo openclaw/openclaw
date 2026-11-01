@@ -1,4 +1,4 @@
-import { getApiProvider, type Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { buildGoogleProvider } from "./provider-registration.js";
 
@@ -107,7 +107,8 @@ describe("Google Interactions provider parity", () => {
       .mockResolvedValueOnce(new Response('{"error":{"message":"rate limited"}}', { status: 429 }))
       .mockResolvedValueOnce(success());
     vi.stubGlobal("fetch", fetch);
-    const streamFn = select(model) ?? getApiProvider("google-interactions")!.streamSimple;
+    const streamFn = select(model);
+    assert(streamFn);
     const stream = await streamFn(model, context, { apiKey: "gemini-key-1" });
     const result = await stream.result();
     expect(result.errorMessage).toBeUndefined();
