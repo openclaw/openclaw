@@ -255,3 +255,41 @@ it("retains focused place choices through a quiet cloud catalog refresh failure"
   expect(draft.gateway.cloudProfiles.map((profile) => profile.id)).toEqual(["aws"]);
   expect(host.querySelector('.palette-session-settings [role="alert"]')).toBeNull();
 });
+
+it.each([["münchen".normalize("NFC")], ["münchen".normalize("NFD")]])(
+  "matches NFC and NFD workspace queries against NFD project names: %s",
+  async (query) => {
+    const nfdName = "München".normalize("NFD");
+    const { host } = await mount({
+      agents: [{ id: "main", workspace: "/workspace", model: { primary: "example/local" } }],
+      methods: ["agents.list", "environments.list", "projects.list", "sessions.create"],
+      request: async (method) =>
+        method === "projects.list"
+          ? {
+              projects: [
+                {
+                  id: "muenchen",
+                  displayName: nfdName,
+                  repoRoot: "/muenchen",
+                  source: "registered",
+                },
+              ],
+            }
+          : {},
+    });
+    await openSettings(host);
+    get(host, ".palette-session-settings__workspace").click();
+    await waitForSolid(() =>
+      expect(host.querySelector('[data-machine="local"][data-project="muenchen"]')).not.toBeNull(),
+    );
+    const content = get(host, ".palette-session-settings__content");
+    const search = expectDefined(
+      content.querySelector<HTMLInputElement>(".palette-session-settings__search"),
+      "settings search",
+    );
+    search.value = query;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await host.updateComplete;
+    expect(content.querySelector('[data-machine="local"][data-project="muenchen"]')).not.toBeNull();
+  },
+);
