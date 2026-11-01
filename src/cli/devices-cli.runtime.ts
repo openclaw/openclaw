@@ -49,28 +49,12 @@ import {
   buildFallbackStateMismatchError,
   resolveLocalPairingFallback,
 } from "./devices-cli-fallback.js";
+import { callDevicesGateway, type DevicesRpcOpts } from "./devices-cli.rpc.js";
 import { ExpectedCliError } from "./failure-output.js";
-import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
-
-type DevicesRpcOpts = {
-  url?: string;
-  token?: string;
-  password?: string;
-  timeout?: string;
-  json?: boolean;
-  latest?: boolean;
-  yes?: boolean;
-  pending?: boolean;
-  device?: string;
-  role?: string;
-  scope?: string[];
-  scopes?: boolean;
-  name?: string;
-};
 
 type ApprovePairingGatewayContext = {
   originalRequest: PendingDevice | null;
@@ -79,22 +63,8 @@ type ApprovePairingGatewayContext = {
 };
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
-const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
-
-const callGatewayCli = async (
-  method: string,
-  opts: DevicesRpcOpts,
-  params?: unknown,
-  callOpts?: { scopes?: OperatorScope[] },
-) =>
-  callGatewayFromCliWithTransport(method, opts, params, {
-    label: `Devices ${method}`,
-    defaultTimeoutMs: DEFAULT_DEVICES_TIMEOUT_MS,
-    scopes: callOpts?.scopes,
-    sharedStateMode: "read-only",
-  });
 
 function stringsMatch(left: unknown, right: unknown): boolean {
   const normalizedLeft = normalizeOptionalString(left);
@@ -184,7 +154,7 @@ function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
 async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
   try {
     return parseDevicePairingList(
-      await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE] }),
+      await callDevicesGateway("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE] }),
     );
   } catch (error) {
     const fallback = resolveLocalPairingFallback(opts, error);
@@ -212,7 +182,7 @@ async function approvePairingWithFallback(
 ): Promise<Record<string, unknown> | null> {
   const { scopes, originalRequest } = context;
   try {
-    return await callGatewayCli(
+    return await callDevicesGateway(
       "device.pair.approve",
       opts,
       { requestId },
@@ -221,7 +191,7 @@ async function approvePairingWithFallback(
   } catch (error) {
     if (isDevicePairingApprovalDenied(error) && !scopes?.includes(ADMIN_SCOPE)) {
       try {
-        return await callGatewayCli(
+        return await callDevicesGateway(
           "device.pair.approve",
           opts,
           { requestId },
@@ -488,7 +458,7 @@ async function resolveTokenManagementScopes(
   if (target.role !== OPERATOR_ROLE) {
     return [ADMIN_SCOPE];
   }
-  const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+  const list = parseDevicePairingList(await callDevicesGateway("device.pair.list", opts, {}));
   const paired = list.paired.find((device) => device.deviceId === target.deviceId);
   if (!paired) {
     // Pairing-scoped device-token lists expose only self; a hidden target needs
@@ -711,7 +681,12 @@ export async function runDevicesDeleteCommand(
     );
     return;
   }
-  const result = await callGatewayCli(`device.pair.${operation}`, opts, { [field]: trimmed });
+  const result = await callDevicesGateway(
+    `device.pair.${operation}`,
+    opts,
+    { [field]: trimmed },
+    operation === "remove" ? { removedLocalDeviceId: trimmed } : undefined,
+  );
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;
@@ -727,7 +702,7 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
     failDevicesCommand(opts.json, "Refusing to clear pairing table without --yes");
     return;
   }
-  const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+  const list = parseDevicePairingList(await callDevicesGateway("device.pair.list", opts, {}));
   const removedDeviceIds: string[] = [];
   const rejectedRequestIds: string[] = [];
   for (const device of list.paired) {
@@ -735,7 +710,12 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
     if (!deviceId) {
       continue;
     }
-    await callGatewayCli("device.pair.remove", opts, { deviceId });
+    await callDevicesGateway(
+      "device.pair.remove",
+      opts,
+      { deviceId },
+      { removedLocalDeviceId: deviceId },
+    );
     removedDeviceIds.push(deviceId);
   }
   if (opts.pending) {
@@ -744,7 +724,7 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
       if (!requestId) {
         continue;
       }
-      await callGatewayCli("device.pair.reject", opts, { requestId });
+      await callDevicesGateway("device.pair.reject", opts, { requestId });
       rejectedRequestIds.push(requestId);
     }
   }
@@ -906,7 +886,7 @@ export async function runDevicesRenameCommand(opts: DevicesRpcOpts): Promise<voi
     );
     return;
   }
-  const result = await callGatewayCli("device.pair.rename", opts, { deviceId, label });
+  const result = await callDevicesGateway("device.pair.rename", opts, { deviceId, label });
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;
@@ -935,7 +915,7 @@ export async function runDevicesTokenCommand(
     operation === "rotate" ? (opts.scopes === false ? [] : opts.scope) : undefined;
   const params = operation === "rotate" ? { ...required, scopes: requestedScopes } : required;
   const scopes = await resolveTokenManagementScopes(opts, required, requestedScopes);
-  const result = await callGatewayCli(`device.token.${operation}`, opts, params, { scopes });
+  const result = await callDevicesGateway(`device.token.${operation}`, opts, params, { scopes });
   defaultRuntime.writeJson(result);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
