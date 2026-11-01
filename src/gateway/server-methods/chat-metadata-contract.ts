@@ -21,6 +21,10 @@ export const chatMetadataSessionFields = [
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
+  // Session project identity decides which skill commands the catalog admits, so a
+  // project change has to invalidate a cached metadata read.
+  "spawnedCwd",
+  "worktree",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
 export type ChatMetadataSessionEntry = Partial<

@@ -5,6 +5,7 @@ import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-r
 import { getPendingPreparedModelRuntimeReplacement } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -50,6 +51,37 @@ import type {
   GatewayModelCatalogContext,
   PreparedModelsListRequest,
 } from "./models-list-context.js";
+
+type PreparedSessionScope = {
+  sessionKey?: string;
+  sessionEntry?: Pick<SessionEntry, "spawnedCwd" | "worktree">;
+};
+
+function preparedSessionScopeOf(params: {
+  sessionKey?: string;
+  sessionEntry?: Partial<Pick<SessionEntry, "spawnedCwd" | "worktree">> & Record<string, unknown>;
+}): PreparedSessionScope {
+  return {
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.sessionEntry
+      ? {
+          sessionEntry: {
+            ...(params.sessionEntry.spawnedCwd !== undefined
+              ? { spawnedCwd: params.sessionEntry.spawnedCwd }
+              : {}),
+            ...(params.sessionEntry.worktree !== undefined
+              ? { worktree: params.sessionEntry.worktree }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+const sessionScopeKey = (scope: PreparedSessionScope) =>
+  `${scope.sessionKey ?? ""}\0${scope.sessionEntry?.spawnedCwd ?? ""}\0${
+    scope.sessionEntry?.worktree?.canonicalWorkspaceDir ?? ""
+  }`;
 
 type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"];
 
@@ -212,8 +244,15 @@ export function createGatewayChatMetadataRuntime(params: {
     return projection;
   };
 
-  const prepareAgent = (generation: PreparedMetadataGeneration, agentId: string) => {
-    const existing = generation.agentsById.get(agentId);
+  const prepareAgent = (
+    generation: PreparedMetadataGeneration,
+    agentId: string,
+    scope: PreparedSessionScope = {},
+  ) => {
+    // Commands are session-dependent once a project is bound, so the cache entry is
+    // keyed by the session scope rather than the agent alone.
+    const cacheKey = `${agentId}\0${sessionScopeKey(scope)}`;
+    const existing = generation.agentsById.get(cacheKey);
     if (existing) {
       return existing.promise;
     }
@@ -233,6 +272,14 @@ export function createGatewayChatMetadataRuntime(params: {
                 agentId,
                 includeArgs: true,
                 scope: "text",
+                ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+                ...(scope.sessionEntry
+                  ? {
+                      sessionEntry: scope.sessionEntry as Parameters<
+                        typeof buildCommandsListResult
+                      >[0]["sessionEntry"],
+                    }
+                  : {}),
               })
             ).commands;
           } catch (error) {
@@ -255,12 +302,12 @@ export function createGatewayChatMetadataRuntime(params: {
             return prepared;
           })
           .catch((error: unknown) => {
-            generation.agentsById.delete(agentId);
+            generation.agentsById.delete(cacheKey);
             throw error;
           }),
       ),
     };
-    generation.agentsById.set(agentId, entry);
+    generation.agentsById.set(cacheKey, entry);
     pruneMapToMaxSize(generation.agentsById, CHAT_METADATA_CACHE_MAX_ENTRIES);
     return entry.promise;
   };
@@ -459,7 +506,7 @@ export function createGatewayChatMetadataRuntime(params: {
       : readParams.sessionEntry;
     return await readCurrent<ChatMetadataResult>(readParams.agentId, async (generation) => {
       const agentId = normalizeAgentId(readParams.agentId);
-      const agent = await prepareAgent(generation, agentId);
+      const agent = await prepareAgent(generation, agentId, preparedSessionScopeOf(readParams));
       if (!agent) {
         throw new ChatMetadataSnapshotUnavailableError(
           `prepared chat metadata is unavailable for agent "${agentId}"`,
@@ -569,7 +616,7 @@ export function createGatewayChatMetadataRuntime(params: {
     const agentId = normalizeAgentId(readParams.agentId);
     let agent = generation.agentsById.get(agentId)?.ready;
     if (readParams.readPolicy !== "ready" && hasSessionContext) {
-      agent = await prepareAgent(generation, agentId);
+      agent = await prepareAgent(generation, agentId, preparedSessionScopeOf(readParams));
       if (
         !agent ||
         current !== generation ||
