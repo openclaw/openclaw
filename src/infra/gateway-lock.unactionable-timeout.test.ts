@@ -3,8 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { resolveGatewayLockPaths } from "./gateway-lock.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
+import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({
@@ -84,7 +83,6 @@ describe("Gateway lock timeout diagnostics", () => {
         role: "sqlite-maintenance",
         timeoutMs: 250,
         pollIntervalMs: 25,
-        staleMs: 10 * 60_000,
         now: clock.now,
         sleep: clock.sleep,
         ...unverifiableOwner,
@@ -121,7 +119,6 @@ describe("Gateway lock timeout diagnostics", () => {
       role: "sqlite-maintenance",
       timeoutMs: 250,
       pollIntervalMs: 25,
-      staleMs: 10 * 60_000,
       now: clock.now,
       sleep: clock.sleep,
       ...unverifiableOwner,
@@ -151,7 +148,6 @@ describe("Gateway lock timeout diagnostics", () => {
       role: "sqlite-maintenance",
       timeoutMs: 250,
       pollIntervalMs: 25,
-      staleMs: 10 * 60_000,
       now: clock.now,
       sleep: clock.sleep,
       ...unverifiableOwner,
@@ -180,7 +176,6 @@ describe("Gateway lock timeout diagnostics", () => {
       role: "sqlite-maintenance",
       timeoutMs: 250,
       pollIntervalMs: 25,
-      staleMs: 10 * 60_000,
       now: clock.now,
       sleep: clock.sleep,
     });
@@ -213,7 +208,6 @@ describe("Gateway lock timeout diagnostics", () => {
       role: "sqlite-maintenance",
       timeoutMs: 250,
       pollIntervalMs: 25,
-      staleMs: 10 * 60_000,
       now: clock.now,
       sleep: clock.sleep,
     });
