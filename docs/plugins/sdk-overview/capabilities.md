@@ -188,6 +188,44 @@ Before ordinary enrollment or project capture, call `options.prepareNodeRuntime(
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be safe to repeat, and `inspect({ leaseId, profile })`, which returns `active`, `dormant`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for checks safe to repeat, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands are rejected and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. For ordinary leases, omission retains the legacy dedicated-host behavior; prepared-workspace registration requires an explicit `sharedHost: false` in the provision result. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
 `WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; username?: string; allowsResize?: boolean; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be an absolute path on the worker (POSIX or Windows). Setting `allowsResize: false` restricts a native desktop from provider-wide virtual-display resizing. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; args?: string[]; cdpPort: number }` or `{ id: "terminal"; executablePath: string; args?: string[] }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields. Optional `args` are fixed by the provider and travel with its admitted launcher, never supplied by the viewer. They run without a shell on the node; each argument is NUL-free and bounded to 4 KiB, with at most 32 arguments and 8 KiB total. Gateway validation accepts POSIX and Windows absolute paths independently of the Gateway OS; the node validates its native path syntax. An optional `username` identifies the lease-owned ARD account, with its password read from `passwordFilePath` and kept transient between the node and Gateway. Managed ARD account authentication requires the node carrier; credentials never enter the browser. Ordinary host desktops retain their existing viewer-supplied ARD credentials.
 Providers with renewable leases can also implement `renew(leaseId)`.
+
+#### Retained worker disks
+
+The optional retained lifecycle uses the generic `WorkerRetentionPolicy`,
+`WorkerRetentionOperation`, and `WorkerRetentionObservation` types exported from
+`openclaw/plugin-sdk/plugin-entry`. Provision options and inspection/destruction
+lease inputs carry `retention?: WorkerRetentionPolicy`: version `1`, an immutable
+`ownerBinding`, and finite positive `computeWindowSeconds`. Freeze this acquisition
+policy before effects and preserve it on every replay and lifecycle call. Retention
+requires the original `WorkerResourceReceipt`; it cannot adopt a replacement disk.
+
+Providers may implement `setRetainedState({ leaseId, profile, resourceReceipt,
+retention, operation, assertCurrent, signal? })`, returning a normalized observation.
+The host persists the operation before submission: `id`, `action` (`pause` or
+`resume`), and `expectedClaimRevision`. Revalidate live authority after awaits and
+immediately before effects. An uncertain reply preserves that same operation and
+its preconditions for retry; do not mint another operation or compute window.
+Completion requires independent exact-resource and policy readback, not an
+optimistic command reply. The provider owns its native claim format and API; core
+receives only `claimRevision`, `state`, `computeExpiresAtMs`, and an optional
+operation with phase `pending` or `observed`.
+
+Inspection returns `retention?: WorkerRetentionObservation`. Only a verified
+`running` observation within the authorized compute window qualifies as `active`.
+Retained `suspended`, `transitioning`, `expired`, and `unavailable` observations
+remain `dormant`, preserving disk custody. Malformed or mismatched evidence throws;
+neither unknown state nor compute expiry authorizes disk deletion. Inspection,
+heartbeat, and ordinary activity never open or extend a retained compute window.
+Explicit destruction retains the original receipt and must still confirm release.
+
+The bundled Crabbox adapter checks its selected executable for Linux Azure Sandbox
+`session-disk-retention-v1` and `pause-resume` support before allocation. It uses
+the released `crabbox.session-disk.v1` observation contract, fixed owner-binding
+and lifecycle-operation flags, and no retained heartbeat loop. This seam does not
+activate retention by itself. Crabbox 0.80.0 metadata alone is not end-to-end
+readiness evidence: retained restart/reconnect integration remains an activation
+gate, and a separately corrected development build is not a released dependency.
+
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core can pass an optional `signal` in `inspect({ leaseId, profile, signal })` to cancel an observation during shutdown. Forward it to inspection commands and settle owned commands before rejecting; cancellation does not prove lease absence or authorize teardown. Core fences an authoritatively absent environment and invokes the normal teardown; shared or unknown host isolation still requires acknowledgment that the exact worker stopped. A shared host must not be stopped or unpaired merely to release its logical lease.
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must

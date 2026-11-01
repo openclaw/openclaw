@@ -499,6 +499,45 @@ describe("processDiscordMessage draft streaming progress", () => {
   });
 });
 
+describe("processDiscordMessage queued thread replies", () => {
+  it.each([true, false])(
+    "recognizes a thread answer when queued execution starts before dispatch returns: %s",
+    async (startsBeforeReturn) => {
+      let endQueuedRoute: (() => void) | void = undefined;
+      mockDispatch(async (params) => {
+        if (startsBeforeReturn) {
+          endQueuedRoute = params?.replyOptions?.queuedDeliveryCorrelations?.at(-1)?.begin();
+        }
+        return createNoQueuedDispatchResult();
+      });
+      await runDraft({ discordConfig: { streaming: { mode: "off" } } });
+      const options = getLastDispatchReplyOptions();
+      if (!startsBeforeReturn) {
+        endQueuedRoute = options?.queuedDeliveryCorrelations?.at(-1)?.begin();
+      }
+      const sessionKey = String(firstDispatchParams().ctx?.SessionKey);
+      const reply = (threadId = "thread-queued") =>
+        notifyDiscordActiveTurnThreadReplyDelivered({ sessionKey, accountId: "default", threadId });
+      try {
+        // Creating a thread alone or answering another thread is not a source reply.
+        expect(reply()).toBe(false);
+        await notifyDiscordActiveTurnThreadCreated({
+          sessionKey,
+          accountId: "default",
+          sourceChannelId: "c1",
+          sourceMessageId: "1001",
+          threadId: "thread-queued",
+        });
+        expect(reply("unrelated-thread")).toBe(false);
+        expect(reply()).toBe(true);
+      } finally {
+        endQueuedRoute?.();
+      }
+      expect(reply()).toBe(false);
+    },
+  );
+});
+
 describe("processDiscordMessage draft streaming reasoning", () => {
   it("hides gated reasoning and replaces public reasoning snapshots", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();

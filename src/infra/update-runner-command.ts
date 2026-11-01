@@ -112,6 +112,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
       cwd,
       timeoutMs,
       env,
+      ...(opts.signal ? { signal: opts.signal } : {}),
       ...(progress?.onStepProgress
         ? {
             onUpdateProgress: (message: string) =>

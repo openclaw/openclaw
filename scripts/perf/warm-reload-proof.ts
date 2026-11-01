@@ -41,6 +41,8 @@ const { values } = parseArgs({
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
+    "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -52,7 +54,8 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation
+  --transcript-late-paint --reload-after-navigation --cpu-profile
+  --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -63,10 +66,14 @@ if (values["audit-report"] || values["paint-audit"]) {
     throw new Error("--audit-report and --paint-audit must be supplied together");
   }
   const audited = await applyWarmReloadPaintAudit(values["audit-report"], values["paint-audit"]);
-  const report: { results: Parameters<typeof createWarmReloadComparison>[0] } = JSON.parse(
-    await readFile(audited, "utf8"),
-  );
-  if (report.results.some((result) => result.arm === "base" || result.arm === "candidate")) {
+  const report: {
+    results: Parameters<typeof createWarmReloadComparison>[0];
+    profiled?: boolean;
+  } = JSON.parse(await readFile(audited, "utf8"));
+  if (
+    !report.profiled &&
+    report.results.some((result) => result.arm === "base" || result.arm === "candidate")
+  ) {
     await createWarmReloadComparison(report.results, path.dirname(audited));
   }
   console.info("Wrote audited-report.json beside the immutable capture report");
@@ -83,6 +90,9 @@ const reloads = integer(values.reloads, "--reloads", 0, 100);
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
+const extraInitScripts = await Promise.all(
+  values["init-script"].map((file) => readFile(file, "utf8")),
+);
 if (!["both", "chat", "dashboard"].includes(values.route)) {
   throw new Error("--route must be both, chat, or dashboard");
 }
@@ -425,7 +435,19 @@ async function captureReload(
   cdp.on("Network.webSocketFrameSent", onSent);
   cdp.on("Network.webSocketFrameReceived", onReceived);
   page.on("pageerror", onError);
+  const profiling = warm && values["cpu-profile"];
+  const timeline: unknown[] = [];
+  const onTrace = ({ value }: { value: unknown[] }) => timeline.push(...value);
   try {
+    if (profiling) {
+      cdp.on("Tracing.dataCollected", onTrace);
+      await cdp.send("Profiler.enable");
+      await cdp.send("Profiler.start");
+      await cdp.send("Tracing.start", {
+        categories: "toplevel,loading,blink.user_timing,devtools.timeline,v8",
+        transferMode: "ReportEvents",
+      });
+    }
     await cdp.send("Page.startScreencast", {
       format: "png",
       maxWidth: viewport.width,
@@ -472,6 +494,7 @@ async function captureReload(
       ...probe.loaf,
       ...probe.shifts,
       ...probe.domStates,
+      ...probe.textStates,
       ...probe.animationSamples,
       ...probe.sidebarFrames,
     ]) {
@@ -619,6 +642,20 @@ async function captureReload(
     );
     return report;
   } finally {
+    if (profiling) {
+      const { profile } = await cdp.send("Profiler.stop");
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
+      await cdp.send("Tracing.end");
+      await complete;
+      cdp.off("Tracing.dataCollected", onTrace);
+      await writeFile(path.join(outputDir, "reload.cpuprofile"), JSON.stringify(profile));
+      await writeFile(
+        path.join(outputDir, "trace.json"),
+        JSON.stringify({ traceEvents: timeline }),
+      );
+    }
     await cdp.send("Page.stopScreencast").catch(() => {});
     cdp.off("Page.screencastFrame", onFrame);
     cdp.off("Network.requestWillBeSent", onDocument);
@@ -837,6 +874,9 @@ try {
           const page = await context.newPage();
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
+          if (extraInitScripts.length) {
+            await page.addInitScript({ content: extraInitScripts.join("\n") });
+          }
           await page.addInitScript({
             content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
           });
@@ -1073,6 +1113,7 @@ try {
   }
   const report = {
     revision,
+    profiled: values["cpu-profile"],
     buildIdentity,
     dist,
     viewport,
@@ -1112,7 +1153,7 @@ try {
     results,
   };
   await writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2));
-  if (values.base) {
+  if (values.base && !values["cpu-profile"]) {
     await createWarmReloadComparison(results, directory);
   }
   console.info(`Retained proof: ${directory}/report.json`);

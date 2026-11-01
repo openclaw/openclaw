@@ -503,6 +503,10 @@ function settleSqliteTransactionSync<T>(
     }
     // Include COMMIT and failed holders: both keep other writers waiting too.
     try {
+      if (timing?.diskRead) {
+        // Borrow the last transaction's existing identifiers/counts until operation settlement.
+        timing.diskRead.context = options?.diagnosticContext;
+      }
       const elapsedMs = Date.now() - transactionStartedAt;
       const hostAdmissionWaitMs = (timing?.hostAdmissionWaitMs ?? 0) - admissionWaitBefore;
       const databaseAdmissionWaitMs =
