@@ -539,10 +539,6 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     }
     requestAnimationFrame(sample);
   };
-  const textObserver = new MutationObserver(() => sample());
-  if (transcriptLatePaint) {
-    textObserver.observe(document, { childList: true, characterData: true, subtree: true });
-  }
   requestAnimationFrame(sample);
   return data;
 }

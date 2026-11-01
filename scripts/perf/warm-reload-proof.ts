@@ -489,6 +489,7 @@ async function captureReload(
       ...probe.loaf,
       ...probe.shifts,
       ...probe.domStates,
+      ...probe.textStates,
       ...probe.animationSamples,
       ...probe.sidebarFrames,
     ]) {
