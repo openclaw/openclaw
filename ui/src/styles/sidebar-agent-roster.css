@@ -329,6 +329,7 @@ openclaw-sidebar-agent-roster {
 }
 .sidebar-session-team-state .session-glyph__ring {
   inset: 0;
+  mask: var(--spinner-mask);
 }
 @media (hover: none), (pointer: coarse) {
   .sidebar-agent-roster__actions {

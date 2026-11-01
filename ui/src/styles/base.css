@@ -355,15 +355,16 @@
   --radius-full: 9999px;
   --radius: 10px;
 
-  /* Every spinner: a three-quarter arc in a solid color with an open gap. */
+  /* Every spinner: a closed ring at 20% with a short round-capped arc on top.
+     A mask paints currentColor, and each stroke stays the same px at any size. */
   --spinner-duration: 0.9s;
   --spinner-duration-background: 1.8s;
-  --spinner-stroke: 2px;
-  /* 8-9px badges: 2px leaves too small a hole to read as an arc. */
-  --spinner-stroke-small: 1.5px;
-  --spinner-stroke-large: 2.5px;
-  --spinner-gap: transparent;
-  --spinner-trace-dash: 72 28;
+  --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-trace-stroke: 1.75px;
+  --spinner-trace-dash: 26 74;
 
   /* One profile for every scroll surface: 12px hit target, 6px visible thumb
      (transparent border + content-box clip). Derived from --muted so every
@@ -468,10 +469,13 @@
   }
 }
 
-/* A still spinner closes its gap, so it reads as a status ring and not a frozen arc. */
+/* A still spinner shows the full ring, so it reads as a status and not a frozen arc. */
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --spinner-gap: currentColor;
+    --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
   }
 }
 

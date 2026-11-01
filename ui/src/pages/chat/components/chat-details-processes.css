@@ -91,8 +91,8 @@
   width: 8px;
   height: 8px;
   color: var(--accent);
-  border: var(--spinner-stroke-small) solid currentColor;
-  border-right-color: var(--spinner-gap);
+  background: currentColor;
+  mask: var(--spinner-mask-small);
   border-radius: 50%;
   corner-shape: round;
   animation: btn-spinner-spin var(--spinner-duration) linear infinite;

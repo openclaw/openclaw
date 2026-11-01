@@ -157,15 +157,15 @@
   height: 14px;
   flex: none;
   color: var(--accent);
-  border: var(--spinner-stroke) solid currentColor;
-  border-right-color: var(--spinner-gap);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: 999px;
   animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
 .chat-activity-pills .activity-pill__badge .activity-pill__spinner {
   width: 9px;
   height: 9px;
-  border-width: var(--spinner-stroke-small);
+  mask: var(--spinner-mask-small);
 }
 .chat-activity-pills [data-family="progress"] {
   gap: 7px;

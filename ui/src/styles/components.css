@@ -348,8 +348,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   position: absolute;
   inset: -2px;
   color: var(--accent);
-  border: var(--spinner-stroke) solid currentColor;
-  border-right-color: var(--spinner-gap);
+  background: currentColor;
+  mask: var(--spinner-mask-avatar);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -358,6 +358,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
    slot used to draw; a full-size empty circle reads as a missing icon. */
 .session-glyph--bare .session-glyph__ring {
   inset: 4px;
+  mask: var(--spinner-mask);
 }
 
 /* Two identities share one run: the arc traces the union outline of the owner
@@ -375,15 +376,16 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .session-glyph__trace path {
   fill: none;
-  stroke-width: var(--spinner-stroke);
+  stroke-width: var(--spinner-trace-stroke);
 }
 
 .session-glyph__trace-track {
-  stroke: transparent;
+  stroke: var(--accent);
+  opacity: 0.2;
 }
 
-/* The arc covers the same share of its outline as the ring's quarter turn and
-   moves at the ring's linear speed (~45px/s). */
+/* The arc covers the same share of its outline as the ring's arc and moves at the
+   ring's linear speed (~45px/s). */
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
@@ -529,8 +531,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: var(--spinner-stroke) solid currentColor;
-  border-right-color: var(--spinner-gap);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }
@@ -3117,8 +3119,8 @@ td.data-table-key-col {
   height: 12px;
   flex: 0 0 auto;
   color: var(--accent);
-  border: var(--spinner-stroke) solid currentColor;
-  border-right-color: var(--spinner-gap);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
 }
 
@@ -3143,8 +3145,7 @@ td.data-table-key-col {
   animation-duration: var(--spinner-duration-background);
 }
 
-/* Forced colors repaints every border side, which would close the gap and stop
-   the rotation from showing. */
+/* Forced colors would repaint the background these masks show through. */
 @media (forced-colors: active) {
   .session-run-spinner,
   .session-glyph__ring,
@@ -3166,6 +3167,7 @@ td.data-table-key-col {
     color: CanvasText !important;
   }
 
+  .session-glyph__trace-track,
   .session-glyph__trace-run {
     forced-color-adjust: none;
     stroke: CanvasText;
@@ -3189,7 +3191,7 @@ td.data-table-key-col {
   }
 
   .session-glyph__trace-track {
-    stroke: var(--accent);
+    opacity: 1;
   }
 }
 

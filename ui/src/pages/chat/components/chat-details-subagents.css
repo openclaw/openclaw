@@ -83,8 +83,8 @@
   display: block;
   width: 8px;
   height: 8px;
-  border: var(--spinner-stroke-small) solid currentColor;
-  border-right-color: var(--spinner-gap);
+  background: currentColor;
+  mask: var(--spinner-mask-small);
   border-radius: 50%;
   animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }

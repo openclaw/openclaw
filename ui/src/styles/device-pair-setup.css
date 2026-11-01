@@ -110,8 +110,8 @@
   width: 18px;
   height: 18px;
   color: var(--accent);
-  border: var(--spinner-stroke) solid currentColor;
-  border-right-color: var(--spinner-gap);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin var(--spinner-duration) linear infinite;
 }

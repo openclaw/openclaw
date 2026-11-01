@@ -400,16 +400,14 @@ suite.define(() => {
             const accent = document.createElement("span").style;
             accent.color = style.getPropertyValue("--accent").trim();
             return {
-              actual: style.borderTopColor,
+              actual: style.backgroundColor,
               expected: accent.color,
-              gap: style.borderRightColor,
+              arc: style.maskImage.includes("stroke-dasharray"),
             };
           });
         expect.soft(spinnerColors.actual).toBe(spinnerColors.expected);
-        // A still spinner closes its gap so it never reads as a frozen arc.
-        expect
-          .soft(spinnerColors.gap)
-          .toBe(reducedMotion === "reduce" ? spinnerColors.expected : "rgba(0, 0, 0, 0)");
+        // A still spinner shows only the full ring so it never reads as a frozen arc.
+        expect.soft(spinnerColors.arc).toBe(reducedMotion !== "reduce");
       }
       await page.emulateMedia({ reducedMotion: "no-preference" });
     }
