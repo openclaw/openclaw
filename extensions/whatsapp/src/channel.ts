@@ -206,6 +206,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsFromConfig(params),
         listGroupsLive: async (params) =>
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsLive(params),
+        listGroupMembers: async (params) =>
+          (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupMembers(params),
       },
       actions: {
         messageActionTargetAliases: {

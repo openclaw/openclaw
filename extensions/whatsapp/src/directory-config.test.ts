@@ -1,6 +1,7 @@
 import { createDirectoryTestRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, expect, it, vi } from "vitest";
+import { whatsappPlugin } from "./channel.js";
 import { WhatsAppConnectionOwnerBusyError } from "./connection-owner.js";
 import { listWhatsAppDirectoryGroupsLive as listGroups } from "./directory-config.js";
 
@@ -52,6 +53,14 @@ const cfg = { channels: { whatsapp: { authDir: root, groups: { [first]: {}, [thi
 const runtime = createDirectoryTestRuntime() as never;
 const params = (overrides: Partial<Parameters<typeof listGroups>[0]> = {}) =>
   ({ cfg, accountId: undefined, runtime, ...overrides }) as never;
+const groupMembersParams = (overrides: { groupId?: string; limit?: number } = {}) =>
+  ({
+    cfg,
+    accountId: undefined,
+    groupId: overrides.groupId ?? "120363418482883586@g.us",
+    limit: overrides.limit,
+    runtime,
+  }) as never;
 const unavailable = (reason: string) =>
   expect(listGroups(params())).rejects.toMatchObject({
     code: "whatsapp_directory_unavailable",
@@ -182,4 +191,70 @@ it("retries retained cleanup after credential drain times out", async () => {
   expect(mocks.releaseOwner).not.toHaveBeenCalled();
   await expect(listGroups(params())).resolves.toEqual([]);
   expect(mocks.releaseOwner).toHaveBeenCalledTimes(2);
+});
+
+it("lists members through the active owner and preserves non-phone identifiers", async () => {
+  const groupId = "120363418482883586@g.us";
+  const proofEnabled = process.env.OPENCLAW_WHATSAPP_DIRECTORY_PROOF === "1";
+  const sock = {
+    groupMetadata: vi.fn().mockResolvedValue({
+      participants: [
+        { id: "opaque-member@lid", admin: null },
+        { id: "15551234567@s.whatsapp.net", admin: "admin" },
+      ],
+    }),
+  };
+  mocks.getController.mockReturnValue({ getCurrentSock: () => sock } as never);
+  const listGroupMembers = whatsappPlugin.directory?.listGroupMembers;
+  if (proofEnabled) {
+    console.log(
+      `WHATSAPP_DIRECTORY_PROOF capability=${typeof listGroupMembers === "function" ? "available" : "missing"} group=${groupId}`,
+    );
+  }
+  expect(listGroupMembers).toBeTypeOf("function");
+
+  const members = await listGroupMembers!(groupMembersParams({ groupId }));
+  if (proofEnabled) {
+    console.log(`WHATSAPP_DIRECTORY_PROOF members=${JSON.stringify(members)}`);
+  }
+  expect(members).toEqual([
+    {
+      kind: "user",
+      id: "15551234567@s.whatsapp.net",
+      raw: { admin: "admin" },
+    },
+    { kind: "user", id: "opaque-member@lid", raw: { admin: "member" } },
+  ]);
+  expect(sock.groupMetadata).toHaveBeenCalledExactlyOnceWith(groupId);
+  expect(mocks.acquireOwner).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["whatsapp:120363418482883586@g.us", "120363418482883586@g.us"],
+  ["whatsapp:group:120363418482883586@g.us", "120363418482883586@g.us"],
+])("normalizes prefixed group IDs before metadata lookup", async (groupId, normalizedGroupId) => {
+  const sock = { groupMetadata: vi.fn().mockResolvedValue({ participants: [] }) };
+  mocks.getController.mockReturnValue({ getCurrentSock: () => sock } as never);
+  const listGroupMembers = whatsappPlugin.directory?.listGroupMembers;
+  expect(listGroupMembers).toBeTypeOf("function");
+
+  await listGroupMembers!(groupMembersParams({ groupId }));
+
+  expect(sock.groupMetadata).toHaveBeenCalledExactlyOnceWith(normalizedGroupId);
+});
+
+it("rejects a non-group JID before opening a member lookup", async () => {
+  const listGroupMembers = whatsappPlugin.directory?.listGroupMembers;
+  expect(listGroupMembers).toBeTypeOf("function");
+
+  await expect(
+    listGroupMembers!(groupMembersParams({ groupId: "15551234567@s.whatsapp.net" })),
+  ).rejects.toThrow("WhatsApp group member lookup requires a group JID.");
+  if (process.env.OPENCLAW_WHATSAPP_DIRECTORY_PROOF === "1") {
+    console.log(
+      "WHATSAPP_DIRECTORY_PROOF negative-control=non-group-jid rejected before connection lookup",
+    );
+  }
+  expect(mocks.getController).not.toHaveBeenCalled();
+  expect(mocks.acquireOwner).not.toHaveBeenCalled();
 });
