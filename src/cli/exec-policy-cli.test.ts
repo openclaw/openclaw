@@ -468,6 +468,21 @@ describe("exec-policy CLI", () => {
     expect(mocks.state.config.tools?.exec).toEqual({ security: "full", ask: "always" });
   });
 
+  it.each<[string[], NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>]>([
+    [["set", "--ask", "on-miss"], { mode: "auto" }],
+    [["set", "--security", "allowlist"], { mode: "auto" }],
+    [["set", "--security", "allowlist", "--ask", "on-miss"], { mode: "auto" }],
+    [["preset", "cautious"], { host: "gateway", mode: "auto" }],
+    [["set", "--ask", "off"], { mode: "allowlist" }],
+    [["set", "--ask", "always"], { security: "allowlist", ask: "always" }],
+    [["set", "--security", "deny"], { mode: "deny" }],
+    [["set", "--security", "full"], { security: "full", ask: "on-miss" }],
+  ])("preserves auto only for unchanged policy: %j", async (args, expected) => {
+    mocks.state.config = { tools: { exec: { mode: "auto" } } };
+    await runExecPolicyCommand([...args, "--json"]);
+    expect(mocks.state.config.tools?.exec).toEqual(expected);
+  });
+
   it("sanitizes terminal control content before rendering the text table", async () => {
     mocks.readConfigFileSnapshot.mockImplementationOnce(async () =>
       configSnapshot("/tmp/openclaw.json\u001B[2J\nforged"),

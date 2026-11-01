@@ -266,14 +266,17 @@ function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPolicySho
         nextConfig.tools.exec.host = policy.host;
       }
       if (policy.security !== undefined || policy.ask !== undefined) {
-        const currentPolicy = resolveExecModePolicy({
+        const current = resolveExecModePolicy({
           mode: normalizeExecMode(nextConfig.tools.exec.mode),
           security: nextConfig.tools.exec.security ?? "full",
           ask: nextConfig.tools.exec.ask ?? "off",
         });
-        const security = policy.security ?? currentPolicy.security;
-        const ask = policy.ask ?? currentPolicy.ask;
-        const mode = resolveExactExecModeFromPolicy({ security, ask });
+        const security = policy.security ?? current.security;
+        const ask = policy.ask ?? current.ask;
+        const mode =
+          current.mode === "auto" && security === current.security && ask === current.ask
+            ? "auto"
+            : resolveExactExecModeFromPolicy({ security, ask });
         if (mode) {
           nextConfig.tools.exec.mode = mode;
           delete nextConfig.tools.exec.security;
