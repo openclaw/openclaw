@@ -35,7 +35,7 @@ export function createMenuControls(): MenuControls {
 export type MenuBinding = {
   isOpen(): boolean;
   itemRef(): (element: HTMLElement) => void;
-  items(): HTMLElement[];
+  items(ordered?: boolean): HTMLElement[];
   highlightedValue(): string | null;
   highlightedValueNow(): string | null;
   setHighlightedValue(value: string | null): void;

@@ -8782,7 +8782,8 @@ struct ChatViewModelTests {
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
-    @Test func `composer web search cannot override a globally disabled baseline`() async throws {
+    @Test(arguments: [nil, false, true] as [Bool?])
+    func `composer web search cannot override a globally disabled baseline`(_ webSearch: Bool?) async throws {
         let catalog = OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
             webSearchBaseEnabled: false,
@@ -8793,12 +8794,13 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             sessionsResponses: [sessionsResponse([
-                sessionEntry(key: "main", updatedAt: 1),
+                sessionEntry(key: "main", updatedAt: 1, toolOverrides: .init(webSearch: webSearch)),
             ])],
             composerCapabilityCatalog: catalog)
         try await loadAndWaitBootstrap(vm: vm)
         await vm.loadComposerCapabilities()
 
+        #expect(await MainActor.run { !vm.composerWebSearchEnabled })
         await MainActor.run { vm.toggleComposerWebSearch() }
 
         #expect(await transport.sessionSettingsPatches().isEmpty)

@@ -147,6 +147,7 @@ function readProjectionRows(
       "recovery_requested_at_ms",
       "workspace_accepted_at_ms",
       "staged_result_ref",
+      "repository_disk_authority_json",
       "created_at_ms",
     ])
     .select((eb) =>
@@ -179,6 +180,7 @@ function readProjectionRows(
       "node_device_id",
       "shared_host",
       "lease_id",
+      "resource_receipt_json",
       "ssh_host",
       "ssh_port",
       "ssh_user",

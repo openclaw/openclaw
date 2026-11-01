@@ -181,7 +181,9 @@ describe("provider checkpoint prompt pressure", () => {
       },
       { ...response, content: [] },
     ];
-    expect(pressure(messages)).toBeGreaterThan(3_500);
+    const covered = messages.filter((message) => message.role !== "toolResult");
+    // The 3,200-character observation adds its content beyond the measured prefix.
+    expect(pressure(messages)).toBeGreaterThan(pressure(covered) + 800);
     expect(pressure(messages)).toBeLessThan(6_000);
   });
 });

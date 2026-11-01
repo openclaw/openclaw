@@ -111,7 +111,7 @@ export class NewSessionPageOwner {
     }
   };
   imageLightbox: ImageLightboxItem | null = null;
-  agentPickerOpen = false;
+  readAgentIdentityTargets: () => readonly string[] = () => [];
   agentPicker: HTMLSpanElement | undefined;
   readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
@@ -297,9 +297,9 @@ export class NewSessionPageOwner {
       this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(
-      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
-    );
+    void this.context?.agentIdentity.ensure([
+      ...new Set([this.place.agentId, ...this.readAgentIdentityTargets()]),
+    ]);
     const agentsReady = this.draft.agentsReady();
     this.place.modelControl.loadCatalogTargets(
       this.context,

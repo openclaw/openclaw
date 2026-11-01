@@ -4,6 +4,7 @@ import type {
   ResponseCompactionItemParam,
   ResponseOutputItem,
 } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions, CompactionReplayRejection } from "../provider-options.js";
 import {
   isOpenAIResponsesCompactionOutput,
@@ -251,7 +252,11 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       replay.compactedWindow !== undefined ||
       replay.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE
     ) {
-      const output = readOpenAIResponsesCompactionWindow(replay, model);
+      const output = readOpenAIResponsesCompactionWindow(
+        replay,
+        model,
+        getAiTransportHost().immutableData,
+      );
       const item = output?.at(-1);
       if (!output || item?.type !== "compaction") {
         return { owner: message, mode: "refresh-required" };
@@ -276,7 +281,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       ...(isSafeResponsesReplayItemId(replay.id) ? { id: replay.id } : {}),
       encrypted_content: replay.data,
     };
-    publishResponsesCompactionInput(replay, [item]);
+    publishResponsesCompactionInput(replay, [item], getAiTransportHost().immutableData);
     return {
       owner: message,
       item,
