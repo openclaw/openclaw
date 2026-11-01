@@ -14,8 +14,8 @@ import {
   readBackupManifestEntry,
 } from "./backup-verify-manifest.js";
 
-export const MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
-export const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+const MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
+const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
 
 export function resolveExtractionBytes(
   entries: NormalizedArchiveEntry[],

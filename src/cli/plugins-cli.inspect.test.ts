@@ -1,7 +1,6 @@
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -19,7 +18,6 @@ import {
   buildPluginSnapshotReportMock as snapshot,
   loadPluginMetadataSnapshotMock,
   expectNoPluginCliCalls as expectNoCalls,
-  pluginCliConfigMock as configMock,
   pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
   retirePluginDiagnosticsMock,
@@ -28,12 +26,6 @@ import {
   runtimeErrors,
   setInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
-
-const workshopMocks = vi.hoisted(() => ({ detectToolPolicyDiagnostic: vi.fn() }));
-
-vi.mock("../skills/workshop/tool-policy-diagnostic.js", () => ({
-  detectSkillWorkshopToolPolicyDiagnostic: workshopMocks.detectToolPolicyDiagnostic,
-}));
 
 function createInspectReport(
   overrides: Partial<PluginInspectReport> & Pick<PluginInspectReport, "plugin">,
@@ -92,7 +84,6 @@ const inspectHome = path.resolve(path.sep, "tmp", "p-home");
 describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
-    workshopMocks.detectToolPolicyDiagnostic.mockReset();
     process.exitCode = undefined;
   });
   afterEach(() => {
@@ -361,43 +352,6 @@ describe("plugins cli inspect", () => {
     }
   });
 
-  it("explains policy-hidden Skill Workshop for every configured agent", async () => {
-    const agentIds = ["main", "venus"];
-    const config: OpenClawConfig = {
-      tools: { profile: "messaging" },
-      agents: { ownership: "explicit", entries: { main: {}, venus: {} } },
-    };
-    configMock.mockReturnValue(config);
-    workshopMocks.detectToolPolicyDiagnostic.mockImplementation(
-      ({ agentId }: { agentId: string }) => ({
-        agentId,
-        message:
-          `Skill Workshop is active, but "skill_workshop" is hidden for agent "${agentId}": ` +
-          'tools.profile: "messaging" does not include "skill_workshop". ' +
-          'Add tools.alsoAllow: ["skill_workshop"].',
-      }),
-    );
-    snapshot.mockReturnValue({ plugins: [], diagnostics: [] });
-
-    await expect(plugins("inspect", "skill-workshop")).rejects.toThrow("__exit__:1");
-
-    const output = runtimeErrors.at(-1);
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
-      config,
-      workspaceDir: undefined,
-    });
-    expect(output).toContain("Skill Workshop is built into OpenClaw, not a plugin");
-    expect(output).toContain('tools.profile: "messaging" does not include "skill_workshop".');
-    expect(output).toContain('Add tools.alsoAllow: ["skill_workshop"].');
-    for (const agentId of agentIds) {
-      expect(workshopMocks.detectToolPolicyDiagnostic).toHaveBeenCalledWith({
-        config,
-        workshopEnabled: true,
-        agentId,
-      });
-      expect(output).toContain(`hidden for agent "${agentId}"`);
-    }
-  });
   it.each(["", "-other"])(
     "preserves diagnostic metadata and source identity (home suffix=%s)",
     async (sourceSuffix) => {

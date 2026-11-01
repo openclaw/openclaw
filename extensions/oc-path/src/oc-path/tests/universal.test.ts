@@ -81,7 +81,7 @@ describe("resolveOcPath", () => {
 
 describe("setOcPath", () => {
   it.each([
-    ['{"k":true}', "k", "false", '{"k":false}', false],
+    ['{"é":true,"e\\u0301":true}', "e\u0301", "false", '{"é":true,"e\\u0301":false}', false],
     [
       '{"a":{"b":{"c":{"d":{"e":{"k":"deny"}}}}}}',
       "a/b/c/d/e/k",
