@@ -50,6 +50,21 @@ describe("matchesExecAllowlistPattern", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "keeps a backslash filename distinct from the slash path",
+    () => {
+      const trusted = "/home/user/bin/tool";
+      const backslashFile = String.raw`/home/user/bin\\tool`;
+      expect(backslashFile.match(/\\/g)?.length).toBe(2);
+      expect(matchesExecAllowlistPattern(trusted, trusted)).toBe(true);
+      expect(matchesExecAllowlistPattern(trusted, backslashFile)).toBe(false);
+      expect(matchesExecAllowlistPattern(backslashFile, backslashFile)).toBe(true);
+      expect(matchesExecAllowlistPattern(backslashFile, trusted)).toBe(false);
+      expect(matchesExecAllowlistPattern("/usr/bin/**", "/usr/bin/tool")).toBe(true);
+      expect(matchesExecAllowlistPattern("/usr/bin/**", String.raw`/usr/bin\\tool`)).toBe(false);
+    },
+  );
+
   it.runIf(process.platform === "darwin")("matches macOS /private/var temp aliases", () => {
     expect(
       matchesExecAllowlistPattern(
