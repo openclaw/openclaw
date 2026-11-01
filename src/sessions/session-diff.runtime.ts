@@ -157,12 +157,16 @@ async function collectUntrackedFiles(
   realRoot: string,
   budget: PatchBudget,
   summaryOnly: boolean,
+  preparedPaths?: string[],
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
-  const listing = await gitOut(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  if (listing === null) {
-    throw new Error("Unable to read untracked Git changes");
+  let paths = preparedPaths;
+  if (!paths) {
+    const listing = await gitOut(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+    if (listing === null) {
+      throw new Error("Unable to read untracked Git changes");
+    }
+    paths = listing.split("\0", MAX_UNTRACKED_FILES + 1).filter(Boolean);
   }
-  const paths = listing.split("\0", MAX_UNTRACKED_FILES + 1).filter(Boolean);
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
   const safePaths: string[] = [];
@@ -414,8 +418,10 @@ export async function collectCheckoutDiff(
   });
   const scope = params.scope ?? "all";
   // Fresh status already inventoried tracked and untracked changes at this HEAD.
-  const cleanWorktree =
-    params.cleanWorktree?.root === realRoot && params.cleanWorktree.head === head;
+  const worktreeStatus =
+    params.worktreeStatus?.root === realRoot && params.worktreeStatus.head === head
+      ? params.worktreeStatus
+      : undefined;
   let revisions: readonly [string] | readonly [string, string] | undefined;
   if (scope === "commit") {
     if (!head || !branchBase || branchBase.base === "HEAD" || branchBase.base === head) {
@@ -452,7 +458,7 @@ export async function collectCheckoutDiff(
   } else {
     revisions = branchBase ? [branchBase.base] : undefined;
   }
-  if (cleanWorktree && revisions?.length === 1 && revisions[0] === head) {
+  if (worktreeStatus?.clean && revisions?.length === 1 && revisions[0] === head) {
     return { ...repositoryFields, files: [], additions: 0, deletions: 0 };
   }
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
@@ -460,9 +466,15 @@ export async function collectCheckoutDiff(
     ? await collectTrackedFiles(root, realRoot, revisions, budget, params.summaryOnly === true)
     : { files: [], truncated: false };
   const untracked =
-    scope === "commit" || cleanWorktree
+    scope === "commit"
       ? { files: [], truncated: false }
-      : await collectUntrackedFiles(root, realRoot, budget, params.summaryOnly === true);
+      : await collectUntrackedFiles(
+          root,
+          realRoot,
+          budget,
+          params.summaryOnly === true,
+          worktreeStatus?.untrackedPaths,
+        );
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>
     a.path.localeCompare(b.path),
   );

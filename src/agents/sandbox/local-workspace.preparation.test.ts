@@ -50,6 +50,12 @@ const fixture = vi.hoisted(() => {
 // mock-isolation: Exercise preparation selection without opening the projection state database.
 vi.mock("../../gateway/worker-environments/local-workspace-projection.js", () => ({
   resolveLocalWorkspaceOwner: () => fixture.owner,
+  withLocalWorkspacePreparation: (
+    _owner: LocalWorkspaceOwner,
+    _options: unknown,
+    prepare: (beginCapture: () => void) => Promise<string>,
+  ) => prepare(() => {}),
+  reuseLocalWorkspaceProjection: () => fixture.reuse(),
   withLocalWorkspaceProjection: async <T>(
     _owner: LocalWorkspaceOwner,
     run: (state: Projection) => Promise<T>,

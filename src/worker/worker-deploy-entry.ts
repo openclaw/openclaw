@@ -2,6 +2,7 @@ import { flushCompileCache } from "node:module";
 import "./worker-deploy-runtime.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
+import { releaseProcessStdin } from "../process/release-stdin.js";
 import workerDeployBrowserRuntime from "./worker-deploy-browser-runtime.js";
 import { runWorkerProcess } from "./worker-process.js";
 import { loadWorkerTurnRuntime } from "./worker.runtime.js";
@@ -47,7 +48,7 @@ try {
 } finally {
   // Startup can fail before the worker lifetime adopts its input and IPC channel.
   // The running worker has already joined its cleanup before returning here.
-  process.stdin.destroy();
+  releaseProcessStdin();
   if (process.connected) {
     process.disconnect?.();
   }

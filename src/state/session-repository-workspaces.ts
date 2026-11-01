@@ -13,7 +13,10 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "./openclaw-state-db-readonly.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import {
@@ -32,6 +35,8 @@ import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceDiskBinding,
+  RepositoryWorkspaceDiskRetirement,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
   SessionRepositoryWorkspaceRecord,
@@ -255,13 +260,25 @@ export function createSessionRepositoryWorkspaceStore(
         input: { agentId: owner.agentId, sessionKey: owner.sessionKey },
       });
     },
-    prepare(workspaceId: string) {
+    prepare(
+      workspaceId: string,
+      read?: { mode: "existing-only"; owner: RepositoryWorkspaceOwner },
+    ) {
       const captured = context();
       return prepareRepositoryWorkspaceRead(captured.admission, workspaceId, () =>
-        executeOpenClawStateWorker(captured, {
-          type: "repositoryWorkspaces.get",
-          input: { workspaceId },
-        }),
+        read
+          ? withArtifactPreservingStateReads(async () => {
+              const reply = await executeExistingOpenClawStateRead(
+                { path: databasePath, env },
+                { type: "sessionRepositoryWorkspaces.find", owners: [read.owner] },
+                { current: true, context: captured, preferIndependentWarmRead: true },
+              );
+              return reply?.workspaces.find((workspace) => workspace.workspaceId === workspaceId);
+            })
+          : executeOpenClawStateWorker(captured, {
+              type: "repositoryWorkspaces.get",
+              input: { workspaceId },
+            }),
       );
     },
     async create(input: Guarded<RepositoryWorkspaceCreate>) {
@@ -275,6 +292,7 @@ export function createSessionRepositoryWorkspaceStore(
               url: input.url,
               requestedRef: input.requestedRef,
               runSetupScript: input.runSetupScript,
+              branchPrefix: input.branchPrefix,
               branch: input.branch,
             },
           },
@@ -296,6 +314,28 @@ export function createSessionRepositoryWorkspaceStore(
           },
           input.assertCurrent,
         ),
+      );
+    },
+    // Internal prerequisite only: no session/profile selector activates disk authority yet.
+    async bindDisk(input: Guarded<RepositoryWorkspaceDiskBinding>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.bindDisk",
+            input: {
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+              diskAuthority: input.diskAuthority,
+            },
+          },
+          input.assertCurrent,
+        ),
+      );
+    },
+    async retireDisk(input: Guarded<RepositoryWorkspaceDiskRetirement>) {
+      const { assertCurrent, ...request } = input;
+      return requireWorkspace(
+        await mutate({ type: "repositoryWorkspaces.retireDisk", input: request }, assertCurrent),
       );
     },
     async acceptCheckpoint(input: Guarded<RepositoryWorkspaceCheckpoint>) {

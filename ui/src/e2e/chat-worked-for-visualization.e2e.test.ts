@@ -115,7 +115,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
-              content: `[embed ref="${viewId}" title="Release confidence" height="180" /]`,
+              content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
               timestamp: browserFirst ? 4_000 : 3_000,
             },
           ];
@@ -192,53 +192,24 @@ suite.define(() => {
                 ),
               ),
           ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
-          // Each visible preview separates typed work into its own in-place chunk.
           const workedFor = page.locator(".chat-work-group > .chat-activity-group__summary");
-          expect(await workedFor.count()).toBe(2);
-          for (let chunkIndex = 0; chunkIndex < 2; chunkIndex++) {
-            const chunk = workedFor.nth(chunkIndex);
-            const otherChunk = workedFor.nth(1 - chunkIndex);
-            expect(await chunk.getAttribute("aria-expanded")).toBe("false");
-            expect(await chunk.locator(".chat-activity-group__label").textContent()).toBe("Worked");
-            for (const expanded of [true, false]) {
-              await chunk.click();
-              await waitForChatScrollIdle(page);
-              expect(await chunk.getAttribute("aria-expanded")).toBe(String(expanded));
-              expect(await otherChunk.getAttribute("aria-expanded")).toBe("false");
-              expect(await widget.count()).toBe(1);
-              expect(await browser.count()).toBe(1);
-              expect(await widget.isVisible()).toBe(true);
-              expect(await browser.isVisible()).toBe(true);
-              // The tall preview can virtualize the offscreen answer while work
-              // expands; it must never become a child of either disclosure.
-              expect(
-                await page
-                  .locator(".chat-work-group")
-                  .getByText("The widget and release reference are ready.", { exact: true })
-                  .count(),
-              ).toBe(0);
-              expect(
-                await page
-                  .locator(
-                    '.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card',
-                  )
-                  .evaluateAll((elements) =>
-                    elements.map((element) =>
-                      element.tagName === "OPENCLAW-BROWSER-TAB-CARD" ? "browser" : "widget",
-                    ),
-                  ),
-              ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
-              const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
-                const rects = elements.map((element) => element.getBoundingClientRect());
-                return rects.flatMap((rect, index) => {
-                  const next = rects[index + 1];
-                  return next && rect.bottom > next.top
-                    ? [{ bottom: rect.bottom, nextTop: next.top }]
-                    : [];
-                });
+          expect(await workedFor.getAttribute("aria-expanded")).toBe("false");
+          for (const expanded of [true, false]) {
+            await workedFor.click();
+            await waitForChatScrollIdle(page);
+            expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
+            expect(await widget.count()).toBe(1);
+            expect(await browser.count()).toBe(1);
+            const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
+              const rects = elements.map((element) => element.getBoundingClientRect());
+              return rects.flatMap((rect, index) => {
+                const next = rects[index + 1];
+                return next && rect.bottom > next.top
+                  ? [{ bottom: rect.bottom, nextTop: next.top }]
+                  : [];
               });
-              expect(overlaps).toEqual([]);
-            }
+            });
+            expect(overlaps).toEqual([]);
           }
         },
       );

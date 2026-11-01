@@ -223,7 +223,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         });
         await drainEntered.promise;
         await expect(
-          runtime.recovery.dispatchAgent({
+          runtime.lifecycle.dispatchAgent({
             message: "must not enter during shutdown",
             sessionKey: "main",
             idempotencyKey: `${runId}-late`,

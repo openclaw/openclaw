@@ -1365,9 +1365,53 @@ describe("createImageGenerateTool", () => {
       },
     });
     const details = resultDetails(result);
-    expect(details.quality).toBe(quality);
-    expect(details.outputFormat).toBe("jpeg");
+    expect(details.requested).toMatchObject({ quality });
+    expect(details.requested).toMatchObject({ outputFormat: "jpeg" });
   });
+
+  it.each(["low", undefined, "auto", "unexpected"])(
+    "reports returned image settings independently of requests (quality %s)",
+    async (quality) => {
+      const buffer = encodePngRgba(Buffer.alloc(2 * 3 * 4, 255), 2, 3);
+      mockGeneratedImage({
+        images: [
+          { buffer, mimeType: "image/png", metadata: { quality } },
+          imageAsset("unrecognized image bytes", "second.png"),
+        ],
+      });
+      vi.spyOn(mediaStore, "saveMediaBuffer")
+        .mockResolvedValueOnce(savedMedia("first.png", buffer.length))
+        .mockResolvedValueOnce(savedMedia("second.png", 23));
+      const tool = createToolWithPrimaryImageModel("openai/gpt-image-1");
+      const result = await tool.execute("call-returned-settings", {
+        prompt: "Two portraits",
+        size: "2160x3840",
+        quality: "high",
+        outputFormat: "jpeg",
+        count: 2,
+      });
+      const details = resultDetails(result);
+      expect(details.requested).toMatchObject({
+        size: "2160x3840",
+        quality: "high",
+        outputFormat: "jpeg",
+      });
+      expect(details.outputs).toEqual([
+        {
+          path: "/tmp/first.png",
+          size: "2x3",
+          outputFormat: "png",
+          ...(quality === "low" ? { quality: "low" } : {}),
+        },
+        { path: "/tmp/second.png" },
+      ]);
+      for (const key of ["size", "quality", "outputFormat"]) {
+        expect(details).not.toHaveProperty(key);
+      }
+      expect(resultText(result)).toContain("size=2x3");
+      expect(resultText(result)).toContain(`quality=${quality === "low" ? "low" : "unknown"}`);
+    },
+  );
 
   it("forwards generic fal provider options", async () => {
     const generateImage = mockGeneratedImage({
@@ -1715,7 +1759,7 @@ describe("createImageGenerateTool", () => {
     const details = resultDetails(result);
     expect(details.provider).toBe("openai");
     expect(details.model).toBe("gpt-image-1.5");
-    expect(details.outputFormat).toBe("png");
+    expect(details.requested).toMatchObject({ outputFormat: "png" });
   });
 
   it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
@@ -1784,7 +1828,7 @@ describe("createImageGenerateTool", () => {
     expect(generateArgs.aspectRatio).toBeUndefined();
     expect(generateArgs.resolution).toBeUndefined();
     expect(generateArgs.inferredResolution).toBe("4K");
-    expect(resultDetails(result).resolution).toBe("4K");
+    expect(resultDetails(result)).not.toHaveProperty("resolution");
     expect(generateArgs.inputImages).toEqual([
       {
         buffer: Buffer.from("input-image"),
@@ -1990,7 +2034,7 @@ describe("createImageGenerateTool", () => {
     });
 
     const details = resultDetails(result);
-    expect(details.aspectRatio).toBe("16:9");
+    expect(details.requested).toMatchObject({ size: "1280x720" });
     expect(details.normalization).toEqual({
       aspectRatio: {
         applied: "16:9",

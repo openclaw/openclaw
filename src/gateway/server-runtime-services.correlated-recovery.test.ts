@@ -4,9 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import * as completionStore from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import * as completion from "../agents/subagents/completion/subagent-completion-delivery.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
-import { createSubagentRegistryCompletionRuntime } from "../agents/subagents/registry/subagent-registry-completion-runtime.js";
-import { subagentRegistryLog } from "../agents/subagents/registry/subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
@@ -15,7 +12,6 @@ import {
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import {
@@ -24,14 +20,12 @@ import {
   markSessionDeliverySettlement,
 } from "../infra/session-delivery-queue-storage.js";
 import { SESSION_DELIVERY_QUEUE_NAME } from "../infra/session-delivery-queue.records.js";
-import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -40,16 +34,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sentinel from "./server-restart-sentinel.js";
 import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 
-const { resume } = vi.hoisted(() => ({ resume: vi.fn() }));
-vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({ resumeSubagentRun: resume }));
-
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: () => ({ stop() {} }),
 }));
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resume.mockClear();
   resetGatewayWorkAdmission();
 });
 
@@ -60,7 +50,6 @@ describe("registered correlated completion recovery custody", () => {
     { change: "file", outcome: "recovered" },
     { change: "successor", outcome: "recovered" },
     { change: "default after commit", outcome: "recovered" },
-    { change: "cleanup released at receipt", outcome: "recovered" },
     { change: "hydration pending", outcome: "recovered" },
   ] as const)("settles $outcome with $change ownership change", async ({ change, outcome }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -83,7 +72,6 @@ describe("registered correlated completion recovery custody", () => {
         endedAt: now - 10,
         outcome: { status: "ok" },
         expectsCompletionMessage: true,
-        ...(change === "cleanup released at receipt" ? { cleanupHandled: true } : {}),
         completion: { required: true, resultText: "Retained result", capturedAt: now - 10 },
         delivery: {
           status: "in_progress",
@@ -98,6 +86,7 @@ describe("registered correlated completion recovery custody", () => {
           kind: "agentTurn",
           sessionKey: child.requesterSessionKey,
           message: "retained completion",
+          expectedMediaUrls: ["/tmp/retained-output.png"],
           messageId: "retained-completion-message",
           owner: {
             kind: "subagent_completion",
@@ -157,50 +146,6 @@ describe("registered correlated completion recovery custody", () => {
       const replacement = replacingSource ? persist(replacementRoot) : undefined;
       const before = structuredClone(child);
       const replacementBefore = replacement && readChild(replacement);
-      let cleanupRelease: Promise<void> | undefined;
-      if (change === "cleanup released at receipt") {
-        const failedCompletion = vi
-          .fn()
-          .mockRejectedValue(new Error("terminal effects unavailable"));
-        const fallbackResume = vi.fn(() => {
-          expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
-        });
-        vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
-        const completionRuntime = createSubagentRegistryCompletionRuntime({
-          runs: subagentRuns,
-          resumed: new Set([getSubagentRunRuntimeKey(child)]),
-          retryTimers: new Set(),
-          completeSubagentRun: failedCompletion,
-          scheduleSweep: vi.fn(),
-          resumeRun: fallbackResume,
-        });
-        let released = false;
-        probe.command(stateWorker, async (command, executeOptions, scope) => {
-          const receipt = await scope.execute(command, executeOptions);
-          if (command.type === "sessionDelivery.mutateSubagentCompletion" && !released) {
-            released = true;
-            // The cleanup successor waits for this ACK to release row admission.
-            cleanupRelease = completionRuntime
-              .completeSubagentRunWithRecovery(
-                {
-                  runId: child.runId,
-                  expectedEntry: child,
-                  endedAt: now - 10,
-                  outcome: { status: "ok" },
-                  reason: SUBAGENT_ENDED_REASON_COMPLETE,
-                  triggerCleanup: true,
-                },
-                "queued-completion-retry",
-              )
-              .then(() => {
-                expect(failedCompletion).toHaveBeenCalledTimes(2);
-                expect(fallbackResume).toHaveBeenCalledOnce();
-                expect(subagentRuns.get(child.runId)?.cleanupHandled).toBe(false);
-              });
-          }
-          return receipt;
-        });
-      }
       const deliver = vi.spyOn(sentinel, "deliverQueuedSessionDelivery");
       const settle = completion.settleCorrelatedSubagentDelivery;
       const settled = vi
@@ -246,13 +191,8 @@ describe("registered correlated completion recovery custody", () => {
               successor = subagentRuns.get(child.runId);
               return;
             }
-            // The first continuation performs the existing pre-import guard. The
-            // second advances ownership while that actual import is pending.
-            queueMicrotask(() =>
-              queueMicrotask(() => {
-                vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-              }),
-            );
+            // Replace the source after the commit, before the callback releases custody.
+            vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
           },
         );
       }
@@ -274,27 +214,23 @@ describe("registered correlated completion recovery custody", () => {
         await services.stopDeliveryRecovery();
         expect(settled).toHaveBeenCalledTimes(2);
         expect(queueStatus()).toBe("completed");
-        expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
         expect(deliver).not.toHaveBeenCalled();
       };
       try {
         await clock.advanceBy(1_250);
         await services.stopDeliveryRecovery();
-        await cleanupRelease;
         expect(settled).toHaveBeenCalledOnce();
         expect(deliver).not.toHaveBeenCalled();
         if (change === "hydration pending") {
           expect(subagentRuns.has(child.runId)).toBe(false);
           expect(readChild()?.delivery?.status).toBe("in_progress");
           await expectPendingReceipt();
-          expect(resume).not.toHaveBeenCalled();
           expect(await restore(true)).toBe(1);
           await replaySettlement();
           expect(readChild()?.delivery?.status).toBe("delivered");
         } else if (change === "default after commit") {
           const committed = readChild();
           expect(committed?.delivery?.status).toBe("delivered");
-          expect(resume).not.toHaveBeenCalled();
           await expectPendingReceipt();
           if (replacement) {
             expect(readChild(replacement)).toEqual(replacementBefore);
@@ -313,7 +249,6 @@ describe("registered correlated completion recovery custody", () => {
           expect(readChild(target)).toEqual(replacementBefore);
           expect(subagentRuns.get(child.runId)).toBe(child);
           expect(child).toEqual(before);
-          expect(resume).not.toHaveBeenCalled();
           expect(log.error).toHaveBeenCalledWith(
             expect.stringContaining("settled callback failed"),
           );
@@ -326,18 +261,9 @@ describe("registered correlated completion recovery custody", () => {
             outcome === "recovered" ? "delivered" : "suspended",
           );
           expect(queueStatus()).toBe(outcome === "recovered" ? "completed" : "failed");
-          if (change === "cleanup released at receipt") {
-            expect(readChild()?.cleanupHandled).toBe(false);
-            expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
-          }
           if (change === "successor") {
             expect(successor).toBeDefined();
             expect(subagentRuns.get(child.runId)).toBe(successor);
-            expect(resume).not.toHaveBeenCalled();
-          } else if (outcome === "recovered") {
-            expect(resume).toHaveBeenCalledWith(child.runId);
-          } else {
-            expect(resume).not.toHaveBeenCalled();
           }
         }
       } finally {

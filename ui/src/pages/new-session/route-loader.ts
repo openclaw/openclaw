@@ -75,6 +75,6 @@ export async function load(
   if (!agentId) {
     return plain;
   }
-  const target = await resolveCreateTarget(gateway.client, requestedLocation.catalogId, agentId);
+  const target = await resolveCreateTarget(gateway, requestedLocation.catalogId, agentId);
   return target ? { ...plain, ...target } : plain;
 }

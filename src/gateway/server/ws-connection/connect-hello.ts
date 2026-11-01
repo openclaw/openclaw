@@ -21,7 +21,12 @@ import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
-import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
+import {
+  resolveRuntimeServiceBuildId,
+  resolveRuntimeServiceCommit,
+  resolveRuntimeServiceBuiltAt,
+  resolveRuntimeServiceVersion,
+} from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
@@ -153,11 +158,11 @@ export async function sendGatewayHello(
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
   const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiBasePath = normalizeControlUiBasePath(
+    context.configSnapshot.gateway?.controlUi?.basePath,
+  );
   const controlUiLocation = ingress
-    ? {
-        origin: ingress.publicOrigin,
-        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
-      }
+    ? { origin: ingress.publicOrigin, basePath: controlUiBasePath }
     : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
@@ -165,6 +170,8 @@ export async function sendGatewayHello(
     ? ("configured" as const)
     : ("bundled" as const);
   const serverBuildId = resolveRuntimeServiceBuildId();
+  const serverCommit = resolveRuntimeServiceCommit();
+  const serverBuiltAt = resolveRuntimeServiceBuiltAt();
   const rolePolicy =
     role === "operator"
       ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
@@ -177,6 +184,8 @@ export async function sendGatewayHello(
     server: {
       version: resolveRuntimeServiceVersion(process.env),
       ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      ...(serverCommit ? { commit: serverCommit } : {}),
+      ...(serverBuiltAt ? { builtAt: serverBuiltAt } : {}),
       bootId,
       controlUiBuildSource,
       connId,
@@ -246,6 +255,9 @@ export async function sendGatewayHello(
     snapshot,
     ...(controlUiLocation
       ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
+      : {}),
+    ...(controlUiBasePath && context.configSnapshot.gateway?.controlUi?.enabled !== false
+      ? { controlUiBasePath }
       : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),

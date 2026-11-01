@@ -93,8 +93,6 @@ const executePhase: {
   appendTranscriptEvent: (scope, input) =>
     scope.execute({ type: "session.actor.appendTranscriptEvent", input }),
   completeTurn: (scope, input) => scope.execute({ type: "session.actor.completeTurn", input }),
-  deliveryPending: (scope, input) =>
-    scope.execute({ type: "session.actor.deliveryPending", input }),
   deliverySettled: (scope, input) =>
     scope.execute({ type: "session.actor.deliverySettled", input }),
   patch: (scope, input) => scope.execute({ type: "session.actor.patch", input }),

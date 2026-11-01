@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
@@ -54,6 +55,7 @@ export async function runMemorySessionBackfill(
       const result = await runSessionBackfill({
         agentId,
         workspaceDir,
+        workspaceFileMode: resolveAgentConfig(cfg, agentId)?.workspaceFileMode,
         pluginConfig,
         from: opts.from,
         to: opts.to,
@@ -366,6 +368,7 @@ export async function runMemoryRemBackfill(
             .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
           const written = await writeBackfillDiaryEntries({
             workspaceDir,
+            workspaceFileMode: resolveAgentConfig(cfg, agentId)?.workspaceFileMode,
             entries,
             timezone: remConfig.timezone,
           });

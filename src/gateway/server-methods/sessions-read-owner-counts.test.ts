@@ -266,6 +266,65 @@ it("counts caller-visible conversations once through direct and delegated work b
     }
   }));
 
+it("keeps owner-count goldens through deep descendant termination and re-parenting", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
+    const ada = ensureProfileForEmail("deep-ada@example.test").id;
+    const bob = ensureProfileForEmail("deep-bob@example.test").id;
+    const client = identifiedClient(ada);
+    const now = Date.now();
+    for (const [name, owner] of [
+      ["deep-ada", ada],
+      ["deep-bob", bob],
+    ] as const) {
+      replaceSessionEntrySync(mainScope(name), profileEntry(name, now, owner));
+    }
+    const chain = Array.from({ length: 100 }, (_, level) =>
+      createSubagentRunRecord({
+        runId: `deep-${level}`,
+        childSessionKey: `agent:main:subagent:deep-${level}`,
+        requesterSessionKey:
+          level === 0 ? mainScope("deep-ada").sessionKey : `agent:main:subagent:deep-${level - 1}`,
+        createdAt: now,
+        execution: level === 99 ? { status: "running" } : { status: "terminal", endedAt: now },
+      }),
+    );
+    const read = async (adaRunning: number, bobRunning: number) => {
+      // The second list reuses the same topology with a fresh query window.
+      for (let pass = 0; pass < 2; pass++) {
+        const result = await listSessions({
+          client,
+          context,
+          request: { includeOwnerSessionCounts: true, excludeSubagents: true },
+        });
+        expect(result.sessions.map((row) => row.key).toSorted()).toEqual([
+          mainScope("deep-ada").sessionKey,
+          mainScope("deep-bob").sessionKey,
+        ]);
+        expect(result.ownerSessionCounts).toEqual(
+          [count(ada, 1, adaRunning), count(bob, 1, bobRunning)].toSorted(byProfile),
+        );
+      }
+    };
+    try {
+      chain.forEach(retainRun);
+      await read(1, 0);
+      retainRun({ ...chain[50]!, requesterSessionKey: mainScope("deep-bob").sessionKey });
+      await read(0, 1);
+      finishRun(chain[99]!);
+      await read(0, 0);
+      retainRun(chain[99]!);
+      await read(0, 1);
+      retainRun(chain[50]!);
+      await read(1, 0);
+    } finally {
+      for (const run of chain) {
+        subagentRuns.delete(run.runId);
+      }
+    }
+  }));
+
 it("keeps the owner summary complete beyond the people facet cap and resolves merged owners", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = requestContext({ agents: { entries: { main: {} } } });

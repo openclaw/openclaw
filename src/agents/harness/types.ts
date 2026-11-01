@@ -36,6 +36,8 @@ export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
   modelProvider?: {
+    /** Configured native command route admitted by the host; not a credential health probe. */
+    nativeCommandAuth?: { runtimeId: string };
     api?: string;
     baseUrl?: string;
     azureApiVersion?: string;

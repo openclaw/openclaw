@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
 import {
   createPublishPreflightEvidenceClient,
@@ -19,6 +19,8 @@ import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sourceTemplates = useAutoCleanupTempDirTracker(afterAll);
+let sourceTemplate: { source: string; targetSha: string } | undefined;
 const version = "2026.9.5";
 const repo = "openclaw/openclaw";
 const api = (endpoint: string) => ["api", `repos/${repo}/${endpoint}`, "--method", "GET"];
@@ -209,11 +211,8 @@ describe("publish preflight optional Telegram evidence", () => {
   });
 });
 
-function coreEvidenceFixture() {
-  const source = tempDirs.make("publish-preflight-source-");
-  const artifacts = tempDirs.make("publish-preflight-artifacts-");
-  const writeArtifact = (name: string, bytes: string | Uint8Array) =>
-    writeFileSync(join(artifacts, name), bytes);
+function buildCoreEvidenceSource() {
+  const source = sourceTemplates.make("publish-preflight-source-");
   writeJsonFile(join(source, "package.json"), {
     name: "openclaw",
     version,
@@ -229,8 +228,32 @@ function coreEvidenceFixture() {
   const git = fixtureGit(source, "Release fixture", "release-fixture@example.invalid");
   git("init", "--quiet");
   git("add", ".");
-  git("commit", "--quiet", "-m", "release source fixture");
+  git(
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "gc.auto=0",
+    "commit",
+    "--quiet",
+    "-m",
+    "release source fixture",
+  );
   const targetSha = git("rev-parse", "HEAD");
+  return { source, targetSha };
+}
+
+function coreEvidenceFixture() {
+  sourceTemplate ??= buildCoreEvidenceSource();
+  const source = tempDirs.make("publish-preflight-source-");
+  // Mutable Git state belongs to each case; only the pristine source seed is reused.
+  cpSync(sourceTemplate.source, source, {
+    recursive: true,
+    mode: constants.COPYFILE_FICLONE,
+  });
+  const { targetSha } = sourceTemplate;
+  const artifacts = tempDirs.make("publish-preflight-artifacts-");
+  const writeArtifact = (name: string, bytes: string | Uint8Array) =>
+    writeFileSync(join(artifacts, name), bytes);
   vi.stubEnv("GIT_DIR", join(source, ".git"));
   vi.stubEnv("GIT_WORK_TREE", source);
   const corePackages = corePackagePolicy.map((policy) => {

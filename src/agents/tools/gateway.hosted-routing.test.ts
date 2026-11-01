@@ -372,7 +372,6 @@ describe("Gateway tool identity and hosted routing", () => {
           {
             client: { internal: { agentRuntimeIdentity } },
             context,
-            isRestartRecoveryResumeRun: false,
           },
           {},
         );
@@ -407,10 +406,7 @@ describe("Gateway tool identity and hosted routing", () => {
       await expectRefusal({ sourceReplyToolCallId: undefined }, "tool-call correlation");
       await expectRefusal({ turnCapability: "missing-capability" }, "an active turn capability");
       await expectRefusal({ turnCapability: sourceLess }, "source-turn correlation");
-      await expectRefusal({ target: "remote" }, "the trusted local gateway context");
-      await expect(
-        resolve({ target: "remote", callerOwnsTerminalReceipt: true }),
-      ).resolves.toBeUndefined();
+      await expect(resolve({ target: "remote" })).resolves.toBeUndefined();
       await expect(
         resolveMessageActionAgentRuntimeIdentityToken({ opts: {}, target: "local" }),
       ).resolves.toBeUndefined();

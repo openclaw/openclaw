@@ -201,6 +201,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "gateway-status" },
   },
   {
+    commandPath: ["gateway", "auth-token"],
+    exact: true,
+    // The command owns a non-observing config read; exec SecretRefs still need the CLI PATH.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["gateway", "recover-lock"],
     exact: true,
     // Recovery must reach the lock before config preflight can request state ownership.
@@ -534,11 +540,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["update"],
     policy: { configGuard: "skip", hideBanner: true },
   },
-  {
-    commandPath: ["update", "admit"],
+  ...["admit", "preflight"].map((action): CliCommandCatalogEntry => ({
+    commandPath: ["update", action],
     // Malformed internal argv must keep protocol stdout and read-only startup policy too.
     policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
-  },
+  })),
   {
     commandPath: ["config", "validate"],
     exact: true,

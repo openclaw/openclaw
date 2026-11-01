@@ -61,6 +61,7 @@ const allowedAttrs = [
   "data-file-kind",
   "data-file-line",
   "data-file-path",
+  "data-file-document-relative",
   "data-link-favicon-host",
   "data-session-key",
   "data-session-href",

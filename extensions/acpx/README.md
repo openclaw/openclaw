@@ -26,9 +26,9 @@ to regenerate wrappers written by an older plugin version.
 - MCP bridge helpers for OpenClaw tools and plugin tools.
 - Static runtime assets used by the ACP process bridge.
 
-If the Gateway restarts before a one-shot session receives its first prompt, ACPX
-reuses the initialized conversation when the agent supports loading or resuming
-sessions. Completed one-shot runs still start a fresh conversation.
+ACPX reuses a one-shot session's recorded conversation when the agent supports
+loading or resuming sessions, including after completion or a Gateway restart.
+Completion releases the worker; reset and deletion prevent reuse.
 
 ## Native agents in the model picker
 

@@ -30,14 +30,10 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import "../../../styles/chat/summary-automations.css";
-import type {
-  ChatDetailsSnapshot,
-  DetailsAutomation,
-  DetailsSnapshotPatch,
-} from "../chat-details-snapshot.ts";
+import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { automationResultData, SessionAutomationResult } from "./session-automation-result.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -407,7 +403,6 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
                 ? undefined
                 : (inventory.connected() && job.enabled && !job.autoDisabled) || undefined,
             state: jobState(job),
-            result: automationResultData(job),
             timezone: job.schedule?.kind === "cron" ? job.schedule.tz : undefined,
           }))
       : (cached()?.rows ?? []),
@@ -616,7 +611,6 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
                     </span>
                   )}
                 </span>
-                <SessionAutomationResult data={job().result} />
               </span>
             </a>
           );

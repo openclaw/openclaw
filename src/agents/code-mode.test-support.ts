@@ -187,7 +187,6 @@ export function createCodeModeHarness(
     catalogRef?: ToolSearchCatalogRef;
     codeModeSkills?: readonly CodeModeSkill[];
     codeMode?: CodeModeToolsConfig;
-    forceRestartSafeTools?: boolean;
     abortSignal?: AbortSignal;
     modelContextWindowTokens?: number;
   } = {},
@@ -209,7 +208,6 @@ export function createCodeModeHarness(
     sessionKey: params.agentId ? `agent:${params.agentId}:main` : "agent:main:main",
     runId: "run-code-mode",
     catalogRef,
-    forceRestartSafeTools: params.forceRestartSafeTools,
     codeModeSkills: params.codeModeSkills,
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(params.modelContextWindowTokens === undefined
@@ -250,11 +248,8 @@ export async function runUntilCompleted(params: {
   execTool: AnyAgentTool;
   waitTool: AnyAgentTool;
   code: string;
-  restartSafe?: boolean;
 }) {
-  const details = await codeModeRunner([params.execTool]).run(params.code, "code-call-1", {
-    restartSafe: params.restartSafe,
-  });
+  const details = await codeModeRunner([params.execTool]).run(params.code, "code-call-1");
   return await waitUntilCompleted({ details, waitTool: params.waitTool });
 }
 

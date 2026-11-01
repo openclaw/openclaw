@@ -397,25 +397,6 @@ export async function maybeRepairGatewayServiceConfig(
           runtimePath: systemNodePath,
         })
       : expectedPlan;
-  if (installationDrift && expectedRoot) {
-    note(
-      formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv),
-      "Gateway service installation",
-    );
-    if (!serviceRepairDeferred) {
-      try {
-        await assertGatewayServiceInstallationRepairAllowed({
-          service,
-          command,
-          activeRoot: expectedRoot,
-          maintenance: options.serviceMaintenance,
-        });
-      } catch (error) {
-        note(String(error), "Gateway service installation");
-        return cfg;
-      }
-    }
-  }
   const runtimeLayout =
     repairPlan === expectedPlan ? expectedLayout : await summarizeGatewayServiceLayout(repairPlan);
   if (
@@ -425,7 +406,11 @@ export async function maybeRepairGatewayServiceConfig(
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
-      message: "Gateway service entrypoint does not match the current install.",
+      message:
+        "Gateway service entrypoint does not match the current install." +
+        (installationDrift
+          ? ` ${formatGatewayServiceInstallationDrift(installationDrift, serviceInstallEnv)}`
+          : ""),
       detail: `${serviceLayout?.entrypoint} -> ${runtimeLayout?.entrypoint}`,
       level: "recommended",
     });
@@ -457,6 +442,19 @@ export async function maybeRepairGatewayServiceConfig(
     serviceLayout,
     definitionRepair,
   );
+  if (installationDrift && expectedRoot && !serviceRepairDeferred) {
+    try {
+      await assertGatewayServiceInstallationRepairAllowed({
+        service,
+        command,
+        activeRoot: expectedRoot,
+        maintenance: options.serviceMaintenance,
+      });
+    } catch (error) {
+      note(String(error), "Gateway service installation");
+      return cfg;
+    }
+  }
   audit.issues = audit.issues.filter((issue) => issue.repair !== "host");
   if (audit.issues.length === 0 && !definitionRepair) {
     return cfg;

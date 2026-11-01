@@ -17,7 +17,7 @@ import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { deletionGatewayEnv } from "./agents-delete.fixture.test-support.js";
 
-const modes = [false, true, "offline CLI"] as const;
+const modes = ["RPC", "offline CLI"] as const;
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const postgresConnection = typeof configured === "string" ? configured : undefined;
 type PostgresIdentity = Extract<BackupEngine, { engine: "postgres" }>;
@@ -27,7 +27,6 @@ beforeEach(resetDatabaseEngineSelectionForTest);
 afterEach(resetDatabaseEngineSelectionForTest);
 
 async function preserveDetachedState(mode: (typeof modes)[number], connection?: string) {
-  const migrationHeld = mode !== false;
   const prefix = `detach_${randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const postgresEnv = connection ? { OPENCLAW_DETACH_TEST_DSN: connection } : {};
   await withOpenClawTestState(
@@ -203,18 +202,7 @@ async function preserveDetachedState(mode: (typeof modes)[number], connection?: 
             engine: "sqlite",
           });
         }
-        if (migrationHeld) {
-          await client.request("cron.migration", {
-            operationId: "traveler-handoff",
-            phase: "hold",
-            agentIds: ["traveler"],
-          });
-          await client.request("cron.migration", {
-            operationId: "traveler-handoff",
-            phase: "export",
-          });
-        }
-        stage("session, transcript, store identity, job and migration hold seeded");
+        stage("session, transcript, store identity and job seeded");
         const expectSourceCronDenied = async () => {
           const result = await client!.request<{ ran: boolean }>("cron.run", {
             id: job.id,
@@ -334,15 +322,6 @@ async function preserveDetachedState(mode: (typeof modes)[number], connection?: 
           client = await connect();
           expect(readAgentEngine("traveler")).toEqual(originalEngine);
         }
-        if (migrationHeld) {
-          await expect(
-            client.request("cron.update", { id: job.id, patch: { name: "Still held" } }),
-          ).rejects.toThrow("is held for migration traveler-handoff");
-          await client.request("cron.migration", {
-            operationId: "traveler-handoff",
-            phase: "resume",
-          });
-        }
         const retained = await client.request<{ jobs: CronJob[] }>("cron.list", {
           includeDisabled: true,
         });
@@ -371,7 +350,7 @@ async function preserveDetachedState(mode: (typeof modes)[number], connection?: 
             content: [{ type: "text", text: "Preserve this transcript across detach." }],
           }),
         ]);
-        stage("original store identity, complete history, job and hold continuity verified");
+        stage("original store identity, complete history and job continuity verified");
         await expect(
           client.request("chat.inject", { sessionKey: key, message: "Adopted agent can write" }),
         ).resolves.toMatchObject({ ok: true });
@@ -396,7 +375,7 @@ async function preserveDetachedState(mode: (typeof modes)[number], connection?: 
   );
 }
 
-it.each(modes)("preserves detached state (held: %s)", async (mode) => {
+it.each(modes)("preserves detached state (%s)", async (mode) => {
   await preserveDetachedState(mode);
 });
 

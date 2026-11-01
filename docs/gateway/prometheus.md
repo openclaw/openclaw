@@ -221,7 +221,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_row_selection_resets_total`             | counter   | none                                                                                      |
 | `openclaw_session_row_partition_cache_total`              | counter   | `task`, `outcome`                                                                         |
 | `openclaw_session_row_partition_revisions_total`          | counter   | `reason`                                                                                  |
-| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite only)                                        |
+| `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite and authority)                               |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
@@ -241,17 +241,23 @@ when a later read fails, rather than reported as zero or retained from an older
 sample. Other platforms do not expose these gauges. OpenClaw does not currently
 expose a total SQLite or jemalloc allocation counter.
 
-SQLite `sqlite_request` and `sqlite_reply` payload byte series add `request_class`
-from the active writer job, using the same closed vocabulary as
+SQLite `sqlite_request`, `sqlite_reply`, and `authority` payload byte series add
+`request_class` from the owning writer job, using the same closed vocabulary as
 `openclaw_worker_request_seconds{kind="sqlite_writer"}`. Unknown or unattributed
-classes use `other`; continuation frames keep their job's class. Other message
-kinds and the message-count/unmeasured-count metrics retain their existing labels.
+classes use `other`; continuation frames and private admission-port commit and
+settlement receipts keep their job's class. Other message kinds and the
+message-count/unmeasured-count metrics retain their existing labels.
 No payload decoding or extra serialization is performed for attribution.
 
 ```promql
 # Known SQLite request payload MB/min by bounded request class
 sum by (request_class) (
   rate(openclaw_worker_message_payload_bytes_total{kind="sqlite_request",direction="to_worker"}[5m])
+) * 60 / 1e6
+
+# Known authority receipt payload MB/min by bounded request class
+sum by (request_class) (
+  rate(openclaw_worker_message_payload_bytes_total{kind="authority",direction="from_worker"}[5m])
 ) * 60 / 1e6
 ```
 
@@ -837,12 +843,14 @@ attribute elapsed execution to a work scope; they do not provide CPU profiles.
 worker owners of that kind. It includes SQLite writer capacity waiters and scoped
 read-only requests, and excludes requests that already hold an execution slot.
 `openclaw_worker_queue_wait_seconds{kind,request_class}` measures enqueue to
-dispatch; `openclaw_worker_request_seconds{kind,request_class}` measures dispatch
-to reply or failure. Both use the existing duration histogram buckets. Cancellation
+dispatch and retains the duration histogram buckets for queue-wait quantiles.
+`openclaw_worker_request_seconds{kind,request_class}` measures dispatch
+to reply or failure using cumulative `_sum`, `_count`, and the `+Inf` bucket. Cancellation
 before dispatch removes the queued request without adding a duration sample.
 
 `openclaw_worker_request_phase_seconds{kind,request_class,phase}` breaks completed
-SQLite writer requests into observed intervals, using the same histogram buckets:
+SQLite writer requests into observed intervals, retaining `_sum`, `_count`, and
+the `+Inf` bucket for each phase:
 
 | Phase      | Interval                                                                 |
 | ---------- | ------------------------------------------------------------------------ |
@@ -853,6 +861,15 @@ SQLite writer requests into observed intervals, using the same histogram buckets
 | `execute`  | Backend execution, including owner code, admission exchanges, and SQL.   |
 | `result`   | Execution end through cleanup, serialization, and result framing.        |
 | `reply`    | Final reply preparation and posting through broker receipt.              |
+
+The request and phase families no longer export finite buckets. Removed series
+are `openclaw_worker_request_seconds_bucket` and
+`openclaw_worker_request_phase_seconds_bucket` with `le` equal to `0.005`, `0.01`,
+`0.025`, `0.05`, `0.1`, `0.25`, `0.5`, `1`, `2.5`, `5`, `10`, `30`, `60`, `120`,
+`300`, or `600`, for every label set. No families or labels are renamed. Existing
+wall-time totals, request rates, and mean-duration queries remain unchanged;
+request and phase quantiles are no longer available. Queue-wait quantiles, RPC
+histograms, GC attribution, and payload request-class counters are unchanged.
 
 The Prometheus subscription enables these timestamps without a restart or a
 diagnostic flag. Large result transfers remain in `result`; input and result
@@ -880,6 +897,17 @@ command suffixes, or caller-provided names. The exporter's shared series cap sti
 applies.
 
 The `transcripts` request family includes stored event appends and retention.
+
+Known session writer commands outside the transcript and history families retain
+their exact owner names, including `session.entries.replace`,
+`session.lifecycle.deletePlan`, `session.lifecycle.delete`,
+`session.archivePruning.pruneRetention`, `session.archivePruning.reclaimPages`, and
+`session.metadata.append`. Unknown `session.*` commands still use `sessions`, so
+queries that compare with older builds should aggregate `sessions` with the
+`session.*` labels. Cron, plugin-state, transcript and history commands keep their
+family labels. The closed vocabulary lives in `src/infra/sqlite-worker-request-class.ts`
+and also applies to worker payload-byte metrics. The `execute` phase includes I/O and
+commit waits, not just SQL or CPU.
 
 Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
 bounded operation-family classifier as SQLite writers. Examples include
@@ -1425,7 +1453,8 @@ increase(openclaw_gc_duration_seconds_count[5m])
 Run, harness-run, model-call (including synthetic model turns), and message-dispatch
 duration histograms preserve the existing bounds through 600 seconds and add
 900, 1800, and 3600 seconds. Each label set expands into 22 scrape series.
-Other duration histograms keep their existing bounds.
+Other duration histograms keep their existing bounds, except the totals-only
+worker request and phase families described above.
 
 Percentiles remain bucket-based estimates; observations above one hour still
 fall only in `+Inf`. Upgrading cannot recover the distribution of historical

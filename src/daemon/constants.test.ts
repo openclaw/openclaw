@@ -8,14 +8,15 @@ import {
 } from "./constants.js";
 
 it.each([
-  [undefined, "ai.openclaw.node", "openclaw-node", "OpenClaw Node"],
-  ["default", "ai.openclaw.node", "openclaw-node", "OpenClaw Node"],
-  ["work", "ai.openclaw.node.work", "openclaw-node-work", "OpenClaw Node (work)"],
-])("scopes node service identities to profile %s", (profile, launchd, systemd, windows) => {
+  [undefined, "ai.openclaw.node", "openclaw-node", "OpenClaw Node", "node"],
+  ["default", "ai.openclaw.node", "openclaw-node", "OpenClaw Node", "node"],
+  ["work", "ai.openclaw.node.work", "openclaw-node-work", "OpenClaw Node (work)", "node-work"],
+])("scopes node service identities to profile %s", (profile, launchd, systemd, windows, log) => {
   expect(resolveNodeServiceIdentityEnvironment({ OPENCLAW_PROFILE: profile })).toMatchObject({
     OPENCLAW_LAUNCHD_LABEL: launchd,
     OPENCLAW_SYSTEMD_UNIT: systemd,
     OPENCLAW_WINDOWS_TASK_NAME: windows,
+    OPENCLAW_LOG_PREFIX: log,
   });
 });
 

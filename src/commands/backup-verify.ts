@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   recordArchiveSymbolicLink,
@@ -12,29 +10,26 @@ import {
   isArchivePathWithin,
   normalizeArchivePath,
   normalizeArchiveRoot,
+  buildBackupArchivePath,
 } from "../infra/backup-archive-path-policy.js";
 import { readEngineAnchor } from "../infra/database-engine/open.js";
+import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store.js";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { sha256File } from "../infra/directory-durability.js";
-import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { resolveBackupRecoveryConfig } from "./backup-recovery-config.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
-import {
-  BACKUP_MAX_DECOMPRESSION_RATIO,
-  buildBackupArchivePath,
-  resolveBackupArchivePath,
-} from "./backup-shared.js";
+import { resolveBackupArchivePath } from "./backup-shared.js";
 import {
   type BackupManifest,
   type NormalizedArchiveEntry,
-  listBackupArchiveEntries,
   isRegularArchiveFile,
   isRootBackupManifestEntry,
   parseBackupManifest,
@@ -42,9 +37,14 @@ import {
   verifyBackupManifestEntries,
   verifyBackupSqliteCoverage,
 } from "./backup-verify-manifest.js";
-
-const MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES = 64 * 1024 * 1024 * 1024;
-const DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES = 256 * 1024 * 1024;
+import {
+  assertSqliteSnapshotFileShape,
+  prepareDatabaseArtifacts,
+  BackupArchiveSpool,
+  listBackupArchiveEntries,
+  resolveExtractionBytes,
+  assertSnapshotExtractionBudget,
+} from "./backup-verify-spool.js";
 
 type BackupVerifyResult = Awaited<ReturnType<typeof verifyBackupArchive>>;
 
@@ -66,34 +66,6 @@ function formatResult(result: BackupVerifyResult): string {
       : "SQLite database coverage unknown: this legacy archive has no database inventory.",
     ...(result.warnings ?? []).map((warning) => terminalText`${warning}`),
   ].join("\n");
-}
-
-function resolveExtractionBytes(
-  entries: NormalizedArchiveEntry[],
-  sqliteSnapshots = false,
-): number {
-  const label = sqliteSnapshots ? "SQLite snapshot" : "Archive";
-  let totalBytes = 0;
-  for (const entry of entries) {
-    if (!sqliteSnapshots && !isRegularArchiveFile(entry.type)) {
-      continue;
-    }
-    if (!Number.isSafeInteger(entry.size) || (entry.size ?? -1) < 0) {
-      throw new Error(
-        sqliteSnapshots
-          ? `SQLite snapshot has an invalid archive size: ${entry.normalized}`
-          : `Archive regular file has an invalid size: ${entry.normalized}`,
-      );
-    }
-    if (sqliteSnapshots && entry.size === 0) {
-      throw new Error(`SQLite snapshot is empty: ${entry.normalized}`);
-    }
-    totalBytes += entry.size ?? 0;
-    if (!Number.isSafeInteger(totalBytes)) {
-      throw new Error(`${label} extraction size exceeds the supported integer range.`);
-    }
-  }
-  return totalBytes;
 }
 
 function assertCanonicalStateAssetRoot(manifest: BackupManifest): void {
@@ -126,6 +98,7 @@ function listSqliteSnapshotEntries(
   entries: NormalizedArchiveEntry[],
   owners: SqliteSnapshotOwner[],
   postgresAnchors: ReadonlySet<string>,
+  companionAnchors: ReadonlySet<string>,
 ): SqliteSnapshotEntry[] {
   const ownersByPath = new Map(
     owners.map((owner) => [resolvePortableArchivePathKey(owner.archivePath), owner]),
@@ -153,6 +126,9 @@ function listSqliteSnapshotEntries(
     }
     if (!isRegularArchiveFile(entry.type)) {
       throw new Error(`SQLite snapshot must be a regular archive file: ${entry.normalized}`);
+    }
+    if (companionAnchors.has(entry.normalized)) {
+      continue;
     }
     const exportPath = `${entry.normalized}.postgres`;
     const image = postgresAnchors.has(entry.normalized)
@@ -184,32 +160,6 @@ function readArchivedAgentDatabaseOwners(
   }));
 }
 
-function assertSnapshotExtractionBudget(params: {
-  entries: NormalizedArchiveEntry[];
-  postgres?: boolean;
-  tempRoot: string;
-  extractedBytes?: number;
-}): void {
-  const label = params.postgres ? "PostgreSQL artifacts" : "SQLite snapshots";
-  const totalBytes = resolveExtractionBytes(params.entries, !params.postgres);
-  if (totalBytes > MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES) {
-    throw new Error(
-      `${label} require ${formatDiskSpaceBytes(totalBytes)} of extraction space; the verification limit is ${formatDiskSpaceBytes(MAX_DATABASE_SNAPSHOT_EXTRACT_BYTES)}.`,
-    );
-  }
-
-  const remainingBytes = totalBytes - (params.extractedBytes ?? 0);
-  const diskSpace = tryReadDiskSpace(params.tempRoot);
-  if (
-    diskSpace &&
-    remainingBytes + DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES > diskSpace.availableBytes
-  ) {
-    throw new Error(
-      `${label} require ${formatDiskSpaceBytes(remainingBytes)} of extraction space, but only ${formatDiskSpaceBytes(diskSpace.availableBytes)} is available near ${params.tempRoot}; verification reserves ${formatDiskSpaceBytes(DATABASE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES)} for the host.`,
-    );
-  }
-}
-
 function assertExpectedSqliteRole(
   database: DatabaseSync,
   archivePath: string,
@@ -233,77 +183,11 @@ function assertExpectedSqliteRole(
   }
 }
 
-async function assertSqliteSnapshotFileShape(
-  extractedPath: string,
-  archivePath: string,
-  expectedSize: number,
-): Promise<void> {
-  const header = Buffer.alloc(100);
-  const handle = await fs.open(extractedPath, "r");
-  try {
-    const { bytesRead } = await handle.read(header, 0, header.byteLength, 0);
-    if (
-      bytesRead !== header.byteLength ||
-      header.subarray(0, 16).toString("utf8") !== "SQLite format 3\u0000"
-    ) {
-      throw new Error(`SQLite snapshot ${archivePath} has an invalid database header.`);
-    }
-  } finally {
-    await handle.close();
-  }
-
-  const encodedPageSize = header.readUInt16BE(16);
-  const pageSize = encodedPageSize === 1 ? 65_536 : encodedPageSize;
-  const validPageSize = pageSize >= 512 && pageSize <= 65_536 && (pageSize & (pageSize - 1)) === 0;
-  if (!validPageSize || expectedSize % pageSize !== 0) {
-    throw new Error(`SQLite snapshot ${archivePath} has an invalid page layout.`);
-  }
-
-  const changeCounter = header.readUInt32BE(24);
-  const declaredPageCount = header.readUInt32BE(28);
-  const versionValidFor = header.readUInt32BE(92);
-  const hasAuthoritativePageCount = declaredPageCount !== 0 && changeCounter === versionValidFor;
-  if (hasAuthoritativePageCount && declaredPageCount !== expectedSize / pageSize) {
-    throw new Error(`SQLite snapshot ${archivePath} has an invalid page layout.`);
-  }
-}
-
-async function extractDatabaseArtifacts(
-  archivePath: string,
-  tempDir: string,
-  entries: NormalizedArchiveEntry[],
-): Promise<void> {
-  const byRawPath = new Map(entries.map((entry) => [entry.raw, entry]));
-  await tar.x({
-    file: archivePath,
-    gzip: true,
-    maxDecompressionRatio: BACKUP_MAX_DECOMPRESSION_RATIO,
-    cwd: tempDir,
-    strict: true,
-    preserveOwner: false,
-    filter: (entryPath, archiveEntry) => {
-      const expected = byRawPath.get(entryPath);
-      if (!expected) {
-        return false;
-      }
-      if (archiveEntry.size !== expected.size) {
-        throw new Error(`Database artifact size changed during verification: ${entryPath}`);
-      }
-      return true;
-    },
-  });
-  for (const entry of entries) {
-    const stat = await fs.lstat(path.join(tempDir, ...entry.normalized.split("/")));
-    if (!stat.isFile() || stat.size !== entry.size) {
-      throw new Error(`Extracted database artifact does not match archive: ${entry.normalized}`);
-    }
-  }
-}
-
 async function verifyPostgresSnapshots(
   archivePath: string,
   entries: NormalizedArchiveEntry[],
   captures: ReturnType<typeof resolvePostgresRestoreEntries>["captures"],
+  spool: BackupArchiveSpool,
 ): Promise<void> {
   if (!captures.length) {
     return;
@@ -317,29 +201,99 @@ async function verifyPostgresSnapshots(
     ]),
   );
   const artifacts = entries.filter((entry) => paths.has(entry.normalized));
-  const tempRoot = os.tmpdir();
-  assertSnapshotExtractionBudget({ entries: artifacts, tempRoot, postgres: true });
-  const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-verify-postgres-"));
-  try {
-    await extractDatabaseArtifacts(archivePath, tempDir, artifacts);
-    const { readBackupEngineImage, verifyMatchedPostgresBackup } =
-      await import("../snapshot/database-backup.js");
-    for (const { directoryPath, anchorPath, manifestSha256 } of captures) {
-      const manifestPath = path.join(tempDir, directoryPath, "manifest.json");
-      if (manifestSha256 && (await sha256File(manifestPath)).digest !== manifestSha256) {
-        throw new Error(
-          `PostgreSQL capsule does not match its capture inventory: ${directoryPath}`,
-        );
-      }
-      const anchor = readBackupEngineImage(path.join(tempDir, anchorPath), anchorPath);
-      if (anchor.engine !== "postgres") {
-        throw new Error(`PostgreSQL backup has an invalid outer anchor: ${anchorPath}`);
-      }
-      await verifyMatchedPostgresBackup(path.join(tempDir, directoryPath), "user-backup", anchor);
+  await assertSnapshotExtractionBudget({
+    entries: artifacts,
+    tempRoot: spool.tempRoot,
+    postgres: true,
+    spool,
+  });
+  const tempDir = await prepareDatabaseArtifacts(archivePath, spool, artifacts);
+  const { readBackupEngineImage, verifyMatchedPostgresBackup } =
+    await import("../snapshot/database-backup.js");
+  for (const { directoryPath, anchorPath, manifestSha256 } of captures) {
+    const manifestPath = path.join(tempDir, directoryPath, "manifest.json");
+    if (manifestSha256 && (await sha256File(manifestPath)).digest !== manifestSha256) {
+      throw new Error(`PostgreSQL capsule does not match its capture inventory: ${directoryPath}`);
     }
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    const anchor = readBackupEngineImage(path.join(tempDir, anchorPath), anchorPath);
+    if (anchor.engine !== "postgres") {
+      throw new Error(`PostgreSQL backup has an invalid outer anchor: ${anchorPath}`);
+    }
+    await verifyMatchedPostgresBackup(path.join(tempDir, directoryPath), "user-backup", anchor);
   }
+}
+
+async function verifyLocalCompanionAnchors(
+  archivePath: string,
+  entries: NormalizedArchiveEntry[],
+  manifest: BackupManifest,
+  spool: BackupArchiveSpool,
+): Promise<SqliteSnapshotOwner[]> {
+  if (manifest.profile !== "local-companion") {
+    return [];
+  }
+  // A companion must not silently preserve undeclared exports that look recoverable.
+  if (
+    entries.some((entry) =>
+      entry.normalized.split("/").some((part) => part.toLowerCase().endsWith(".postgres")),
+    )
+  ) {
+    throw new Error("Local-companion checkpoint contains an undeclared PostgreSQL export.");
+  }
+  const anchors = (manifest.postgresAnchors ?? []).map((anchor) => ({
+    sourcePath: anchor.sourcePath,
+    storeId: anchor.storeId,
+    namespace: anchor.namespace,
+    archivePath: buildBackupArchivePath(manifest.archiveRoot, anchor.sourcePath),
+  }));
+  const byPath = new Map(entries.map((entry) => [entry.normalized, entry]));
+  const portablePaths = new Set(
+    entries.map((entry) => resolvePortableArchivePathKey(entry.normalized)),
+  );
+  const artifacts = anchors.map((anchor) => {
+    const entry = byPath.get(anchor.archivePath);
+    if (
+      !entry ||
+      !isRegularArchiveFile(entry.type) ||
+      SQLITE_SIDECAR_SUFFIXES.some((suffix) =>
+        portablePaths.has(resolvePortableArchivePathKey(`${anchor.archivePath}${suffix}`)),
+      )
+    ) {
+      throw new Error(
+        `Local-companion anchor is missing, invalid, or has sidecars: ${anchor.archivePath}`,
+      );
+    }
+    return entry;
+  });
+  if (!artifacts.length) {
+    return [];
+  }
+  assertCanonicalStateAssetRoot(manifest);
+  await assertSnapshotExtractionBudget({ entries: artifacts, tempRoot: spool.tempRoot, spool });
+  const tempDir = await prepareDatabaseArtifacts(archivePath, spool, artifacts);
+  const verified: SqliteSnapshotOwner[] = [];
+  for (const [index, anchor] of anchors.entries()) {
+    const imagePath = path.join(tempDir, anchor.archivePath);
+    await assertSqliteSnapshotFileShape(imagePath, anchor.archivePath, artifacts[index]!.size!);
+    using database = openNodeSqliteDatabase(imagePath, { readOnly: true });
+    configureSqliteReadOnlyPragmas(database);
+    assertSqliteIntegrity(database, anchor.archivePath);
+    const identity = readEngineAnchorIdentity(database, anchor.archivePath);
+    if (
+      identity.engine !== "postgres" ||
+      identity.storeId !== anchor.storeId ||
+      identity.namespace !== anchor.namespace
+    ) {
+      throw new Error(`Local-companion PostgreSQL identity mismatch: ${anchor.archivePath}`);
+    }
+    const owner = manifest.sqliteSnapshots?.find(
+      (snapshot) => snapshot.sourcePath === anchor.sourcePath,
+    );
+    if (owner) {
+      verified.push({ ...owner, archivePath: anchor.archivePath });
+    }
+  }
+  return verified;
 }
 
 async function verifySqliteSnapshots(params: {
@@ -347,6 +301,8 @@ async function verifySqliteSnapshots(params: {
   entries: NormalizedArchiveEntry[];
   manifest: BackupManifest;
   postgresAnchors: ReadonlySet<string>;
+  companionAnchors: ReadonlySet<string>;
+  spool: BackupArchiveSpool;
 }): Promise<SqliteSnapshotOwner[]> {
   const verifiedOwners: SqliteSnapshotOwner[] = [];
   const stateDir =
@@ -383,104 +339,97 @@ async function verifySqliteSnapshots(params: {
     params.entries,
     declaredOwners,
     params.postgresAnchors,
+    params.companionAnchors,
   );
   if (initialEntries.length === 0) {
     return verifiedOwners;
   }
   assertCanonicalStateAssetRoot(params.manifest);
-  const tempRoot = os.tmpdir();
-  assertSnapshotExtractionBudget({ entries: initialEntries, tempRoot });
-  const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-verify-sqlite-"));
-  try {
-    const batches = [initialEntries];
-    const extractedEntries: SqliteSnapshotEntry[] = [];
-    for (const sqliteEntries of batches) {
-      const extractedBytes = resolveExtractionBytes(extractedEntries, true);
-      extractedEntries.push(...sqliteEntries);
-      if (extractedBytes > 0) {
-        assertSnapshotExtractionBudget({ entries: extractedEntries, tempRoot, extractedBytes });
-      }
-      await extractDatabaseArtifacts(params.archivePath, tempDir, sqliteEntries);
+  const tempRoot = params.spool.tempRoot;
+  const batches = [initialEntries];
+  const extractedEntries: SqliteSnapshotEntry[] = [];
+  for (const sqliteEntries of batches) {
+    extractedEntries.push(...sqliteEntries);
+    await assertSnapshotExtractionBudget({
+      entries: extractedEntries,
+      tempRoot,
+      spool: params.spool,
+    });
+    const tempDir = await prepareDatabaseArtifacts(params.archivePath, params.spool, sqliteEntries);
 
-      for (const entry of sqliteEntries) {
-        const extractedPath = path.join(tempDir, ...entry.normalized.split("/"));
+    for (const entry of sqliteEntries) {
+      const extractedPath = path.join(tempDir, ...entry.normalized.split("/"));
 
-        let database: DatabaseSync | undefined;
-        try {
-          await assertSqliteSnapshotFileShape(extractedPath, entry.normalized, entry.size!);
-          database = openNodeSqliteDatabase(extractedPath, {
-            allowExtension: true,
-            readOnly: true,
-          });
-          if (readEngineAnchor(database)) {
-            throw new Error(
-              "PostgreSQL anchor has no owned matched capsule. Re-run backup with this version on the source installation.",
-            );
-          }
-          database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
-          await loadSqliteVecExtension({ db: database });
-          assertSqliteIntegrity(database, entry.normalized);
-          if (entry.role === "agent") {
-            assertOpenClawAgentDatabaseOwner(database, {
-              agentId: entry.agentId,
-              pathname: entry.normalized,
-            });
-          } else {
-            assertExpectedSqliteRole(database, entry.normalized, entry.role);
-          }
-          verifiedOwners.push({ ...entry });
-          if (entry.role === "global") {
-            const agentOwners = readArchivedAgentDatabaseOwners(
-              database,
-              params.manifest,
-              stateDir,
-            );
-            const ownerByPath = new Map<string, SqliteSnapshotOwner>(
-              declaredOwners.map((owner) => [
-                resolvePortableArchivePathKey(owner.archivePath),
-                owner,
-              ]),
-            );
-            for (const owner of agentOwners) {
-              const ownerKey = resolvePortableArchivePathKey(owner.archivePath);
-              const previous = ownerByPath.get(ownerKey);
-              if (
-                previous &&
-                (previous.role !== "agent" ||
-                  owner.role !== "agent" ||
-                  previous.agentId !== owner.agentId ||
-                  previous.archivePath !== owner.archivePath)
-              ) {
-                throw new Error(
-                  `SQLite snapshot has conflicting registered owners: ${owner.archivePath}`,
-                );
-              }
-              ownerByPath.set(ownerKey, owner);
-            }
-            const agentEntries = listSqliteSnapshotEntries(
-              params.entries,
-              agentOwners,
-              params.postgresAnchors,
-            ).filter(
-              (candidate) => !extractedEntries.some((extracted) => extracted.raw === candidate.raw),
-            );
-            if (agentEntries.length > 0) {
-              batches.push(agentEntries);
-            }
-          }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+      let database: DatabaseSync | undefined;
+      try {
+        await assertSqliteSnapshotFileShape(extractedPath, entry.normalized, entry.size!);
+        database = openNodeSqliteDatabase(extractedPath, {
+          allowExtension: true,
+          readOnly: true,
+        });
+        if (readEngineAnchor(database)) {
           throw new Error(
-            `Backup SQLite snapshot failed verification: ${entry.normalized}. ${message}`,
-            { cause: err },
+            "PostgreSQL anchor has no owned matched capsule. Re-run backup with this version on the source installation.",
           );
-        } finally {
-          database?.close();
         }
+        configureSqliteReadOnlyPragmas(database);
+        await loadSqliteVecExtension({ db: database });
+        assertSqliteIntegrity(database, entry.normalized);
+        if (entry.role === "agent") {
+          assertOpenClawAgentDatabaseOwner(database, {
+            agentId: entry.agentId,
+            pathname: entry.normalized,
+          });
+        } else {
+          assertExpectedSqliteRole(database, entry.normalized, entry.role);
+        }
+        verifiedOwners.push({ ...entry });
+        if (entry.role === "global") {
+          const agentOwners = readArchivedAgentDatabaseOwners(database, params.manifest, stateDir);
+          const ownerByPath = new Map<string, SqliteSnapshotOwner>(
+            declaredOwners.map((owner) => [
+              resolvePortableArchivePathKey(owner.archivePath),
+              owner,
+            ]),
+          );
+          for (const owner of agentOwners) {
+            const ownerKey = resolvePortableArchivePathKey(owner.archivePath);
+            const previous = ownerByPath.get(ownerKey);
+            if (
+              previous &&
+              (previous.role !== "agent" ||
+                owner.role !== "agent" ||
+                previous.agentId !== owner.agentId ||
+                previous.archivePath !== owner.archivePath)
+            ) {
+              throw new Error(
+                `SQLite snapshot has conflicting registered owners: ${owner.archivePath}`,
+              );
+            }
+            ownerByPath.set(ownerKey, owner);
+          }
+          const agentEntries = listSqliteSnapshotEntries(
+            params.entries,
+            agentOwners,
+            params.postgresAnchors,
+            params.companionAnchors,
+          ).filter(
+            (candidate) => !extractedEntries.some((extracted) => extracted.raw === candidate.raw),
+          );
+          if (agentEntries.length > 0) {
+            batches.push(agentEntries);
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Backup SQLite snapshot failed verification: ${entry.normalized}. ${message}`,
+          { cause: err },
+        );
+      } finally {
+        database?.close();
       }
     }
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
   }
   return verifiedOwners;
 }
@@ -510,7 +459,10 @@ async function verifyResolvedBackupArchive(
     );
   }
 
-  const listing = await listBackupArchiveEntries(archivePath).catch((error: unknown) => {
+  await using spool = new BackupArchiveSpool();
+  const listing = await listBackupArchiveEntries(archivePath, (entry, normalized) =>
+    spool.capture(entry, normalized),
+  ).catch((error: unknown) => {
     throw new Error(
       `Archive could not be read or parsed. ${formatErrorMessage(error)} Check the file permissions and archive integrity, then try again.`,
     );
@@ -661,14 +613,29 @@ async function verifyResolvedBackupArchive(
     entries,
     manifest,
   );
-  await verifyPostgresSnapshots(archivePath, entries, databaseRestoreCandidates);
+  await verifyPostgresSnapshots(archivePath, entries, databaseRestoreCandidates, spool);
+  const companionOwners = await verifyLocalCompanionAnchors(archivePath, entries, manifest, spool);
   const verifiedSnapshots = await verifySqliteSnapshots({
     archivePath,
     entries,
     manifest,
+    spool,
     postgresAnchors: new Set(databaseRestoreCandidates.map(({ anchorPath }) => anchorPath)),
+    companionAnchors: new Set(
+      (manifest.postgresAnchors ?? []).map(({ sourcePath }) =>
+        buildBackupArchivePath(manifest.archiveRoot, sourcePath),
+      ),
+    ),
   });
-  verifyBackupSqliteCoverage(manifest, requiredSnapshots, verifiedSnapshots);
+  verifyBackupSqliteCoverage(manifest, requiredSnapshots, [
+    ...verifiedSnapshots,
+    ...companionOwners,
+  ]);
+  if (manifest.profile === "local-companion") {
+    warnings.push(
+      "Local-companion checkpoint contains no PostgreSQL rows and is not disaster recovery; restore keeps the same PostgreSQL stores and namespaces.",
+    );
+  }
 
   const result = {
     ok: true as const,
@@ -680,6 +647,7 @@ async function verifyResolvedBackupArchive(
     entryCount: entries.length,
     symlinkCount: symbolicLinks.length,
     sqliteInventoryVerified: manifest.sqliteSnapshots !== undefined,
+    ...(manifest.profile ? { profile: manifest.profile } : {}),
     ...(warnings.length ? { warnings } : {}),
     ...(externalSymbolicLinks.length ? { externalSymbolicLinks } : {}),
   };

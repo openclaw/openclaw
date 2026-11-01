@@ -44,6 +44,23 @@ function fixture(scrollHeight = 1600) {
 const messages = (...ids: string[]) => new Set(ids);
 afterEach(() => document.body.replaceChildren());
 
+it("stops requesting commits when a reachable scroll correction makes no progress", () => {
+  const { scroller, bubble, virtualizer, instance, anchor, measureRows } = fixture();
+  scroller.scrollTop = 200;
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  bubble.getBoundingClientRect = () => rect(130, 180);
+  // Model a native scroll command ignored until layout is available.
+  virtualizer.scrollToOffset.mockImplementation(() => {});
+
+  const commits = Array.from({ length: 3 }, () => anchor.update(scroller, instance, measureRows));
+  expect(commits).toEqual([true, true, false]);
+  expect(anchor.messageKey).toBeNull();
+  expect(scroller.scrollTop).toBe(200);
+});
+
 it.each([true, false])(
   "preserves only an existing end anchor through measured prepend correction (%s)",
   (following) => {
@@ -169,6 +186,21 @@ it.each<[string, string[], string[], boolean, number?, number?, boolean?]>([
     }
   },
 );
+
+it("retires a reader anchor when an explicit scroll command replaces it", () => {
+  const { scroller, instance, anchor, measureRows } = fixture();
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  expect(anchor.messageKey).toBe("visible");
+
+  anchor.messageKeys = messages("older", "visible", "sent");
+  anchor.capture(scroller, true, true);
+  expect(anchor.messageKey).toBeNull();
+  expect(anchor.update(scroller, instance, measureRows)).toBe(false);
+  expect(measureRows).not.toHaveBeenCalled();
+});
 
 it("keeps the original reader target when another projection commits before restoration", () => {
   const { scroller, bubble, instance, anchor, measureRows } = fixture();

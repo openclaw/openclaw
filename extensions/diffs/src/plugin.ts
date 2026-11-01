@@ -23,6 +23,7 @@ import {
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
 
 const DIFFS_AGENT_GUIDANCE = [
+  "## Diffs",
   "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
   "It accepts either `before` + `after` text or a unified `patch`.",
   "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
@@ -99,6 +100,7 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     },
     {
       name: "diffs",
+      promptGuidance: DIFFS_AGENT_GUIDANCE,
     },
   );
   const viewerFailureLimiter = createAuthRateLimiter({
@@ -260,9 +262,6 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
       }
     },
   });
-  api.on("before_prompt_build", async () => ({
-    prependSystemContext: DIFFS_AGENT_GUIDANCE,
-  }));
 }
 
 function respondText(res: ServerResponse, statusCode: number, body: string): void {

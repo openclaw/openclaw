@@ -5,9 +5,6 @@
 .chatgpt-usage-limit {
   position: relative;
   padding: 40px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--card);
   text-align: center;
 }
 

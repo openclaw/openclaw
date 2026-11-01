@@ -1,4 +1,1 @@
-# Preserve 621 lines of agents.detach Gateway handoff and recovery regression coverage.
-# Current main contributes 6,310,907 lines; this candidate adds exactly 621.
-# Admit the measured 6,311,528 total without extra future allowance.
-6311528
+6319970

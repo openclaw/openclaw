@@ -45,7 +45,10 @@ vi.mock("node:fs", () => {
   };
   return { ...filesystem, default: filesystem };
 });
-vi.mock("../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }));
+vi.mock("../shared/pid-alive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/pid-alive.js")>()),
+  isPidDefinitelyDead: definitelyDead,
+}));
 vi.mock("./container-environment.js", () => ({ isContainerEnvironment: container }));
 // mock-isolation: the real detector reads and caches the test host's CPU brand.
 vi.mock("../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
@@ -58,7 +61,10 @@ vi.mock("../process/supervisor/darwin-process-command.js", () => ({
 }));
 // mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
 vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: ancestry }));
-import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
+import {
+  type HandoffReferences,
+  inspectOtherOpenClawProcesses,
+} from "./openclaw-process-census.js";
 
 const self = process.pid;
 const launcher = self + 1;
@@ -147,7 +153,7 @@ beforeEach(() => {
     }
     return match?.[2] === "cmdline"
       ? row.argv.join("\0")
-      : `${pid} (name ) (with\nparentheses) ${row.state ?? "S"} ${row.ppid} ${self} 0 0 0 ${row.flags ?? 0}`;
+      : `${pid} (name ) (with\nparentheses) ${row.state ?? "S"} ${row.ppid} ${self} 0 0 0 ${row.flags ?? 0} ${"0 ".repeat(12)}100`;
   });
 });
 
@@ -484,7 +490,7 @@ const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 function expectReferences(
   matchingPids: number[],
   unverifiedPids: number[] = [],
-  handoff: typeof references & { sharedRoots?: string[]; familyDeadline?: number } = references,
+  handoff: HandoffReferences = references,
 ) {
   expect(inspectOtherOpenClawProcesses(handoff)).toEqual({
     matchingPids,
@@ -522,6 +528,12 @@ it.each([0, 1000])(
   (uid) => {
     processRow(peer, ["/bin/sh", "worker.sh"], { uid, cwd: denied() });
     expectPids([]);
+    for (const startIdentity of ["99", "100", "101"]) {
+      const handoff = { ...references, drivers: [{ pid: self, startIdentity }] };
+      expectReferences([], uid === 1000 && startIdentity !== "101" ? [peer] : [], handoff);
+    }
+    rows.get(peer)!.argv.push(references.artifactPaths[0]!);
+    expectReferences([peer], [], { ...references, drivers: [{ pid: self, startIdentity: "101" }] });
   },
 );
 

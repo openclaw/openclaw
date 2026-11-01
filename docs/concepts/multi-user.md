@@ -27,7 +27,7 @@ controls signed-in people. None of those settings creates a public link.
 The session creator or a Gateway admin can explicitly enable **Public access**.
 Anyone with the normal thread URL can then read existing and future conversation
 text, shared images, saved inline widgets, and tool-step summaries without signing
-in, while tool results, reasoning, file downloads, hidden messages, and internal
+in, while tool-result text, reasoning, file downloads, hidden messages, and internal
 metadata remain excluded. **Log in** returns to that same
 thread with the person's existing permissions. Assigning a different owner does
 not transfer publication authority. Disabling public access stops anonymous
@@ -208,7 +208,7 @@ does not retain their delivered channel message IDs. See
 
 In the transcript, selected mentions show a small inline avatar beside the original name. Missing photos use initials. The badge omits the visible `@`, while copied text keeps it.
 
-In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
+In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. People without a display name appear under a linked verified GitHub handle when available; otherwise, they keep a neutral person label rather than exposing an email address. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
 
 Use Up/Down to move through people, Home/End to jump to the first or last result,
 and Enter or Tab to insert the selected mention. Escape closes the picker. Typing a
@@ -274,6 +274,10 @@ This state improves continuity. It is not an authorization or isolation boundary
 ## Drafts
 
 Start a session as a draft to keep work in progress out of other people's sidebars until you publish it. Drafts are never hidden from admins, who see other people's drafts with a faded ghost marker. This is a coordination feature, not a security boundary.
+
+When Draft sessions are enabled, newly spawned children of a Draft session also start as Draft, including hidden helpers and visible sessions. Publishing the parent later does not publish its children; each session keeps its own audience until you change it.
+
+Disabling Draft creation leaves existing Draft conversations usable, but prevents them from spawning new Draft children. The request fails without sharing the child instead. Continue in the existing conversation or ask an administrator to enable Draft creation.
 
 Catalog listings and progress updates recheck current session visibility for each recipient. Cached provider results do not preserve access to a session that has become draft or incognito. An adopted thread remains bound to its original session instance and plugin ownership. Deleting and recreating a session key does not transfer the old thread to the new creator. Catalog reads and mutations also recheck the stored session after provider enumeration.
 

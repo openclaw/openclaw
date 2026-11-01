@@ -170,6 +170,12 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
     await fixture.waitForOutput("ready:1");
     expect(fixture.child.kill(stop ? "SIGTERM" : "SIGUSR2")).toBe(true);
     const exited = await Promise.race([fixture.closed, delay(12_000, "still alive")]);
+    expect(fixture.output()).not.toContain("start:2");
+    if (retained) {
+      expect(exited, fixture.output()).not.toBe("still alive");
+      expect(fixture.output()).toContain("resources remain");
+      return;
+    }
     expect(exited, fixture.output()).toEqual(mode === "rejected" ? [1, null] : [null, "SIGKILL"]);
     expect(fixture.output().includes("natural-exit")).toBe(mode === "rejected");
     const reason = pending
@@ -185,7 +191,6 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
     } else {
       expect(bundle.evidence.shutdown.step).toBe("gateway-server-close");
     }
-    expect(fixture.output()).not.toContain("start:2");
   });
 
   posixIt.each([true, false])("holds failed-restart ownership: recovery=%s", async (recover) => {

@@ -106,10 +106,6 @@ export type RunEmbeddedAgentParams = Pick<
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** Restrict this reconstructed run to restart-safe tools. */
-  forceRestartSafeTools?: boolean;
-  /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
-  forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
@@ -120,11 +116,6 @@ export type RunEmbeddedAgentParams = Pick<
   retryTransientErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
-  /**
-   * Background Workshop review of this conversation: edits of existing skills require a prior
-   * view, and changes credit "review" with this originating session key as their provenance.
-   */
-  skillWorkshopReviewOf?: string;
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */

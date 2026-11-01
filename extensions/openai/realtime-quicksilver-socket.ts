@@ -36,6 +36,8 @@ export class OpenAIQuicksilverWorkerSocket extends EventEmitter implements Quick
         url,
         options: { headers: options.headers, maxPayload: options.maxPayload },
         ...media,
+        // Plugin-scoped requests carry invocation proxies; workers need a plain format record.
+        audioFormat: media.audioFormat ? { ...media.audioFormat } : undefined,
       },
       execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
     });

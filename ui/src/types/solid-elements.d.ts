@@ -173,6 +173,7 @@ declare module "@solidjs/web" {
             | "excludeIdentities"
             | "totalCount"
             | "maxVisible"
+            | "overflowInSlots"
             | "personActivity"
           >
         > & { variant?: "session" };

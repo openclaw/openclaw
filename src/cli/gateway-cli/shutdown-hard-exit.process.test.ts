@@ -4,13 +4,19 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 
-const WATCHDOG_DELAY_MS = 100;
-const CHILD_TIMEOUT_MS = 3_000;
 const watchdogModuleUrl = pathToFileURL(
   path.resolve("src/cli/gateway-cli/shutdown-hard-exit.ts"),
 ).href;
 
-function runWatchdogChild() {
+function runWatchdogChild(blockMain: boolean) {
+  const delayedBootstrap = (delayMs: number) => `
+    import { isMainThread } from "node:worker_threads";
+    import { writeSync } from "node:fs";
+    if (!isMainThread) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${delayMs});
+      writeSync(1, "worker-bootstrap-finished:${delayMs}:" + Date.now() + "\\n");
+    }
+  `;
   const script = `
     import { writeSync } from "node:fs";
     import { armShutdownHardExitWatchdog } from ${JSON.stringify(watchdogModuleUrl)};
@@ -19,32 +25,30 @@ function runWatchdogChild() {
       writeSync(2, \`error:\${message}\\n\`);
       process.exit(2);
     };
+    process.env.NODE_OPTIONS = ${JSON.stringify(`--import=data:text/javascript,${encodeURIComponent(delayedBootstrap(500))}`)};
+    const hold = setInterval(() => {}, 1_000);
     const firstWatchdog = armShutdownHardExitWatchdog({
-      delayMs: ${WATCHDOG_DELAY_MS},
+      delayMs: 100,
       onError: (error) => fail(String(error)),
     });
-    if (firstWatchdog === null) {
-      fail("first-watchdog-not-armed");
-    }
-    firstWatchdog.cancel();
-    await new Promise((resolve) => setTimeout(resolve, ${WATCHDOG_DELAY_MS * 2}));
+    await firstWatchdog.cancel();
+    clearInterval(hold);
+    await new Promise((resolve) => setTimeout(resolve, 200));
     writeSync(1, "cancelled-watchdog-deadline-survived\\n");
 
     process.once("beforeExit", () => {
       // Reaching beforeExit proves the cancelled worker no longer retains process liveness.
       writeSync(1, "cancelled-watchdog-released-liveness\\n");
-      const secondWatchdog = armShutdownHardExitWatchdog({
-        delayMs: ${WATCHDOG_DELAY_MS},
+      process.env.NODE_OPTIONS = ${JSON.stringify(`--import=data:text/javascript,${encodeURIComponent(delayedBootstrap(blockMain ? 1_000 : 5_000))}`)};
+      armShutdownHardExitWatchdog({
+        delayMs: 1_000,
+        describePending: () => "shutdown.sidecar.database-admission",
         onError: (error) => fail(String(error)),
       });
-      if (secondWatchdog === null) {
-        fail("second-watchdog-not-armed");
-      }
       writeSync(1, "second-watchdog-armed\\n");
-      while (true) {}
+      ${blockMain ? "while (true) {}" : "setInterval(() => {}, 1_000);"}
     });
   `;
-  const startedAt = Date.now();
   const result = spawnSync(
     process.execPath,
     ["--import", "tsx", "--input-type=module", "--eval", script],
@@ -53,40 +57,31 @@ function runWatchdogChild() {
       encoding: "utf8",
       env: { ...process.env, VITEST: undefined },
       killSignal: "SIGKILL",
-      timeout: CHILD_TIMEOUT_MS,
+      timeout: 3_000,
     },
   );
-  return { elapsedMs: Date.now() - startedAt, result };
+  return { finishedAt: Date.now(), result };
 }
 
-it("cancels one watchdog before another kills a blocked main thread", () => {
-  const { elapsedMs, result } = runWatchdogChild();
-  const diagnostics = JSON.stringify(
-    {
-      elapsedMs,
-      status: result.status,
-      signal: result.signal,
-      error: result.error ? String(result.error) : undefined,
-      stdout: result.stdout,
-      stderr: result.stderr,
-    },
-    null,
-    2,
+it.each([true, false])("bounds retained cleanup with blocked main=%s", (blockMain) => {
+  const { finishedAt, result } = runWatchdogChild(blockMain);
+  const diagnostics = JSON.stringify(result);
+  expect(result.stdout, diagnostics).toContain(
+    "cancelled-watchdog-deadline-survived\ncancelled-watchdog-released-liveness\nsecond-watchdog-armed\n",
   );
-  const markers = [
-    "cancelled-watchdog-deadline-survived",
-    "cancelled-watchdog-released-liveness",
-    "second-watchdog-armed",
-  ];
-  let previousMarkerIndex = -1;
-  for (const marker of markers) {
-    const markerIndex = result.stdout.indexOf(marker);
-    expect(markerIndex, diagnostics).toBeGreaterThan(previousMarkerIndex);
-    previousMarkerIndex = markerIndex;
-  }
-
+  expect(result.stderr, diagnostics).toContain(
+    "pending close steps: shutdown.sidecar.database-admission; forcing SIGKILL",
+  );
   expect(result.error, diagnostics).toBeUndefined();
   expect(result.status, diagnostics).toBeNull();
   expect(result.signal, diagnostics).toBe("SIGKILL");
-  expect(elapsedMs, diagnostics).toBeLessThan(CHILD_TIMEOUT_MS);
+  if (blockMain) {
+    const bootstrapFinished = Number(
+      result.stdout.match(/worker-bootstrap-finished:1000:(\d+)/)?.[1],
+    );
+    expect(bootstrapFinished, diagnostics).toBeGreaterThan(0);
+    expect(finishedAt - bootstrapFinished, diagnostics).toBeLessThan(500);
+  } else {
+    expect(result.stdout, diagnostics).not.toContain("worker-bootstrap-finished:5000:");
+  }
 });

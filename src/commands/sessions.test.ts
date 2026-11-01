@@ -6,7 +6,7 @@ import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catal
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { assignSessionOwner, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
@@ -208,7 +208,7 @@ describe("sessionsCommand", () => {
       contextTokensSource: "runtime",
       totalTokens: 11,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
 
     const logs = await readSessionsText(store);

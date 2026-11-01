@@ -7,6 +7,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
   isBenignUncaughtExceptionError,
   isUncaughtExceptionHandled,
@@ -294,12 +295,14 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
   // Names survive worker transport without loading the state owner's runtime here.
-  const stateRefusal = errors.find(
-    (error): error is Error =>
-      error instanceof Error &&
-      (error.name === "StateDatabaseAccessError" ||
-        error.name === "StateDatabaseMaintenanceScopeError"),
-  );
+  const stateRefusal =
+    findStartupMaintenanceRequiredError(options.error) ??
+    errors.find(
+      (error): error is Error =>
+        error instanceof Error &&
+        (error.name === "StateDatabaseAccessError" ||
+          error.name === "StateDatabaseMaintenanceScopeError"),
+    );
   const reason = (error: unknown) =>
     `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
   if (!showDebugDetails && !showUpdateDiagnostics) {

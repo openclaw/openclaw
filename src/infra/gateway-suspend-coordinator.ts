@@ -22,8 +22,8 @@ import {
 } from "./gateway-active-work.js";
 
 const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
-// Thirty seconds to drain, then fifteen to hand off or release. Reconnects do not
-// extend user-visible downtime; freeze/snapshot leases retain their own TTL.
+// Drain preparation waits for persistence, then hands running work to committed
+// shutdown. Reconnects do not extend its deadline; freeze retains its own TTL.
 const GATEWAY_SUSPEND_DRAIN_BUDGET_MS = 45_000;
 const GATEWAY_SUSPEND_BUSY_RETRY_AFTER_MS = 20_000;
 const GATEWAY_SUSPEND_DRAIN_POLL_MS = 5_000;
@@ -169,6 +169,10 @@ function renewHeldSuspension(held: HeldGatewaySuspension, nowMs: number): void {
   scheduleResume(held, GATEWAY_SUSPEND_TTL_MS);
 }
 
+function suspensionReady(drain: boolean, snapshot: GatewayActiveWorkSnapshot): boolean {
+  return drain ? snapshot.writeCustody.every(({ count }) => count === 0) : snapshot.idle;
+}
+
 function refreshHeldSuspension(held: HeldGatewaySuspension): GatewayActiveWorkSnapshot | undefined {
   // Polls and renewals retain the update's terminal policy even after the first idle observation.
   const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
@@ -177,7 +181,7 @@ function refreshHeldSuspension(held: HeldGatewaySuspension): GatewayActiveWorkSn
   if (COORDINATOR_STATE.current !== held || normalizeExpiredHeldSuspension(held) !== held) {
     return undefined;
   }
-  if (snapshot.idle) {
+  if (suspensionReady(held.drain, snapshot)) {
     if (held.commitAdmission?.() === false) {
       throw new Error("gateway suspension admission changed during drain completion");
     }
@@ -198,12 +202,12 @@ function heldPrepareResult(
     blockers: snapshot.blockers,
     writeCustody: snapshot.writeCustody,
   };
-  return snapshot.idle
+  return suspensionReady(held.drain, snapshot)
     ? { status: "ready", ...result }
     : { status: "draining", ...result, retryAfterMs: GATEWAY_SUSPEND_DRAIN_POLL_MS };
 }
 
-/** Acquire an idle lease, or optionally preserve existing work behind a drain fence. */
+/** Freeze only idle work; drain preparation leaves running work for committed shutdown. */
 export function prepareGatewaySuspend(params: {
   requestId: string;
   terminalPolicy?: GatewaySuspendTerminalPolicy;
@@ -313,7 +317,8 @@ export function prepareGatewaySuspend(params: {
         writeCustody: snapshot.writeCustody,
       };
     }
-    const admissionTransition = snapshot.idle ? admission.commit : admission.drain;
+    const ready = suspensionReady(drain, snapshot);
+    const admissionTransition = ready ? admission.commit : admission.drain;
     if (!admissionTransition()) {
       throw new Error("gateway suspension admission changed during preparation");
     }
@@ -328,7 +333,7 @@ export function prepareGatewaySuspend(params: {
       expiresAtMs,
       deadlineAtMs,
       inspect: params.inspect,
-      commitAdmission: snapshot.idle ? undefined : admission.commit,
+      commitAdmission: ready ? undefined : admission.commit,
       reopenAdmission,
       resumeScheduling: params.resumeScheduling,
       nowMs: params.nowMs ?? Date.now,
@@ -360,8 +365,14 @@ function handoffRefusal(held: HeldGatewaySuspension, owner: GatewaySuspendHandof
   if (!held.inspect?.getTerminalPersistence) {
     return "gateway terminal persistence inspection is unavailable";
   }
-  if (held.inspect.getTerminalPersistence() > 0) {
+  const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
+    ignoreTerminalSessions: held.terminalPolicy === "terminate",
+  });
+  if (snapshot.counts.terminalPersistence > 0) {
     return "gateway terminal persistence is still pending";
+  }
+  if (snapshot.writeCustody.some(({ count }) => count > 0)) {
+    return "gateway write custody is still pending";
   }
   return undefined;
 }
@@ -397,12 +408,6 @@ export function armGatewaySuspendHandoff(params: {
   if (params.commit) {
     if (!params.owner.commitStop) {
       return resultError("gateway host does not support committed suspension stop");
-    }
-    const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
-      ignoreTerminalSessions: held.terminalPolicy === "terminate",
-    });
-    if (snapshot.writeCustody.some(({ count }) => count > 0)) {
-      return resultError("gateway write custody is still pending");
     }
     const changed = handoffRefusal(held, params.owner);
     if (changed) {
@@ -500,7 +505,7 @@ export function getGatewaySuspendStatus(
   if (!snapshot) {
     return getGatewaySuspendStatus(suspensionId, includeLifecycle);
   }
-  if (retired || !snapshot.idle) {
+  if (retired || !suspensionReady(held.drain, snapshot)) {
     return {
       status: "draining",
       ...(includeLifecycle

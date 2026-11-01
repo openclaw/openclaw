@@ -1,6 +1,8 @@
+import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -9,7 +11,7 @@ import { SecretsPageState } from "./state.ts";
 import { SecretsStore } from "./view.tsx";
 
 function mount(
-  entries: SecretStoreEntry[],
+  entries: SecretStoreEntry[] | (() => SecretStoreEntry[]),
   overrides: Partial<SecretsPageState> = {},
   methods = ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
 ): HTMLElement {
@@ -23,12 +25,13 @@ function mount(
   // SAFETY: this unbound view owner only reads the Gateway capability for permissions.
   const context = { gateway: source.gateway } as ApplicationContext;
   const state = Object.assign(new SecretsPageState(context, vi.fn()), overrides);
-  state.store.entries = entries;
+  state.store.entries = typeof entries === "function" ? entries() : entries;
+  const read = typeof entries === "function" ? entries : () => state.store.entries;
   return mountSolid(() => (
     <SecretsStore
       state={state}
       scope={state.store}
-      read={() => state.store.entries}
+      read={read}
       busy={state.store.busy}
       onSubmit={(bulk) => void (bulk ? state.submitBulk() : state.submitDraft())}
       onRemove={(entry) => void state.removeEntry(entry)}
@@ -85,4 +88,43 @@ it("hides mutation controls when the gateway does not advertise them", () => {
   const container = mount([], {}, ["secrets.store.list"]);
   expect(container.querySelector("button")).toBeNull();
   expect(container.textContent).toContain("Secrets");
+});
+
+it("uses the current system timezone for refreshed inventory timestamps", () => {
+  const NativeDateTimeFormat = Intl.DateTimeFormat;
+  let timeZone = "UTC";
+  const formatter = vi
+    .spyOn(Intl, "DateTimeFormat")
+    .mockImplementation(function (locales, options) {
+      return new NativeDateTimeFormat(locales, { ...options, timeZone });
+    });
+  try {
+    const entry: SecretStoreEntry = {
+      name: "SERVICE_URL",
+      kind: "env",
+      value: "https://service.test",
+      scopeKind: "team",
+      scopeId: "",
+      createdAtMs: 1,
+      updatedAtMs: Date.UTC(2026, 0, 1, 12),
+    };
+    const [entries, setEntries] = createSignal([entry]);
+    const container = mount(() => entries());
+    const title = () => container.querySelector("time")?.title;
+    const expected = (ms: number) =>
+      new NativeDateTimeFormat(i18n.getLocale(), {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone,
+      }).format(ms);
+    expect(title()).toBe(expected(entry.updatedAtMs));
+
+    timeZone = "America/Los_Angeles";
+    const refreshed = { ...entry, updatedAtMs: entry.updatedAtMs + 60_000 };
+    setEntries([refreshed]);
+    flush();
+    expect(title()).toBe(expected(refreshed.updatedAtMs));
+  } finally {
+    formatter.mockRestore();
+  }
 });

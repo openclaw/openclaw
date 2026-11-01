@@ -706,7 +706,9 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 For ordinary embedding requests, a recognized error with one explicit item cap
-sizes the retry batches directly. Unusable or conflicting caps, and aggregate
+sizes the retry batches directly, including caps preserved in a bounded provider
+error body when a gateway wrapper pushes them beyond the displayed preview.
+Unusable or conflicting caps, and aggregate
 limits reported without a count (Mistral's "Too many tokens overall, split into
 more batches."), fall back to halving the rejected batch. Successful slices
 retain their input order and cache entries. A single input that still exceeds a
@@ -928,7 +930,9 @@ before applying it. Source session transcripts remain in the session store.
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+Dreaming user settings for Memory CLI commands are configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+
+The managed Gateway dreaming sidecar may additionally read dreaming settings from the selected memory-slot owner (for example `plugins.entries.<memory-slot-owner>.config.dreaming`) when that plugin exposes them. Slot-owned Gateway settings are separate from any plugin-specific vector-native dreaming pipeline.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 
@@ -969,7 +973,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 ```
 
 <Note>
-- Dreaming writes machine state to `memory/.dreams/`.
+- Dreaming keeps machine state (recall store, phase signals, ingestion checkpoints, locks) in SQLite-backed plugin state; under `memory/.dreams/` it writes only the derived session corpus. See [What dreaming writes](/concepts/dreaming#what-dreaming-writes).
 - Dreaming combines Light, REM, and promoted Deep memories into at most one diary entry per workspace per sweep in `DREAMS.md` (or existing `dreams.md`). Phase reports remain separate, and sweeps without new material produce no diary entry.
 - Deep consolidation stores the prior `MEMORY.md` in SQLite-backed plugin state and records rewrite counts and highlights in `DREAMS.md`.
 - Untrusted and system-derived candidates are structurally excluded before consolidation and durable promotion.
