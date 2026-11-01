@@ -40,12 +40,13 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
-import { planSessionMessageCut } from "./session-message-cut-plan.js";
+import { planSessionMessageCut, selectSessionMessageCut } from "./session-message-cut-plan.js";
 import type {
   SessionMessageCutIntent,
   SessionMessageCutPreconditions,
   SessionMessageCutResult,
 } from "./session-message-cut.types.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
 import {
   markSessionTranscriptIndexDirtyInTransaction,
   reconcileSessionTranscriptIndexInTransaction,
@@ -210,6 +211,28 @@ export async function mutateSqliteSessionAtMessage(
           if (!entry) {
             return { status: "missing-session" } as const;
           }
+          if (entry.worktree) {
+            intent.expectedState ??= {
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            };
+            const events = await loadSessionTranscriptEvents({
+              ...memoryScope,
+              agentId: memory.agentId,
+              storePath: memory.path,
+              sessionId: entry.sessionId,
+            });
+            memory.authority.assertCurrent();
+            const selected = selectSessionMessageCut(
+              entry,
+              events,
+              intent,
+              preconditions?.sourceRepositoryWorkspaceId,
+            );
+            if (selected.status !== "selected") {
+              return selected;
+            }
+          }
           const target = captureSessionTranscriptTargetBinding({
             agentId: memory.agentId,
             storePath: memory.path,
@@ -312,6 +335,24 @@ export async function mutateSqliteSessionAtMessage(
       preconditions,
     );
   if (mode !== "fork" && preparedEntry) {
+    if (preparedEntry.worktree) {
+      const events = await loadSessionTranscriptEvents({
+        ...params,
+        sessionKey: sourceKey,
+        storePath: resolved.path,
+        sessionId: preparedEntry.sessionId,
+      });
+      assertCurrent();
+      const selected = selectSessionMessageCut(
+        preparedEntry,
+        events,
+        { ...intent, expectedState: preparedExpectedState },
+        preconditions?.sourceRepositoryWorkspaceId,
+      );
+      if (selected.status !== "selected") {
+        return selected;
+      }
+    }
     intent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
       {
         agentId: resolved.agentId,

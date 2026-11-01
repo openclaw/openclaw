@@ -566,6 +566,7 @@ struct RootSidebar: View {
             groups: categories.enumerated().map { offset, name in
                 OpenClawChatSessionGroup(name: name, position: offset)
             },
+            rosterIsComplete: self.model.isSessionRosterComplete,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract,
             now: self.model.now)
     }

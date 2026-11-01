@@ -172,10 +172,10 @@ export async function runSessionCompactionIfNeeded(params: {
     sessionKey: compactionSessionKey,
     storePath: compactionStorePath,
   };
-  const readTranscriptSize = async (sessionId: string, rawBytes?: number) =>
+  const readTranscriptSize = async (sessionId: string) =>
     readCompactionTranscriptBytes({
       target: { ...compactionTarget, sessionId },
-      rawBytes,
+      rawBytes: undefined,
       runtime: params.followupRun.run,
       maxBytes: maxActiveTranscriptBytes,
       contextTokenBudget: contextWindowTokens,
@@ -220,7 +220,7 @@ export async function runSessionCompactionIfNeeded(params: {
           contextWindowTokens,
         });
   const activeTranscriptBytes = shouldCheckActiveTranscriptBytes
-    ? await readTranscriptSize(entry.sessionId, transcriptUsageTokens?.transcriptByteSize)
+    ? await readTranscriptSize(entry.sessionId)
     : undefined;
   assertActive();
   const exceedsTranscriptByteThreshold =

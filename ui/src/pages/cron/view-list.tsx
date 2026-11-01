@@ -224,6 +224,7 @@ function Toolbar(
               <Icon name="search" />
             </span>
             <input
+              ref={props.focus?.ref("search")}
               type="search"
               class="settings-input"
               value={props.jobsQuery}
@@ -257,6 +258,7 @@ function Toolbar(
           </button>
           {(props.canCreate ?? props.canManage) ? (
             <button
+              ref={props.focus?.ref("create")}
               type="button"
               class="btn primary btn--sm cron-new-task"
               data-test-id="cron-new-task"
@@ -335,6 +337,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
   const elements = new Set<HTMLDivElement>();
   const windowed = () => props.rows.length > 20;
   const canManage = createMemo(() => props.canManage);
+  const canCreate = createMemo(() => props.canCreate);
   const busy = createMemo(() => props.busy);
   const connected = createMemo(() => props.connected);
   const getItemKey = createMemo(() => {
@@ -387,6 +390,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         return;
       }
       const { rows } = next;
+      focusedId ??= props.focus?.target;
       scroller = list.closest<HTMLElement>(".content");
       current = rows;
       const margin = scroller
@@ -434,6 +438,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
   function Row(row: { job: CronJob }) {
     let element: HTMLDivElement;
     const item = () => geometry().get(row.job.id);
+    // Equal permission results must not wake the retained row controls.
+    const canManageJob = createMemo(() => props.canManageJob?.(row.job) ?? canManage());
     onSettled(() => {
       elements.add(element);
       virtualizer.measureElement(element);
@@ -446,8 +452,8 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
       <JobRow
         job={row.job}
         jobs={props.jobs}
-        canManage={props.canManageJob?.(row.job) ?? canManage()}
-        canCreate={props.canCreate}
+        canManage={canManageJob()}
+        canCreate={canCreate()}
         busy={busy()}
         connected={connected()}
         toggleSavingJobId={props.toggleSavingJobId}
@@ -455,9 +461,16 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         onToggle={(job, enabled) => props.onToggle(job, enabled)}
         onClone={(job) => props.onClone(job)}
         onRemove={(job) => props.onRemove(job)}
-        onSelectJob={(job) => props.onSelectJob(job)}
+        onSelectJob={(job) => {
+          props.focus?.remember(
+            job.id,
+            props.rows.map((entry) => entry.id),
+          );
+          props.onSelectJob(job);
+        }}
         index={byId().get(row.job.id)!.index}
         count={props.rows.length}
+        focus={props.focus}
         rowRef={(node) => (element = node)}
         onFocus={() => {
           if (focusedId === row.job.id) {
@@ -522,7 +535,7 @@ function JobsTableFrame(props: { canManage: boolean; busy: boolean; children: JS
 }
 function JobRow(
   props: CronJobActionProps &
-    Pick<CronProps, "jobs" | "onSelectJob"> & {
+    Pick<CronProps, "jobs" | "onSelectJob" | "focus"> & {
       job: CronJob;
       index: number;
       count: number;
@@ -551,7 +564,7 @@ function JobRow(
         }
       }}
     >
-      <button type="button" class="cron-table__name">
+      <button ref={props.focus?.ref(props.job.id)} type="button" class="cron-table__name">
         <JobStateIndicator job={props.job} />
         <span class="cron-table__name-copy">
           <span class="cron-table__name-line">

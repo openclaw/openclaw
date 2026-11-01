@@ -59,7 +59,6 @@ export function publishConfigMachineStateRow(
   } else if (key === "authProfiles.store" || key === "authProfiles.state") {
     publishAuthProfileRowsChanged(database);
   } else if (
-    key === "modelCatalog.remote.v4" ||
     key === "modelCatalog.remote.v3" ||
     key === "modelCatalog.remote.v2" ||
     key === "modelCatalog.remote"
