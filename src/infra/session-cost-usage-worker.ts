@@ -109,7 +109,6 @@ export async function executeUsageCostWorker(
   };
   const refreshInputs =
     operation.kind === "refresh" ? usageRefreshInputs(location.databasePath) : undefined;
-  let byPath: Map<string, SessionCostUsageRollupRow> | undefined;
   const { access, readFacts, readFreshness, inventory } = createUsageCostCollectionAccess({
     input,
     control,
@@ -120,12 +119,9 @@ export async function executeUsageCostWorker(
         return undefined;
       }
       const database = target(marker.agentId, marker.storePath);
-      const row = byPath?.get(
+      const checkpoint = byPath.get(
         formatSqliteSessionFileMarker({ ...marker, storePath: database.path }),
-      );
-      const checkpoint = row
-        ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)?.checkpoint
-        : undefined;
+      )?.envelope?.checkpoint;
       return checkpoint?.kind === "sqlite" ? checkpoint : undefined;
     },
   });
@@ -362,7 +358,15 @@ export async function executeUsageCostWorker(
   }
 
   const rows = await readMetadata();
-  byPath = new Map(rows.map((row) => [row.key, row]));
+  const byPath = new Map(
+    rows.map((row) => [
+      row.key,
+      {
+        row,
+        envelope: decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint),
+      },
+    ]),
+  );
   const selectedFiles = operation.sessionFiles
     ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
     : [];
@@ -421,10 +425,9 @@ export async function executeUsageCostWorker(
     if (old && !gap) {
       continue;
     }
-    const row = byPath.get(file.filePath);
-    const envelope = row
-      ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)
-      : undefined;
+    const cached = byPath.get(file.filePath);
+    const row = cached?.row;
+    const envelope = cached?.envelope;
     const invalid = rebuildByPath.get(file.filePath);
     const rebuild =
       row &&
