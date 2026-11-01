@@ -4,6 +4,7 @@ import {
   ensureMemoryRecallMetadataSchema,
   hasLegacyMemoryRecallMetadataColumns,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
@@ -65,6 +66,74 @@ export {
 } from "./openclaw-agent-db-schema-read.js";
 
 export { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
+
+/** beta.6 wrote v16 before the derived validity column and triggers existed. */
+export function repairAndAssertOpenClawAgentV16Validity(
+  db: DatabaseSync,
+  pathname: string,
+  schemaSql: string,
+): void {
+  const triggerCount = db
+    .prepare(`SELECT count(*) AS count FROM sqlite_schema
+    WHERE type = 'trigger' AND name IN (
+      'session_nodes_entry_valid_after_insert',
+      'session_nodes_entry_valid_after_entry_update',
+      'session_nodes_entry_valid_after_identity_update'
+    )`)
+    .get()?.count;
+  if (triggerCount === 3) {
+    return;
+  }
+  // Missing invalidation triggers cannot certify even rows already marked valid.
+  const rows = db.prepare("SELECT current_session_id, entry_json, updated_at FROM session_nodes");
+  for (const row of rows.iterate() as Iterable<{
+    current_session_id: string;
+    entry_json: string;
+    updated_at: number;
+  }>) {
+    if (!parseSqliteSessionEntryRecord(row)) {
+      throw new SqliteSchemaMismatchError(
+        `Cannot repair v16 validity triggers for ${pathname}: invalid session entry identity or JSON. Stop the Gateway and preserve the database and SQLite sidecars; restore a verified backup or contact OpenClaw support to repair the affected rows. No session rows were changed.`,
+      );
+    }
+  }
+  ensureLegacySessionEntryValidityTriggers(db);
+  assertSqliteSchemaContains(db, pathname, schemaSql, {
+    ...AGENT_SCHEMA_COMPATIBILITY,
+    allowCompatibleAdditiveColumns: false,
+    allowedMissingColumns: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingColumns,
+      ...LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
+    ],
+    allowedMissingTables: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
+      "session_transcript_cold_archives",
+    ],
+  });
+  // v17's owner validates and retires the published v16 lease table and indexes.
+  if (hasRetiredAgentStateLeaseSchema(db)) {
+    assertSqliteSchemaContains(db, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
+  }
+  const tables = new Set([...getCanonicalSqliteTableNames(schemaSql), "state_leases"]);
+  const indexes = new Set([
+    ...getCanonicalSqliteNamedIndexNames(schemaSql),
+    "idx_agent_state_leases_expiry",
+    "idx_agent_state_leases_owner",
+    // The memory schema owner retires this published path-only index.
+    "idx_memory_index_chunks_path",
+  ]);
+  for (const row of db
+    .prepare(
+      "SELECT type, name FROM sqlite_schema WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'",
+    )
+    .iterate()) {
+    if (!(row.type === "table" ? tables : indexes).has(String(row.name))) {
+      throw new SqliteSchemaMismatchError(
+        `Cannot repair v16 validity triggers for ${pathname}: unexpected ${row.type} ${row.name}. Preserve the database and SQLite sidecars and contact OpenClaw support; the unknown schema needs inspection before migration.`,
+      );
+    }
+  }
+}
 
 export function migratedSessionColumn(
   columns: ReadonlySet<string>,
