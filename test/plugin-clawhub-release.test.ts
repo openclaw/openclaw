@@ -274,7 +274,7 @@ describe("collectPluginClawHubReleasePlan", () => {
       ).rejects.toThrow(
         `Failed to query ClawHub package @openclaw/demo-plugin: HTTP 503 ${detail}`,
       );
-      expect(packageRequests).toBe(4);
+      expect(packageRequests).toBe(5);
     },
   );
 

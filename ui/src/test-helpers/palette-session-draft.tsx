@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { vi } from "vitest";
 import { createChangeListeners } from "../../../src/shared/listeners.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
@@ -8,7 +8,6 @@ import {
   PaletteSessionAttachments,
   PaletteSessionAuxiliary,
   PaletteSessionControls,
-  PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { mountSolid } from "./mount-solid.ts";
@@ -48,10 +47,6 @@ export class PaletteDraftHost {
         this.paletteOpen = false;
         this.started();
       },
-      onOpen: () => {
-        this.paletteOpen = true;
-        this.draft.open();
-      },
     },
   );
   constructor(readonly context: ApplicationContext) {
@@ -60,10 +55,6 @@ export class PaletteDraftHost {
       () => {
         const [revision, setRevision] = createSignal({}, { ownedWrite: true });
         this.publish = () => setRevision({});
-        const recovery = createMemo(() => {
-          revision();
-          return this.draft.recoveryAction;
-        });
         const message = createMemo(() => {
           revision();
           return this.draft.message;
@@ -88,9 +79,6 @@ export class PaletteDraftHost {
           <>
             <textarea aria-label="Palette prompt" value={message()} />
             <PaletteSessionControls draft={this.draft} revision={revision()} />
-            <Show when={recovery()}>
-              {(onOpen) => <PaletteSessionRecovery onOpen={onOpen()} />}
-            </Show>
             <PaletteSessionAuxiliary draft={this.draft} revision={revision()} />
             <PaletteSessionAttachments draft={this.draft} revision={revision()} />
           </>

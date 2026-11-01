@@ -35,7 +35,6 @@ import {
   PaletteSessionAttachments,
   PaletteSessionControls,
   PaletteSessionAuxiliary,
-  PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { createSubmissionAction } from "../pages/new-session/submission-action.ts";
@@ -493,7 +492,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const mentionListboxId = () => paneDomId(current().mentionHost.paneId, "mention-menu-listbox");
   const mentionAnnouncementId = () =>
     paneDomId(current().mentionHost.paneId, "mention-announcement");
-  const recovery = createMemo(() => current().draft.recoveryAction);
   const reason = () =>
     current().draft.disabledReason ??
     (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
@@ -670,11 +668,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
           <Show when={error()}>
             <div class="cmd-palette__creation-error" role="alert">
               {error()}
-            </div>
-          </Show>
-          <Show when={recovery()}>
-            <div class="cmd-palette__footer">
-              <PaletteSessionRecovery onOpen={() => recovery()?.()} />
             </div>
           </Show>
         </div>

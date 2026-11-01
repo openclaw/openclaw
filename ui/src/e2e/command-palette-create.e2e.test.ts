@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { twoFrames } from "./chat-presentation.test-support.ts";
 import {
   expectPaletteProjectGrouping,
   expectPaletteSettingsAlignment,
@@ -356,10 +355,10 @@ suite.define(() => {
           // Optimistic start: the launcher returns to the foreground before admission.
           await input.waitFor({ state: "hidden" });
           await expectForegroundUnchanged(page, composer, url);
-          // Reopening shows the pending start; a second chord must not start a second session.
+          // The pending start owns its draft; Cmd+K reopens empty and cannot resend it.
           await page.keyboard.press("ControlOrMeta+K");
           await input.waitFor({ state: "visible" });
-          expect(await input.inputValue()).toBe(submittedPrompt);
+          expect(await input.inputValue()).toBe("");
           await expect.poll(() => start.isEnabled()).toBe(false);
           await input.press("ControlOrMeta+Enter");
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
@@ -393,7 +392,7 @@ suite.define(() => {
     },
   );
 
-  it("opens persistent rejected-turn recovery with the keyboard after dismissing its toast", async () => {
+  it("opens a rejected first turn from its notice without resending it", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const key = "agent:main:dashboard:palette-rejected-turn";
       const gateway = await installMockGateway(
@@ -419,39 +418,24 @@ suite.define(() => {
       await input.press("ControlOrMeta+Enter");
       await gateway.waitForRequest("sessions.create");
       await input.waitFor({ state: "hidden" });
-      const toast = page.locator(".app-toast");
-      await expect.poll(() => toast.textContent()).toContain("Initial turn rejected");
-      await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
-      await toast.waitFor({ state: "hidden" });
-      expect(page.url()).toBe(url);
-      expect(await composer.inputValue()).toBe(foregroundDraft);
+      await expectForegroundUnchanged(page, composer, url);
+      // The destination session owns the rejected prompt; the launcher is already free.
       await page.keyboard.press("ControlOrMeta+K");
       await input.waitFor({ state: "visible" });
-      await expect
-        .poll(() => palette.getByRole("alert").textContent())
-        .toContain("Initial turn rejected");
-      expect(await input.inputValue()).toBe(prompt);
-      await input.press("ControlOrMeta+Enter");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      const recovery = palette.getByRole("button", { name: "Open session", exact: true });
-      await recovery.waitFor({ state: "visible" });
-      await input.focus();
-      for (let step = 0; step < 10; step += 1) {
-        await page.keyboard.press("Tab");
-        if (await recovery.evaluate((element) => document.activeElement === element)) {
-          break;
-        }
-      }
-      expect(await recovery.evaluate((element) => document.activeElement === element)).toBe(true);
-      await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
+      expect(await input.inputValue()).toBe("");
+      expect(await palette.getByRole("alert").count()).toBe(0);
+      await input.press("Escape");
       await input.waitFor({ state: "hidden" });
+      const toast = page.locator(".app-toast");
+      await expect.poll(() => toast.textContent()).toContain("Initial turn rejected");
+      await toast.getByRole("button", { name: "Open session", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
     });
   });
 
-  it("keeps a rejected creation visible and retries the same prompt without touching chat", async () => {
+  it("starts a second prompt while the first is pending and retries a failed start", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(
         page,
@@ -464,56 +448,46 @@ suite.define(() => {
         suite.server.baseUrl,
       );
       const prompt = "Preserve this task when creation is denied.\nRetry only after I ask.";
-      await input.fill(prompt);
+      const second = "A second task while the first one starts.\nKeep both.";
       const start = palette.getByRole("button", {
         name: "Start new session in background",
         exact: true,
       });
+      await input.fill(prompt);
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await gateway.deferNext("sessions.create");
+      await gateway.deferNext("sessions.create", { message: prompt });
       await input.press("ControlOrMeta+Enter");
       await gateway.waitForRequest("sessions.create");
       await input.waitFor({ state: "hidden" });
-      // Reopened while pending, the prompt stays focused and read-only.
+      await expectForegroundUnchanged(page, composer, url);
+      // The pending start never holds the launcher: a new prompt starts immediately.
       await page.keyboard.press("ControlOrMeta+K");
       await input.waitFor({ state: "visible" });
-      await expect.poll(() => start.isEnabled()).toBe(false);
-      await twoFrames(page);
-      expect(
-        await input.evaluate((element: HTMLTextAreaElement) => [
-          document.activeElement === element,
-          element.readOnly,
-          element.getAttribute("aria-busy"),
-        ]),
-      ).toEqual([true, true, "true"]);
-      await input.press("Escape");
+      expect(await input.inputValue()).toBe("");
+      expect(await input.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(false);
+      await input.fill(second);
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      await input.press("ControlOrMeta+Enter");
       await input.waitFor({ state: "hidden" });
+      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
+      const toast = page.locator(".app-toast");
+      await expect.poll(() => toast.textContent()).toContain("Running");
+      await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
       await gateway.rejectDeferred("sessions.create", {
         code: "INVALID_REQUEST",
         message: "Fixture denied creation; correct the request and retry.",
       });
-      const toast = page.locator(".app-toast");
       await expect.poll(() => toast.textContent()).toContain("Session didn't start");
-      await toast.getByRole("button", { name: "Edit prompt", exact: true }).click();
-      await input.waitFor({ state: "visible" });
-      const error = palette.getByRole("alert");
-      await expect.poll(() => error.textContent()).toContain("Fixture denied creation");
-      expect(await input.inputValue()).toBe(prompt);
+      expect(await toast.textContent()).toContain("Fixture denied creation");
+      await toast.getByRole("button", { name: "Try again", exact: true }).click();
+      const retry = await gateway.waitForRequest("sessions.create", { after: 2 });
+      expect(retry.params).toMatchObject({ agentId: "main", message: prompt });
+      await expect.poll(() => toast.textContent()).toContain("Running");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(3);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
+      // Notice actions retire their own button; the foreground route and draft stay intact.
       expect(page.url()).toBe(url);
       expect(await composer.inputValue()).toBe(foregroundDraft);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      await expect
-        .poll(() => input.evaluate((element) => document.activeElement === element))
-        .toBe(true);
-      expect(await input.getAttribute("aria-busy")).toBeNull();
-      await expect.poll(() => start.isEnabled()).toBe(true);
-      await input.press("ControlOrMeta+Enter");
-      const retry = await gateway.waitForRequest("sessions.create", { after: 1 });
-      expect(retry.params).toMatchObject({ agentId: "main", message: prompt });
-      await input.waitFor({ state: "hidden" });
-      await expectForegroundUnchanged(page, composer, url);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(2);
-      expect(await gateway.getRequests("chat.send")).toEqual([]);
     });
   });
 });
