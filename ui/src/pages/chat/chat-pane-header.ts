@@ -501,7 +501,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       workspaceIcon: resolveChatPaneWorkspaceIcon({
         sessionKey:
           workspace.root && this.state?.connected && !this.routeResolutionPending
-            ? this.state?.sessionKey
+            ? row?.key
             : undefined,
         resourceBasePath: this.context.resourceBasePath,
         hello: sharingSnapshot.hello,
