@@ -566,7 +566,10 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       }
       const pinned = await preferences.setCanonicalUserPreferences(
         viewer.id,
-        { "ui.railShortcuts": pinKeys.map((key) => `session:${key}`) },
+        {
+          "ui.railShortcuts": pinKeys.map((key) => `session:${key}`),
+          ...(options.dashboardEndAnchor ? { "ui.fontChat": "lora" } : {}),
+        },
         { env },
       );
       if (!pinned?.ok) {
