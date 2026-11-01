@@ -41,12 +41,18 @@ type CachedChatItems = {
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
 
-let prependRuntime: typeof import("./chat-thread-prepend.ts") | undefined;
+type PrependRuntime = Awaited<ReturnType<typeof importPrependRuntime>>;
+let prependRuntime: PrependRuntime | undefined;
 let prependLoading: Promise<unknown> | undefined;
+
+async function importPrependRuntime() {
+  const { prependOlderChatItems } = await import("./chat-thread-prepend.ts");
+  return { prependOlderChatItems };
+}
 
 /** Older-page reuse stays out of chat boot; prepends take the full build until it loads. */
 function loadedPrependRuntime() {
-  prependLoading ??= import("./chat-thread-prepend.ts").then(
+  prependLoading ??= importPrependRuntime().then(
     (loaded) => (prependRuntime = loaded),
     () => (prependLoading = undefined),
   );
