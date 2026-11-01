@@ -15,7 +15,9 @@ import {
   targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readPluginNoticeData, type PluginNotice } from "../shared/plugin-notice.js";
 import { isActiveStoreWriter } from "../shared/store-writer-queue.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -128,6 +130,30 @@ describe("channel-final transcript mirrors", () => {
       "conflicts with the admitted message",
     );
     expect(rows()).toEqual(before);
+  });
+
+  it("records a plugin notice that stays out of model replay without its provenance", async () => {
+    const data = { runId: "review-1", skills: [{ name: "deploy", action: "created" }] };
+    const notice: PluginNotice = { kind: "plugin-notice", pluginId: "demo", type: "changed", data };
+    const withExtraField = { ...notice, extra: "dropped" };
+    expect(
+      await appendMirror({
+        ...scope,
+        idempotencyKey: "demo-notice:review-1",
+        deliveryMirror: withExtraField,
+        text: "Learned: created deploy.",
+        updateMode: "none",
+      }),
+    ).toMatchObject({ ok: true });
+
+    const message = (await mirrorEntries()).at(-1)?.message;
+    expect(message).toHaveProperty("openclawDeliveryMirror", notice);
+    expect(readPluginNoticeData(message, "demo", "changed")).toEqual(data);
+    expect(readPluginNoticeData(message, "other", "changed")).toBeUndefined();
+    // Rows whose provider and model were stripped stay out of replay by their marker (#99470).
+    expect(isTranscriptOnlyOpenClawAssistantMessage({ ...message, provider: "", model: "" })).toBe(
+      true,
+    );
   });
 
   it("retains distinct unkeyed media identities and suppresses an exact repeat", async () => {
