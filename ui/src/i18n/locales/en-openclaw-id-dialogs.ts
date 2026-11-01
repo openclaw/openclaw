@@ -71,10 +71,16 @@ const enOpenClawIdDialogs = {
     step_reserve_hint: "Your permanent address",
     step_relay: "Opening an encrypted connection to the relay",
     step_relay_hint: "Outbound only: no ports opened on your network",
-    stepNotPublished: "Linked, but not listed in OpenClaw ID yet ({detail}).",
+    stepNotPublished:
+      "Linked, but not listed in OpenClaw ID yet: {detail}. The claw retries automatically.",
     stepRelayOffline: "Not connected to the relay yet; the claw keeps trying on its own.",
-    doneBody: "This claw is now linked to your recovery kit and reachable at https://{host}.",
-    doneNotPublished: "It is not listed in OpenClaw ID yet. Add an enrollment code to publish it.",
+    doneBody: "This claw is now linked to your recovery kit. Its address is https://{host}.",
+    doneNotPublished:
+      "It is not listed in OpenClaw ID yet: {detail}. The claw retries automatically.",
+    publicationPending: "publication has not completed",
+    publicationNeedsAccount: "account registration has not completed",
+    doneNeedsLinkCode:
+      "It is not listed in OpenClaw ID yet. Use the manual link-code option to finish registration.",
     done: "Done",
     regenTitle: "Regenerate owner key",
     regenDescription: "Replace this claw's owner key and recovery kit.",

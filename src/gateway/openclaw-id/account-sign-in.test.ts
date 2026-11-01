@@ -160,6 +160,33 @@ describe("createOpenClawIdSignIn", () => {
     await service.stop();
   });
 
+  it.each(["email", "name", "both"])("publishes when verified claims omit %s", async (missing) => {
+    const store = memoryStore();
+    const authority = createOpenClawIdAuthority(store);
+    const services = fakeServices((nonce) => {
+      const { email, name, ...required } = valid(nonce);
+      return {
+        ...required,
+        ...(missing === "name" ? { email } : {}),
+        ...(missing === "email" ? { name } : {}),
+      };
+    });
+    const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });
+    const started = await begin(signIn);
+    services.authorize(started.authorizationUrl);
+    await signIn.complete({
+      state: started.state,
+      code: "the-code",
+      onVerifiedAccount: (account) => authority.recordVerifiedAccount(account),
+    });
+    await authority.recordDiscovery({ owner_account_id: "acct-1", published_snapshot_seq: 1 });
+    expect((await store.read())?.owner_profile).toEqual({
+      sub: "acct-1",
+      ...(missing === "name" ? { email: "owner@example.test" } : {}),
+      ...(missing === "email" ? { name: "Owner" } : {}),
+    });
+  });
+
   it("sends the verifier that matches the S256 challenge, and fails with another sign-in's", async () => {
     const services = fakeServices(valid);
     const signIn = createOpenClawIdSignIn({ fetchImpl: services.fetchImpl, now });

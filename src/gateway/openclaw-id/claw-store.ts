@@ -18,7 +18,7 @@ export type StoredClaw = {
   /** Membership authority; null until the claw is linked. */
   authority: AuthorityState | null;
   /** Server-redeemed OIDC display claims; usable only for the linked owner subject. */
-  owner_profile?: { sub: string; email: string | null; name: string | null };
+  owner_profile?: { sub: string; email?: string; name?: string };
   /** The current ServerBinding, signed by R or an owner device. */
   binding: SignedStatement<"ServerBinding"> | null;
   /**

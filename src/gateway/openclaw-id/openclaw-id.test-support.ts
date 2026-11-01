@@ -22,6 +22,7 @@ import {
   type StatementSigner,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
+import { serializePluginStoreJson } from "../../plugin-state/plugin-store-validation.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
@@ -35,6 +36,15 @@ export function memoryStore() {
   return {
     read: async () => record,
     write: async (next: StoredClaw) => {
+      // Match the durable store's strict JSON contract, including absent optional fields.
+      serializePluginStoreJson({
+        value: next,
+        label: "plugin state value",
+        errors: {
+          invalid: (message) => new Error(message),
+          limit: (message) => new Error(message),
+        },
+      });
       record = structuredClone(next);
     },
   };

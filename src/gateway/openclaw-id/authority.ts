@@ -265,7 +265,11 @@ export function createOpenClawIdAuthority(
         }
         await commit({
           ...current,
-          owner_profile: { sub: account.sub, email: account.email, name: account.name },
+          owner_profile: {
+            sub: account.sub,
+            ...(typeof account.email === "string" ? { email: account.email } : {}),
+            ...(typeof account.name === "string" ? { name: account.name } : {}),
+          },
         });
       });
     },
@@ -763,17 +767,14 @@ export function createOpenClawIdAuthority(
       return serialize(async () => {
         const current = await load();
         if (current) {
-          const discovery = { ...current.discovery, ...update };
-          await commit({
-            ...current,
-            discovery,
-            // A link code for another account must never adopt this sign-in's profile.
-            owner_profile:
-              discovery.owner_account_id &&
-              current.owner_profile?.sub !== discovery.owner_account_id
-                ? undefined
-                : current.owner_profile,
-          });
+          const next = { ...current, discovery: { ...current.discovery, ...update } };
+          const owner = next.discovery.owner_account_id;
+          // Omit an absent or unrelated profile; explicit undefined is not valid store JSON.
+          // A link code for another account must never adopt this sign-in's profile.
+          if (!next.owner_profile || (owner && next.owner_profile.sub !== owner)) {
+            delete next.owner_profile;
+          }
+          await commit(next);
         }
       });
     },

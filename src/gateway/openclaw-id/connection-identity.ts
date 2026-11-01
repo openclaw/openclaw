@@ -129,7 +129,7 @@ export function createOpenClawIdConnectionAccess(params: {
           displayName: report?.display_name ?? null,
           invitedBy:
             profile && (profile.name || profile.email)
-              ? { name: profile.name, email: profile.email }
+              ? { name: profile.name ?? null, email: profile.email ?? null }
               : null,
         };
       }

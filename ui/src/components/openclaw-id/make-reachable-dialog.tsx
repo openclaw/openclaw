@@ -45,6 +45,17 @@ async function readRelayOnline(client: GatewayBrowserClient): Promise<boolean> {
   return result.status.state === "on" && tunnel?.state === "running" && tunnel.relayOnline === true;
 }
 
+// Preserve the Gateway's failure cause in both progress and completion copy.
+function publicationDetail(publication: OpenClawIdPublication | null): string {
+  return publication?.state === "failed"
+    ? publication.message
+    : t(
+        publication?.state === "needs_enrollment_code"
+          ? "openclawId.publicationNeedsAccount"
+          : "openclawId.publicationPending",
+      );
+}
+
 // The mark of a linking step: waiting, running, done or a problem.
 function stepMark(state: LinkStepState["state"]): string {
   return state === "done" ? "✓" : state === "running" ? "…" : state === "waiting" ? "○" : "!";
@@ -449,7 +460,15 @@ export function showMakeReachableDialog(params: {
                     <div class="secret-reveal__body">
                       <p>{t("openclawId.doneBody", { host: done().hostname })}</p>
                       <Show when={done().publication?.state !== "published"}>
-                        <p>{t("openclawId.doneNotPublished")}</p>
+                        <p>
+                          {!params.signedIn &&
+                          !codeFromAccount() &&
+                          done().publication?.state === "needs_enrollment_code"
+                            ? t("openclawId.doneNeedsLinkCode")
+                            : t("openclawId.doneNotPublished", {
+                                detail: publicationDetail(done().publication),
+                              })}
+                        </p>
                       </Show>
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
