@@ -1,5 +1,8 @@
 /** Shared fresh-request estimates for admission and compaction replacement. */
-import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringTokenPressure,
+} from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import type { AgentMessage, BashExecutionMessage } from "../runtime/index.js";
@@ -12,37 +15,9 @@ import {
   IMAGE_BLOCK_TOKENS,
 } from "../runtime/index.js";
 
-export const ESTIMATED_CHARS_PER_TOKEN = 4;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
-const NUMERIC_RUN_PATTERN = /^[0-9]+$/;
-
-export function estimateStringTokenPressure(
-  text: string,
-  charsPerToken = ESTIMATED_CHARS_PER_TOKEN,
-) {
-  let tokens = estimateStringChars(text) / charsPerToken;
-  // Encoded runs, numeric groups and JSON delimiters have lexical boundaries
-  // that prose character averages miss, regardless of the message's tool role.
-  for (const run of text.match(/[A-Za-z0-9+/_=-]{16,}|\b[0-9]+\b|[{}[\]:,]/g) ?? []) {
-    let denseTokens = 0;
-    if (NUMERIC_RUN_PATTERN.test(run)) {
-      denseTokens = Math.ceil(run.length / 3);
-    } else if (run.length === 1) {
-      denseTokens = 1;
-    } else {
-      if (run.length < 64 && !(/[A-Za-z]/.test(run) && /[0-9]/.test(run))) {
-        continue;
-      }
-      for (const part of run.match(/[A-Za-z]+|[0-9]{1,3}|[^A-Za-z0-9]/g) ?? []) {
-        denseTokens += Math.ceil(part.length / charsPerToken);
-      }
-    }
-    tokens += Math.max(0, denseTokens - run.length / charsPerToken);
-  }
-  return Math.ceil(tokens);
-}
 
 export function estimateJsonPayloadTokenPressure(
   value: unknown,
@@ -89,7 +64,7 @@ function estimateContentBlockTokenPressure(block: unknown): number {
     return estimateStringTokenPressure(block);
   }
   if (!isRecord(block)) {
-    return estimateJsonPayloadTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN);
+    return estimateJsonPayloadTokenPressure(block, CHARS_PER_TOKEN_ESTIMATE);
   }
 
   const type = block.type;
@@ -102,7 +77,7 @@ function estimateContentBlockTokenPressure(block: unknown): number {
   }
   return (
     CONTENT_BLOCK_OVERHEAD_TOKENS +
-    estimateJsonPayloadTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN)
+    estimateJsonPayloadTokenPressure(block, CHARS_PER_TOKEN_ESTIMATE)
   );
 }
 
