@@ -10,7 +10,8 @@ import {
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
 import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
-import type { SessionActivityFilters } from "./session-activity.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { ACTIVITY_PHONE_QUERY, type SessionActivityFilters } from "./session-activity.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
@@ -118,6 +119,7 @@ export function PeopleControl(props: {
 }) {
   let anchor!: HTMLButtonElement;
   let popover: PopoverHandle | undefined;
+  const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
   const selectPerson = (personId: string | null) => {
     popover?.hide();
     props.view.onFiltersChange({ ...props.view.filters, personId });
@@ -134,14 +136,19 @@ export function PeopleControl(props: {
         }}
         id="activity-feed-people-trigger"
         type="button"
-        class="btn btn--sm activity-feed__people-trigger"
+        class={[
+          "btn btn--sm activity-feed__people-trigger",
+          { active: phone() && Boolean(props.selectedPerson) },
+        ]}
         aria-label={t("activityFeed.peopleButtonLabel")}
         aria-haspopup="dialog"
         aria-controls="activity-feed-people-popover"
         aria-expanded="false"
         onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
-        {props.selectedPerson ? (
+        {phone() ? (
+          <Icon name="users" />
+        ) : props.selectedPerson ? (
           <>
             <PersonAvatar
               person={props.selectedPerson}
@@ -175,7 +182,7 @@ export function PeopleControl(props: {
           </span>
         )}
       </button>
-      {props.selectedPerson ? (
+      {props.selectedPerson && !phone() ? (
         <button
           type="button"
           class="btn btn--sm activity-feed__people-clear"
