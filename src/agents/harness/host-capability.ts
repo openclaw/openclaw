@@ -56,6 +56,7 @@ import {
   captureRequiredWorkspaceToolFloor,
   prepareHostWorkspaceReadiness,
 } from "./host-capability-workspace.js";
+import type { AgentHarnessHostCreationOptions } from "./host-creation-options.types.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
@@ -64,7 +65,6 @@ import {
   registerAgentHarnessTtsProvenanceTransferCapability,
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
-  type AgentHarnessHostCreationOptions,
 } from "./host-private-capabilities.js";
 import { buildHarnessHostRequester } from "./host-requester.js";
 import { bindBoundedSeed } from "./host-seed.js";
