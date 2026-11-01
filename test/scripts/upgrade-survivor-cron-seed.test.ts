@@ -325,55 +325,67 @@ printf '%s\\t%s\\n' "$OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE" "$2" >> "$TRACE_PA
   ]);
 });
 
-it("bridges stale cron authority through the last compatible Doctor", () => {
-  const root = tempDirs.make("openclaw-survivor-cron-bridge-");
-  const tracePath = path.join(root, "trace");
-  const installTracePath = path.join(root, "install-trace");
-  const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-  const start = source.indexOf("migrate_baseline_cron_authority() {");
-  const end = source.indexOf("\ninitialize_state()", start);
-  const result = spawnSync(
-    "bash",
-    [
-      "-c",
-      `${source.slice(start, end)}
+it.each([
+  ["2026.10.9", ["2026.9.7"]],
+  ["2026.6.34", ["2026.9.7", "2026.10.1"]],
+])(
+  "bridges stale cron authority from %s through compatible Doctors",
+  (baselineVersion, bridges) => {
+    const root = tempDirs.make("openclaw-survivor-cron-bridge-");
+    const tracePath = path.join(root, "trace");
+    const installTracePath = path.join(root, "install-trace");
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const start = source.indexOf("migrate_baseline_cron_authority() {");
+    const end = source.indexOf("\ninitialize_state()", start);
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `${source.slice(start, end)}
 rm_rf_retry() { rm -rf "$1"; }
 openclaw_prepublish_plugin_registry_run_published() {
-  printf '%s\\n' "$*" > "$INSTALL_TRACE_PATH"
+  printf '%s\\n' "$*" >> "$INSTALL_TRACE_PATH"
+  case "$*" in
+    *openclaw@2026.10.1*) installed_version=2026.10.1 ;;
+    *) installed_version=2026.9.7 ;;
+  esac
   mkdir -p "$bridge_prefix/bin"
-  cat > "$bridge_prefix/bin/openclaw" <<'EOF'
+  cat > "$bridge_prefix/bin/openclaw" <<EOF
 #!/bin/sh
-printf '%s\\n' "$*" >> "$TRACE_PATH"
-if [ "$1" = "--version" ]; then printf '%s\\n' 'OpenClaw 2026.9.7'; fi
+printf '%s\\n' "\\$*" >> "$TRACE_PATH"
+if [ "\\$1" = "--version" ]; then printf '%s\\n' 'OpenClaw $installed_version'; fi
 EOF
   chmod +x "$bridge_prefix/bin/openclaw"
 }
 openclaw_e2e_maybe_timeout() { shift; "$@"; }
-baseline_version=2026.10.9
+baseline_version=${baselineVersion}
 ARTIFACT_ROOT="$FIXTURE_ROOT/artifacts"
 BASELINE_DOCTOR_LOG="$FIXTURE_ROOT/doctor.log"
 COMMAND_TIMEOUT=10s
 mkdir -p "$ARTIFACT_ROOT"
 migrate_baseline_cron_authority
 `,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        FIXTURE_ROOT: root,
-        INSTALL_TRACE_PATH: installTracePath,
-        TRACE_PATH: tracePath,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FIXTURE_ROOT: root,
+          INSTALL_TRACE_PATH: installTracePath,
+          TRACE_PATH: tracePath,
+        },
       },
-    },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(readFileSync(installTracePath, "utf8")).toContain("openclaw@2026.9.7");
-  expect(readFileSync(tracePath, "utf8").trim().split("\n")).toEqual([
-    "--version",
-    "doctor --fix --non-interactive",
-  ]);
-});
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const installTrace = readFileSync(installTracePath, "utf8");
+    for (const bridge of bridges) {
+      expect(installTrace).toContain(`openclaw@${bridge}`);
+    }
+    expect(readFileSync(tracePath, "utf8").trim().split("\n")).toEqual(
+      bridges.flatMap(() => ["--version", "doctor --fix --non-interactive"]),
+    );
+  },
+);
 
 const baselineJobs = [
   { id: "job-default", name: "survivor-default-owner" },

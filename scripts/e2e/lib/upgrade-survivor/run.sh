@@ -1013,6 +1013,35 @@ migrate_baseline_cron_authority() {
     return 1
   fi
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1
+
+  # Pre-October baselines still need the schema-20 config bridge after the
+  # authority-compatible Doctor has moved cron ownership out of JSON. Running
+  # 2026.10.1 first rejects the intentionally stale cron specimen, while
+  # stopping at 2026.9.7 leaves config keys that the candidate will not load.
+  case "$baseline_version" in
+    2026.[0-9].*)
+      local config_bridge_version_expected="2026.10.1"
+      rm_rf_retry "$bridge_prefix"
+      mkdir -p "$bridge_prefix"
+      if ! openclaw_prepublish_plugin_registry_run_published openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$bridge_prefix" "openclaw@$config_bridge_version_expected" --no-fund --no-audit >>"$bridge_install_log" 2>&1; then
+        echo "config migration bridge npm install failed" >&2
+        openclaw_e2e_print_log "$bridge_install_log" >&2
+        return 1
+      fi
+      bridge_cli="$bridge_prefix/bin/openclaw"
+      if ! bridge_version="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" --version 2>&1)"; then
+        echo "config migration bridge openclaw --version failed" >&2
+        echo "$bridge_version" >&2
+        return 1
+      fi
+      if [[ "$bridge_version" != *"$config_bridge_version_expected"* ]]; then
+        echo "config migration bridge version mismatch: expected $config_bridge_version_expected" >&2
+        echo "$bridge_version" >&2
+        return 1
+      fi
+      openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" doctor --fix --non-interactive >>"$BASELINE_DOCTOR_LOG" 2>&1
+      ;;
+  esac
 }
 
 initialize_state() {
