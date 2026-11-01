@@ -313,8 +313,9 @@ const jsoncOps: WalkOps<JsoncValue> = {
   *enumerate(node, matches) {
     if (node.kind === "object") {
       // Duplicate keys: yield only the last (effective) occurrence of each key.
-      const lastIndex = new Map(node.entries.map((e, idx) => [e.key, idx]));
-      for (const [idx, e] of node.entries.entries()) {
+      const entries = node.entries;
+      const lastIndex = new Map(entries.map((e, idx) => [e.key, idx]));
+      for (const [idx, e] of entries.entries()) {
         if (lastIndex.get(e.key) === idx && (!matches || matches(e.value))) {
           yield { keySub: quoteSeg(e.key), child: e.value };
         }
@@ -329,8 +330,6 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   lookup(node, key) {
     if (node.kind === "object") {
-      // Entry keys are unquoted in the AST; strip quotes from a quoted
-      // path key so the walker matches the resolver's behavior.
       const lookupKey = unquoteSeg(key);
       const e = node.entries.findLast((entry) => entry.key === lookupKey);
       return e === undefined
