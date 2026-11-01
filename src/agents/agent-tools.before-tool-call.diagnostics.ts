@@ -469,6 +469,9 @@ export function recordSkillUsed(params: {
   const skillFingerprint = getSkillInstructionFingerprint(params.result);
   recordRunSkillUsage({
     runId: params.ctx?.runId,
+    agentId: params.ctx?.agentId,
+    sessionKey: params.ctx?.sessionKey,
+    sessionId: params.ctx?.sessionId,
     name: params.match.skillName,
     source: params.match.skillSource,
     activation: params.match.activation,

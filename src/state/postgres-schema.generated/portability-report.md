@@ -13,9 +13,9 @@
 
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
-| state    | table         |   136 |        136 |        0 |
-| state    | column        |  1416 |       1414 |        2 |
-| state    | index         |   291 |        291 |        0 |
+| state    | table         |   137 |        137 |        0 |
+| state    | column        |  1431 |       1429 |        2 |
+| state    | index         |   298 |        298 |        0 |
 | state    | foreignKey    |    33 |         33 |        0 |
 | state    | check         |   299 |        299 |        0 |
 | state    | trigger       |     0 |          0 |        0 |
@@ -34,6 +34,7 @@
 
 - audit_events.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - audit_identity_keys.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
+- audit_skill_selection_events.sequence: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - capture_events.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - config_revision_keys.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - cron_job_runtime_authorities.recovery_required: 0/1 boolean candidate retained as bigint.
