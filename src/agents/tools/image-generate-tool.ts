@@ -1,6 +1,7 @@
 import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { Type } from "typebox";
+import type { ImageGenerationSourceImage } from "../../image-generation/asset-types.js";
 import { sniffImageMimeType } from "../../image-generation/image-assets.js";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { generateImage } from "../../image-generation/runtime.js";
@@ -8,7 +9,6 @@ import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProviderOptions,
   ImageGenerationResolution,
-  ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";

@@ -379,6 +379,8 @@ function appendVoiceTranscript(
                     selectedLifecycleRevision: entry.lifecycleRevision,
                     sessionFile: normalized.sessionTarget.sessionKey,
                     assertCurrent: assertFresh,
+                    sessionLifecyclePatch:
+                      normalized.role === "user" ? { lastInteractionAt: Date.now() } : undefined,
                     messages: [messageOptions],
                     voiceTranscript: {
                       agentId: normalized.agentId,

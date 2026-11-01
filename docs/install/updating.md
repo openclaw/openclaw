@@ -1406,6 +1406,27 @@ evidence, reports a warning, and does not restart the Gateway or install a packa
 journal, lease database, or recovery evidence. Other pending operations still
 require `openclaw update repair` or the recorded package recovery command. The lease database stays at its existing location.
 
+If a reboot or temporary-directory cleanup removes the lease database before
+publication starts, recovery can retire a `prepared` journal with no publication
+intent or published launchers. It first checks that the live package, launcher
+directory, and every launcher still have their recorded previous identities.
+Update admission, repair, and a separately staged recovery helper share this
+settlement. They warn and rename the journal, control directory, candidate, and
+the operation's remaining npm update stage into retained evidence; they do not
+delete them. Other stages are left with their owners. Changed identities,
+publication intent, or another phase do not qualify for this recovery path.
+Recovery `status` is read-only and can report an unfinished operation even when
+the lease database is missing or replaced.
+
+The managed-update lease store still uses the shared per-user temporary location.
+Moving it to a state directory requires a coordinated migration: older updaters
+continue acquiring leases in the temporary location, and separate profiles can
+update the same installation. Copying the database would create competing lease
+owners; file symlinks and hard links do not satisfy the existing store contract.
+Durable placement remains follow-up work. These recovery changes must be present
+in the updater or separately staged helper that executes them; an older sealed
+helper does not gain the new behavior.
+
 After the transaction verifies its selected installation, cleanup failures are
 warnings. Changed old package trees, old helpers, and unexpected backup contents
 are preserved, not restored or deleted. The updater durably closes their recovery
@@ -2004,8 +2025,13 @@ or inspection until the plugin is active. Installing or enabling that plugin
 does not bypass its migration: runtime admission holds it until Doctor migrates
 the state or confirms it is already ready. This deferral clears the inactive
 plugin's repair warning without claiming its state was migrated.
-Active plugins and retained settings still require their
-migration owner; Doctor names the install or enable step when that owner is missing.
+For an installed inactive plugin with retained settings, Doctor can inspect both
+migration phases without enabling the plugin or registering its runtime or tools.
+If its detectors confirm no remaining work and the retained settings validate,
+Doctor completes the obligation with a warning and keeps those settings, including
+`config.enabled: false`. Detected source data, failed inspection, or settings that
+still need repair keep the obligation pending. Missing migration owners still
+require the install or enable step named by Doctor.
 For a systemd system unit, Doctor
 checks stop permission before draining the Gateway; an unprivileged run names
 the `sudo systemctl stop <unit>` command for the service owner. Run Doctor as the

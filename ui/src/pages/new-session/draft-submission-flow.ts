@@ -14,6 +14,7 @@ import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "..
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence-feedback.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import { BackgroundCreatePreview } from "./background-create-preview.ts";
 import { promptNewSessionNotifications } from "./background-session-notice.ts";
 import { NewSessionCapabilities } from "./capabilities.ts";
 import * as catalog from "./catalog-target.ts";
@@ -78,6 +79,7 @@ export class DraftSubmissionFlow {
   private blockedSubmitAttempt = false;
   submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   private readonly startedSession = new StartedSessionNavigation();
+  private readonly backgroundPreview = new BackgroundCreatePreview();
   error: string | null = null;
   private submitRequest = new AbortController();
   private readonly sessionStartup: DraftSessionStartup;
@@ -352,6 +354,7 @@ export class DraftSubmissionFlow {
     this.creationComposerValue?.releaseDraft();
     this.creationComposerValue = undefined;
     this.startedSession.clearSubmission();
+    this.backgroundPreview.clear();
     this.sessionStartup.clear();
     this.blockedSubmitAttempt = false;
     const preservePendingPlacement = Boolean(this.pendingPlacement.sessionKey);
@@ -544,6 +547,17 @@ export class DraftSubmissionFlow {
       if (input.apiAttachments?.length) {
         assertUploadsEnabled(context.config);
       }
+      if (background && !placementTarget) {
+        this.backgroundPreview.begin({
+          context,
+          agentId: input.agentId,
+          params: createParams,
+          resumed: Boolean(startup),
+          message: submittedMessage,
+          displayName: preparedTitle,
+          retry: () => void this.submit(undefined, true),
+        });
+      }
       const createRequest =
         input.pendingPlacement && pending.phase !== "creating"
           ? Promise.resolve({ key: pending.sessionKey, initialRun: { status: "idle" as const } })
@@ -646,7 +660,7 @@ export class DraftSubmissionFlow {
           }
           return this.clearSubmittedDraft(release, submittedDraft, keepPending);
         },
-        completeInBackground: input.completeInBackground,
+        completeInBackground: this.backgroundPreview.admitBefore(input.completeInBackground),
         onAccepted: () => this.callbacks.onAccepted?.({ ...result, agentId: input.agentId }),
         finishNavigation: () => this.sessionStartup.clear(),
       });
@@ -667,6 +681,7 @@ export class DraftSubmissionFlow {
         this.activeSubmission = null;
         this.callbacks.changed();
       }
+      this.backgroundPreview.settle(this.error, this.submitting);
     }
   }
 
@@ -717,6 +732,7 @@ export class DraftSubmissionFlow {
 
   disconnect() {
     this.submitRequest.abort();
+    this.backgroundPreview.clear();
     this.creationComposerValue?.releaseDraft();
     this.pendingPlacement.releaseClaim();
     this.startedSession.current = null;
