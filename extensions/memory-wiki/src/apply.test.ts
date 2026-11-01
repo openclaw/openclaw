@@ -49,18 +49,12 @@ describe("applyMemoryWikiMutation", () => {
           "# Alpha\n\n## Notes\n<!-- openclaw:human:start -->\nkeep this note\n<!-- openclaw:human:end -->\n",
         );
       }
-      const result = await mutate(
-        config,
-        update
-          ? {
-              op: "metadata",
-              lookup: id,
-              ...structuredClone(metadata),
-              confidence: null,
-              status: "review",
-            }
-          : { op: "synthesis", ...synthesisInput, ...structuredClone(metadata), confidence: "0.7" },
-      );
+      const result = await mutate(config, {
+        ...(update
+          ? { op: "metadata", lookup: id, confidence: null, status: "review" }
+          : { op: "synthesis", ...synthesisInput, confidence: "0.7" }),
+        ...structuredClone(metadata),
+      });
       expect(result).toMatchObject({
         changed: true,
         pagePath: target,
@@ -78,6 +72,9 @@ describe("applyMemoryWikiMutation", () => {
         ...(!update ? { confidence: 0.7 } : {}),
       });
       expect(parsed.body).toContain("<!-- openclaw:human:start -->");
+      await expect(read(update ? "entities/index.md" : "index.md")).resolves.toContain(
+        update ? "[Alpha](alpha.md)" : "[Alpha Synthesis](syntheses/alpha-synthesis.md)",
+      );
       if (update) {
         expect(parsed.frontmatter).not.toHaveProperty("confidence");
         expect(parsed.body).toContain("keep this note");
@@ -86,10 +83,13 @@ describe("applyMemoryWikiMutation", () => {
         expect(parsed.body).toContain("<!-- openclaw:wiki:generated:start -->");
         expect(parsed.body).toContain(synthesisInput.body);
         expect(parsed.body).toContain("## Notes");
+        await mutate(config, { op: "metadata", lookup: id, status: "review" });
+        await mutate(config, { op: "synthesis", ...synthesisInput, body: "Refreshed summary." });
+        const refreshed = parseWikiMarkdown(await read(target));
+        expect(refreshed.frontmatter).toMatchObject({ status: "review", confidence: 0.7 });
+        await mutate(config, { op: "synthesis", ...synthesisInput, status: "stale" });
+        expect(parseWikiMarkdown(await read(target)).frontmatter.status).toBe("stale");
       }
-      await expect(read(update ? "entities/index.md" : "index.md")).resolves.toContain(
-        update ? "[Alpha](alpha.md)" : "[Alpha Synthesis](syntheses/alpha-synthesis.md)",
-      );
     },
   );
 
@@ -115,20 +115,6 @@ describe("applyMemoryWikiMutation", () => {
       }),
     ).rejects.toThrow(error);
     await expect(read(target)).resolves.toBe(original);
-  });
-
-  it("keeps a curated status when a synthesis is refreshed without one", async () => {
-    const { config, read } = await createVault();
-    const target = "syntheses/alpha-synthesis.md";
-    const readStatus = async () => parseWikiMarkdown(await read(target)).frontmatter.status;
-    await mutate(config, { op: "synthesis", ...synthesisInput });
-    await mutate(config, { op: "metadata", lookup: "synthesis.alpha-synthesis", status: "review" });
-
-    await mutate(config, { op: "synthesis", ...synthesisInput, body: "Refreshed summary." });
-    await expect(readStatus()).resolves.toBe("review");
-
-    await mutate(config, { op: "synthesis", ...synthesisInput, status: "stale" });
-    await expect(readStatus()).resolves.toBe("stale");
   });
 
   it("preserves disjoint metadata updates from concurrent agent turns", async () => {
