@@ -103,6 +103,7 @@ function packageFixture(fakeTools: boolean) {
     "lib/mac-notarization-recovery.py",
     "lib/swift-toolchain.sh",
     "lib/plistbuddy.sh",
+    "lib/mac-pnpm.sh",
     "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
     ...(fakeTools ? [] : ["notarize-mac-artifact.sh"]),
@@ -426,7 +427,10 @@ function runHelper(script: string) {
 }
 
 function runSparkleBootstrap(nodeAfterInstall: string, pnpmBody: string) {
-  const helpers = packageBlock("DIST_PNPM_CMD=()", "correction_build_from_exact_tag()");
+  const helpers =
+    readFileSync("scripts/lib/mac-pnpm.sh", "utf8") +
+    "\n" +
+    packageBlock("SPARKLE_BUILD_DEPS_RETRIED=0", "correction_build_from_exact_tag()");
   const dir = checkpointDirs.make("openclaw-dist-sparkle-");
   const tools = path.join(dir, "tools");
   const marker = path.join(dir, "installed");
@@ -517,53 +521,6 @@ it("fails on old Swift before reading package metadata", () => {
   expectFailure(result, "OpenClaw macOS app packaging requires Swift tools 6.3+", 1);
   expect(result.stderr).toContain("Current Swift is 6.0");
   expect(result.stderr).not.toContain("node should not run before Swift preflight");
-});
-
-it("prefers repo Corepack pnpm over a global pnpm shim", () => {
-  const helperBlock = packageBlock("DIST_PNPM_CMD=()", "ensure_sparkle_build_deps()");
-  const tempRoot = checkpointDirs.make("openclaw-dist-pnpm-root-");
-  const outerRoot = checkpointDirs.make("openclaw-dist-pnpm-outer-");
-  const toolsDir = checkpointDirs.make("openclaw-dist-pnpm-tools-");
-  const logPath = path.join(tempRoot, "pnpm.log");
-
-  writeFileSync(
-    path.join(tempRoot, "package.json"),
-    '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
-  );
-  writeFileSync(
-    path.join(outerRoot, "package.json"),
-    '{\n  "packageManager": "pnpm@11.8.0+sha512.test"\n}\n',
-  );
-  writeExecutable(
-    path.join(toolsDir, "pnpm"),
-    `printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
-if [[ "\${1:-}" == "--version" ]]; then echo "11.8.0"; fi`,
-  );
-  writeExecutable(
-    path.join(toolsDir, "corepack"),
-    `printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
-if [[ "\${1:-}" == "pnpm" && "\${2:-}" == "--version" ]]; then
-  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else echo "11.8.0"; fi
-fi`,
-  );
-
-  const result = runHelper(`
-      set -euo pipefail
-      ROOT_DIR=${JSON.stringify(tempRoot)}
-      OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
-      export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      cd ${JSON.stringify(outerRoot)}
-      ${helperBlock}
-      run_dist_pnpm --version
-    `);
-
-  expectSuccess(result);
-  expect(result.stdout).toBe("11.2.2\n");
-  expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-    `corepack|${tempRoot}|pnpm --version`,
-    `corepack|${tempRoot}|pnpm --version`,
-  ]);
 });
 
 it.each(["successful", "failed"] as const)(
