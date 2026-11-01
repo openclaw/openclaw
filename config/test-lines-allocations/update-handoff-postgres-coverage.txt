@@ -1,2 +1,0 @@
-# Keep managed handoff coverage in the PostgreSQL conformance inventory.
-1
