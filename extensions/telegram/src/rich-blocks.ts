@@ -375,7 +375,7 @@ function splitParagraphs(
       });
     }
   };
-  const blankLine = /\n[ \t]*\n+/g;
+  const blankLine = /\n(?:[ \t]*\n)+/g;
   let last = 0;
   let paragraphBreak = "";
   let match: RegExpExecArray | null;

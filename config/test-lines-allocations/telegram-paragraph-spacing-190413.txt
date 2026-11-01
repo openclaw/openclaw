@@ -1,2 +1,2 @@
-# Preserve Markdown blank lines in Telegram rich blocks and plain recovery.
-9
+# Preserve parsed paragraph gaps, native RichText, and chunk-start recovery.
+60
