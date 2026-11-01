@@ -724,6 +724,7 @@ jobs:
       - name: Upload ClawHub package artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ matrix.plugin.artifactName }}
           path: ${{ runner.temp }}/clawhub-package-artifact/*.tgz
           if-no-files-found: error

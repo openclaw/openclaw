@@ -1074,6 +1074,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ steps.artifact.outputs.name }}
           path: |
             .artifacts/docker-e2e-package/${{ steps.artifact.outputs.file_name }}
@@ -1086,6 +1087,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/prepublish-plugin-registry/
           retention-days: 14
@@ -1374,6 +1376,7 @@ jobs:
         if: steps.windows_node_candidate.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: windows-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-node-candidate/openclaw-current.tgz
