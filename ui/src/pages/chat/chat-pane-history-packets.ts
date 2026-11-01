@@ -14,7 +14,7 @@ import {
 } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import {
-  admitChatHistoryPages,
+  admitChatHistoryPagePrefix,
   prepareChatHistoryPages,
   reopenChatHistoryBoundary,
   resolveChatHistoryPagination,
@@ -266,14 +266,12 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
     // Reader/live publication may have changed capacity during a later reply.
     // Keep a fitting contiguous prefix. Only an original small packet may wait
     // in the staged slot; discarded broad bodies never advance an opaque edge.
-    while (
-      packets.length &&
-      !prepareChatHistoryPages(
-        state,
-        packets.map((page) => page.result),
-        direction,
-      ).fits
-    ) {
+    const { acceptedCount, change: admitted } = admitChatHistoryPagePrefix(
+      state,
+      packets.map((page) => page.result),
+      direction,
+    );
+    while (packets.length > acceptedCount) {
       const rejected = packets.pop()!;
       overflow = large(rejected) ? null : rejected;
       if (!packets.length && !overflow) {
@@ -287,13 +285,6 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
       capacityBlocked = true;
       failure = new Error(t("chat.thread.historyCapacity"));
     }
-    const admitted =
-      packets.length &&
-      admitChatHistoryPages(
-        state,
-        packets.map((page) => page.result),
-        direction,
-      );
     owner.direction = direction;
     owner.page = overflow;
     if (admitted) {

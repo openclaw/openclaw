@@ -232,6 +232,10 @@ export function getChatSessionProjection(
   return scopedProjection;
 }
 
+/** Inspect tentative admission custody without initializing or binding the pane. */
+export const readChatSessionProjection = (owner: object): SessionProjectionState | undefined =>
+  chatSessionProjections.get(owner)?.projection;
+
 export function getChatRunProjection(owner: object, runId: string) {
   return chatSessionProjections.get(owner)?.projection?.runs[runId];
 }

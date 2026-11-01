@@ -39,6 +39,7 @@ import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import {
   getChatSessionProjection,
+  readChatSessionProjection,
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
   readChatLocalOutputEntries,
@@ -439,8 +440,82 @@ export function admitChatHistoryPages(
   results: readonly ChatHistoryResult[],
   direction: "older" | "newer" | "around",
 ): "messages" | "coverage" | false {
-  const messages = results.flatMap((result) => result.messages ?? []);
   const projection = getChatSessionProjection(state);
+  const localEntries = readChatLocalOutputEntries(state);
+  const prepared = prepareChatHistoryPages(state, results, direction, localEntries);
+  if (!prepared.fits) {
+    // Around navigation cannot retire a required target after accepting its
+    // coverage or receipts; its existing caller surfaces this capacity reason.
+    if (direction === "around") {
+      throw new Error(t("chat.thread.historyCapacity"));
+    }
+    return false;
+  }
+  return commitPreparedChatHistoryPages(
+    state,
+    results,
+    direction,
+    projection,
+    localEntries,
+    prepared,
+  );
+}
+
+/** Fit and commit one contiguous prefix without exporting prepared authority. */
+export function admitChatHistoryPagePrefix(
+  state: ChatState,
+  results: readonly ChatHistoryResult[],
+  direction: "older" | "newer",
+): { acceptedCount: number; change: "messages" | "coverage" | false } {
+  const previousProjection = readChatSessionProjection(state);
+  let localEntries = readChatLocalOutputEntries(state);
+  let accepted = results;
+  const fit = () => {
+    while (accepted.length) {
+      const candidate = prepareChatHistoryPages(state, accepted, direction, localEntries);
+      if (candidate.fits) {
+        return candidate;
+      }
+      accepted = accepted.slice(0, -1);
+    }
+    return undefined;
+  };
+  let prepared = fit();
+  if (!prepared) {
+    return { acceptedCount: 0, change: false };
+  }
+  const projection = getChatSessionProjection(state);
+  // Initialization or scope binding can publish different resident/local custody.
+  // Only an unchanged projection permits reuse of this same-stack fit.
+  if (projection !== previousProjection) {
+    localEntries = readChatLocalOutputEntries(state);
+    prepared = fit();
+    if (!prepared) {
+      return { acceptedCount: 0, change: false };
+    }
+  }
+  return {
+    acceptedCount: accepted.length,
+    change: commitPreparedChatHistoryPages(
+      state,
+      accepted,
+      direction,
+      projection,
+      localEntries,
+      prepared,
+    ),
+  };
+}
+
+function commitPreparedChatHistoryPages(
+  state: ChatState,
+  results: readonly ChatHistoryResult[],
+  direction: "older" | "newer" | "around",
+  projection: ReturnType<typeof getChatSessionProjection>,
+  localEntries: readonly SessionProjectionEntry[],
+  prepared: ReturnType<typeof prepareChatHistoryPages>,
+): "messages" | "coverage" | false {
+  const messages = results.flatMap((result) => result.messages ?? []);
   let acceptedRunIds: ReadonlySet<string> | undefined;
   const pendingRunIds = projection.entries.flatMap((entry) =>
     entry.pending && entry.identity?.role === "user" && entry.pendingRunId
@@ -467,17 +542,7 @@ export function admitChatHistoryPages(
   }
   const previous = state.chatMessages;
   const previousPagination = state.chatHistoryPagination;
-  const localEntries = readChatLocalOutputEntries(state);
   const localOutputs = localEntries.map((entry) => entry.message);
-  const prepared = prepareChatHistoryPages(state, results, direction, localEntries);
-  if (!prepared.fits) {
-    // Around navigation cannot retire a required target after accepting its
-    // coverage or receipts; its existing caller surfaces this capacity reason.
-    if (direction === "around") {
-      throw new Error(t("chat.thread.historyCapacity"));
-    }
-    return false;
-  }
   state.chatHistoryPagination = prepared.pagination;
   if (direction === "around") {
     publishChatSessionProjection(
