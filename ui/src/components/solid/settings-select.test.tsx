@@ -45,4 +45,19 @@ describe("SettingsSelect", () => {
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledOnce();
   });
+
+  it("keeps the shared class when a caller adds its own", () => {
+    const view = mountSolid(SettingsSelect, {
+      class: "local-hook",
+      value: "one",
+      options: [{ value: "one", label: "One" }],
+    });
+    cleanup = () => {
+      view.dispose();
+      view.container.remove();
+    };
+    const select = view.container.querySelector("select")!;
+    expect(select.classList.contains("settings-select")).toBe(true);
+    expect(select.classList.contains("local-hook")).toBe(true);
+  });
 });

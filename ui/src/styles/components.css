@@ -1074,8 +1074,6 @@ select.input {
 }
 
 .field select,
-.usage-select,
-.dashboards-select select,
 select.settings-select:not([multiple]) {
   appearance: none;
   padding-right: 36px;
@@ -1089,8 +1087,6 @@ select.settings-select:not([multiple]) {
 
 @media (forced-colors: active) {
   .field select,
-  .usage-select,
-  .dashboards-select select,
   select.settings-select:not([multiple]) {
     appearance: auto;
     padding-inline-end: 10px;
@@ -1111,6 +1107,7 @@ select.settings-select:not([multiple]) {
 
       &::picker-icon {
         content: "";
+        flex: none;
         width: 16px;
         height: 16px;
         margin-inline-start: auto;
@@ -2250,6 +2247,13 @@ td.data-table-key-col {
 .data-table-pagination__controls button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* The dense footer keeps the select level with its 30px buttons. */
+select.data-table-pagination__size {
+  --settings-control-height: 30px;
+
+  width: auto;
 }
 
 .shell--chat .chat {

@@ -29,7 +29,7 @@ export function CategoryCell(props: CategoryCellProps & { row: GatewaySessionRow
         disabled={props.loading || Boolean(props.groupWriteDisabledReason)}
         title={props.groupWriteDisabledReason ?? undefined}
         aria-label={t("sessionsView.moveToGroup")}
-        class="session-group-select"
+        class="settings-select session-group-select"
         onChange={(e) => {
           if (props.groupWriteDisabledReason) {
             return;

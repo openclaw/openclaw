@@ -405,7 +405,7 @@ function SystemsWorkspace(props: {
           <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
         </div>
         <select
-          class="systems-mobile-picker"
+          class="settings-select systems-mobile-picker"
           aria-label={t("systems.select")}
           onChange={(event) => controller().select(event.currentTarget.value)}
         >
