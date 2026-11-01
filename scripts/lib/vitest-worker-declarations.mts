@@ -1,15 +1,14 @@
+import { collectPackageRootModules } from "./package-root-modules.mts";
+
 // Declaration paths are shared metadata; only the runner imports their build values.
 export const nativeSchtasksIntegrationEnabled =
   process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
 
 // Package-root modules loaded outside the compiled graph retain their bootstrap dependencies.
-export const vitestWorkerRuntimeAssets = [
+export const vitestWorkerRuntimeAssets = collectPackageRootModules([
   "cli-invocation.mjs",
-  "cli-parent-lifetime.mjs",
-  "gateway-shutdown-budget.mjs",
   "node-host-launcher.mjs",
-  "node-runtime-env.mjs",
-];
+]);
 
 export const rootRuntimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":

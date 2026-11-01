@@ -20,6 +20,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "../../scripts/lib/bun-standalone-support.mjs";
+import { collectPackageRootModules } from "../../scripts/lib/package-root-modules.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -48,12 +49,7 @@ if (!process.argv.includes("--debug-child")) {
 }
 console.log(JSON.stringify({ answer, mode: getStandaloneRuntimeBuild()?.mode ?? null, sqliteLibrary: process.env.OPENCLAW_SQLITE_LIBRARY ?? null }));`,
   );
-  for (const filename of [
-    "cli-invocation.mjs",
-    "cli-parent-lifetime.mjs",
-    "gateway-shutdown-budget.mjs",
-    "node-runtime-env.mjs",
-  ]) {
+  for (const filename of collectPackageRootModules(["cli-invocation.mjs"])) {
     fs.copyFileSync(
       new URL(`../../${filename}`, import.meta.url),
       path.join(runtimeRoot, filename),

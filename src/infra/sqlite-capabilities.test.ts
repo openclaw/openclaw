@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
 import { afterEach, expect, it, vi } from "vitest";
 import { probeSqlite } from "../../node-sqlite-capabilities.mjs";
+import { collectPackageRootModules } from "../../scripts/lib/package-root-modules.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
@@ -177,7 +178,7 @@ it.each([
 
 it.each([false, true])("loads a self-contained SQLite probe (bundled=%s)", (bundled) => {
   const root = temporary.make("sqlite-capability-bootstrap-");
-  const files = ["node-sqlite.mjs", "node-version.mjs", "node-sqlite-capabilities.mjs"];
+  const files = collectPackageRootModules(["node-sqlite.mjs"]);
   for (const name of files) {
     copyFileSync(new URL("../../" + name, import.meta.url), path.join(root, name));
   }

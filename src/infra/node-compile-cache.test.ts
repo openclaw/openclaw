@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { build } from "esbuild";
 import { afterEach, expect, it } from "vitest";
 import { resolveOpenClawCompileCacheDirectory } from "../../node-compile-cache.mjs";
+import { collectPackageRootModules } from "../../scripts/lib/package-root-modules.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
 
@@ -60,14 +61,7 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   `,
   });
   const launcher = path.join(root, "gateway-prewarm.mjs");
-  for (const name of [
-    "gateway-prewarm.mjs",
-    "node-compile-cache.mjs",
-    "cli-invocation.mjs",
-    "cli-parent-lifetime.mjs",
-    "gateway-shutdown-budget.mjs",
-    "node-runtime-env.mjs",
-  ]) {
+  for (const name of collectPackageRootModules(["gateway-prewarm.mjs"])) {
     await fs.copyFile(new URL(`../../${name}`, import.meta.url), path.join(root, name));
   }
   const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: path.join(root, "cache") };

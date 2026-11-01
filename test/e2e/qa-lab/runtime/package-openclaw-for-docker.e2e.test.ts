@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH } from "../../../../scripts/lib/package-dist-inventory-contract.mts";
 import { writePackageDistInventoryForPublish } from "../../../../scripts/lib/package-dist-inventory.ts";
+import { collectPackageRootModules } from "../../../../scripts/lib/package-root-modules.mts";
 import {
   preparePackageDocsMap,
   restorePackageDocsMap,
@@ -864,11 +865,10 @@ describe("package-openclaw-for-docker", () => {
     const tempRoot = tempDirs.make("openclaw-package-harness-");
     let child: ReturnType<typeof spawn> | undefined;
     const copiedFiles = [
-      "cli-invocation.mjs",
-      "cli-parent-lifetime.mjs",
-      "gateway-shutdown-budget.mjs",
-      "node-runtime-env.mjs",
-      "runtime-process-bootstrap.generated.mjs",
+      ...collectPackageRootModules([
+        "cli-invocation.mjs",
+        "runtime-process-bootstrap.generated.mjs",
+      ]),
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
