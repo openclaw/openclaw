@@ -143,8 +143,9 @@ main.content:where(.content--logs-page) .content-header {
     display: contents;
   }
 
-  main.content.content--logs-page .content-header {
-    display: none;
+  /* The description reads as the title's subtitle, with no gap held between them. */
+  main.content.content--logs-page .content-header + * {
+    margin-top: 0;
   }
 
   .content.content--logs-page .settings-workspace--fill-height,

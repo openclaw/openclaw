@@ -159,6 +159,18 @@ suite.define(() => {
         expect(layout.messageWidth).toBe(layout.rowWidth);
         expect(layout.pageWidth).toBeLessThanOrEqual(390);
 
+        // The heading stays for assistive tech at phone width, and stays on screen above the
+        // width where the shell header takes over the title.
+        const heading = page.getByRole("heading", { name: "Logs", level: 1 });
+        await expect.poll(() => heading.count()).toBe(1);
+        await page.setViewportSize({ height: 844, width: 620 });
+        await heading.waitFor({ state: "visible" });
+        const title = (await heading.boundingBox())!;
+        expect(title.height).toBeGreaterThan(1);
+        const description = (await page.locator(".settings-section__desc").boundingBox())!;
+        expect(description.y - (title.y + title.height)).toBeLessThan(8);
+        await page.setViewportSize({ height: 844, width: 390 });
+
         await page.getByRole("button", { name: "Filter", exact: true }).click();
         const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
         await autoFollow.waitFor({ state: "visible" });
