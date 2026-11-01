@@ -358,7 +358,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     visibility: hidden;
   }
 
-  & .topnav-shell__actions :is(a, button) {
+  /* Pill controls only; a menu opened from the pill keeps its own rows. */
+  & .topnav-shell__actions :is(a, button):not(.oc-menu *) {
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -374,18 +375,25 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     color: inherit;
   }
 
-  & .topnav-shell__actions :is(a, button):hover:not(:disabled, [aria-disabled="true"]) {
+  &
+    .topnav-shell__actions
+    :is(a, button):not(.oc-menu *):hover:not(:disabled, [aria-disabled="true"]) {
     border: 0;
     background: transparent;
     color: inherit;
   }
 
-  & .topnav-shell__actions :is(a, button):focus-visible {
+  & .topnav-shell__actions :is(a, button):not(.oc-menu *):focus-visible {
     outline: 2px solid var(--text);
     outline-offset: -4px;
   }
 
-  & :is(.topbar-nav-toggle, .topnav-shell__actions) svg {
+  /* A menu trigger's label wrapper must not move its icon off the pill's center. */
+  & .topnav-shell__actions .oc-menu-item__label:not(.oc-menu *) {
+    display: contents;
+  }
+
+  & :is(.topbar-nav-toggle, .topnav-shell__actions) svg:not(.oc-menu *) {
     width: 20px;
     height: 20px;
     stroke-width: 1.75;
