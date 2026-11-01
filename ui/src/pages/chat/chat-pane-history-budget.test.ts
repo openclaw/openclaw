@@ -110,7 +110,6 @@ it.each(["older", "newer"] as const)(
         refs.forKey(item.key)(bubble);
       }
     };
-    let stagedCount = 0;
     if (direction === "older") {
       // The ordinary small tail first grows through a real capacity-sized admission.
       present([842]);
@@ -118,17 +117,9 @@ it.each(["older", "newer"] as const)(
       expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
         Array.from({ length: 400 }, (_, index) => 443 + index),
       );
-      await vi.waitFor(() => expect(pane.stagedHistory.load).toBeNull());
-      const staged = pane.stagedHistory.page?.result.messages ?? [];
-      stagedCount = staged.length;
-      expect(stagedCount).toBeGreaterThan(0);
-      expect(stagedCount).toBeLessThanOrEqual(80);
-      expect(new TextEncoder().encode(JSON.stringify(staged)).length).toBeLessThanOrEqual(
-        256 * 1024,
-      );
-      expect(staged.map(nativeHistorySeq)).toEqual(
-        Array.from({ length: stagedCount }, (_, index) => 443 - stagedCount + index),
-      );
+      expect(request.mock.calls.at(-1)![1].limit).toBe(399);
+      expect(pane.stagedHistory.page).toBeNull();
+      expect(pane.stagedHistory.load).toBeNull();
     } else {
       // A bounded around navigation followed by ordinary pages reaches the other edge.
       admitChatHistoryPages(state, [wirePage(1, 80)], "around");
@@ -146,9 +137,7 @@ it.each(["older", "newer"] as const)(
 
     const retained = state.chatMessages.map(nativeHistorySeq);
     expect(retained).toEqual(expect.arrayContaining(visible));
-    expect(request.mock.calls.find(([, params]) => params.limit > 80)![1].limit).toBe(
-      direction === "older" ? 400 - 2 - stagedCount : 398,
-    );
+    expect(request.mock.calls.find(([, params]) => params.limit > 80)![1].limit).toBe(398);
     expect(retained).toHaveLength(400);
     expect(retained).toEqual(
       Array.from({ length: 400 }, (_, index) => (direction === "older" ? 45 : 399) + index),

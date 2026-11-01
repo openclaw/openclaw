@@ -188,9 +188,9 @@ it.each(["older", "newer"] as const)(
     expect(retained).toEqual(
       Array.from({ length: 400 }, (_, index) => (direction === "older" ? 164 : 338) + index),
     );
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(request.mock.calls[2]![1]).toMatchObject({ limit: 80, maxBytes: 256 * 1024 });
-    expect(pane.stagedHistory.page?.requestedCursor).toBe(request.mock.calls[2]![1].cursor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(pane.stagedHistory.page).toBeNull();
+    expect(pane.stagedHistory.load).toBeNull();
   },
 );
 

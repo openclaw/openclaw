@@ -98,6 +98,7 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
     let coverageAdvanced = false;
     let sparse = 0;
     let smallOnly = false;
+    let adaptiveStop = false;
     const large = (page: StagedOlderHistoryPage) =>
       !page.result.packet?.boundedPacket &&
       ((page.result.requestBudget?.limit ?? 0) > CHAT_HISTORY_REQUEST_LIMIT ||
@@ -248,11 +249,18 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
           break;
         }
         selector = { cursor };
+        const adaptiveResponse = budget !== undefined && !limit;
         // Reuse this fit's facts synchronously; only numeric bounds cross the
         // next await. Changed live/reader custody is checked again on arrival.
         budget =
           readerIntent && !smallOnly ? readChatHistoryRequestBudget(state, prepared) : undefined;
         prepared = undefined;
+        if (visible && adaptiveResponse && !smallOnly && !budget) {
+          // No further adaptive envelope is available for this visible action.
+          // Commit now; a small overflow would fragment the next reader action.
+          adaptiveStop = true;
+          break;
+        }
       }
     } catch (error) {
       if (!settleForegroundRead()) {
@@ -299,7 +307,7 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
       if (capacityBlocked && direction === "newer") {
         owner.capacityNotice = state.lastError ?? undefined;
       }
-    } else if (admitted && readerIntent && !overflow) {
+    } else if (admitted && readerIntent && !overflow && !adaptiveStop) {
       this.stageNextHistoryPage(state, direction);
     }
     return Boolean(admitted || (coverageAdvanced && !failure));

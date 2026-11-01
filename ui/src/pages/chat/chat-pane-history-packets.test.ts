@@ -56,7 +56,7 @@ it("publishes a valid packet prefix while exposing a later foreground failure", 
   expect(request).toHaveBeenCalledTimes(2);
 });
 
-it("keeps one overflow packet, consumes it once, and reverses through its opaque edge without source IDs", async () => {
+it("settles a filled chain and reverses through its opaque edge without source IDs", async () => {
   const { pane, state, request, moveReader } = packetHistoryPane();
   readChatInputRunIds(state);
   const published = vi.spyOn(state, "chatMessages", "set");
@@ -70,11 +70,11 @@ it("keeps one overflow packet, consumes it once, and reverses through its opaque
     "older-320",
     "older-240",
     "older-160",
-    "older-80",
   ]);
   await Promise.resolve();
-  expect(request).toHaveBeenCalledTimes(5);
-  expect(pane.stagedHistory.page).not.toBeNull();
+  expect(request).toHaveBeenCalledTimes(4);
+  expect(pane.stagedHistory.page).toBeNull();
+  expect(pane.stagedHistory.load).toBeNull();
   moveReader(81);
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
   expect(request).toHaveBeenCalledTimes(5);
@@ -106,7 +106,14 @@ it("keeps one overflow packet, consumes it once, and reverses through its opaque
           Array.from({ length: count }, (_, index) => nativeHistoryMessage(441 - count + index)),
         ).length,
     })),
-    expect.objectContaining({ cursor: "older-80", limit: 80, maxBytes: 256 * 1024 }),
+    expect.objectContaining({
+      cursor: "older-80",
+      limit: 320,
+      maxBytes:
+        3 * 1024 * 1024 -
+        JSON.stringify(Array.from({ length: 80 }, (_, index) => nativeHistoryMessage(81 + index)))
+          .length,
+    }),
     expect.objectContaining({
       cursor: "newer-401",
       limit: 320,
