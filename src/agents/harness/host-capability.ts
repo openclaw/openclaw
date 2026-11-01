@@ -414,6 +414,8 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCreat
         exec: { ...effectiveOptions.exec, preparedRunEnvironment },
         runtimePluginToolGrant,
         toolPolicyScope: params.readToolPolicyScope?.(),
+        // The host incarnation binds a conversation-scoped follow-up surface.
+        sessionId: attempt.sessionId,
         sessionEventSourcePolicy: undefined,
         toolDiscovery: attempt.toolDiscovery,
         skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,

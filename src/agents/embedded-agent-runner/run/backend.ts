@@ -56,7 +56,8 @@ export async function runEmbeddedAttemptWithBackend(
         ? undefined
         : params.sessionKey,
     sessionId: params.sessionId,
-    agentId: params.agentId ?? parseAgentSessionKey(params.sessionKey)?.agentId,
+    // The durable session owner selects presentation, as in CLI preparation.
+    agentId: parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId,
     storePath: params.sessionTarget?.storePath,
     capture: params.toolDiscoveryCapture,
     getConfig: () => getRuntimeConfigSnapshot() ?? params.config ?? getRuntimeConfig(),

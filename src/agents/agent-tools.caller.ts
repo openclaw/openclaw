@@ -77,9 +77,17 @@ export function createCodingToolsGatewayCaller(params: {
               }
             : !options.sessionEventSourcePolicy &&
                 options.toolPolicyScope === "conversation" &&
+                options.sessionId &&
                 !toolPolicyRestrictsTools(capabilityProfile.policy.groupPolicy) &&
                 !toolPolicyRestrictsTools(capabilityProfile.policy.senderPolicy)
-              ? { sessionEventToolsAllowSessionScoped: true as const }
+              ? {
+                  // Bound to this incarnation, like the CLI conversation scope.
+                  sessionEventToolsAllowSessionScoped: {
+                    agentId,
+                    sessionKey: sessionKey.trim(),
+                    sessionId: options.sessionId,
+                  },
+                }
               : {}),
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
             permissionMode: options.sessionPermissionPolicy?.mode,

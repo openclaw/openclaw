@@ -20,6 +20,7 @@ async function observeCallerIdentity(senderId: string, toolPolicyScope: "convers
       agentId: "main",
       config: { tools: { toolsBySender: { "id:guest": { deny: ["exec", "process"] } } } },
       sessionKey: "agent:main:main",
+      sessionId: "main-session",
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
       messageProvider: "discord",
@@ -42,7 +43,12 @@ async function observeCallerIdentity(senderId: string, toolPolicyScope: "convers
 }
 
 it.for([
-  { sender: "an unrestricted sender", senderId: "owner", scope: "conversation", scoped: true },
+  {
+    sender: "an unrestricted sender",
+    senderId: "owner",
+    scope: "conversation",
+    scoped: { agentId: "main", sessionKey: "agent:main:main", sessionId: "main-session" },
+  },
   {
     sender: "a sender narrowed by toolsBySender",
     senderId: "guest",
@@ -55,6 +61,6 @@ it.for([
   async ({ senderId, scope, scoped }) => {
     const identity = await observeCallerIdentity(senderId, scope);
     expect(identity?.sessionEventToolsAllow).toEqual(expect.arrayContaining(["file_fetch"]));
-    expect(identity?.sessionEventToolsAllowSessionScoped).toBe(scoped);
+    expect(identity?.sessionEventToolsAllowSessionScoped).toEqual(scoped);
   },
 );

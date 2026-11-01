@@ -89,7 +89,15 @@ export function createConfiguredSkillWorkshopTool(params: {
           "Skill authoring needs a fresh message from the person requesting the change.",
         );
       }
-      return execution.execute(id, raw, ...rest);
+      // A personal presentation never falls through to a current workspace default.
+      const args =
+        presentation.defaultTarget === "personal" &&
+        raw !== null &&
+        typeof raw === "object" &&
+        !("target" in raw)
+          ? { ...raw, target: "personal" }
+          : raw;
+      return execution.execute(id, args, ...rest);
     },
   };
 }

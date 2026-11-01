@@ -77,11 +77,14 @@ async function observeScoped(hostScope: "conversation" | "turn" | undefined) {
 }
 
 it.for([
-  { hostScope: "conversation", scoped: true },
+  {
+    hostScope: "conversation",
+    scoped: { agentId: "main", sessionKey: KEY, sessionId: "main-session" },
+  },
   { hostScope: "turn", scoped: undefined },
   { hostScope: undefined, scoped: undefined },
 ] as const)("uses the host-prepared $hostScope policy scope", async ({ hostScope, scoped }) => {
-  expect(await observeScoped(hostScope)).toBe(scoped);
+  expect(await observeScoped(hostScope)).toEqual(scoped);
 });
 
 it("keeps native tool reconstruction after its captured discovery audience changes", async () => {

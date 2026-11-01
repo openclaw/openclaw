@@ -35,7 +35,8 @@ async function prepareWithDiscovery(
     params.executionMode === "side-question" ||
     params.controlOperation
   ) {
-    return prepare(params);
+    // Caller-supplied presentation never crosses an owner-less or control preparation.
+    return prepare({ ...params, toolDiscovery: undefined });
   }
   const discovery = await prepareSessionToolDiscovery({
     sessionKey: params.sessionKey,

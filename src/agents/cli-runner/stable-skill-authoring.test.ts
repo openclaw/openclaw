@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { expireSkillLibraryAuthoring } from "../../auto-reply/reply/transcript-followup-run.js";
 import type { SessionToolDiscoveryPresentation } from "../../config/sessions/tool-discovery.types.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
@@ -59,5 +59,19 @@ describe("Workshop presentation without retained authority", () => {
       tool(undefined, node!.workshop).execute("workspace", { action: "list" }),
     ).rejects.toMatchObject({ code: "AUTHORITY_EXPIRED" });
     expect(presentation.workshop?.defaultTarget).toBe("workspace");
+  });
+
+  it("keeps an untargeted call from a personal presentation in the personal library", async () => {
+    const invoke = vi.fn(async () => {
+      throw new Error("personal library reached");
+    });
+    const personal = tool(
+      { ...authoring, invoke },
+      { defaultTarget: "personal", multipleProfiles: true },
+    );
+    await expect(personal.execute("personal-default", { action: "list" })).rejects.toThrow(
+      "personal library reached",
+    );
+    expect(invoke).toHaveBeenCalledOnce();
   });
 });
