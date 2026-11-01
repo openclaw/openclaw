@@ -86,6 +86,19 @@ const ollama: SetupInferenceCandidate = {
   recommended: false,
 };
 
+const presentedLlama = {
+  kind: "provider-auto:llama-app" as const,
+  modelRef: "llama-app/ggml-org/model:Q4_K_M",
+  label: "Llama",
+  detail: "Available locally",
+  brandId: "llama-app",
+};
+const llama: SetupInferenceCandidate = {
+  ...presentedLlama,
+  credentials: true,
+  recommended: false,
+};
+
 const chatGptSignIn = {
   id: "openai-device-code",
   brandId: "openai",
@@ -201,21 +214,24 @@ describe("Gateway automatic inference setup", () => {
     },
   );
 
-  it("can select Ollama when Codex is genuinely absent", async () => {
-    fixture.detect.mockResolvedValueOnce(detection([{ ...ollama }]));
+  it.each([
+    { label: "Ollama when Llama is absent", selected: ollama, candidates: [ollama] },
+    { label: "Llama before other local providers", selected: llama, candidates: [ollama, llama] },
+  ])("selects $label without installing another runtime", async ({ selected, candidates }) => {
+    fixture.detect.mockResolvedValueOnce(detection(candidates));
     fixture.activate.mockResolvedValueOnce({
       ok: true,
-      modelRef: "ollama/fixture",
+      modelRef: selected.modelRef,
       latencyMs: 1,
       lines: [],
     });
 
     expect(await runSetup()).toMatchObject({
       status: "activated",
-      selected: { kind: "provider-auto:ollama-local", modelRef: "ollama/fixture" },
+      selected: { kind: selected.kind, modelRef: selected.modelRef },
       attempts: [],
     });
-    expect(fixture.activate).toHaveBeenCalledOnce();
+    expectActivationKinds(selected.kind);
     expect(fixture.prepare).not.toHaveBeenCalled();
   });
   it.each(["user", "agent"] as const)(
@@ -233,7 +249,9 @@ describe("Gateway automatic inference setup", () => {
         },
       });
       fixture.detect.mockResolvedValue(
-        detection([openai, { ...codex, kind: "existing-model" }, codex], { setupComplete: true }),
+        detection([llama, openai, { ...codex, kind: "existing-model" }, codex], {
+          setupComplete: true,
+        }),
       );
       const result = await runSetup();
       expect(result).toEqual({
@@ -244,7 +262,7 @@ describe("Gateway automatic inference setup", () => {
           ...(homeScope === "user" ? { shared: true } : {}),
         },
         ...(homeScope === "user" ? { separateSignIn } : {}),
-        alternatives: [presentedCodex, presentedOpenai],
+        alternatives: [presentedCodex, presentedOpenai, presentedLlama],
         attempts: [],
         installedPlugins: [],
       });

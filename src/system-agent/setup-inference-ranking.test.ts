@@ -20,6 +20,15 @@ describe("first-run inference ranking", () => {
   it("ranks supported primary routes deterministically without promoting utility or unknown routes", () => {
     const candidates = [
       candidate("provider-auto:ollama", { modelRef: "ollama/loaded" }),
+      candidate("provider-auto:llama-app", { modelRef: "llama-app/ggml-org/model:Q4_K_M" }),
+      candidate("provider-auto:llama-app", {
+        modelRef: "llama-app/unavailable",
+        credentials: false,
+      }),
+      candidate("provider-auto:llama-app", {
+        modelRef: "llama-app/utility",
+        modelTarget: "utility",
+      }),
       candidate("provider-auto:llama-cpp", { modelRef: "llama-cpp/loaded" }),
       candidate("provider-auto:lmstudio", { modelRef: "lmstudio/loaded" }),
       candidate("provider-auto:unknown", { credentials: true }),
@@ -44,6 +53,7 @@ describe("first-run inference ranking", () => {
       "claude-cli",
       "openai-api-key",
       "anthropic-api-key",
+      "provider-auto:llama-app",
       "provider-auto:ollama",
       "provider-auto:lmstudio",
       "provider-auto:llama-cpp",
