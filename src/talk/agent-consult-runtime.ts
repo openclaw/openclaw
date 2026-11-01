@@ -234,16 +234,6 @@ export async function consultRealtimeVoiceAgent(params: {
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
-  /**
-   * Chat surfaces deliver the current answer's media while the run is still registered.
-   * "attached" and "refused" let a media-only answer say what the chat now shows.
-   */
-  deliverAnswerMedia?: (reply: {
-    runId: string;
-    sessionId: string;
-    payloads: ReplyPayload[];
-    abortSignal: AbortSignal;
-  }) => Promise<"attached" | "refused" | "none">;
   /** Gateway ingress adapts authenticated policy; channel bridges keep their own authority. */
   prepareToolContext?: (
     sessionEntry: SessionEntry,
@@ -273,6 +263,27 @@ export async function consultRealtimeVoiceAgent(params: {
     | void
     | Promise<RealtimeVoiceAgentConsultRunRegistration | void>;
 }): Promise<RealtimeVoiceAgentConsultResult> {
+  return await consultRealtimeVoiceAgentWithAnswerMedia(params);
+}
+
+/**
+ * Gateway Talk entry point: the plugin SDK re-exports only consultRealtimeVoiceAgent,
+ * so chat media delivery stays an internal Gateway contract.
+ */
+export async function consultRealtimeVoiceAgentWithAnswerMedia(
+  params: Parameters<typeof consultRealtimeVoiceAgent>[0] & {
+    /**
+     * Chat surfaces deliver the current answer's media while the run is still registered.
+     * "attached" and "refused" let a media-only answer say what the chat now shows.
+     */
+    deliverAnswerMedia?: (reply: {
+      runId: string;
+      sessionId: string;
+      payloads: ReplyPayload[];
+      abortSignal: AbortSignal;
+    }) => Promise<"attached" | "refused" | "none">;
+  },
+): Promise<RealtimeVoiceAgentConsultResult> {
   params.abortSignal?.throwIfAborted();
   const [{ beginSessionEffect }, { resolveSessionWorkStartError }] = await Promise.all([
     import("../sessions/session-controller.lifecycle.js"),

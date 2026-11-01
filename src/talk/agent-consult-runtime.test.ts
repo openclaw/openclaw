@@ -15,7 +15,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import { consultRealtimeVoiceAgentWithAnswerMedia } from "./agent-consult-runtime.js";
 import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -86,11 +86,11 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   };
 }
 
-type ConsultParams = Parameters<typeof consultRealtimeVoiceAgent>[0];
+type ConsultParams = Parameters<typeof consultRealtimeVoiceAgentWithAnswerMedia>[0];
 type TestRuntime = ReturnType<typeof createAgentRuntime>["runtime"];
 
 function runConsult(runtime: TestRuntime, params: Partial<ConsultParams> = {}) {
-  return consultRealtimeVoiceAgent({
+  return consultRealtimeVoiceAgentWithAnswerMedia({
     agentRuntime: runtime as never,
     cfg: {},
     logger: { warn: vi.fn() },

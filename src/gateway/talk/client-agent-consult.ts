@@ -18,7 +18,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   buildRealtimeVoiceAgentToolAuthorityOverlay,
-  consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentWithAnswerMedia,
 } from "../../talk/agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -212,7 +212,7 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     return await admission
       .run(() =>
-        consultRealtimeVoiceAgent({
+        consultRealtimeVoiceAgentWithAnswerMedia({
           cfg: config,
           agentRuntime: runtime,
           logger: params.context.logGateway,
