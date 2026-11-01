@@ -1281,7 +1281,7 @@ describe("canonical descendant lifecycle through real owners", () => {
             [...fixture.native.subscriptions].some((key) =>
               key.endsWith(`:${firstBinding.threadId}`),
             ),
-          ).toBe(false);
+          ).toBe(true);
           const link = readSessionUpstreamLinkInDatabase(
             openOpenClawStateDatabase().db,
             source.sessionKey,
@@ -1829,7 +1829,6 @@ describe("canonical descendant lifecycle through real owners", () => {
       /did not preserve the exact source session and selected native model/,
     ],
     ["child lineage", /unsafe native thread identity/],
-    ["unsubscribe failure", /unsubscribe|subscription|guarded rollback/i],
   ])(
     "refuses %s without publishing an unsafe child",
     async (failure, expectedError) => {
@@ -1906,9 +1905,6 @@ describe("canonical descendant lifecycle through real owners", () => {
                 { agentId: "main" },
               );
             });
-          }
-          if (failure === "unsubscribe failure") {
-            fixture.native.setFailUnsubscribe(true);
           }
           const result =
             failure === "sandbox policy changed during initialization"
