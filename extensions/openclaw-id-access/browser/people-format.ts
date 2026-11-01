@@ -70,10 +70,10 @@ export function memberRunning(
     : `running ${runs.length} ${runs.length === 1 ? "task" : "tasks"}`;
 }
 
-/** Which invite a pending request used: its audience, role and creation day. */
+/** The invite's role and creation day, without repeating the requester's email. */
 export function inviteUsed(invite: Invite, locale: string): string {
   const role = invite.role.charAt(0).toUpperCase() + invite.role.slice(1);
-  return `Using your invite for ${invite.label} · ${role} · created ${formatDay(invite.createdAt, locale)}`;
+  return `${role} invite · created ${formatDay(invite.createdAt, locale)}`;
 }
 
 /** What a removal changed, e.g. "Bob removed · 1 device disconnected · 1 run stopped". */

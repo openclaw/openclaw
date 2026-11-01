@@ -10,7 +10,7 @@ import { PeoplePage } from "./people-page.js";
 import type { StatusResult } from "./types.js";
 import "./control-ui.css";
 
-/** The page id the Control UI account menu opens ("People"). */
+/** The People destination in the Control UI sidebar's Pages catalog. */
 export const PEOPLE_PAGE_ID = "people";
 
 const mountPeople: ControlUiView = (container, context) => {
@@ -18,22 +18,22 @@ const mountPeople: ControlUiView = (container, context) => {
   return { dispose };
 };
 
-// True when the Gateway has OpenClaw ID on (the Labs flag); false when off or unknown.
-async function openClawIdEnabled(host: ControlUiHost): Promise<boolean> {
+// The Gateway owns the flag and whether this connection may read people.
+async function canSeePeople(host: ControlUiHost): Promise<boolean> {
   if (!host.connection.connected) {
     return false;
   }
   try {
     const status = await host.request<StatusResult>("openclawId.status", {});
-    return status.status.state !== "off";
+    return status.status.state !== "off" && status.owner === true;
   } catch {
     return false;
   }
 }
 
 /**
- * Registers the People page only while the OpenClaw ID flag is on,
- * and follows the flag as the connection changes.
+ * Registers the owner-only People page and its sidebar destination while enabled.
+ * Connection changes recheck the Gateway-owned flag and owner admission.
  */
 export default defineControlUiPlugin({
   id: "openclaw-id-access",
@@ -42,16 +42,27 @@ export default defineControlUiPlugin({
     let generation = 0;
     const sync = async () => {
       const id = ++generation;
-      const enabled = await openClawIdEnabled(host);
+      const enabled = await canSeePeople(host);
       if (id !== generation || host.signal.aborted) {
         return;
       }
       if (enabled && !disposePage) {
-        disposePage = host.ui.registerPage({
+        const page = host.ui.registerPage({
           id: PEOPLE_PAGE_ID,
           label: "People",
           mount: mountPeople,
         });
+        const navigation = host.ui.registerNavigation({
+          id: PEOPLE_PAGE_ID,
+          label: "People",
+          page: { id: PEOPLE_PAGE_ID },
+          icon: "users",
+          defaultVisible: false,
+        });
+        disposePage = () => {
+          navigation();
+          page();
+        };
       } else if (!enabled && disposePage) {
         disposePage();
         disposePage = undefined;

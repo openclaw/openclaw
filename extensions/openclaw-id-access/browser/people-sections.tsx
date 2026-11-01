@@ -2,7 +2,7 @@
 // The sections of the People page. Each takes plain data and callbacks, so the
 // page owns all Gateway access and the sections can be restyled independently.
 import type { MemberRole } from "@openclaw/openclaw-id-protocol";
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, latest, Show } from "solid-js";
 import type { CreatedInvite } from "./invites.js";
 import {
   countDevices,
@@ -80,7 +80,7 @@ export function InviteForm(props: {
           Create invite link
         </button>
       </div>
-      <Show when={created()}>
+      <Show when={latest(created)}>
         {(made) => (
           <div class="callout info stack ocid-access__link" role="status">
             <div>
@@ -88,7 +88,7 @@ export function InviteForm(props: {
             </div>
             <code class="ocid-access__url">{made().url}</code>
             <button type="button" class="btn btn--sm" onClick={() => void copy(made().url)}>
-              {copied() ? "Copied" : "Copy link"}
+              {latest(copied) ? "Copied" : "Copy link"}
             </button>
             <p class="ocid-access__hint">
               Send it privately. The part after # never reaches OpenClaw. Anyone with the link can
@@ -118,34 +118,39 @@ export function PendingRequests(props: {
         fallback={<p class="ocid-access__empty">No one is waiting for approval.</p>}
       >
         <ul class="ocid-access__list">
-          <For each={props.invites}>
+          <For each={props.invites} keyed={(invite) => invite.inviteId}>
             {(invite) => {
-              const pending = () => invite.pending!;
-              const who = () =>
-                pending().reported.displayName || pending().reported.email || pending().accountId;
+              const pending = () => invite().pending!;
+              const who = () => pending().reported.email || "OpenClaw ID account";
               return (
                 <li class="ocid-access__row ocid-access__row--request">
                   <div>
                     <div class="ocid-access__title">
-                      {who()} wants to join as {invite.role}
+                      {who()} · browser unavailable on unknown OS ·{" "}
+                      {pending().reported.locationHint ?? "location unknown"}
                     </div>
                     <div class="ocid-access__hint">
-                      {pending().reported.email ?? pending().accountId} · device{" "}
-                      {props.fingerprints.get(pending().devicePub) ?? "unknown"} ·{" "}
-                      {pending().reported.locationHint ?? "location unknown"} (reported by OpenClaw
-                      ID)
-                    </div>
-                    <div class="ocid-access__hint">
-                      {inviteUsed(invite, props.locale)} · decide by{" "}
+                      {inviteUsed(invite(), props.locale)} · decide by{" "}
                       {formatDay(pending().decideBy, props.locale)}
                     </div>
+                    <details class="ocid-access__details">
+                      <summary>Request details</summary>
+                      <p class="ocid-access__hint">
+                        Device fingerprint:{" "}
+                        <code>{props.fingerprints.get(pending().devicePub) ?? "unavailable"}</code>
+                      </p>
+                      <p class="ocid-access__hint">
+                        Email and approximate location reported by OpenClaw ID. Browser and
+                        operating system were not provided.
+                      </p>
+                    </details>
                   </div>
                   <div class="ocid-access__actions">
                     <button
                       type="button"
                       class="btn btn--sm danger"
                       disabled={props.disabled}
-                      onClick={() => props.onDecide(invite, false)}
+                      onClick={() => props.onDecide(invite(), false)}
                     >
                       Deny
                     </button>
@@ -153,7 +158,7 @@ export function PendingRequests(props: {
                       type="button"
                       class="btn primary btn--sm"
                       disabled={props.disabled}
-                      onClick={() => props.onDecide(invite, true)}
+                      onClick={() => props.onDecide(invite(), true)}
                     >
                       Approve
                     </button>
@@ -195,7 +200,7 @@ function MemberRow(props: {
       <div>
         <div class="ocid-access__title">{memberName(props.member)}</div>
         <div class="ocid-access__hint">{details()}</div>
-        <Show when={confirming()}>
+        <Show when={latest(confirming)}>
           <p class="ocid-access__hint" role="note">
             Their browser disconnects right away and anything they are running stops (what it
             finished is kept). Sessions they started stay here. They can come back only with a new
@@ -206,7 +211,7 @@ function MemberRow(props: {
       <div class="ocid-access__actions">
         <span class="chip">{props.member.role}</span>
         <Show
-          when={confirming()}
+          when={latest(confirming)}
           fallback={
             <button
               type="button"
@@ -261,10 +266,10 @@ export function Members(props: {
           </div>
           <span class="chip">owner</span>
         </li>
-        <For each={props.members}>
+        <For each={props.members} keyed={(member) => member.accountId}>
           {(member) => (
             <MemberRow
-              member={member}
+              member={member()}
               disabled={props.disabled}
               nowMs={props.nowMs}
               sessionTitle={props.sessionTitle}
@@ -272,18 +277,18 @@ export function Members(props: {
             />
           )}
         </For>
-        <For each={open()}>
+        <For each={open()} keyed={(invite) => invite.inviteId}>
           {(invite) => (
             <li class="ocid-access__row ocid-access__row--invited">
               <div>
-                <div class="ocid-access__title">{invite.label}</div>
+                <div class="ocid-access__title">{invite().label}</div>
                 <div class="ocid-access__hint">
-                  Invite link created {formatDay(invite.createdAt, props.locale)} · expires{" "}
-                  {formatDay(invite.expiresAt, props.locale)} · not accepted yet
+                  Invite link created {formatDay(invite().createdAt, props.locale)} · expires{" "}
+                  {formatDay(invite().expiresAt, props.locale)} · not accepted yet
                 </div>
               </div>
               <div class="ocid-access__actions">
-                <span class="chip">{invite.role}</span>
+                <span class="chip">{invite().role}</span>
                 <span class="chip">Invited</span>
               </div>
             </li>

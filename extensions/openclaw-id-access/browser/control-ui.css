@@ -77,9 +77,20 @@
 }
 
 .ocid-access__title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  overflow-wrap: anywhere;
   color: var(--text-strong);
   font-weight: 600;
+}
+
+.ocid-access__details {
+  margin-top: var(--space-2);
+  color: var(--muted);
+}
+
+.ocid-access__details summary {
+  width: fit-content;
+}
+
+.ocid-access__details code {
+  overflow-wrap: anywhere;
 }

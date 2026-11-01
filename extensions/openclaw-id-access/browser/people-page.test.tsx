@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { formatEd25519PublicKey } from "@openclaw/openclaw-id-protocol";
+import { render } from "@solidjs/web";
 import type * as UI from "openclaw/plugin-sdk/control-ui";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PeoplePage } from "./people-page.js";
 import type { StatusResult } from "./types.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
@@ -15,6 +18,7 @@ vi.mock("./owner-signing.js", () => ({
 }));
 
 const { default: plugin } = await import("./index.js");
+const disposers: Array<() => void> = [];
 
 const pendingInvite = {
   inviteId: "inv-1",
@@ -71,29 +75,59 @@ function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
     }
     return submitResult;
   });
-  const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => () => {});
+  const disposePage = vi.fn();
+  const disposeNavigation = vi.fn();
+  const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => disposePage);
+  const registerNavigation = vi.fn(() => disposeNavigation);
+  const subscribers = new Set<() => void>();
+  const events = new Map<string, Set<(payload: unknown) => void>>();
   const controller = new AbortController();
   const host = {
     locale: "en-US",
     signal: controller.signal,
     connection: { connected: true, canRead: true, canWrite: true, canAdmin: true },
     request,
-    subscribe: () => () => {},
+    subscribe: (listener: () => void) => {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
+    onEvent: (event: string, listener: (payload: unknown) => void) => {
+      const listeners = events.get(event) ?? new Set();
+      events.set(event, listeners);
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     sessions: {
       rows: [{ key: "agent:main:trip", derivedTitle: "Trip ideas" }],
       normalizeKey: (key: string) => key,
     },
-    ui: { registerPage },
+    ui: { registerPage, registerNavigation },
   } as unknown as UI.ControlUiHost;
-  return { host, request, registerPage, controller };
+  return {
+    host,
+    request,
+    registerPage,
+    registerNavigation,
+    disposePage,
+    disposeNavigation,
+    controller,
+    subscribers,
+    events,
+    emit: () => events.get("openclawId.people.changed")?.forEach((listener) => listener({})),
+    connect: (connected: boolean) => {
+      host.connection.connected = connected;
+      subscribers.forEach((listener) => listener());
+    },
+  };
 }
 
 async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
-  const { host, request, registerPage, controller } = hostFor(
-    [statuses[0]!, ...statuses],
-    submitResult,
-  );
-  await plugin.activate(host);
+  const harness = hostFor([statuses[0]!, ...statuses], submitResult);
+  const { host, request, registerPage, controller } = harness;
+  const stop = await plugin.activate(host);
+  if (typeof stop === "function") {
+    disposers.push(stop);
+  }
   await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
   const [page] = registerPage.mock.calls[0]!;
   expect(page).toMatchObject({ id: "people", label: "People" });
@@ -105,7 +139,9 @@ async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
     signal: controller.signal,
     presented: true,
   } as UI.ControlUiViewContext);
-  return { request, container, dispose: () => view?.dispose?.() };
+  const dispose = () => view?.dispose?.();
+  disposers.push(dispose);
+  return { ...harness, request, container, dispose };
 }
 
 const button = (container: HTMLElement, label: string) =>
@@ -113,7 +149,12 @@ const button = (container: HTMLElement, label: string) =>
 
 describe("People page", () => {
   afterEach(() => {
+    disposers
+      .splice(0)
+      .toReversed()
+      .forEach((dispose) => dispose());
     document.body.replaceChildren();
+    vi.useRealTimers();
   });
 
   it("registers no page while OpenClaw ID is off", async () => {
@@ -128,10 +169,18 @@ describe("People page", () => {
 
   it("shows who is asking, from which device, and which invite they used", async () => {
     const { container } = await mountPage([linked()]);
-    await vi.waitFor(() => expect(container.textContent).toMatch(/· device [0-9A-Z]{5}-/));
-    expect(container.textContent).toContain(
-      "Using your invite for member@example.test · Operator · created",
+    await vi.waitFor(() =>
+      expect(container.textContent).toMatch(/Device fingerprint: fp:[a-f0-9]{64}/),
     );
+    expect(container.textContent).toContain("Operator invite · created");
+    expect(container.textContent).toContain(
+      "member@example.test · browser unavailable on unknown OS · Falkenstein, DE",
+    );
+    expect(container.textContent?.match(/member@example.test/g)).toHaveLength(1);
+    expect(container.querySelector("details")?.open).toBe(false);
+    expect(container.querySelector("details code")?.textContent).toMatch(/^fp:[a-f0-9]{64}$/);
+    expect(container.querySelector("header")?.textContent?.trim()).toBe("People");
+    expect(button(container, "Refresh")).toBeUndefined();
     // Owner devices live in the account menu, not on People.
     expect(container.textContent).not.toContain("Old laptop");
   });
@@ -152,7 +201,7 @@ describe("People page", () => {
       }),
     ]);
     await vi.waitFor(() =>
-      expect(container.textContent).toContain("Mia wants to join as operator"),
+      expect(container.textContent).toContain("member@example.test · browser unavailable"),
     );
     await vi.waitFor(() => expect(button(container, "Approve")?.disabled).toBe(false));
     button(container, "Approve")!.click();
@@ -251,7 +300,10 @@ describe("People page", () => {
   });
 
   it("shows no people to a client that is not an owner, and never asks for them", async () => {
-    const { container, request } = await mountPage([{ ...linked(), owner: false }]);
+    const { host, request } = hostFor([{ ...linked(), owner: false }]);
+    const container = document.createElement("div");
+    document.body.append(container);
+    disposers.push(render(() => <PeoplePage host={host} />, container));
     await vi.waitFor(() =>
       expect(container.textContent).toContain(
         "Only an owner device of this claw can see who has access.",
@@ -270,5 +322,173 @@ describe("People page", () => {
       expect(container.textContent).toContain("is not an owner device for this claw"),
     );
     expect(button(container, "Approve")?.disabled).toBe(true);
+  });
+
+  it("registers only owner Pages navigation, and removes it on disconnect", async () => {
+    const harness = await mountPage([linked()]);
+    expect(harness.registerNavigation).toHaveBeenCalledWith({
+      id: "people",
+      label: "People",
+      page: { id: "people" },
+      icon: "users",
+      defaultVisible: false,
+    });
+    harness.connect(false);
+    await vi.waitFor(() => expect(harness.disposeNavigation).toHaveBeenCalledTimes(1));
+    expect(harness.disposePage).toHaveBeenCalledTimes(1);
+    harness.request.mockResolvedValue({ ...linked(), owner: false });
+    harness.connect(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.registerPage).toHaveBeenCalledTimes(1);
+    expect(harness.registerNavigation).toHaveBeenCalledTimes(1);
+  });
+
+  it("debounces bursts, removes departed members, and does not poll", async () => {
+    const member = { accountId: "a", role: "viewer", peerKeys: [], email: "a@example.test" };
+    const harness = await mountPage([
+      linked({ invites: [], members: [member] }),
+      linked({ invites: [] }),
+    ]);
+    await vi.waitFor(() => expect(harness.container.textContent).toContain(member.email));
+    vi.useFakeTimers();
+    const reads = () =>
+      harness.request.mock.calls.filter(([method]) => method === "openclawId.people").length;
+    expect(reads()).toBe(1);
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(100);
+    harness.emit();
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(reads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    flush();
+    expect(reads()).toBe(2);
+    expect(harness.container.textContent).not.toContain(member.email);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reads()).toBe(2);
+  });
+
+  it("retains one trailing read for invalidation during an in-flight response", async () => {
+    const harness = await mountPage([linked({ invites: [] })]);
+    await vi.waitFor(() => expect(harness.container.textContent).toContain("No one is waiting"));
+    vi.useFakeTimers();
+    const held = Promise.withResolvers<unknown>();
+    let reads = 0;
+    harness.request.mockImplementation(async (method: string) => {
+      if (method === "openclawId.people") {
+        reads += 1;
+        return reads === 1
+          ? held.promise
+          : {
+              link: linked({
+                invites: [],
+                members: [
+                  {
+                    accountId: "latest",
+                    email: "latest@example.test",
+                    role: "viewer",
+                    peerKeys: [],
+                  },
+                ],
+              }).link,
+            };
+      }
+      return linked({ invites: [] });
+    });
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(250);
+    harness.emit();
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(reads).toBe(1);
+    held.resolve({ link: linked({ invites: [] }).link });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(reads).toBe(2);
+    expect(harness.container.textContent).toContain("latest@example.test");
+  });
+
+  it("refetches on reconnect and ignores the previous connection's late response", async () => {
+    const harness = await mountPage([linked({ invites: [] })]);
+    await vi.waitFor(() => expect(harness.container.textContent).toContain("No one is waiting"));
+    vi.useFakeTimers();
+    const held = Promise.withResolvers<unknown>();
+    let reads = 0;
+    harness.request.mockImplementation(async (method: string) => {
+      if (method === "openclawId.people") {
+        reads += 1;
+        return reads === 1
+          ? held.promise
+          : {
+              link: linked({
+                invites: [],
+                members: [
+                  { accountId: "new", email: "new@example.test", role: "viewer", peerKeys: [] },
+                ],
+              }).link,
+            };
+      }
+      return linked({ invites: [] });
+    });
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(250);
+    harness.connect(false);
+    harness.connect(true);
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(reads).toBe(2);
+    expect(harness.container.textContent).toContain("new@example.test");
+    held.resolve({ link: linked({ invites: [pendingInvite as never] }).link });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(harness.container.textContent).toContain("new@example.test");
+    expect(harness.container.textContent).not.toContain("member@example.test");
+
+    const retired = Promise.withResolvers<unknown>();
+    harness.request.mockImplementation(async (method: string) =>
+      method === "openclawId.people" ? retired.promise : linked({ invites: [] }),
+    );
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(250);
+    harness.emit();
+    harness.dispose();
+    const before = harness.request.mock.calls.length;
+    retired.resolve({ link: linked().link });
+    await vi.advanceTimersByTimeAsync(1_000);
+    flush();
+    expect(harness.container.textContent).toBe("");
+    expect(harness.request).toHaveBeenCalledTimes(before);
+  });
+
+  it("shows live-read errors and clears them after the next successful event", async () => {
+    const harness = await mountPage([linked({ invites: [] })]);
+    await vi.waitFor(() => expect(harness.container.textContent).toContain("No one is waiting"));
+    vi.useFakeTimers();
+    harness.request.mockRejectedValueOnce(new Error("People unavailable"));
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(250);
+    flush();
+    expect(harness.container.querySelector('[role="alert"]')?.textContent).toBe(
+      "People unavailable",
+    );
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(250);
+    flush();
+    expect(harness.container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("releases event and connection listeners and cancels queued reads on disposal", async () => {
+    const harness = await mountPage([linked({ invites: [] })]);
+    await vi.waitFor(() => expect(harness.container.textContent).toContain("No one is waiting"));
+    vi.useFakeTimers();
+    harness.emit();
+    const before = harness.request.mock.calls.length;
+    harness.dispose();
+    expect(harness.events.get("openclawId.people.changed")?.size).toBe(0);
+    expect(harness.subscribers.size).toBe(1); // Plugin registration still owns its subscription.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.request).toHaveBeenCalledTimes(before);
+    expect(harness.container.textContent).toBe("");
   });
 });

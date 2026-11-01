@@ -5,17 +5,13 @@
 // Gateway (openclawId.authority); everything shown is read from the Gateway
 // (openclawId.people, which answers only an owner).
 // Owner devices and the recovery kit live in the account menu, not here.
-import {
-  displayFingerprint,
-  fingerprint,
-  type MemberRole,
-  type PublicKeyText,
-} from "@openclaw/openclaw-id-protocol";
+import { fingerprint, type MemberRole, type PublicKeyText } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createSignal, Show, untrack } from "solid-js";
+import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
 import { createInvite, decideInvite, removeMember } from "./invites.js";
 import { thisOwnerDevice } from "./owner-signing.js";
 import { memberName, removalNote } from "./people-format.js";
+import { observePeople } from "./people-refresh.js";
 import { InviteForm, Members, PendingRequests } from "./people-sections.js";
 import type { Invite, Link, Member, StatusResult } from "./types.js";
 
@@ -23,14 +19,13 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// Display fingerprints of the devices pending requests come from, so the owner
-// can compare them with what the invitee's screen shows.
+// Canonical device fingerprints stay available in the request's details disclosure.
 async function pendingFingerprints(invites: Invite[]): Promise<ReadonlyMap<string, string>> {
   const keys = invites.flatMap((invite) => (invite.pending ? [invite.pending.devicePub] : []));
   const entries = await Promise.all(
     keys.map(async (key) => {
       try {
-        return [key, displayFingerprint(await fingerprint(key as PublicKeyText))] as const;
+        return [key, await fingerprint(key as PublicKeyText)] as const;
       } catch {
         return undefined;
       }
@@ -59,12 +54,19 @@ export function PeoplePage(props: { host: ControlUiHost }) {
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
+  const [readError, setReadError] = createSignal<string | null>(null);
+  let observer: ReturnType<typeof observePeople> | undefined;
+  let disposed = false;
+  let actionInFlight = false;
 
   // Reads link state (the owner view when this client is an owner) and which
   // listed owner device, if any, is this browser.
-  const refresh = async () => {
+  const read = async (isCurrent: () => boolean) => {
     try {
       const summary = await host.request<StatusResult>("openclawId.status", {});
+      if (!isCurrent()) {
+        return;
+      }
       const next =
         summary.owner && summary.link.linked
           ? {
@@ -72,76 +74,96 @@ export function PeoplePage(props: { host: ControlUiHost }) {
               link: (await host.request<{ link: Link }>("openclawId.people", {})).link,
             }
           : summary;
-      const own = await thisOwnerDevice(next.link).catch(() => undefined);
+      const [own, nextFingerprints] = await Promise.all([
+        thisOwnerDevice(next.link).catch(() => undefined),
+        pendingFingerprints(next.link.invites ?? []),
+      ]);
+      if (!isCurrent()) {
+        return;
+      }
       setOwnDevicePub(own?.devicePub ?? null);
-      setFingerprints(await pendingFingerprints(next.link.invites ?? []));
+      setFingerprints(nextFingerprints);
       setNowMs(Date.now());
       setState(next);
+      setReadError(null);
     } catch (failure) {
-      setError(errorText(failure));
+      if (isCurrent()) {
+        setReadError(errorText(failure));
+      }
     }
   };
+
+  onSettled(() => {
+    observer = observePeople(host, read);
+    return () => {
+      disposed = true;
+      observer?.dispose();
+    };
+  });
 
   // Runs one owner action, then refreshes; failures show above the sections. The
   // action signs against the owner state read now, not the page's last read: the
   // claw's seq moves on its own (a member's device joining, another owner device),
   // and a change signed at an old seq is refused.
   const run = async <T,>(action: (link: Link) => Promise<T>): Promise<T | undefined> => {
-    if (!state()?.link || busy()) {
+    if (disposed || !state()?.link || actionInFlight || !host.connection.connected) {
       return undefined;
     }
+    actionInFlight = true;
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       const { link } = await host.request<{ link: Link }>("openclawId.people", {});
+      if (disposed || !host.connection.connected || !host.connection.canAdmin) {
+        return undefined;
+      }
       return await action(link);
     } catch (failure) {
-      setError(errorText(failure));
+      if (!disposed) {
+        setError(errorText(failure));
+      }
       return undefined;
     } finally {
-      setBusy(false);
-      await refresh();
+      actionInFlight = false;
+      if (!disposed) {
+        setBusy(false);
+        await observer?.refresh();
+      }
     }
   };
 
   const remove = (member: Member) =>
     void run(async (link) => {
       const removal = await removeMember(host.request, link, member.accountId);
-      setNotice(removalNote(memberName(member), removal));
+      if (!disposed) {
+        setNotice(removalNote(memberName(member), removal));
+      }
     });
 
-  const canManage = () => Boolean(ownDevicePub()) && host.connection.canAdmin && !busy();
-  void refresh();
+  const canManage = () =>
+    Boolean(latest(ownDevicePub)) && host.connection.canAdmin && !latest(busy);
 
   return (
     <section class="ocid-access">
       <header class="ocid-access__header">
-        <div>
-          <h1>People</h1>
-          <Show when={state()?.link.hostname}>
-            {(hostname) => <p class="ocid-access__hint">https://{hostname()}</p>}
-          </Show>
-        </div>
-        <button type="button" class="btn btn--sm" disabled={busy()} onClick={() => void refresh()}>
-          Refresh
-        </button>
+        <h1>People</h1>
       </header>
-      <Show when={error()}>
+      <Show when={latest(error) ?? latest(readError)}>
         {(message) => (
           <div class="callout danger" role="alert">
             {message()}
           </div>
         )}
       </Show>
-      <Show when={notice()}>
+      <Show when={latest(notice)}>
         {(message) => (
           <div class="callout success ocid-access__notice" role="status">
             {message()}
           </div>
         )}
       </Show>
-      <Show when={state()}>
+      <Show when={latest(state)}>
         {(current) => (
           <Show
             when={current().status.state !== "off"}
@@ -169,7 +191,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   </p>
                 }
               >
-                <Show when={!ownDevicePub()}>
+                <Show when={!latest(ownDevicePub)}>
                   <div class="callout info" role="note">
                     This browser is not an owner device for this claw, so it can only view people.
                     Use an owner device to invite, approve or remove.
@@ -177,7 +199,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                 </Show>
                 <PendingRequests
                   invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
-                  fingerprints={fingerprints()}
+                  fingerprints={latest(fingerprints)}
                   disabled={!canManage()}
                   locale={host.locale}
                   onDecide={(invite, approve) =>
@@ -190,7 +212,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   ownerDevices={current().link.ownerDevices?.length ?? 0}
                   disabled={!canManage()}
                   locale={host.locale}
-                  nowMs={nowMs()}
+                  nowMs={latest(nowMs)}
                   sessionTitle={sessionTitleFrom(host)}
                   onRemove={remove}
                 />
