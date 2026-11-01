@@ -43,6 +43,83 @@ describe("memory-wiki tools", () => {
     expect(page.body).toContain("Keep this human note.");
   });
 
+  it("discloses complete-list replacements, clears, and preserves omitted metadata", async () => {
+    const { tool, pagePath } = await createApplyFixture();
+    const original = parseWikiMarkdown(await fs.readFile(pagePath, "utf8"));
+    const lists = {
+      claims: Array.from({ length: 17 }, (_, index) => ({ text: `Fact ${index}` })),
+      questions: ["Question A", "Question B", "Question C"],
+      contradictions: ["Conflict A", "Conflict B", "Conflict C"],
+      sourceIds: ["source.a", "source.b", "source.c"],
+    };
+    await fs.writeFile(
+      pagePath,
+      `---\n${Object.entries({ ...original.frontmatter, ...lists })
+        .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+        .join("\n")}\n---\n${original.body}`,
+    );
+    const replacement = {
+      claims: [{ text: "Replacement fact" }],
+      questions: ["New question"],
+      contradictions: ["New conflict"],
+      sourceIds: ["source.new"],
+    };
+    const result = await tool.execute("replace-lists", {
+      op: "update_metadata",
+      lookup: "entity.alpha",
+      ...replacement,
+    });
+    expect(result.details).toMatchObject({
+      metadataListChanges: {
+        claims: { before: 17, after: 1 },
+        questions: { before: 3, after: 1 },
+        contradictions: { before: 3, after: 1 },
+        sourceIds: { before: 3, after: 1 },
+      },
+    });
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining("Replaced metadata lists:"),
+    });
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: expect.stringContaining("claims 17 -> 1"),
+    });
+    const updated = parseWikiMarkdown(await fs.readFile(pagePath, "utf8"));
+    expect(updated.frontmatter).toMatchObject(replacement);
+    expect(updated.body).toContain("Keep this human note.");
+    const scalar = await tool.execute("scalar-only", {
+      op: "metadata",
+      lookup: "entity.alpha",
+      status: "review",
+    });
+    expect(scalar.details).not.toHaveProperty("metadataListChanges");
+    expect(parseWikiMarkdown(await fs.readFile(pagePath, "utf8")).frontmatter).toMatchObject(
+      replacement,
+    );
+    const cleared = await tool.execute("clear-lists", {
+      op: "update_metadata",
+      lookup: "entity.alpha",
+      claims: [],
+      questions: [],
+      contradictions: [],
+      sourceIds: [],
+    });
+    expect(cleared.details).toMatchObject({
+      metadataListChanges: {
+        claims: { before: 1, after: 0 },
+        questions: { before: 1, after: 0 },
+        contradictions: { before: 1, after: 0 },
+        sourceIds: { before: 1, after: 0 },
+      },
+    });
+    const empty = parseWikiMarkdown(await fs.readFile(pagePath, "utf8"));
+    expect(empty.frontmatter.sourceIds).toEqual([]);
+    for (const key of ["claims", "questions", "contradictions"]) {
+      expect(empty.frontmatter).not.toHaveProperty(key);
+    }
+  });
+
   it("keeps wiki pages unchanged for out-of-range claim confidence", async () => {
     const { tool, pagePath, original } = await createApplyFixture();
 

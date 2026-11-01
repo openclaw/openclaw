@@ -22,5 +22,8 @@ export function renderWikiMutationSummary(
   result: WikiMutationResult,
   text: (value: string) => string = String,
 ): string {
-  return `${result.changed ? "Updated" : "No changes for"} ${text(result.pagePath)} via ${text(result.operation)}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}`;
+  const replacements = Object.entries(result.metadataListChanges ?? {})
+    .map(([key, counts]) => `${key} ${counts.before} -> ${counts.after}`)
+    .join(", ");
+  return `${result.changed ? "Updated" : "No changes for"} ${text(result.pagePath)} via ${text(result.operation)}. ${result.compile.updatedFiles.length > 0 ? `Refreshed ${result.compile.updatedFiles.length} index file${result.compile.updatedFiles.length === 1 ? "" : "s"}.` : "Indexes unchanged."}${replacements ? ` Replaced metadata lists: ${text(replacements)}.` : ""}`;
 }
