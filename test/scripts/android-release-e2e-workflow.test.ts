@@ -1,9 +1,7 @@
 import { ok } from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
-import { parse } from "yaml";
-import { readCiWorkflow } from "./ci-workflow.test-support.js";
+import { readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
 
 type Job = {
   if?: string;
@@ -14,10 +12,7 @@ type Job = {
 };
 type Workflow = { permissions: Record<string, string>; jobs: Record<string, Job> };
 
-function readWorkflow(filename: string): Workflow {
-  return parse(readFileSync(`.github/workflows/${filename}`, "utf8")) as Workflow;
-}
-const qualification = readWorkflow("android-release-e2e.yml");
+const qualification = readWorkflow(".github/workflows/android-release-e2e.yml") as Workflow;
 const qualify = qualification.jobs.qualify;
 ok(qualify, "Android validation must have its qualification job");
 const selectionDir = "${{ env.GATEWAY_SELECTION_DIR }}";
@@ -61,7 +56,9 @@ it.each([
 it.each(["success", "failure", "cancelled", "skipped"])(
   "gates store signing/upload on qualification: %s",
   (result) => {
-    const { qualify: storeQualify, release } = readWorkflow("android-store-release.yml").jobs;
+    const { qualify: storeQualify, release } = (
+      readWorkflow(".github/workflows/android-store-release.yml") as Workflow
+    ).jobs;
     ok(storeQualify, "Android store release must have its qualification job");
     ok(release, "Android store release must have its release job");
     const context = {
@@ -85,9 +82,9 @@ it.each(["success", "failure", "cancelled", "skipped"])(
 
 it("publishes only credential-free qualification evidence", () => {
   expect(qualification.permissions).toEqual({ actions: "read", contents: "read" });
-  const selection = parse(
-    readFileSync(".github/actions/prepare-mobile-release-gateway/action.yml", "utf8"),
-  ) as { runs: { steps: NonNullable<Job["steps"]> } };
+  const selection = readWorkflow(".github/actions/prepare-mobile-release-gateway/action.yml") as {
+    runs: { steps: NonNullable<Job["steps"]> };
+  };
   const prepare = qualify.steps?.find(
     (step) => step.uses === "./.github/actions/prepare-mobile-release-gateway",
   );

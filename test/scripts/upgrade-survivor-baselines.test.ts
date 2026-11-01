@@ -4,9 +4,9 @@ import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } fro
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readWorkflow, readWorkflowOutputs as readOutputs } from "./ci-workflow.test-support.js";
 import {
   readJsonLines,
   writeExecutable,
@@ -25,18 +25,7 @@ type Workflow = {
   };
   jobs: { resolve_package: { steps: Steps } };
 };
-const workflow = () =>
-  parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as Workflow;
-const readOutputs = (file: string) =>
-  Object.fromEntries(
-    readFileSync(file, "utf8")
-      .trimEnd()
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+const workflow = () => readWorkflow(".github/workflows/package-acceptance.yml") as Workflow;
 
 let root: string;
 let bin: string;
@@ -228,13 +217,11 @@ if (process.env.FAIL_API === "true") process.exit(75);
     "minimum",
   ])("pins the %s workflow baseline once before Docker fanout", (entrypoint) => {
     const packageWorkflow = workflow();
-    const migration = parse(readFileSync(".github/workflows/update-migration.yml", "utf8")) as {
+    const migration = readWorkflow(".github/workflows/update-migration.yml") as {
       on: { workflow_dispatch: { inputs: { baselines: { default: string } } } };
     };
     const inputs = packageWorkflow.on.workflow_call.inputs;
-    const release = parse(
-      readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
-    ) as {
+    const release = readWorkflow(".github/workflows/openclaw-release-checks.yml") as {
       jobs: {
         package_acceptance_release_checks: {
           with: { published_upgrade_survivor_baselines: string };
