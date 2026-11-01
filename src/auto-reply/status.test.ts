@@ -12,6 +12,7 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -475,7 +476,7 @@ function usage(input: number, output: number, cacheRead: number, totalTokens: nu
   return { input, output, cacheRead, cacheWrite: 0, totalTokens };
 }
 function freshUsage(totalTokens: number) {
-  return { totalTokens, totalTokensFresh: true, totalTokensVersion: 1 as const };
+  return { totalTokens, totalTokensFresh: true, totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION };
 }
 function withStatusHome(run: () => Promise<void>) {
   return withTempHome(

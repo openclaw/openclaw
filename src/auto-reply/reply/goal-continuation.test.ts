@@ -10,7 +10,7 @@ import {
 } from "../../agents/harness/lifecycle.test-support.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import {
@@ -310,7 +310,7 @@ describe("Goal continuation eligibility", () => {
     current.goal!.tokenBudget = 50;
     current.totalTokens = 50;
     current.totalTokensFresh = true;
-    current.totalTokensVersion = 1;
+    current.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     expect(isGoalContinuationCurrent(identity, current)).toBe(false);
     expect(current.goal!.status).toBe("active");
   });

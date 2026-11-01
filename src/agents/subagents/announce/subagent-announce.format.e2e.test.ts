@@ -9,7 +9,7 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -562,7 +562,7 @@ describe("subagent announce formatting", () => {
       outputTokens: 1000,
       totalTokens: 197000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
     const call = await deliverCompletion({
       childRunId: "run-direct-completion",

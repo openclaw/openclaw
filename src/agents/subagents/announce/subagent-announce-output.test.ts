@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../../config/sessions/types.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
@@ -182,7 +183,7 @@ describe("buildCompactAnnounceStatsLine", () => {
       updatedAt: 0,
       totalTokens: 500,
       totalTokensFresh: true,
-      totalTokensVersion: 1 as const,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     }));
     testing.setDepsForTest({
       getRuntimeConfig: () => ({ session: { store: "memory" } }),
@@ -190,7 +191,7 @@ describe("buildCompactAnnounceStatsLine", () => {
       resolveSessionStorePathCore: () => "/tmp/openclaw-session-store",
     });
     await expect(buildCompactAnnounceStatsLine({ sessionKey: childKey })).resolves.toBe(
-      "Stats: runtime n/a • tokens 500 prompt/cache",
+      "Stats: runtime n/a • tokens 500 context",
     );
     expect(readEntry).toHaveBeenCalledOnce();
   });

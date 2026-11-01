@@ -20,6 +20,7 @@ import {
   MAX_LATEST_USER_REQUEST_CHARS,
   parseCompactionDetails,
 } from "./compaction-details.js";
+import { resolveCompactionThreshold } from "./compaction-threshold.js";
 import { runSummarizationCompletion } from "./summarization-completion.js";
 import { buildSummaryCheckpointPrompt } from "./summary-checkpoint-prompt.js";
 import {
@@ -265,7 +266,13 @@ export function shouldCompact(
   if (!settings.enabled || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return false;
   }
-  return contextTokens > contextWindow - settings.reserveTokens;
+  return (
+    contextTokens >
+    resolveCompactionThreshold({
+      contextWindowTokens: contextWindow,
+      reserveTokensFloor: settings.reserveTokens,
+    })
+  );
 }
 
 const SUMMARIZATION_PROMPT = buildSummaryCheckpointPrompt({
