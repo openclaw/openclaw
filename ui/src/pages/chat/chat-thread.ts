@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
@@ -28,6 +29,7 @@ import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-ca
 type CachedChatItems = {
   generation: number;
   input: BuildChatItemsProps | null;
+  sources: WeakSet<object>;
   items: ReturnType<typeof buildChatItems>;
   liveStream: {
     index: number;
@@ -68,6 +70,68 @@ const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
 const expansionListeners = new WeakMap<ReadonlyMap<string, unknown>, Set<() => void>>();
 const explicitToolExpansions = new WeakMap<ReadonlyMap<string, unknown>, Set<string>>();
+
+/** Release retired dependencies without throwing away independent survivor rows. */
+export function retireChatThreadSources(paneId: string, messages: readonly unknown[]): void {
+  const sources = new Set(messages);
+  for (const projections of chatItemsByPane.get(paneId)?.values() ?? []) {
+    for (const view of ["visible", "unfiltered"] as const) {
+      const cached = projections[view];
+      if (!cached) {
+        continue;
+      }
+      // Hidden panes may retire repeatedly without another build. Keep only weak
+      // raw-source membership, never the old input arrays or live derived state.
+      cached.input = null;
+      cached.liveStream = null;
+      for (const value of messages) {
+        const source = asRecord(value);
+        if (source) {
+          cached.sources.delete(source);
+        }
+      }
+      const retained = (value: unknown) => {
+        const source = asRecord(value);
+        return (
+          source !== null &&
+          cached.sources.has(source) &&
+          source["__openclawToolStreamLive"] !== true
+        );
+      };
+      cached.items = cached.items.filter((item) => {
+        const dependencies =
+          item.kind === "group"
+            ? [
+                ...item.messages.map((entry) => entry.message),
+                ...[item.replyToMessage, item.replyTurnSource, item.replyCurrentSource].flatMap(
+                  (entry) => (entry ? [entry.message] : []),
+                ),
+              ]
+            : item.kind === "message"
+              ? [item.message]
+              : item.kind === "stream" && item.replyToMessage
+                ? [item.replyToMessage.message]
+                : [];
+        const keep =
+          (item.kind === "message" || (item.kind === "group" && !item.isStreaming)) &&
+          dependencies.every(retained);
+        if (!keep) {
+          // Synthetic Canvas/tool rows can key shared memos through a surviving
+          // raw neighbor. Retire those derived owners, not certified raw survivors.
+          for (const value of dependencies) {
+            const source = asRecord(value);
+            if (source && !cached.sources.has(source)) {
+              sources.add(source);
+            }
+          }
+        }
+        return keep;
+      });
+    }
+  }
+  const retired = [...sources];
+  retireChatGroupingSources([...retired, ...retireCoalescedMessageSources(retired)]);
+}
 
 export function resetChatThreadState(
   paneId?: string,
@@ -443,6 +507,7 @@ export function buildCachedChatItems(
   const cached = (projections[projection] ??= {
     generation: 0,
     input: null,
+    sources: new WeakSet<object>(),
     items: [],
     liveStream: null,
   });
@@ -459,6 +524,13 @@ export function buildCachedChatItems(
     if (updateCachedLiveStream(cached, input)) {
       cached.input = input;
       return cached.items;
+    }
+  }
+  cached.sources = new WeakSet();
+  for (const value of [...input.messages, ...input.toolMessages]) {
+    const source = asRecord(value);
+    if (source) {
+      cached.sources.add(source);
     }
   }
   const items = stabilizeChatItems(cached.items, buildChatItems(input, projections.inputOrder));

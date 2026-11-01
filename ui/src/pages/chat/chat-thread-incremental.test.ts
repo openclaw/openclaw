@@ -6,7 +6,13 @@ import * as displayText from "../../lib/strip-thinking-tags.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import * as duplicatePreparation from "./chat-thread-duplicates.ts";
 import { createProps } from "./chat-thread.test-support.ts";
-import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import {
+  buildCachedChatItems,
+  getChatItemsGeneration,
+  getExpandedToolCards,
+  resetChatThreadState,
+  retireChatThreadSources,
+} from "./chat-thread.ts";
 
 function deepFreeze(value: unknown): void {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -401,4 +407,97 @@ it("keeps one owned canvas while its answer shortcode streams", () => {
     otherRun.some((item) => item.kind === "stream" && item.text.includes('ref="cv_owned"')),
   ).toBe(true);
   resetChatThreadState();
+});
+
+it("preserves independent session seeds and peer-published rows during partial retirement", () => {
+  const paneId = "partial-pane";
+  const messages = [
+    message("retired-user", "user", 1, "Retired prompt"),
+    message("retired-answer", "assistant", 2, "Retired answer"),
+    message("kept-user", "user", 3, "Kept prompt"),
+    message("kept-answer", "assistant", 4, "Kept answer"),
+  ];
+  const props = createProps({ paneId, messages });
+  const other = createProps({
+    paneId,
+    sessionKey: "other",
+    messages: [message("other", "user", 10, "Other session")],
+  });
+  const peer = { ...props, paneId: "partial-peer" };
+  const original = buildCachedChatItems(props);
+  const otherRows = buildCachedChatItems(other);
+  const otherGeneration = getChatItemsGeneration(otherRows);
+  const peerRows = buildCachedChatItems(peer);
+  const published = JSON.stringify([original, otherRows, peerRows]);
+  getExpandedToolCards(props.sessionKey).set("remembered-choice", true);
+  try {
+    retireChatThreadSources(paneId, messages.slice(0, 2));
+    expect(JSON.stringify([original, otherRows, peerRows])).toBe(published);
+    expect(buildCachedChatItems(peer)).toBe(peerRows);
+    const otherNext = buildCachedChatItems(other);
+    expect(otherNext.every((row, index) => row === otherRows[index])).toBe(true);
+    expect(getChatItemsGeneration(otherNext)).toBeGreaterThan(otherGeneration);
+    expect(getExpandedToolCards(props.sessionKey).get("remembered-choice")).toBe(true);
+    const next = buildCachedChatItems({ ...props, messages: messages.slice(2) });
+    expect(
+      next
+        .filter((item) => item.kind === "group")
+        .flatMap((item) => item.messages.map((entry) => entry.message)),
+    ).toEqual(messages.slice(2));
+    expect(next.every((row) => original.includes(row))).toBe(true);
+    resetChatThreadState(paneId);
+    expect(buildCachedChatItems(peer)).toBe(peerRows);
+  } finally {
+    resetChatThreadState(paneId);
+    resetChatThreadState(peer.paneId);
+    getExpandedToolCards(props.sessionKey).delete("remembered-choice");
+  }
+});
+
+it("keeps raw seeds while rebuilding uncertified derived and stream rows after retirement", () => {
+  const { props } = fixture();
+  const views = ["visible", "unfiltered"] as const;
+  const raw = new Set([...props.messages, ...props.toolMessages]);
+  const prior = views.map((view) => buildCachedChatItems(props, view));
+  const retired = props.messages.filter(
+    (source) =>
+      source &&
+      typeof source === "object" &&
+      "content" in source &&
+      source.content === "Unrelated request",
+  );
+  expect(retired).toHaveLength(1);
+  try {
+    retireChatThreadSources(props.paneId, retired);
+    const nextProps = {
+      ...props,
+      messages: props.messages.filter((source) => !retired.includes(source)),
+    };
+    for (const [index, view] of views.entries()) {
+      const before = prior[index]!;
+      const next = buildCachedChatItems(nextProps, view);
+      const derived = before.filter(
+        (item) => item.kind === "group" && item.messages.some((entry) => !raw.has(entry.message)),
+      );
+      expect(derived.length).toBeGreaterThan(0);
+      expect(derived.every((item) => !next.includes(item))).toBe(true);
+      const stream = before.find((item) => item.kind === "stream" && item.isStreaming);
+      expect(stream).toBeDefined();
+      expect(next).not.toContain(stream);
+      const kept = before.find(
+        (item) =>
+          item.kind === "group" &&
+          item.messages.some((entry) => entry.message === props.messages.at(-1)),
+      );
+      expect(kept).toBeDefined();
+      expect(next).toContain(kept);
+      expect(
+        next
+          .filter((item) => item.kind === "group")
+          .flatMap((item) => item.messages.map((entry) => entry.message)),
+      ).not.toContain(retired[0]);
+    }
+  } finally {
+    resetChatThreadState(props.paneId);
+  }
 });

@@ -7,17 +7,17 @@ import type { ChatTranscriptReaderSnapshot } from "./chat-history-pagination.ts"
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
-import { resetChatThreadState } from "./chat-thread.ts";
+import { retireChatThreadSources } from "./chat-thread.ts";
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import { captureChatSessionScrollPosition, saveChatSessionScrollPosition } from "./scroll.ts";
 
 export function retireChatTranscriptSources(
-  paneId: string,
+  presentationId: string,
   transcript: ChatTranscript,
   state: ChatState | null | undefined,
   messages: readonly unknown[],
 ): void {
-  resetChatThreadState(paneId, messages);
+  retireChatThreadSources(presentationId, messages);
   if (state) {
     const pending = getChatPendingInputs(state);
     // Parked panes do not project recovery. Source retirement must release

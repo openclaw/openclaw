@@ -20,7 +20,9 @@ import { snapshotStoreGeneration } from "./session-snapshot-invalidation-events.
 export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation {
   protected retireTranscriptMessageSources(messages: readonly unknown[]): void {
     this.retireReplyMessages();
-    retireChatTranscriptSources(this.paneId, this.transcript, this.state, messages);
+    // Rendering and disposal key caches by presentation, not physical placement;
+    // using the placement id would leave retired bodies cached.
+    retireChatTranscriptSources(this.presentationId, this.transcript, this.state, messages);
   }
   protected readTranscriptReaderSnapshot(): ChatTranscriptReaderSnapshot | null {
     return this.visuallyPresented

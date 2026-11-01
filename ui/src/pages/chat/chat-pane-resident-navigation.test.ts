@@ -11,6 +11,7 @@ import type { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { createTestChatPane, nativeHistorySeq } from "./chat-pane-history.test-support.ts";
 import { residentPane } from "./chat-pane-resident.test-support.ts";
 import { createPaneHeaderWorkspaceFixture } from "./chat-pane.test-support.ts";
+import * as duplicatePreparation from "./chat-thread-duplicates.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems } from "./chat-thread.ts";
@@ -95,6 +96,98 @@ it("rebuilds visible and unfiltered search views without resurrecting retired so
       }
       expect(input.searchQuery).toBe("body-601");
     }
+  }
+});
+
+it("reuses complete survivor turns across real older and newer residency cuts", async () => {
+  const { pane, state, requests } = residentPane((messages) => {
+    for (const message of messages) {
+      message.role = nativeHistorySeq(message)! % 2 ? "user" : "assistant";
+      message.timestamp = nativeHistorySeq(message)! * 10;
+    }
+  });
+  pane.paneId = "survivor-physical";
+  pane.presentationId = JSON.stringify([pane.paneId, state.sessionKey]);
+  expect(pane.presentationId).not.toBe(pane.paneId);
+  await loadChatHistory(state, { deferBranches: true });
+  for (let page = 0; page < 4; page++) {
+    expect(await pane.loadOlderMessages(false)).toBe(true);
+  }
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
+    Array.from({ length: 400 }, (_, index) => index + 241),
+  );
+  const survivors = state.chatMessages.slice(0, 320);
+  const retained = new Set(survivors);
+  const views = ["visible", "unfiltered"] as const;
+  const build = (view: (typeof views)[number]) =>
+    buildCachedChatItems(
+      createProps({
+        paneId: pane.presentationId,
+        sessionKey: state.sessionKey,
+        messages: state.chatMessages,
+      }),
+      view,
+    ).filter((item) => item.kind === "group");
+  let previous = views.map(build);
+  for (const items of previous) {
+    expect(items.flatMap((item) => item.messages.map((entry) => entry.message))).toEqual(
+      state.chatMessages,
+    );
+  }
+  const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
+  try {
+    for (const direction of ["older", "newer"] as const) {
+      preparation.mockClear();
+      const before = requests.length;
+      expect(
+        await (direction === "older" ? pane.loadOlderMessages(false) : pane.loadNewerMessages()),
+      ).toBe(true);
+      const first = direction === "older" ? 161 : 241;
+      expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
+        Array.from({ length: 400 }, (_, index) => index + first),
+      );
+      const currentSurvivors = state.chatMessages.filter((message) => retained.has(message));
+      expect(currentSurvivors).toHaveLength(320);
+      expect(currentSurvivors.every((message, index) => message === survivors[index])).toBe(true);
+      expect(requests.slice(before)).toEqual([
+        {
+          cursor: direction === "older" ? "before-241" : "after-560",
+          messageId: undefined,
+          offset: undefined,
+          limit: direction === "older" ? 80 : 400,
+        },
+      ]);
+      expect(state.chatHistoryPagination.hasNewer).toBe(direction === "older" ? true : undefined);
+      const next = views.map(build);
+      for (const [index, items] of next.entries()) {
+        expect(items.flatMap((item) => item.messages.map((entry) => entry.message))).toEqual(
+          state.chatMessages,
+        );
+        const prior = new Map(previous[index]!.map((item) => [item.key, item]));
+        const kept = items.filter((item) =>
+          item.messages.every((entry) => retained.has(entry.message)),
+        );
+        expect(kept).toHaveLength(320);
+        expect(kept.every((item) => prior.has(item.key))).toBe(true);
+        expect
+          .soft(
+            kept.every((item) => prior.get(item.key) === item),
+            direction + ": " + views[index],
+          )
+          .toBe(true);
+      }
+      expect
+        .soft(
+          preparation.mock.calls
+            .flatMap(([items]) => items)
+            .filter((item) => item.kind === "message" && retained.has(item.message)).length,
+          direction + ": retained preparation",
+        )
+        .toBe(0);
+      previous = next;
+    }
+  } finally {
+    preparation.mockRestore();
   }
 });
 
@@ -565,6 +658,9 @@ it("collects retired concrete bodies and dormant projections while the pane and 
       });
     }
   });
+  pane.paneId = "dormant-physical";
+  pane.presentationId = JSON.stringify([pane.paneId, state.sessionKey]);
+  expect(pane.presentationId).not.toBe(pane.paneId);
   await loadChatHistory(state, { deferBranches: true });
   const populateDormantOwners = () => {
     for (const [seq, runId, status] of [
@@ -580,7 +676,7 @@ it("collects retired concrete bodies and dormant projections while the pane and 
     }
     expect(pane.readReplyMessage("source-601")).toBeDefined();
     const input = createProps({
-      paneId: pane.paneId,
+      paneId: pane.presentationId,
       sessionKey: state.sessionKey,
       messages: state.chatMessages,
     });
@@ -588,7 +684,7 @@ it("collects retired concrete bodies and dormant projections while the pane and 
     buildCachedChatItems(input, "unfiltered");
     const catalog = Reflect.get(pane, "attachmentCatalog") as PaneAttachmentCatalog;
     const chatProps = {
-      paneId: pane.paneId,
+      paneId: pane.presentationId,
       sessionKey: state.sessionKey,
       connectionEpoch: state.connectionEpoch,
     } as ChatProps;
