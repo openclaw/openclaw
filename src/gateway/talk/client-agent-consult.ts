@@ -268,7 +268,7 @@ export function createTalkClientAgentConsultRunner(params: {
               ({ payload }) => payload.sensitiveMedia !== true,
             );
             if (!plan.some(({ parts }) => parts.mediaUrls.length > 0)) {
-              return false;
+              return "none";
             }
             // Same owner as Gateway agent finals: stage managed attachments on the
             // consult's own transcript message under the session's media access.
@@ -280,7 +280,7 @@ export function createTalkClientAgentConsultRunner(params: {
                 readConsistency: "latest",
               })
             )?.lifecycleRevision;
-            await finalizeAgentRunMedia(
+            const attached = await finalizeAgentRunMedia(
               {
                 options: {},
                 session: {
@@ -309,7 +309,7 @@ export function createTalkClientAgentConsultRunner(params: {
               { payloads, sessionId, lifecycleRevision, storePath },
               plan,
             );
-            return true;
+            return attached ? "attached" : "refused";
           },
           onRunStarted: async ({ runId, sessionId, timeoutMs }) => {
             let registeredRun:

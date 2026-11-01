@@ -44,6 +44,7 @@ const REALTIME_VOICE_YIELD_ACK_MAX_CHARS = 500;
 const REALTIME_VOICE_YIELD_ACK_FALLBACK =
   "I started that work and will share the result when it is ready.";
 const REALTIME_VOICE_MEDIA_ONLY_ACK = "I've put that in the chat.";
+const REALTIME_VOICE_MEDIA_REFUSED_ACK = "I couldn't put that in the chat.";
 
 /**
  * Sender-auth contract revision for official realtime voice plugins.
@@ -235,14 +236,14 @@ export async function consultRealtimeVoiceAgent(params: {
   abortSignal?: AbortSignal;
   /**
    * Chat surfaces deliver the current answer's media while the run is still registered.
-   * Resolves true when attachments reached the chat, so a media-only answer is spoken.
+   * "attached" and "refused" let a media-only answer say what the chat now shows.
    */
   deliverAnswerMedia?: (reply: {
     runId: string;
     sessionId: string;
     payloads: ReplyPayload[];
     abortSignal: AbortSignal;
-  }) => Promise<boolean>;
+  }) => Promise<"attached" | "refused" | "none">;
   /** Gateway ingress adapts authenticated policy; channel bridges keep their own authority. */
   prepareToolContext?: (
     sessionEntry: SessionEntry,
@@ -595,7 +596,7 @@ export async function consultRealtimeVoiceAgent(params: {
         throw error;
       }
       let currentInputPayloads: ReplyPayload[] = [];
-      let mediaDelivered = false;
+      let mediaDelivery: "attached" | "refused" | "none" = "none";
       const result = await runPromise
         .catch((error: unknown) => {
           assertRealtimeVoiceConsultNotInterrupted(abortSignal);
@@ -609,7 +610,7 @@ export async function consultRealtimeVoiceAgent(params: {
           );
           if (params.deliverAnswerMedia && completed.meta?.yielded !== true) {
             try {
-              mediaDelivered = await params.deliverAnswerMedia({
+              mediaDelivery = await params.deliverAnswerMedia({
                 runId,
                 sessionId,
                 payloads: currentInputPayloads,
@@ -642,8 +643,13 @@ export async function consultRealtimeVoiceAgent(params: {
         };
       }
       const text = collectRealtimeVoiceAgentConsultVisibleText(currentInputPayloads);
-      if (!text && mediaDelivered) {
-        return { text: REALTIME_VOICE_MEDIA_ONLY_ACK };
+      if (!text && mediaDelivery !== "none") {
+        return {
+          text:
+            mediaDelivery === "attached"
+              ? REALTIME_VOICE_MEDIA_ONLY_ACK
+              : REALTIME_VOICE_MEDIA_REFUSED_ACK,
+        };
       }
       if (!text) {
         params.logger.warn(
