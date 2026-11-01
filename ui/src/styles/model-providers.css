@@ -358,11 +358,6 @@
   margin-bottom: var(--space-3);
 }
 
-.settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
-  width: var(--control-ui-text-xs);
-  height: var(--control-ui-text-xs);
-}
-
 .model-providers__defaults .settings-row__control {
   flex: 0 1 420px;
   width: 420px;

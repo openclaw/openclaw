@@ -144,7 +144,8 @@ export function ChannelsView(props: ChannelsProps) {
           actions={
             <ChannelRefresh
               updatedAt={props.channels.channelsLastSuccess}
-              disabled={!props.channels.connected || props.channels.channelsLoading}
+              busy={props.channels.channelsLoading}
+              disabled={!props.channels.connected}
               onRefresh={() => props.onRefresh(true)}
             />
           }

@@ -12,6 +12,8 @@ import {
   createSignal,
   Errored,
   For,
+  action,
+  createOptimistic,
   isPending,
   latest,
   Loading,
@@ -24,6 +26,7 @@ import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -215,6 +218,13 @@ function Toolbar(
     hasAdvancedJobsFilters: boolean;
   },
 ) {
+  // The jobs read holds its results in a transition; only an optimistic value shows during it.
+  const [manualRefresh, setManualRefresh] = createOptimistic(false);
+  const refreshing = () => manualRefresh() || props.loading;
+  const refresh = action(function* () {
+    setManualRefresh(true);
+    yield props.onRefresh();
+  });
   return (
     <div class="cron-toolbar">
       {props.listTab === "tasks" ? (
@@ -243,19 +253,13 @@ function Toolbar(
       <div class="cron-toolbar__primary">
         <ListTabs {...props} />
         <div class="cron-toolbar__actions">
-          <button
-            type="button"
-            class={[
-              "btn btn--sm btn--ghost cron-refresh",
-              { "cron-refresh--loading": props.loading },
-            ]}
-            disabled={props.loading}
-            title={props.loading ? t("cron.list.refreshing") : t("cron.list.refresh")}
-            aria-label={t("cron.list.refresh")}
-            onClick={() => props.onRefresh()}
-          >
-            <Icon name="refresh" />
-          </button>
+          <RefreshButton
+            class="cron-refresh"
+            label={t("cron.list.refresh")}
+            tooltip={refreshing() ? t("cron.list.refreshing") : t("cron.list.refresh")}
+            busy={refreshing()}
+            onClick={() => void refresh()}
+          />
           {(props.canCreate ?? props.canManage) ? (
             <button
               ref={props.focus?.ref("create")}

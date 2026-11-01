@@ -2,6 +2,7 @@ import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsPage, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
@@ -325,15 +326,11 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
                     { value: "cost", label: t("usage.metrics.cost") },
                   ]}
                 />
-                <button
-                  class="btn btn--sm btn--icon"
-                  aria-label={t("common.refresh")}
-                  title={t("common.refresh")}
+                <RefreshButton
+                  label={t("common.refresh")}
+                  busy={loading()}
                   onClick={() => void props.callbacks.filters.onRefresh()}
-                  disabled={loading()}
-                >
-                  <Icon name="refresh" />
-                </button>
+                />
               </div>
             </div>
 

@@ -680,7 +680,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       onSettled(() => ensureEditorModels());
     },
     onFormChange: patchForm,
-    onRefresh: () => void refreshCron({ refresh: true }),
+    onRefresh: () => refreshCron({ refresh: true }),
     onSubmit: () => submitForm(),
     onSubmitRunNow: () => submitForm(true),
     onSelectJob: selectJob,

@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -120,9 +121,9 @@ export function AgentCron(
         actions={
           <CronReadBoundary read={params.read().refresh}>
             {(pending) => (
-              <AgentPanelAction
-                label={pending ? t("common.refreshing") : t("common.refresh")}
-                disabled={pending}
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={pending}
                 onClick={params.onRefresh}
               />
             )}

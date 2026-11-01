@@ -185,7 +185,7 @@ it("retains one initial request across metadata snapshots with empty logs", asyn
   const { request, replies } = pendingRequests();
   const { client, context, page } = await setup(request, false);
   context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
-  await waitForSolid(() => expect(page.disabled("Loading…")).toBe(true));
+  await waitForSolid(() => expect(page.disabled("Refresh")).toBe(true));
   context.gateway.publish({ ...context.gateway.snapshot });
   expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([false]);
   await deliver(replies[0]!, tail(100, [], "/tmp/initial.log"));
@@ -329,7 +329,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     await page.refresh();
     page.expectRows(["old"], true);
   }
-  expect(page.disabled("Loading…")).toBe(true);
+  expect(page.disabled("Refresh")).toBe(true);
   expectRetainedControls();
   pending.reject(new Error("logs unavailable"));
   await waitForSolid(() => expect(page.disabled("Refresh")).toBe(false));

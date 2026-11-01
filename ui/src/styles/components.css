@@ -1283,6 +1283,43 @@ select.settings-select:not([multiple]) {
   border-color: transparent;
 }
 
+.btn.refresh-button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.btn.refresh-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn.refresh-button[aria-busy="true"]:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+.refresh-button[aria-busy="true"] svg {
+  animation: btn-spinner-spin 0.9s linear infinite;
+}
+
+@media (pointer: coarse) {
+  .btn.refresh-button {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refresh-button[aria-busy="true"] svg {
+    animation: none;
+  }
+}
+
 .muted {
   color: var(--muted);
 }
