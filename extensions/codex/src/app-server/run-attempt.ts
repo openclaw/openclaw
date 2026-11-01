@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-model-metadata";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
@@ -9,7 +10,7 @@ import { prepareCodexAttemptContext } from "./run-attempt-context.js";
 import { finalizeCodexAttempt } from "./run-attempt-finalize.js";
 import { createCodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { createCodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import { prepareCodexAttemptPrompt } from "./run-attempt-prompt.js";
+import { prepareCodexAttemptPrompt, type CodexAttemptAssembly } from "./run-attempt-prompt.js";
 import { prepareCodexAttemptResources } from "./run-attempt-resources.js";
 import { prepareCodexAttemptRoute } from "./run-attempt-route.js";
 import { prepareCodexAttemptRuntime } from "./run-attempt-runtime.js";
@@ -20,10 +21,33 @@ import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import { startCodexAttemptTurn } from "./run-attempt-turn-start.js";
 import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
+import { CodexThreadClientReplacementError } from "./thread-lifecycle-errors.js";
+import { collectCodexDeferredToolNames } from "./thread-prompt.js";
+import { assertDeferredToolInventoryFits } from "./tool-inventory-budget.js";
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
+): Promise<EmbeddedRunAttemptResult> {
+  const replacement = { requested: false };
+  const assembly: CodexAttemptAssembly = {};
+  try {
+    return await runCodexAppServerAttemptOnce(params, options, replacement, assembly);
+  } catch (error) {
+    if (!replacement.requested || !(error instanceof CodexThreadClientReplacementError)) {
+      throw error;
+    }
+    // Preserve startup's one replacement retry, now rebuilding the surface on
+    // the replacement connection before computing prompt/history fingerprints.
+    return await runCodexAppServerAttemptOnce(params, options, { requested: false }, assembly);
+  }
+}
+
+async function runCodexAppServerAttemptOnce(
+  params: EmbeddedRunAttemptParamsV2,
+  options: CodexRunAttemptOptions,
+  replacement: { requested: boolean },
+  assembly: CodexAttemptAssembly,
 ): Promise<EmbeddedRunAttemptResult> {
   if (
     params.requireWorkspaceOnly === true &&
@@ -55,8 +79,22 @@ export async function runCodexAppServerAttempt(
           prepareCodexAttemptContext(runtime, attemptTools),
         );
         const attemptPrompt = await preparation.measure("prompt", () =>
-          prepareCodexAttemptPrompt(attemptContext),
+          prepareCodexAttemptPrompt(attemptContext, assembly),
         );
+        // Only restricted turns deferred by connection discovery are admitted here;
+        // other searchable turns keep their existing admission.
+        if (runtime.toolDiscoveryClient?.modelListedOnConnection) {
+          assertDeferredToolInventoryFits({
+            names: collectCodexDeferredToolNames(attemptTools.toolBridge.specs),
+            model: runtime.effectiveRuntimeModelId,
+            contextSource: runtime.effectiveContextWindowInfo?.source,
+            contextTokens:
+              runtime.effectiveContextWindowInfo?.tokens ??
+              runtime.effectiveContextTokenBudget ??
+              params.model.contextWindow ??
+              DEFAULT_CONTEXT_TOKENS,
+          });
+        }
         const resources = prepareCodexAttemptResources(attemptPrompt);
         // This turn's claimed children make the yield; otherwise report native
         // children of earlier turns, whose completion still resumes the session.
@@ -70,9 +108,18 @@ export async function runCodexAppServerAttempt(
         };
         let activeTurnOwnsCleanup = false;
         try {
-          const startedResources = await preparation.measure("runtime-start", () =>
-            startCodexAttemptRuntime(resources),
-          );
+          const startedResources = await preparation.measure("runtime-start", async () => {
+            try {
+              return await startCodexAttemptRuntime(resources);
+            } catch (error) {
+              replacement.requested = Boolean(
+                runtime.toolDiscoveryClient &&
+                !connection.runAbortController.signal.aborted &&
+                error instanceof CodexThreadClientReplacementError,
+              );
+              throw error;
+            }
+          });
 
           const turnRuntime = createCodexAttemptTurnState(startedResources);
           try {
@@ -190,6 +237,7 @@ export async function runCodexAppServerAttempt(
         );
       }
     } finally {
+      runtime.toolDiscoveryClient?.release();
       runtime.nativeExecutionPolicy.release();
     }
   } catch (error) {

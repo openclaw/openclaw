@@ -5,7 +5,11 @@ import {
   type CodexDynamicToolSpec,
   type JsonObject,
 } from "./protocol.js";
-import { buildDeveloperInstructions, type CodexThreadPromptContext } from "./thread-prompt.js";
+import {
+  buildDeveloperInstructions,
+  collectCodexDeferredToolNames,
+  type CodexThreadPromptContext,
+} from "./thread-prompt.js";
 
 function tool(
   name: string,
@@ -91,11 +95,11 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
           expect(instructions).not.toContain(name);
         }
       } else {
-        expect(instructions.includes("ALL_TOOLS")).toBe(enabled);
+        expect(instructions).toContain("ALL_TOOLS");
         expect(instructions).toContain(
           enabled
             ? "native JavaScript `exec`"
-            : "Shell command tools execute operating-system commands",
+            : "shell command tools execute operating-system commands",
         );
         if (!codeOnly) {
           expect(instructions).toContain("openclaw.dashboard");
@@ -235,4 +239,20 @@ describe("buildDeveloperInstructions delivery-mode stability", () => {
     expect(instructions[1]).toBe(instructions[0]);
     expect(instructions[2]).toBe(instructions[0]);
   });
+});
+
+it("renders the same qualified deferred inventory that admission accounts", () => {
+  const dynamicTools = [
+    namespace([tool("read", {}, true), tool("exec")]),
+    namespace([tool("read", {}, true)], "other_server"),
+    tool("plain", {}, true),
+  ];
+  const names = collectCodexDeferredToolNames(dynamicTools);
+  expect(names).toEqual(["openclaw.read", "other_server.read", "plain"]);
+  expect(render({}, { dynamicTools, nativeCodeModeEnabled: false })).toContain(
+    `Deferred searchable OpenClaw dynamic tools available: ${names.join(", ")}.`,
+  );
+  expect(render({}, { dynamicTools, nativeCodeModeEnabled: false })).toContain(
+    "actual runtime name",
+  );
 });

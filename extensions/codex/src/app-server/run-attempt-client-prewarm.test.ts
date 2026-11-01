@@ -62,7 +62,8 @@ function createInput(params?: {
     },
     agentDir: "/tmp/openclaw-agent",
     sessionAgentId: "main",
-    pluginConfig: { appServer: { enabled: true } },
+    // Exercise prewarm independently of the catalog's awaited startup lease.
+    pluginConfig: { appServer: { enabled: true }, codexDynamicToolsLoading: "direct" },
     startupAuthProfileId: "profile-1",
     startupClientAuthProfileId: "profile-1",
     startupAuthRequirement: "subscription",
@@ -93,7 +94,7 @@ describe("Codex attempt client prewarm", () => {
     expect(mocks.getSharedCodexAppServerClient).toHaveBeenCalledWith({
       assertCurrent: input.assertLegacyCurrent,
       startOptions: { command: "codex", args: ["app-server"] },
-      pluginConfig: { appServer: { enabled: true } },
+      pluginConfig: { appServer: { enabled: true }, codexDynamicToolsLoading: "direct" },
       authProfileId: "profile-1",
       authRequirement: "subscription",
       authProfileStore: { kind: "test-store" },
