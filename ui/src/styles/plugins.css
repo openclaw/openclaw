@@ -1513,10 +1513,20 @@ openclaw-plugins-page
     flex: none;
   }
 
-  openclaw-skills-page .skill-library-search .btn--icon,
-  openclaw-skills-page .skill-library-search__action .btn--icon {
+  openclaw-skills-page .btn.skill-library-search__icon {
     width: var(--settings-control-height);
     height: var(--settings-control-height);
+    padding: 0;
+  }
+
+  openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
+    display: contents;
+  }
+
+  openclaw-skills-page .skill-library-search__icon svg {
+    display: block;
+    width: 14px;
+    height: 14px;
   }
 
   openclaw-skills-page .plugins-toolbar--fields:has(> .skill-library-search__action) {

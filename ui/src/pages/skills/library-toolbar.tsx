@@ -59,7 +59,7 @@ export function SkillLibraryPageMenu(
       label={t("skillLibrary.library")}
       placement="bottom-end"
       pointerFocus="trigger"
-      triggerClass="btn btn--icon"
+      triggerClass="btn btn--sm skill-library-search__icon"
       trigger={<Icon name="moreHorizontal" />}
       items={items()}
       onSelect={(item) => {

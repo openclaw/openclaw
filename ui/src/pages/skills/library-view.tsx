@@ -134,7 +134,7 @@ export function SkillLibrary(props: {
           </label>
           <button
             type="button"
-            class="btn btn--icon skill-library-search__action"
+            class="btn btn--sm skill-library-search__action skill-library-search__icon"
             aria-label={t("common.refresh")}
             disabled={props.library.saving() || current().busy || current().loading}
             onClick={() => void props.library.load()}
