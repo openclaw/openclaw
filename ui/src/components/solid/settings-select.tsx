@@ -16,6 +16,7 @@ export function SettingsSelect(
             value={option().value}
             selected={props.value === option().value}
             disabled={option().disabled}
+            // SAFETY: the typeof check reads the same accessor in the same synchronous expression.
             title={typeof option().label === "string" ? (option().label as string) : undefined}
           >
             {option().label}
