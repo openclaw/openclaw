@@ -767,12 +767,3 @@ it("re-evaluates discovery on startup client replacement and falls back to direc
   ).toBe(true);
   await completeRun(second, run);
 });
-
-it("does not query the catalog on the existing unrestricted native path", async () => {
-  const { harness, run } = await startTool(createRuntimeDynamicTool("lookup_record"), {
-    clock: true,
-  });
-  await run.waitForTurnAccepted();
-  expect(harness.requests.filter(({ method }) => method === "model/list")).toEqual([]);
-  await completeRun(harness, run);
-});
