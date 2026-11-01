@@ -140,7 +140,7 @@ fixture.describe("Control UI shimmer", () => {
       expect(active.map(([, transparent]) => transparent)).toEqual(
         active.map(([shimmer]) => shimmer),
       );
-      const dimensions = active.map(([, , width, height]) => [width, height]);
+      const dimensions = active.map((state) => state.slice(2));
       expect(dimensions.filter((_, index) => index % 2 === 0)).toEqual(
         dimensions.filter((_, index) => index % 2 === 1),
       );
