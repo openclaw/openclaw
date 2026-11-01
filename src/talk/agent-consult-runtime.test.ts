@@ -450,7 +450,7 @@ describe("realtime voice agent consult runtime", () => {
     ]);
     const deliverAnswerMedia = vi.fn(async () => {
       expect(cleanup).not.toHaveBeenCalled();
-      return true;
+      return "attached" as const;
     });
 
     const mediaOnly = await runConsult(runtime, {
@@ -472,6 +472,14 @@ describe("realtime voice agent consult runtime", () => {
     expect(mediaOnly).toEqual({ text: "I've put that in the chat." });
     expect(warn).not.toHaveBeenCalled();
 
+    // A refused attachment is never announced as delivered.
+    const refused = await runConsult(createAgentRuntime([media]).runtime, {
+      logger: { warn },
+      deliverAnswerMedia: async () => "refused",
+    });
+    expect(refused).toEqual({ text: "I couldn't put that in the chat." });
+    expect(warn).not.toHaveBeenCalled();
+
     // Channels without a chat surface keep the existing no-answer fallback.
     const withoutOwner = await runConsult(createAgentRuntime([media]).runtime, {
       logger: { warn },
@@ -491,7 +499,7 @@ describe("realtime voice agent consult runtime", () => {
       deliverAnswerMedia: async ({ abortSignal }) => {
         controller.abort(new Error("voice session closed"));
         abortSignal.throwIfAborted();
-        return true;
+        return "attached" as const;
       },
     });
 
