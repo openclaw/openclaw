@@ -844,7 +844,7 @@ try {
         await waitForControlUiGatewayReady(page, 60000);
         // A rendered header can precede the viewer declaration; pause only after its ack.
         const declared = page.waitForEvent("websocket").then(async (socket) => {
-          const { payload } = await socket.waitForEvent("framesent", {
+          const { payload: declaration } = await socket.waitForEvent("framesent", {
             predicate: ({ payload }) => {
               const frame: { method?: string; params?: { sessionKeys?: string[] } } = JSON.parse(
                 payload.toString(),
@@ -856,7 +856,7 @@ try {
             },
             timeout: 60000,
           });
-          const request: { id: string } = JSON.parse(payload.toString());
+          const request: { id: string } = JSON.parse(declaration.toString());
           await socket.waitForEvent("framereceived", {
             predicate: ({ payload }) => {
               const frame: { id?: string; ok?: boolean } = JSON.parse(payload.toString());
