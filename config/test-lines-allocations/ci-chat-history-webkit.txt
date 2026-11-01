@@ -1,0 +1,2 @@
+1
+# Cover WebKit installation for the shard selecting chat history reading stability.
