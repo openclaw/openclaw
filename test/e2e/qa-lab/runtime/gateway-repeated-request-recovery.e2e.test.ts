@@ -306,7 +306,7 @@ async function readFailureEvidence(params: {
 
 describe("Gateway repeated-request recovery", () => {
   it(
-    "recovers semantic stagnation and settles the active run before draining one queued followup",
+    "observes semantic stagnation until the active run settles before draining one queued followup",
     { timeout: 330_000 },
     async () => {
       gatewayOwner = createQaLiveLaneGateway();
@@ -395,50 +395,37 @@ describe("Gateway repeated-request recovery", () => {
       expect(queued).toMatchObject({ status: "started" });
       expect(typeof queued.runId).toBe("string");
 
-      // Repeated-request recovery owns semantic stagnation independently of the
-      // current provider request's deadline. Observe its settlement before queue drain.
-      const events = await waitForStability(
-        gateway,
-        baselineSeq,
-        (records) =>
-          records.some(
-            (event) => event.type === "session.recovery.completed" && event.outcome === "aborted",
-          ),
-        250_000,
-      );
-      const stalled = events.filter(
-        (event) => event.type === "session.stalled" && event.reason === RECOVERY_REASON,
-      );
-      const requested = events.filter(
-        (event) => event.type === "session.recovery.requested" && event.reason === RECOVERY_REASON,
-      );
-      const completed = events.filter((event) => event.type === "session.recovery.completed");
-
-      // Heartbeats may observe a stall more than once; recovery still owns one abort.
-      expect(stalled.length).toBeGreaterThan(0);
-      for (const event of stalled) {
-        expect(event.ageMs).toEqual(expect.any(Number));
-        expect(event.ageMs as number).toBeGreaterThanOrEqual(QA_RECOVERY_BOUND_MS);
-      }
-      expect(requested).toEqual([
-        expect.objectContaining({ action: "abort", reason: RECOVERY_REASON }),
-      ]);
-      expect(completed).toEqual([
-        expect.objectContaining({ action: "abort_embedded_run", outcome: "aborted" }),
-      ]);
-      expect(
-        events.filter((event) => event.type === "model.call.started").length,
-      ).toBeGreaterThanOrEqual(5);
-
+      // Repeated provider requests are observational: the provider deadline,
+      // not diagnostics, settles the active owner before the queued turn drains.
       const activeTerminal = (await gateway.call(
         "agent.wait",
-        { runId: active.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
+        { runId: active.runId, timeoutMs: 180_000 },
+        { timeoutMs: 185_000 },
       )) as GatewayChatRun;
       expect(activeTerminal).toMatchObject({
         status: "error",
         endedAt: expect.any(Number),
       });
+
+      const events = (await readStability(gateway, baselineSeq)).events ?? [];
+      const stalled = events.filter(
+        (event) => event.type === "session.stalled" && event.reason === RECOVERY_REASON,
+      );
+      expect(stalled.length).toBeGreaterThan(0);
+      for (const event of stalled) {
+        expect(event.ageMs).toEqual(expect.any(Number));
+        expect(event.ageMs as number).toBeGreaterThanOrEqual(QA_RECOVERY_BOUND_MS);
+      }
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "session.recovery.requested" ||
+            event.type === "session.recovery.completed",
+        ),
+      ).toEqual([]);
+      expect(
+        events.filter((event) => event.type === "model.call.started").length,
+      ).toBeGreaterThanOrEqual(5);
 
       const history = await waitForQueuedReply(gateway, sessionKey).catch(
         async (error: unknown) => {
@@ -474,10 +461,8 @@ describe("Gateway repeated-request recovery", () => {
       }
       const requests = await readClassifiedMockRequests(mockBaseUrl);
       const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
-      // Invisible replay-safe errors exhaust the primary model's retry budget;
-      // the diagnostic owner then aborts the stalled fallback request.
-      // The mock records its planned response before the delay; lifecycle checks
-      // above prove the actual abort and completion.
+      // Invisible replay-safe errors exhaust both model retry budgets. Diagnostics
+      // remain observational while the fallback owner continues on its native thread.
       expect(recoveryRequests).toEqual([
         ...Array.from({ length: 4 }, () =>
           expect.objectContaining({
@@ -493,20 +478,29 @@ describe("Gateway repeated-request recovery", () => {
           outcome: "error",
           errorCode: "response_failed_no_details",
         }),
+        ...Array.from({ length: 4 }, () =>
+          expect.objectContaining({
+            model: "gpt-5.6-luna-alt",
+            continuation: true,
+            outcome: "error",
+            errorCode: "response_failed_no_details",
+          }),
+        ),
       ]);
-      // The stalled turn never replied, so the queued request answers with the
-      // interruption guidance instead of a retry notice or an extra recovery turn.
+      // The provider-owned turn settles without a diagnostic abort, so the queued
+      // request answers normally without synthetic interruption guidance.
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
-        expect.objectContaining({ outcome: "success", stallGuidance: true }),
+        expect.objectContaining({ outcome: "success", stallGuidance: false }),
       ]);
 
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];
       expect(
-        finalEvents.filter((event) => event.type === "session.recovery.requested"),
-      ).toHaveLength(1);
-      expect(
-        finalEvents.filter((event) => event.type === "session.recovery.completed"),
-      ).toHaveLength(1);
+        finalEvents.filter(
+          (event) =>
+            event.type === "session.recovery.requested" ||
+            event.type === "session.recovery.completed",
+        ),
+      ).toEqual([]);
     },
   );
 });
