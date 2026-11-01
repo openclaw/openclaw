@@ -1,2 +1,2 @@
-# #141959: Telegram flood retry budget counts queue and request time; slow-429 limiter regression
-21
+# #141959: Telegram flood retry budget (slow-429 limiter case) and flood-refused finals kept for resend (429 no-send proof, page loop stop)
+35
