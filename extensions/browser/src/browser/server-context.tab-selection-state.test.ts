@@ -390,12 +390,11 @@ describe("browser tab selection and ownership", () => {
       ...retainedDashboardRecord("OLD8"),
       kind: "durable" as const,
       profile: scenario.profile,
-      profileAliases: "aliases" in scenario ? [...scenario.aliases] : undefined,
-      lastUsedAt: "dashboard" in scenario && scenario.dashboard !== "released" ? 0 : 9_000,
-      dashboard:
-        "dashboard" in scenario
-          ? { ...retainedDashboardRecord("OLD8").dashboard!, state: scenario.dashboard }
-          : undefined,
+      profileAliases: scenario.aliases ? [...scenario.aliases] : undefined,
+      lastUsedAt: scenario.dashboard && scenario.dashboard !== "released" ? 0 : 9_000,
+      dashboard: scenario.dashboard
+        ? { ...retainedDashboardRecord("OLD8").dashboard!, state: scenario.dashboard }
+        : undefined,
     };
     vi.spyOn(sessionTabTracking, "readDurableTabs").mockResolvedValue([record]);
     const { openclaw, closed, cleanup } = setupManagedTabEviction(() =>
