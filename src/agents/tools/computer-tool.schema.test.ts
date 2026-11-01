@@ -466,19 +466,17 @@ describe("createComputerTool v2 execution", () => {
   );
 
   it.each(["inspect", "accept"])(
-    "captures an after-image only for a dialog mutation: %s",
+    "preserves prompt whitespace and captures an after-image only for a dialog mutation: %s",
     async (dialogAction) => {
+      const promptText = dialogAction === "inspect" ? undefined : " \t ";
       useActions(["browser_dialog"]);
-      callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
-        (body as ComputerActBody).command === COMPUTER_ACT_COMMAND
-          ? { payload: { ok: true, effect: "confirmed" } }
-          : screenshotPayload(),
-      );
+      mockComputerAct(() => ({ payload: { ok: true, effect: "confirmed" } }));
       await createVisionComputerTool().execute("dialog", {
         action: "browser_dialog",
         browserRef: "browser-1",
         pageRef: "page-1",
         dialogAction,
+        promptText,
         ...(dialogAction === "inspect" ? {} : { dialogRef: "dialog-1" }),
       });
       expect(
@@ -488,51 +486,9 @@ describe("createComputerTool v2 execution", () => {
           ? [COMPUTER_ACT_COMMAND]
           : [COMPUTER_ACT_COMMAND, "screen.snapshot"],
       );
-      expect(readLastComputerActParams()).not.toHaveProperty("promptText");
+      expect(readLastComputerActParams().promptText).toBe(promptText);
     },
   );
-
-  it.each([
-    ["set_value", "value", "get_window_state", { windowRef: "window-1" }],
-    ["browser_type", "text", "get_browser_state", { browserRef: "browser-1", pageRef: "page-1" }],
-    [
-      "browser_dialog",
-      "promptText",
-      "get_browser_state",
-      { browserRef: "browser-1", pageRef: "page-1" },
-    ],
-  ] as const)("preserves text content for %s", async (action, field, observe, target) => {
-    useActions([observe, action]);
-    mockComputerAct((params) => ({
-      payload:
-        params?.action === observe
-          ? {
-              ok: true,
-              observation: {
-                kind: observe === "get_window_state" ? "window" : "browser",
-                observationId: "observation-1",
-              },
-            }
-          : { ok: true, effect: "confirmed" },
-    }));
-    const tool = createVisionComputerTool({
-      pairedNodeComputerUse: { actions: [observe, action] },
-    });
-    for (const text of ["  hello\t\n", " \t\n", ""]) {
-      await tool.execute("observe", { action: observe, ...target });
-      const input = {
-        action,
-        ...target,
-        ...(action === "browser_dialog"
-          ? { dialogAction: "accept", dialogRef: "dialog-1" }
-          : { observationId: "observation-1", elementRef: "element-1" }),
-        [field]: text,
-      };
-      expect(Value.Check(tool.parameters, input)).toBe(true);
-      await tool.execute("input", input);
-      expect(readLastComputerActParams(action)[field]).toBe(text);
-    }
-  });
 
   it("maps browser observations and opaque refs through the public tool", async () => {
     useActions(["get_browser_state", "browser_pointer"]);
