@@ -158,7 +158,7 @@ function textLooksLikeReviewerDirective(value: string): boolean {
   // punctuation so check-ignore and reviewer-decision.md remain single words.
   const prose = folded
     .replace(/[\p{Cc}\p{Cf}\p{P}\p{S}]/gu, (character) =>
-      "-/\\._=".includes(character) ? character : " ",
+      "-/\\._".includes(character) ? character : " ",
     )
     .replace(/\.+(?=\s|$)/gu, " ")
     .replace(/\s+/gu, " ")
