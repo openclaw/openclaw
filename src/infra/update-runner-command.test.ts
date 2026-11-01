@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import * as updateGlobal from "./update-global.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { buildUpdateCommandRunner, runStep } from "./update-runner-command.js";
 
 describe("update download progress", () => {
@@ -103,6 +105,41 @@ describe("update download progress", () => {
 });
 
 describe("update command failure diagnostics", () => {
+  it.each([
+    "error: cannot lock ref 'refs/tags/release/child': 'refs/tags/release' exists; cannot create 'refs/tags/release/child'",
+    "fatal: unable to update local ref",
+    " ! [rejected] release -> release (would clobber existing tag)",
+  ])(
+    "retains the Git failure below progress in saved history and reports: %s",
+    async (diagnostic) => {
+      const stderr = `remote: Enumerating objects: 4, done.\nReceiving objects: 100% (4/4), done.\r${diagnostic}\n`;
+      const result = await runStep({
+        name: "git fetch",
+        argv: ["git", "fetch", "--tags", "--force", "--prune", "origin"],
+        cwd: "/fixture",
+        stepIndex: 0,
+        totalSteps: 1,
+        runCommand: async () => ({ code: 1, stdout: "", stderr }),
+      });
+      expect(result.stderrTail).toBe(stderr.trimEnd());
+      expect(result.failureFacts?.[0]?.message).toBe(diagnostic.trim());
+      const [saved] = updateRunStepsFromResultStep(result);
+      expect(saved?.detail).toContain(diagnostic.trim().slice(0, 60));
+      expect(saved?.failureFacts).toEqual(result.failureFacts);
+      const report = renderUpdateRunReport(
+        updateRunReportInputFromResult({
+          status: "error",
+          mode: "git",
+          reason: "fetch-failed",
+          steps: [result],
+          durationMs: 0,
+        }),
+      );
+      expect(report.markdown).toContain(diagnostic.trim());
+      expect(report.markdown).not.toContain("Enumerating objects");
+    },
+  );
+
   it.each(["stderr", "stdout"] as const)(
     "keeps the sanitized child cause below a package-manager banner in %s",
     async (stream) => {

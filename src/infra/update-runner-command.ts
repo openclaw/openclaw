@@ -29,8 +29,20 @@ export const MAX_LOG_CHARS = 8000;
 // A run shares its heartbeat callback across steps; weak keys do not retain completed runs.
 const warnedHeartbeats = new WeakSet<() => void>();
 
-function selectCommandFailureMessage(stdout: string, stderr: string): string {
+function selectCommandFailureMessage(
+  argv: readonly string[],
+  stdout: string,
+  stderr: string,
+): string {
   const lines = stripAnsi(stderr).split(/[\r\n\u2028\u2029]/u);
+  if (argv[0] === "git") {
+    // Forced progress precedes errors and rejected-ref status lines. Retain the
+    // diagnostic suffix for cause extraction without changing captured stderr.
+    const diagnostic = lines.findIndex((line) =>
+      /^\s*(?:(?:remote:\s*)?(?:fatal|error):|!\s+\[)/u.test(line),
+    );
+    return diagnostic >= 0 ? lines.slice(diagnostic).join("\n") : stderr;
+  }
   const firstLine = lines.find((line) => line.trim())?.trimStart();
   if (!firstLine?.startsWith("$ ")) {
     return stderr;
@@ -151,7 +163,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
               (result.termination && result.termination !== "exit"
                 ? result.termination
                 : "command-failed"),
-            message: selectCommandFailureMessage(result.stdout, result.stderr),
+            message: selectCommandFailureMessage(argv, result.stdout, result.stderr),
           },
           env,
         ),
