@@ -584,6 +584,10 @@
     grid-area: 2 / 1 / auto / -1;
     justify-content: space-between;
   }
+
+  .sw-tabs {
+    border-bottom: 0;
+  }
 }
 
 @media (max-width: 900px) {

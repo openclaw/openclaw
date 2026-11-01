@@ -65,6 +65,7 @@ it("lays out the toolbar in two rows and reveals the reader on a phone-width tap
         window.innerHeight,
       );
     });
+    expect(getComputedStyle(find(".sw-tabs")).borderBottomWidth).toBe("0px");
   } finally {
     mounted.unmount();
   }
