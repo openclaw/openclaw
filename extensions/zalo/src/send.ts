@@ -4,6 +4,8 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { stripChannelTargetPrefix, stripTargetKindPrefix } from "openclaw/plugin-sdk/core";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveZaloAccount } from "./accounts.js";
 import { sendMessage, sendPhoto } from "./api.js";
@@ -11,7 +13,7 @@ import { resolveZaloProxyFetch } from "./proxy.js";
 
 export async function sendMessageZalo(
   chatId: string,
-  text: string,
+  rawText: string,
   options: {
     accountId?: string;
     cfg: OpenClawConfig;
@@ -29,6 +31,10 @@ export async function sendMessageZalo(
     throw new Error(token ? "No chat_id provided" : "No Zalo bot token configured");
   }
 
+  const text = convertMarkdownTables(
+    rawText,
+    resolveMarkdownTableMode({ cfg: options.cfg, channel: "zalo", accountId: account.accountId }),
+  );
   const photoUrl = options.mediaUrl?.trim();
   if (options.mediaUrl && !photoUrl && !text) {
     throw new Error("No photo URL provided");

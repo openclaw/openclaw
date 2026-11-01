@@ -1,3 +1,7 @@
+import {
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ZaloFetch } from "./api.js";
 
@@ -14,6 +18,7 @@ vi.mock("./proxy.js", () => ({
   resolveZaloProxyFetch: (...args: unknown[]) => resolveZaloProxyFetchMock(...args),
 }));
 
+import { zaloPlugin } from "./channel.js";
 import { sendMessageZalo } from "./send.js";
 
 const cfg = {
@@ -110,4 +115,38 @@ describe("zalo send", () => {
     ).rejects.toBe(authorityError);
     expect(assertDirectAdapterHandoff).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["text", undefined, sendMessageMock, "text"],
+    ["caption", mediaUrl, sendPhotoMock, "caption"],
+  ] as const)(
+    "renders %s tables with the account markdown.tables mode",
+    async (_name, photo, transport, field) => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "zalo", plugin: zaloPlugin, source: "test" }]),
+      );
+      transport.mockResolvedValueOnce(sent("z-table"));
+      const tableCfg = {
+        channels: {
+          zalo: {
+            botToken: "zalo-token",
+            markdown: { tables: "off" as const },
+            accounts: {
+              work: { botToken: "work-token", markdown: { tables: "bullets" as const } },
+            },
+          },
+        },
+      };
+
+      await sendMessageZalo("chat", "| Plan | Price |\n| --- | --- |\n| Pro | $12 |", {
+        cfg: tableCfg,
+        accountId: "work",
+        ...(photo ? { mediaUrl: photo } : {}),
+      });
+
+      expect(transport.mock.calls[0]?.[1]).toMatchObject({
+        [field]: "**Pro**\n• Price: $12",
+      });
+    },
+  );
 });
