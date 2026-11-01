@@ -287,12 +287,30 @@ struct ChatToolResultIngestionTests {
         try Self.deliver(raw, to: vm)
         #expect(vm.messages.map(\.toolCallId) == ["a", "b"])
         let runs = try Self.raw(#"""
-        {"role":"user","timestamp":3,"content":[
+        {"role":"user","timestamp":3,"__openclaw":{"id":"canonical-carrier"},"content":[
           {"type":"tool_result","tool_use_id":"a","runId":"run-a","content":"OK"},
           {"type":"tool_result","tool_use_id":"a","runId":"run-b","content":"OK"}
         ]}
         """#)
-        #expect(OpenClawChatViewModel.decodeMessages([runs]).map(\.transcriptRunID) == ["run-a", "run-b"])
+        #expect(OpenClawChatViewModel.decodeMessages([runs, runs]).map(\.transcriptRunID) == ["run-a", "run-b"])
+        let runsVM = Self.model()
+        defer { runsVM.detachTransport() }
+        for _ in 0..<2 { try Self.deliver(runs, to: runsVM) }
+        #expect(runsVM.messages.map(\.transcriptRunID) == ["run-a", "run-b"])
+        #expect(runsVM.messages.map(\.transcriptMessageID) == ["canonical-carrier", "canonical-carrier"])
+
+        let missingIDs = try Self.raw(#"""
+        {"role":"user","timestamp":3,"__openclaw":{"id":"missing-call-ids"},"content":[
+          {"type":"tool_result","content":"Alpha output"},
+          {"type":"tool_result","content":"Beta output"}
+        ]}
+        """#)
+        #expect(OpenClawChatViewModel.decodeMessages([missingIDs, missingIDs]).map { $0.content.first?.text }
+            == ["Alpha output", "Beta output"])
+        let missingVM = Self.model()
+        defer { missingVM.detachTransport() }
+        for _ in 0..<2 { try Self.deliver(missingIDs, to: missingVM) }
+        #expect(missingVM.messages.map { $0.content.first?.text } == ["Alpha output", "Beta output"])
 
         let native = try Self.raw(#"{"role":"toolResult","timestamp":5,"content":"Native output"}"#)
         #expect(OpenClawChatViewModel.decodeMessages([native, native]).count == 1)
