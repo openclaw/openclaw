@@ -54,6 +54,7 @@ describe("fetchClaudeUsage", () => {
       { label: "5h", usedPercent: 0, resetAt: undefined },
       { label: "Week", usedPercent: 100, resetAt: Date.parse(reset) },
       { label: "Sonnet", usedPercent: 67 },
+      { label: "Numeric", usedPercent: 80 },
       { label: "Fable", usedPercent: 27, resetAt: Date.parse(reset) },
       { label: "Zero", usedPercent: 0, resetAt: undefined },
     ]);
@@ -62,9 +63,33 @@ describe("fetchClaudeUsage", () => {
     ]);
   });
 
-  it("preserves Opus when sibling windows and activity flags are malformed", async () => {
+  it("parses string-encoded numerics instead of treating them as missing", async () => {
     const result = await fetchUsage({
       five_hour: { utilization: "18" },
+      seven_day: { utilization: "42" },
+      limits: [{ percent: "33", scope: { model: { display_name: "Drafted" } } }],
+      extra_usage: {
+        is_enabled: true,
+        monthly_limit: "100000",
+        used_credits: "4132",
+        utilization: "4.132",
+        currency: "usd",
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toEqual([
+      { label: "5h", usedPercent: 18 },
+      { label: "Week", usedPercent: 42 },
+      { label: "Drafted", usedPercent: 33 },
+    ]);
+    expect(result.billing).toEqual([
+      { type: "budget", used: 41.32, limit: 1000, unit: "USD", period: "month" },
+    ]);
+  });
+
+  it("preserves Opus when sibling windows and activity flags are malformed", async () => {
+    const result = await fetchUsage({
+      five_hour: { utilization: "not-a-number" },
       seven_day: null,
       seven_day_sonnet: {},
       seven_day_opus: { utilization: 44 },
