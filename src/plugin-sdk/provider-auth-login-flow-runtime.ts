@@ -330,16 +330,20 @@ function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResu
     result.defaultModel === undefined
       ? undefined
       : parseRequiredString(result.defaultModel, "default model");
+  const access: unknown = result.modelAccess;
   let modelAccess: ModelsAuthLoginFlowResult["modelAccess"];
-  if (result.modelAccess !== undefined) {
-    const { message, applied } =
-      result.modelAccess && typeof result.modelAccess === "object"
-        ? (result.modelAccess as Record<string, unknown>)
-        : {};
-    if (typeof message !== "string" || typeof applied !== "boolean") {
+  if (access !== undefined) {
+    if (
+      !access ||
+      typeof access !== "object" ||
+      !("message" in access) ||
+      !("applied" in access) ||
+      typeof access.message !== "string" ||
+      typeof access.applied !== "boolean"
+    ) {
       throw new Error("Provider login returned an invalid model access result.");
     }
-    modelAccess = { message, applied };
+    modelAccess = { message: access.message, applied: access.applied };
   }
   return {
     providerId,
