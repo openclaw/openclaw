@@ -3,19 +3,10 @@
   "categories": [
     "agent-orchestration"
   ],
-  "doctorContract": {
-    "configRepair": true
-  },
   "enabledByDefault": true,
   "name": "Skill Workshop",
   "description": "Learned skills each agent saves from its own work.",
   "agentSkillsDir": "workshop-skills",
-  "configContracts": {
-    "compatibilityMigrationPaths": [
-      "skills.workshop",
-      "plugins.entries.skill-workshop.config"
-    ]
-  },
   "uiHints": {
     "autonomous.mode": {
       "label": "Skill Workshop Autonomous Mode",
