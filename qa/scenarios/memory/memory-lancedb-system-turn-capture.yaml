@@ -31,7 +31,7 @@ scenario:
   successCriteria:
     - The stranded private final gets one recovery retry, and the reply is delivered via message(action=send).
     - A later user turn in the same conversation is stored, so capture ran and the retry's capture has settled before the store is read.
-    - No stored memory starts with the [System] marker of the retry turn.
+    - No stored memory contains the retry turn's instructions, with or without its [System] marker.
   docsRefs:
     - docs/channels/qa-channel.md
   codeRefs:
@@ -55,7 +55,8 @@ scenario:
       # 16-dimension embeddings put most English sentences above the 0.95 duplicate threshold;
       # this text stays far below it against the prompt and the retry turn.
       barrierPrompt: "QA-MEMORY-BARRIER 記住 1 2 3 4 5 6 7 8 9 0"
-      systemTurnFilter: "text LIKE '[System]%'"
+      # Matches the retry turn whether or not sanitizing removed its [System] first line.
+      retryFilter: "text LIKE '%send it now with message(action=send)%'"
       barrierFilter: "text LIKE '%QA-MEMORY-BARRIER%'"
 
 flow:
@@ -110,7 +111,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 180000)
             - 1000
         - call: runQaCli
-          saveAs: systemRows
+          saveAs: retryRows
           args:
             - ref: env
             - - ltm
@@ -118,7 +119,7 @@ flow:
               - --agent
               - expr: config.agentId
               - --filter
-              - expr: config.systemTurnFilter
+              - expr: config.retryFilter
               - --cols
               - text
               - --limit
@@ -127,7 +128,7 @@ flow:
                 expr: liveTurnTimeoutMs(env, 60000)
               json: true
         - assert:
-            expr: "Array.isArray(systemRows) && systemRows.length === 0"
+            expr: "Array.isArray(retryRows) && retryRows.length === 0"
             message:
-              expr: "`expected no stored [System] turn, saw ${JSON.stringify(systemRows)}`"
-      detailsExpr: "`barrier rows=${barrierRows.length}; [System] rows=${systemRows.length}; first [System] row: ${JSON.stringify(systemRows[0] ?? null).slice(0, 240)}`"
+              expr: "`expected no stored retry turn, saw ${JSON.stringify(retryRows)}`"
+      detailsExpr: "`barrier rows=${barrierRows.length}; retry rows=${retryRows.length}; first retry row: ${JSON.stringify(retryRows[0] ?? null).slice(0, 240)}`"
