@@ -1,5 +1,5 @@
 import type { FormatCapabilityProfile, FormatConstruct } from "./format-capabilities.js";
-import { copyHtmlTags } from "./ir-metadata.js";
+import { attachBlockMetadata, copyHtmlTags, type MarkdownIRWithMetadata } from "./ir-metadata.js";
 import { sliceMarkdownIRRanges } from "./ir-slice.js";
 import {
   createStyleSpan,
@@ -55,6 +55,27 @@ function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
   if (result.annotations) {
     result.annotations = mergeAnnotationSpans(result.annotations);
   }
+  const metadataIR: MarkdownIRWithMetadata = ir;
+  if (metadataIR.blocks?.length) {
+    const mapOffset = (offset: number) => {
+      let shift = 0;
+      for (const edit of ordered) {
+        if (edit.end > offset) {
+          break;
+        }
+        shift += edit.text.length - (edit.end - edit.start);
+      }
+      return offset + shift;
+    };
+    attachBlockMetadata(
+      result,
+      metadataIR.blocks.map((block) => ({
+        ...block,
+        start: mapOffset(block.start),
+        end: mapOffset(block.end),
+      })),
+    );
+  }
   return result;
 }
 
@@ -94,6 +115,8 @@ export function applyConstructFallbacks(
     ...ir,
     styles: synthesizedHeading ? mergeStyleSpans(projected) : projected,
   });
+  const metadataIR: MarkdownIRWithMetadata = ir;
+  attachBlockMetadata(styled, metadataIR.blocks ?? []);
   const listEdits: TextEdit[] = [];
   for (const item of styled.listItems ?? []) {
     if (item.task) {
@@ -124,5 +147,6 @@ export function applyConstructFallbacks(
             ? [{ start: link.end, end: link.end, text: ` (${href})` }]
             : [];
         });
-  return applyTextEdits(copyHtmlTags(listProjected, { ...listProjected, links }), linkEdits);
+  listProjected.links = links;
+  return applyTextEdits(listProjected, linkEdits);
 }

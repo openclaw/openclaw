@@ -167,7 +167,8 @@ function makeSlackEmphasisStylesSafe(ir: MarkdownIR): MarkdownIR {
       !isUnsafeSlackEmphasisBoundary(getCodePointAt(ir.text, span.end))
     );
   });
-  return styles.length === ir.styles.length ? ir : { ...ir, styles };
+  ir.styles = styles;
+  return ir;
 }
 
 const SLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({

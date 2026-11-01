@@ -1,5 +1,6 @@
 import { applyConstructFallbacks } from "./construct-fallbacks.js";
 import type { FormatCapabilityProfile } from "./format-capabilities.js";
+import type { MarkdownIRWithMetadata } from "./ir-metadata.js";
 import {
   copyMarkdownLinkSpan,
   isAutoLinkedMarkdownLink,
@@ -202,16 +203,17 @@ export function renderMarkdownWithMarkers(
       : undefined;
   if (quoteLineStarts) {
     const codeBlocks = projected.styles.filter((span) => span.style === "code_block");
-    for (const quote of projected.styles) {
-      if (quote.style !== "blockquote") {
-        continue;
-      }
+    const metadataIR: MarkdownIRWithMetadata = projected;
+    const quotes: { start: number; end: number; blockquoteDepth?: number }[] =
+      metadataIR.blocks?.filter((block) => block.kind === "blockquote") ??
+      projected.styles.filter((span) => span.style === "blockquote");
+    for (const quote of quotes) {
       for (let start = quote.start; start < quote.end;) {
         if (
           text[start] !== "\n" &&
           !codeBlocks.some((code) => code.start < start && start < code.end)
         ) {
-          quoteLineStarts.set(start, (quoteLineStarts.get(start) ?? 0) + 1);
+          quoteLineStarts.set(start, Math.max(quoteLineStarts.get(start) ?? 0, quote.blockquoteDepth ?? 1));
           boundaries.add(start);
         }
         const newline = text.indexOf("\n", start);
