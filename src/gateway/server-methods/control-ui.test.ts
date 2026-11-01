@@ -841,6 +841,8 @@ describe("controlUi.linkPreview", () => {
 
   it.each([
     { url: "http://127.0.0.1/private" },
+    { url: "not a url" },
+    { url: "ftp://public.example/file" },
     { url: "https://public.example", token: "not-forwarded" },
     {},
   ])("rejects malformed or private targets %j", async (params) => {
@@ -850,6 +852,38 @@ describe("controlUi.linkPreview", () => {
     await send(params);
     expectError(respond, expect.objectContaining({ code: "INVALID_REQUEST" }));
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([{ url: "http://127.0.0.1/private" }, { url: "http://192.168.1.10/" }])(
+    "returns an empty preview when the caller allows unavailable targets %j",
+    async (params) => {
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      vi.stubGlobal("fetch", fetch);
+      const { respond, send } = fixture("linkPreview");
+      await send({ ...params, allowUnavailable: true });
+      expectReply(respond, {});
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a non-boolean allowUnavailable", async () => {
+    const { respond, send } = fixture("linkPreview");
+    await send({ url: "https://public.example", allowUnavailable: "yes" });
+    expectError(respond, expect.objectContaining({ code: "INVALID_REQUEST" }));
+  });
+
+  it("keeps public previews when unavailable targets are allowed", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) =>
+      (input instanceof Request ? input.url : input.toString()).endsWith("/favicon.ico")
+        ? new Response(null, { status: 404 })
+        : new Response('<head><meta property="og:title" content="Allowed preview"></head>', {
+            headers: { "content-type": "text/html" },
+          }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const { respond, send } = fixture("linkPreview");
+    await send({ url: "https://rpc-preview.example/page", allowUnavailable: true });
+    expectReply(respond, { title: "Allowed preview" });
   });
 
   it.each(["authority", "config", "principal"] as const)(
