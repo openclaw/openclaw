@@ -25,7 +25,7 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
     command.option("--language <code>", "Language hint").option("--prompt <text>", "Prompt hint");
   }
   command
-    .option("--model <provider/model>", "Model override")
+    .option("--model <provider/model>", "Model to try first; configured fallbacks remain")
     .option("--json", "Output JSON", false)
     .action((opts: MediaUnderstandingOptions, actionCommand: Command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
@@ -45,8 +45,8 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           agent,
           ...(audio ? {} : { surface: "infer video describe" }),
         });
-        const activeModel = requireProviderModelOverride(opts.model);
-        const input = { filePath: path.resolve(file), cfg, agentId, agentDir, activeModel };
+        const modelOverride = requireProviderModelOverride(opts.model);
+        const input = { filePath: path.resolve(file), cfg, agentId, agentDir, modelOverride };
         const result = audio
           ? await transcribeAudioFile({
               ...input,

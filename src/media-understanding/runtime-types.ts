@@ -1,3 +1,4 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 // Public media-understanding runtime API types for file-based image/audio/video
 // helpers and direct structured extraction.
@@ -80,7 +81,10 @@ export type ExtractStructuredWithModelParams = Omit<
 export type DescribeVideoFileParams = Omit<
   DescribeImageFileParams,
   "mediaUrl" | "prompt" | "timeoutMs" | "scopeContext"
->;
+> & {
+  /** Try this model first, retaining configured media model fallbacks. */
+  modelOverride?: ProviderModelRef;
+};
 
 export type TranscribeAudioFileParams = DescribeVideoFileParams & {
   language?: string;

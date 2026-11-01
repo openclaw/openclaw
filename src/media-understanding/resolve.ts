@@ -1,3 +1,4 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
@@ -7,6 +8,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -185,6 +187,7 @@ export function resolveModelEntries(params: {
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+  modelOverride?: ProviderModelRef;
 }): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
@@ -213,6 +216,26 @@ export function resolveModelEntries(params: {
         preferredMediaModelRank(right.entry, preferred) -
         preferredMediaModelRank(left.entry, preferred),
     );
+  }
+  if (params.modelOverride) {
+    const provider = normalizeMediaExecutionProviderId(params.modelOverride.provider);
+    const model = params.modelOverride.model.trim();
+    const matchesProvider = ({ entry }: ResolvedMediaModelEntry) =>
+      (entry.type ?? (entry.command ? "cli" : "provider")) === "provider" &&
+      normalizeMediaExecutionProviderId(entry.provider ?? "") === provider;
+    const exact = entries.find(
+      (candidate) => matchesProvider(candidate) && candidate.entry.model?.trim() === model,
+    );
+    const providerWide = entries.find(
+      (candidate) => matchesProvider(candidate) && !candidate.entry.model?.trim(),
+    );
+    // Reorder owned descriptors, not configuration: their secret owners retain original indices.
+    const primary: ResolvedMediaModelEntry =
+      exact ??
+      (providerWide
+        ? { ...providerWide, entry: { ...providerWide.entry, model } }
+        : { entry: { provider, model } });
+    return [primary, ...entries.filter((candidate) => candidate !== exact)];
   }
   return entries;
 }
