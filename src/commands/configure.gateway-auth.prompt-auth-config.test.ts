@@ -188,6 +188,20 @@ describe("promptAuthConfig", () => {
     });
   });
 
+  it("keeps fallbacks when the unscoped prompt returns the saved policy", async () => {
+    const model = { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] };
+    const allow = ["openai/gpt-5.5", "anthropic/*"];
+    const config: OpenClawConfig = {
+      meta: { migrations: { modelPolicyAllowlist: true } },
+      agents: { defaults: { model, modelPolicy: { allow } } },
+    };
+    mocks.authChoice.mockResolvedValue("skip");
+    mocks.allowlist.mockResolvedValue({ models: allow });
+    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter);
+    expect(result.agents?.defaults?.model).toEqual(model);
+    expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(allow);
+  });
+
   it("retries provider selection before loading the installed provider's manifest catalog", async () => {
     const provider = "github-copilot";
     const existingConfig: OpenClawConfig = {

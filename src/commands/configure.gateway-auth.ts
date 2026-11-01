@@ -261,10 +261,15 @@ export async function promptAuthConfig(
       }
       const { scopeKeys } = allowlistSelection;
       next = applyAgentModelDefaults(next, target, (projected) => {
-        const withFallbacks = applyModelFallbacksFromSelection(projected, selectedModels, {
-          scopeKeys,
-          fallbacksOnly: !hasAllowlist,
-        });
+        // An unscoped selection edits the saved policy as a whole; its entries can be
+        // wildcards, which are not fallback models.
+        const withFallbacks =
+          hasAllowlist && !scopeKeys
+            ? projected
+            : applyModelFallbacksFromSelection(projected, selectedModels, {
+                scopeKeys,
+                fallbacksOnly: !hasAllowlist,
+              });
         return hasAllowlist
           ? applyModelAllowlist(withFallbacks, selectedModels, { scopeKeys })
           : withFallbacks;
