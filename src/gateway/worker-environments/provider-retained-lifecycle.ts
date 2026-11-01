@@ -303,6 +303,7 @@ export function createWorkerRetainedLifecycle(
           options.providerFor(resumed.providerId),
           artifact,
           signal,
+          assertRunning,
         );
         assertRunning();
         const installed = await options.ensureNodeWorkerBundle({
