@@ -44,6 +44,9 @@ suite.define(() => {
       });
       expect(surface.radius).toBeGreaterThan(0);
       expect(surface.shadow).not.toBe("none");
+      // A short roster hugs its rows instead of stretching to the drawer's height.
+      const card = await menu.boundingBox();
+      expect(card!.height).toBeLessThan(844 / 2);
 
       const options = list.getByRole("option");
       await expectBrowser(options).toHaveCount(5);
