@@ -306,7 +306,9 @@ describe("normalizeConfiguredMemoryExtraPaths", () => {
         { path: "archive", pattern: "**/*.md", evergreen: true },
       ]),
     ).toEqual([
+      " notes ",
       "notes",
+      { path: " notes ", pattern: "runbooks/**/*.md" },
       { path: "notes", pattern: "runbooks/**/*.md" },
       { path: "notes", pattern: "decisions/**/*.md" },
       { path: "reference", evergreen: true },
@@ -323,5 +325,11 @@ describe("normalizeConfiguredMemoryExtraPaths", () => {
         "archive",
       ]),
     ).toEqual([{ path: "notes", evergreen: true }, "archive"]);
+  });
+
+  it("drops configured roots that are blank or whitespace-only", () => {
+    expect(
+      normalizeConfiguredMemoryExtraPaths(["", "   ", { path: "  ", pattern: " *.md " }]),
+    ).toEqual([]);
   });
 });

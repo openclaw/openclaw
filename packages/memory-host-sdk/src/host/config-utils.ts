@@ -25,16 +25,16 @@ type MemorySearchConfig = {
   extraPaths?: MemoryExtraPath[];
 };
 
-/** Trim and deduplicate configured extra-memory roots without losing pattern identity. */
+/** Deduplicate configured extra-memory roots while preserving literal path identity. */
 export function normalizeConfiguredMemoryExtraPaths(
   extraPaths?: MemoryExtraPath[],
 ): MemoryExtraPath[] {
   const normalized = new Map<string, MemoryExtraPath>();
   for (const entry of extraPaths ?? []) {
-    const configuredPath = (typeof entry === "string" ? entry : entry.path).trim();
+    const configuredPath = typeof entry === "string" ? entry : entry.path;
     const pattern = typeof entry === "string" ? "" : entry.pattern?.trim() || "";
     const evergreen = typeof entry === "string" ? false : entry.evergreen === true;
-    if (configuredPath) {
+    if (configuredPath.trim()) {
       normalized.set(
         `${configuredPath}\0${pattern}`,
         pattern || evergreen
