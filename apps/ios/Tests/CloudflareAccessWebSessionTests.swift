@@ -287,15 +287,4 @@ struct CloudflareAccessWebSessionTests {
         let ipv6 = try CloudflareAccessOrigin(#require(URL(string: "https://[::1]:8443")))
         #expect(CloudflareAccessWebSession.otherAuthorityBlockRules(for: ipv6) == nil)
     }
-
-    @Test func `subframes to another port on the gateway host are recognized`() throws {
-        let custom = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test:8443")))
-        func other(_ value: String) -> Bool {
-            CloudflareAccessWebSession.isOtherPortOnSameHost(URL(string: value), origin: custom)
-        }
-        #expect(other("https://gateway.example.test:9443/x"))
-        #expect(other("https://GATEWAY.example.test/x"))
-        #expect(!other("https://gateway.example.test:8443/x"))
-        #expect(!other("https://unrelated.example.test:9443/x"))
-    }
 }

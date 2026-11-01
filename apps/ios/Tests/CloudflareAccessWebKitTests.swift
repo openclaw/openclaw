@@ -56,6 +56,7 @@ struct CloudflareAccessWebKitTests {
         let otherPort = try await other.start()
         let admitted = try LocalServer(body: """
         <html><body><img src="http://127.0.0.1:\(otherPort)/pixel.png">\
+        <iframe src="http://127.0.0.1:\(otherPort)/frame"></iframe>\
         <script>fetch("http://127.0.0.1:\(otherPort)/xhr", {mode: "no-cors"}).catch(() => {});</script>\
         </body></html>
         """)

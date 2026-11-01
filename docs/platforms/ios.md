@@ -169,6 +169,14 @@ the native connection. Tap **Cancel** to stop; use **Sign in** in the
 native Gateway settings to try again. Returning from the background never starts
 a browser automatically.
 
+Dashboard pages, Desktop, Terminal and session Dashboards open after the native
+Access sign-in; the app gives each page its own temporary browser session for
+that Gateway only, and never shares it with Safari or another Gateway. Signing
+out, expiry, or switching accounts closes those pages and discards the session.
+If the grant is missing or Cloudflare Access refuses the browser session (for
+example when the Access app uses binding cookies), the page shows **Try again**
+and **Open Gateway settings** instead of loading.
+
 If Access expires or is revoked, connections pause and Gateway settings asks you
 to sign in again. Your Gateway pairing and device keys remain saved. Signing out
 of Access removes the shared grant for that host and closes connections using

@@ -419,13 +419,6 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
             self.requestAccessSignIn(.edgeRejected)
             return
         }
-        if let accessOrigin, navigationAction.targetFrame?.isMainFrame == false,
-           CloudflareAccessWebSession.isOtherPortOnSameHost(navigationAction.request.url, origin: accessOrigin)
-        {
-            // Cookies are not port-scoped; never let a subframe carry the grant to another port.
-            decisionHandler(.cancel)
-            return
-        }
         let decision = self.navigationDecision(
             to: navigationAction.request.url,
             isMainFrame: navigationAction.targetFrame?.isMainFrame)

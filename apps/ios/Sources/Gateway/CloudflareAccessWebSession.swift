@@ -172,12 +172,6 @@ enum CloudflareAccessWebSession {
         guard let data = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]) else { return nil }
         return String(data: data, encoding: .utf8)
     }
-
-    /// True for a subframe aimed at the Gateway host on any port other than the admitted authority.
-    static func isOtherPortOnSameHost(_ url: URL?, origin: CloudflareAccessOrigin) -> Bool {
-        guard let url, let host = url.host?.lowercased(), host == origin.url.host?.lowercased() else { return false }
-        return !origin.contains(url)
-    }
 }
 
 /// Live seeded WebView cookie stores, so Access retirement (sign-out, forget, expiry,
