@@ -120,16 +120,6 @@
   }
 }
 
-@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  .chat-compaction--active .chat-divider__title {
-    background: linear-gradient(105deg, var(--muted) 35%, var(--text) 48%, var(--muted) 61%);
-    background-size: 260% 100%;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    animation: compaction-shimmer 3.2s ease-in-out infinite;
-  }
-}
-
 @keyframes compaction-fold {
   0%,
   12%,
@@ -143,18 +133,6 @@
   70% {
     opacity: var(--fold-opacity);
     transform: translate(3px, var(--fold-y)) scaleX(var(--fold-scale));
-  }
-}
-
-@keyframes compaction-shimmer {
-  0%,
-  12% {
-    background-position: 100% 0;
-  }
-
-  78%,
-  100% {
-    background-position: 0 0;
   }
 }
 

@@ -1055,6 +1055,10 @@ textarea.settings-input {
   width: 100%;
 }
 
+.settings-loading-skeleton {
+  --skeleton-base: var(--skeleton-base-raised);
+}
+
 .settings-loading-skeleton__title,
 .settings-loading-skeleton__description,
 .settings-loading-skeleton__control {

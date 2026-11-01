@@ -1,25 +1,7 @@
-/* One desktop Working sweep for Details and the Subagents panel. The gradient
-   must not tile: repeated backgrounds produced a second highlight each cycle. */
-@supports (background-clip: text) {
-  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-    .chat-details-subagents:not(.chat-details-subagents--mobile) .chat-details-subagents__working,
-    .subagents-desktop__working {
-      display: inline-block;
-      background: linear-gradient(100deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
-      background-repeat: no-repeat;
-      background-size: 250% 100%;
-      background-clip: text;
-      color: transparent;
-      animation: subagents-working-sweep 3.2s linear infinite;
-    }
-  }
-}
-
-@keyframes subagents-working-sweep {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: 0% 0;
+/* The Working label sizes to its text so the sweep crosses the word, not the row. */
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .chat-details-subagents:not(.chat-details-subagents--mobile) .chat-details-subagents__working,
+  .subagents-desktop__working {
+    display: inline-block;
   }
 }

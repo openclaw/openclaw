@@ -510,12 +510,14 @@ suite.define(() => {
       return {
         animationName: style.animationName,
         backgroundClip: style.getPropertyValue("-webkit-background-clip") || style.backgroundClip,
-        color: style.color,
+        fill: style.webkitTextFillColor,
+        image: style.backgroundImage,
       };
     });
     expect(wave.animationName).toBe("text-shimmer");
     expect(wave.backgroundClip).toBe("text");
-    expect(wave.color).toBe("rgba(0, 0, 0, 0)");
+    expect(wave.fill).toBe("rgba(0, 0, 0, 0)");
+    expect(wave.image).toContain("linear-gradient");
     await captureToolActivityProof(page, "tool-row-running-text-wave");
 
     await emit(3, "tool", {

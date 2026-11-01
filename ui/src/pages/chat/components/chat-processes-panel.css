@@ -116,13 +116,6 @@
   font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
-.chat-processes__shimmer {
-  background: linear-gradient(100deg, var(--muted) 25%, var(--text) 50%, var(--muted) 75%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: chat-processes-shimmer 2s linear infinite;
-}
 .chat-processes__finished-meta {
   display: flex;
   flex: 0 0 auto;
@@ -573,23 +566,13 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-processes__spinner,
-  .chat-processes__shimmer {
+  .chat-processes__spinner {
     animation: none;
-  }
-  .chat-processes__shimmer {
-    background: none;
-    color: var(--muted);
   }
 }
 @media (prefers-reduced-transparency: reduce) {
   .chat-processes__panel[data-mobile="true"] .chat-processes__list,
   .chat-processes__panel[data-mobile="true"] .chat-processes__output {
     mask-image: none;
-  }
-}
-@keyframes chat-processes-shimmer {
-  to {
-    background-position: -200% 0;
   }
 }

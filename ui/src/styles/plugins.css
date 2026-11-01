@@ -377,7 +377,7 @@
    two summary lines), so the loaded cards land exactly where the placeholders were. */
 .plugin-catalog-card--skeleton {
   /* Lighter than the default skeleton fill: eight cards of solid bars read as a wall. */
-  --skeleton-base: color-mix(in srgb, var(--bg-muted) 55%, var(--bg-elevated));
+  --skeleton-base: color-mix(in srgb, var(--muted) 8%, transparent);
 
   pointer-events: none;
 }

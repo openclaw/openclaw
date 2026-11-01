@@ -208,7 +208,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                     <span class="chat-processes__activity">
                       <span
                         class={{
-                          "chat-processes__shimmer": !data().stopping.has(row().instanceId),
+                          "text-shimmer": !data().stopping.has(row().instanceId),
                         }}
                       >
                         {data().stopping.has(row().instanceId)

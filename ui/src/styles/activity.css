@@ -350,7 +350,12 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
+.activity-feed__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+}
+
 .activity-pulse--loading {
+  background: var(--skeleton-base);
   height: 108px;
 }
 
@@ -497,14 +502,6 @@ a.activity-current-work__row:hover {
   margin: 0;
 }
 
-.activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-  background: linear-gradient(90deg, var(--text) 35%, var(--muted) 50%, var(--text) 65%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: text-shimmer 2.4s ease-in-out infinite;
-}
-
 .activity-feed__recap-skeleton {
   display: grid;
   gap: var(--space-2);
@@ -521,14 +518,6 @@ a.activity-current-work__row:hover {
   width: 30%;
   height: 11px;
   margin-top: var(--space-1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-    animation: none;
-    background: none;
-    color: var(--text);
-  }
 }
 
 .activity-feed__note,

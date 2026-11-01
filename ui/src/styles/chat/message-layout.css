@@ -331,8 +331,6 @@
 
 .chat-image-skeleton.skeleton {
   --skeleton-base: transparent;
-  --skeleton-highlight: color-mix(in srgb, var(--bg-hover) 45%, transparent);
-  --skeleton-duration: 2.4s;
 
   position: absolute;
   inset: 0;

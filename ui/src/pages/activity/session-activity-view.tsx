@@ -263,7 +263,9 @@ function SessionLinkView(props: {
         title={title()}
       >
         {summary()?.text ? (
-          <p class="activity-feed__recap-text">{summary()?.text}</p>
+          <p class={["activity-feed__recap-text", { "text-shimmer": updating() }]}>
+            {summary()?.text}
+          </p>
         ) : updating() ? (
           <div class="activity-feed__recap-skeleton" aria-hidden="true">
             <div class="skeleton skeleton-line skeleton-line--long" />

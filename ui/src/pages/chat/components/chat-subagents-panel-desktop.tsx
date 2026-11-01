@@ -129,7 +129,7 @@ function DesktopRow(props: {
                     : groupLabel(group())
                 }
               >
-                <span class="subagents-desktop__working">
+                <span class="subagents-desktop__working text-shimmer">
                   {t("chat.subagentsPanel.desktopWorking")}
                 </span>{" "}
                 <Show

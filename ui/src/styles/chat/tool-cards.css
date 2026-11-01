@@ -346,31 +346,6 @@
   color: var(--chat-tool-secondary-color);
 }
 
-/* Active-task text wave: a subtle left-to-right color sweep across the
-   running row's primary text (same shimmer language as the skeleton/usage
-   loaders, clipped to glyphs). The band fades text toward --bg so it stays
-   correct in both themes. Scoped to no-preference so reduced-motion users
-   keep plain static text and syntax colors. */
-@media (prefers-reduced-motion: no-preference) {
-  /* Whichever element names the work in progress: the action verb on file rows,
-     the command itself on terminal rows. Syntax tokens inherit `color`, so the
-     clipped gradient paints their glyphs too. */
-  .chat-tool-row--running :is(.chat-tool-row__verb, .chat-tool-row__cmd) {
-    background-image: linear-gradient(
-      90deg,
-      var(--text) 0%,
-      var(--text) 35%,
-      color-mix(in srgb, var(--text) 42%, var(--bg) 58%) 50%,
-      var(--text) 65%,
-      var(--text) 100%
-    );
-    background-size: 200% 100%;
-    background-clip: text;
-    color: transparent;
-    animation: text-shimmer 2.2s ease-in-out infinite;
-  }
-}
-
 .chat-diffstat {
   display: inline-flex;
   align-items: center;

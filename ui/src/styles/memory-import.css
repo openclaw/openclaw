@@ -214,6 +214,8 @@
 }
 
 .memory-import__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+
   display: grid;
   gap: 12px;
   padding: 12px;
@@ -222,10 +224,6 @@
 .memory-import__skeleton {
   height: 96px;
   border-radius: var(--radius-md);
-}
-
-.memory-import__skeleton::after {
-  animation-duration: 1.4s;
 }
 
 .memory-import__confirm .callout {
