@@ -728,6 +728,7 @@ describe("google-interactions provider", () => {
   ])(
     "maps $modelId reasoning=$reasoning and nucleus sampling into the request",
     async ({ modelId, reasoning, expected }) => {
+      const options = { apiKey: "test-api-key", reasoning, topP: 0.4 };
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(sseResponse(completedSse() + "data: [DONE]\n\n"));
@@ -740,7 +741,7 @@ describe("google-interactions provider", () => {
           thinkingLevelMap: { xhigh: "high", max: "high" },
         },
         basicContext,
-        { apiKey: "test-api-key", reasoning, topP: 0.4 },
+        options,
       ).result();
 
       const request = requestJson(fetchMock.mock.calls[0]?.[1]?.body);
