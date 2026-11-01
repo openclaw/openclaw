@@ -1,9 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
-import type { AuthProbeSummary } from "../../commands/models/list.probe.js";
+import type { runAuthProbes } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+type AuthProbeSummary = Awaited<ReturnType<typeof runAuthProbes>>;
 
 const mocks = vi.hoisted(() => ({
   listAgentIds: vi.fn(() => ["main", "writer"]),

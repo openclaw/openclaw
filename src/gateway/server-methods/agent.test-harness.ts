@@ -332,9 +332,8 @@ export function cronMediaCompletionEvent(): AgentInternalEvent {
   };
 }
 
-export function setupCronContinuationReleaseFixture() {
-  const sessionKey = "agent:main:cron:job-1:run:run-1";
-  const entry: SessionEntry = {
+export function readyCronContinuationEntry(): SessionEntry {
+  return {
     sessionId: "run-1",
     updatedAt: Date.now(),
     lifecycleRevision: "revision-1",
@@ -346,6 +345,11 @@ export function setupCronContinuationReleaseFixture() {
       basePersisted: true,
     },
   };
+}
+
+export function setupCronContinuationReleaseFixture() {
+  const sessionKey = "agent:main:cron:job-1:run:run-1";
+  const entry: SessionEntry = readyCronContinuationEntry();
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
     storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),

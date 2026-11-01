@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { makeConfiguredModel } from "../agents/test-helpers/provider-model-fixture.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
@@ -68,15 +69,14 @@ it.each(["database admission", "plugin cache"] as const)(
         return executeRead(options, command, { ...readOptions, context });
       },
     );
-    const model: ModelDefinitionConfig = {
+    const model: ModelDefinitionConfig = makeConfiguredModel({
       id: "priced",
       name: "Fixture",
       reasoning: false,
-      input: ["text"],
       cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 8192,
       maxTokens: 1024,
-    };
+    });
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       models: {

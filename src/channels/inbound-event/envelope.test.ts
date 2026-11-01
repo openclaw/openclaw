@@ -3,14 +3,11 @@ import {
   resolveInboundRouteEnvelopeBuilder,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "openclaw/plugin-sdk/inbound-envelope";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  createChannelInboundEnvelopeBuilder,
-  resolveChannelInboundRouteEnvelope,
-} from "./envelope.js";
+import { resolveChannelInboundRouteEnvelope } from "./envelope.js";
 
 const readSessionUpdatedAtCore = vi.hoisted(() => vi.fn(() => 60_000));
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/state/main/sessions.json"));
@@ -32,7 +29,6 @@ const cfg = {
   agents: { defaults: { userTimezone: "UTC" } },
   session: { store: "/state/{agentId}/sessions.json" },
 } as OpenClawConfig;
-const coreRoute = { agentId: "main", sessionKey: "agent:main:telegram:direct:peer" };
 const routeParams = {
   cfg,
   channel: "telegram",
@@ -54,52 +50,46 @@ const sdkResult = { storePath: "/state/main/sessions.json", body: formattedMessa
 
 describe("channel inbound envelope", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
 
   it("warns once with an awaited replacement while retaining the released envelope result", () => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    try {
-      withPluginRuntimePluginScope({ pluginId: "envelope-deprecation-consumer" }, () => {
-        for (let i = 0; i < 2; i += 1) {
-          const buildEnvelope = createInboundEnvelopeBuilder({
-            ...envelopeParams,
-            route: resolveAgentRoute(),
-          });
-          expect(buildEnvelope(timedMessage)).toEqual(sdkResult);
-        }
-      });
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(
-          "createInboundEnvelopeBuilder is deprecated; use await createChannelInboundEnvelopeBuilderAsync",
-        ),
-        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-      );
-    } finally {
-      warning.mockRestore();
-    }
+    withPluginRuntimePluginScope({ pluginId: "envelope-deprecation-consumer" }, () => {
+      for (let i = 0; i < 2; i += 1) {
+        const buildEnvelope = createInboundEnvelopeBuilder({
+          ...envelopeParams,
+          route: resolveAgentRoute(),
+        });
+        expect(buildEnvelope(timedMessage)).toEqual(sdkResult);
+      }
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "createInboundEnvelopeBuilder is deprecated; use await createChannelInboundEnvelopeBuilderAsync",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
   });
 
-  it.each(["direct", "routed", "runtime"] as const)(
+  it.each(["routed", "runtime"] as const)(
     "preserves the shipped SDK resolveStorePath callback through the %s helper",
     (helper) => {
-      const route = resolveAgentRoute();
       const resolved =
-        helper === "direct"
-          ? { route, buildEnvelope: createInboundEnvelopeBuilder({ ...envelopeParams, route }) }
-          : helper === "routed"
-            ? resolveInboundRouteEnvelopeBuilder({
-                ...envelopeParams,
-                ...routeParams,
-                resolveAgentRoute,
-              })
-            : resolveInboundRouteEnvelopeBuilderWithRuntime({
-                ...routeParams,
-                sessionStore: cfg.session?.store,
-                runtime: {
-                  routing: { resolveAgentRoute },
-                  session: { resolveStorePath, readSessionUpdatedAt: readSessionUpdatedAtCore },
-                  reply: { resolveEnvelopeFormatOptions, formatAgentEnvelope },
-                },
-              });
+        helper === "routed"
+          ? resolveInboundRouteEnvelopeBuilder({
+              ...envelopeParams,
+              ...routeParams,
+              resolveAgentRoute,
+            })
+          : resolveInboundRouteEnvelopeBuilderWithRuntime({
+              ...routeParams,
+              sessionStore: cfg.session?.store,
+              runtime: {
+                routing: { resolveAgentRoute },
+                session: { resolveStorePath, readSessionUpdatedAt: readSessionUpdatedAtCore },
+                reply: { resolveEnvelopeFormatOptions, formatAgentEnvelope },
+              },
+            });
 
       expect(resolved.route.sessionKey).toBe("agent:main:telegram:direct:peer");
       expect(resolved.buildEnvelope(timedMessage)).toEqual(sdkResult);
@@ -107,28 +97,12 @@ describe("channel inbound envelope", () => {
     },
   );
 
-  it("owns session lookup and formatting for a resolved route", () => {
-    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route: coreRoute });
-
+  it("binds routing, session lookup and formatting in one core operation", () => {
+    const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope(routeParams);
+    expect(route.sessionKey).toBe("agent:main:telegram:direct:peer");
+    expect(buildEnvelope(message)).toBe("[Telegram Alice] hello");
     expect(buildEnvelope(timedMessage)).toBe(formattedMessage);
-    expect(resolveStorePath).toHaveBeenCalledWith(cfg.session?.store, { agentId: "main" });
-    expect(readSessionUpdatedAtCore).toHaveBeenCalledWith({
-      storePath: "/state/main/sessions.json",
-      sessionKey: "agent:main:telegram:direct:peer",
-    });
-  });
-
-  it("binds routing and envelope construction in one core operation", () => {
-    const resolved = resolveChannelInboundRouteEnvelope(routeParams);
-
-    expect(resolveAgentRoute).toHaveBeenCalledWith(routeParams);
-    expect(resolved.route.sessionKey).toBe("agent:main:telegram:direct:peer");
-    expect(resolved.buildEnvelope(message)).toBe("[Telegram Alice] hello");
-  });
-
-  it("formats buffered history without reading the live session timestamp", () => {
-    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route: coreRoute });
-
+    readSessionUpdatedAtCore.mockClear();
     expect(
       buildEnvelope({ ...message, body: "older", timestamp: 30_000, previousTimestamp: null }),
     ).toBe("[Telegram Alice Thu 1970-01-01T00:00:30Z] older");

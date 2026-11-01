@@ -21,7 +21,10 @@ import { realpathOrResolve } from "./path-existence.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
-import type { GlobalInstallManager } from "./update-global-env.js";
+import {
+  applyNonInteractivePackageManagerEnv,
+  type GlobalInstallManager,
+} from "./update-global-env.js";
 import {
   resolvePnpmGlobalDirFromGlobalRoot,
   resolvePnpmCommand,
@@ -869,7 +872,15 @@ async function resolveGlobalRoot(
   if (resolved.manager === "bun") {
     return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalRoot();
   }
-  const res = await runCommand([resolved.command, "root", "-g"], { timeoutMs }).catch(() => null);
+  // Discovery runs while the updater owns the terminal pane: a Corepack shim must not prompt,
+  // and the probe must never wait for input that the pane cannot answer.
+  const probeEnv: NodeJS.ProcessEnv = { ...process.env };
+  applyNonInteractivePackageManagerEnv(probeEnv);
+  const res = await runCommand([resolved.command, "root", "-g"], {
+    timeoutMs,
+    env: probeEnv,
+    input: "",
+  }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }

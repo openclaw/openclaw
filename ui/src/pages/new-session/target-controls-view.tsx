@@ -7,7 +7,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import "../../components/agent-select-registration.ts";
@@ -126,8 +125,7 @@ export function NewSessionPlaceControls(props: {
     const { context, data, gateway, place } = props.params;
     const browser = place.browser;
     const nativeTerminal = catalog.isTarget(data);
-    const cloudProfiles = nativeTerminal || !place.isAdmin() ? [] : gateway.cloudProfiles;
-    const branches = place.repository.kind === "git" ? place.repository : null;
+    const cloudProfiles = nativeTerminal ? [] : gateway.cloudProfiles;
     const projects = nativeTerminal ? [] : browser.projects;
     const recents = nativeTerminal
       ? []
@@ -148,21 +146,11 @@ export function NewSessionPlaceControls(props: {
       projectQuery: browser.projectQuery,
       freshWorkspace: place.freshWorkspace,
     });
-    const checkoutState = resolveCheckoutChip({
-      destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
-      worktree: place.worktree,
-      worktreeName: place.worktreeName,
-      headBranch: branches?.headBranch,
-      baseRef: place.baseRef,
-      repository: Boolean(place.remoteRepository),
-    });
-
     return {
       nativeTerminal,
       browser,
       whereState,
       projectState,
-      checkoutState,
     };
   });
   return (
@@ -237,11 +225,7 @@ export function NewSessionPlaceControls(props: {
             )}
             {props.params.place.checkoutVisible &&
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-              <CheckoutChip
-                params={props.params}
-                state={view().checkoutState}
-                folderLabel={view().projectState.label}
-              />
+              <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
             ) : undefined}
           </div>
           {props.params.place.deviceFolder ? (

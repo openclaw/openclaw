@@ -6,7 +6,7 @@ import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-ca
 
 registerSkillWorkshopEnglish();
 
-export type SkillWorkshopMode = "off" | "auto";
+export type SkillWorkshopMode = "off" | "propose" | "auto";
 
 export function resolveWorkshopMode(
   runtimeConfig: RuntimeConfigCapability | undefined,
@@ -17,7 +17,10 @@ export function resolveWorkshopMode(
   }
   // The Gateway defaults an absent mode to auto; any other value learns nothing.
   const configured = asRecord(asRecord(asRecord(config.skills)?.workshop)?.autonomous)?.mode;
-  return configured === undefined || configured === "auto" ? "auto" : "off";
+  if (configured === undefined || configured === "auto") {
+    return "auto";
+  }
+  return configured === "propose" ? "propose" : "off";
 }
 
 /** Patch the canonical config key; returns an error message or null on success. */
@@ -27,8 +30,11 @@ export async function setWorkshopMode(
 ): Promise<string | null> {
   const patch = {
     raw: { skills: { workshop: { autonomous: { mode } } } },
-    note:
-      mode === "auto" ? "Enable Skill Workshop auto-learning" : "Disable Skill Workshop learning",
+    note: {
+      auto: "Enable Skill Workshop auto-learning",
+      propose: "Have Skill Workshop propose drafts",
+      off: "Disable Skill Workshop learning",
+    }[mode],
   };
   const patched = await runtimeConfig.patch(patch);
   if (!patched) {

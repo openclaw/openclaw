@@ -10,19 +10,12 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
+import { MODELS_AUTH_INTEGRATION_ENV } from "../test-helpers.env.js";
 
 it("models.authSetApiKey validates the old wire request before the real credential writer", async () => {
   const state = await createOpenClawTestState({
     label: "models-auth-api-key",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
+    env: { ...MODELS_AUTH_INTEGRATION_ENV },
   });
   const token = "api-key-contract-fixture-token";
   const cfg = {

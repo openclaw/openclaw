@@ -2,7 +2,10 @@ import { getAiTransportHost } from "@openclaw/ai";
 import { createAzureOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
-import { logResponsesFailedNoDetails } from "../../packages/ai/src/transports/openai-responses-debug.js";
+import {
+  observeResponsesTransportFailure,
+  ResponsesStreamFailure,
+} from "../../packages/ai/src/transports/openai-responses-debug.js";
 import {
   resolveAzureOpenAIApiVersion,
   makeResponsesModel,
@@ -100,10 +103,9 @@ describe("openai transport stream", () => {
       },
     };
 
-    const observation = testing.normalizeResponsesFailedEvent(
-      event,
-      createAzureResponsesModel(),
-    ).observation;
+    const model = createAzureResponsesModel();
+    const failure = testing.normalizeResponsesFailedEvent(event, model);
+    const observation = failure.observation;
     assert(observation);
 
     expect(observation).toMatchObject({
@@ -116,12 +118,17 @@ describe("openai transport stream", () => {
     expect(observation.requestIdHashes).toHaveLength(6);
     expect(observation.requestIdHashes.join(",")).toContain("sha256:");
     const logWarn = vi.spyOn(getAiTransportHost(), "logWarn").mockImplementation(() => {});
-    logResponsesFailedNoDetails(observation);
+    observeResponsesTransportFailure({
+      error: new ResponsesStreamFailure(failure, event.response),
+      model,
+      output: createResponsesAssistantOutput(model),
+    });
     expect(logWarn).toHaveBeenCalledOnce();
     expect(logWarn.mock.calls[0]?.[1]).toContain("responseId=resp_failed_123");
     expect(logWarn.mock.calls[0]?.[1]).toContain("requestIds=");
     for (const secret of secrets) {
       expect(JSON.stringify(observation)).not.toContain(secret);
+      expect(JSON.stringify(logWarn.mock.calls)).not.toContain(secret);
     }
   });
 

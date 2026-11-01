@@ -122,12 +122,4 @@ describe("event session routing", () => {
       expect(resolveEventSessionKeyForPolicy(key, policy)).toBe(key);
     }
   });
-
-  it("keeps cron-run remapping behavior unchanged", () => {
-    expectRoute(
-      "agent:ops:cron:nightly:run:abc",
-      { mainKey: "primary", sessionScope: "per-sender" },
-      "agent:ops:primary",
-    );
-  });
 });

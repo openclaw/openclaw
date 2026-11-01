@@ -4,7 +4,6 @@ import { mediaKindFromMime } from "./constants.js";
 import {
   detectMime,
   extensionForMime,
-  FILE_TYPE_SNIFF_MAX_BYTES,
   getFileExtension,
   imageMimeFromFormat,
   isAudioFileName,
@@ -12,7 +11,6 @@ import {
   kindFromMime,
   mimeTypeFromFilePath,
   normalizeMimeType,
-  sliceMimeSniffBuffer,
 } from "./mime.js";
 
 // file-type classifies this generic ISO-BMFF brand as video/mp4 without track metadata.
@@ -185,11 +183,16 @@ describe("mime detection", () => {
     expect(await detectMime({ buffer })).toBe("audio/x-caf");
   });
 
-  it("caps dependency sniffing to a bounded prefix", () => {
-    const small = Buffer.alloc(32);
-    const large = Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 16);
-    expect(sliceMimeSniffBuffer(small)).toBe(small);
-    expect(sliceMimeSniffBuffer(large)).toHaveLength(FILE_TYPE_SNIFF_MAX_BYTES);
+  it("does not inspect ZIP metadata beyond the 1 MiB sniffing limit", async () => {
+    const zip = new JSZip();
+    zip.file("padding.bin", Buffer.alloc(1024 * 1024));
+    zip.file(
+      "[Content_Types].xml",
+      `<Types><Override PartName="/word/document.xml" ContentType="${DOCX_MIME}.main+xml"/></Types>`,
+    );
+    zip.file("word/document.xml", "<xml/>");
+    const buffer = await zip.generateAsync({ type: "nodebuffer", compression: "STORE" });
+    expect(await detectMime({ buffer })).toBe("application/zip");
   });
 });
 

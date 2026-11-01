@@ -218,7 +218,9 @@ function NativeNotificationSection(props: {
 const renderWebPushError = (error: () => unknown) => (
   <div class="settings-row">
     <div class="settings-row__text">
-      <span class="cfg-field__error">{formatUiError(error())}</span>
+      <span class="cfg-field__error" role="alert">
+        {formatUiError(error())}
+      </span>
     </div>
   </div>
 );
@@ -412,7 +414,9 @@ function WebPushSection(props: {
         <Show when={props.push.error}>
           <div class="settings-row">
             <div class="settings-row__text">
-              <span class="cfg-field__error">{formatUiExternalText(props.push.error)}</span>
+              <span class="cfg-field__error" role="alert">
+                {formatUiExternalText(props.push.error)}
+              </span>
             </div>
           </div>
         </Show>

@@ -50,6 +50,9 @@ export class TranscriptPrependAnchor {
     commanded: boolean,
     readingProjectionChanged = false,
   ): void {
+    if (commanded) {
+      this.pending = null;
+    }
     // A second projection may commit before measurement settles. Keep the
     // original reader target rather than recapturing an already shifted bubble.
     const retained =

@@ -280,6 +280,7 @@ it.each([false, true])(
   async (teardownFails) => {
     releasePending = createDeferredCore();
     const starts = new Map<string, number>();
+    const handledRequests = new Map<string, number>();
     const channelPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id: channelId,
@@ -316,6 +317,7 @@ it.each([false, true])(
             accountId,
             throwOnFailure: true,
             handler: (_req, res) => {
+              handledRequests.set(accountId, (handledRequests.get(accountId) ?? 0) + 1);
               const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
               res.setHeader(
                 "x-webhook-registry",
@@ -356,14 +358,29 @@ it.each([false, true])(
     await waitForGatewayStartup(port);
     await maintenance.settled;
     const probe = async (accountId: string) => {
-      const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
-        method: "POST",
-      });
-      return {
-        status: response.status,
-        body: await response.text(),
-        registry: response.headers.get("x-webhook-registry"),
-      };
+      const before = handledRequests.get(accountId) ?? 0;
+      let phase = "fetch";
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/reload-webhook/${accountId}`, {
+          method: "POST",
+        });
+        phase = "body";
+        return {
+          status: response.status,
+          body: await response.text(),
+          registry: response.headers.get("x-webhook-registry"),
+        };
+      } catch (error) {
+        process.stderr.write(
+          `[plugin-webhook-probe] ${JSON.stringify({
+            accountId,
+            phase,
+            starts: [...starts],
+            handlerEntered: (handledRequests.get(accountId) ?? 0) > before,
+          })}\n`,
+        );
+        throw error;
+      }
     };
     await expect
       .poll(() => [...starts.keys()].toSorted(), { timeout: 30_000 })

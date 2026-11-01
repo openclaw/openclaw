@@ -655,8 +655,16 @@ if (args[0] === 'pr' && args[1] === 'view') {
       name, run_id: 1, run_attempt: 1, status: 'queued', conclusion: null,
       runner_id: null, steps: [],
     })) };
-  } else if (endpoint === 'repos/fixture/repo/actions/runs/1') {
-    value = { run_attempt: 1, status: 'in_progress', conclusion: null };
+  } else if (['repos/fixture/repo/actions/runs/1', 'repos/openclaw/openclaw/actions/runs/1'].includes(endpoint)) {
+    if (control.moveAtCi) {
+      runGit(['-C', origin, 'update-ref', 'refs/heads/main', movedMain]);
+    }
+    event({ kind: 'ci-completed' });
+    value = {
+      id: 1, head_sha: control.metadata.headRefOid, run_attempt: 1,
+      status: control.hostedCi === 'scheduled' ? 'completed' : 'in_progress',
+      conclusion: control.hostedCi === 'scheduled' ? 'success' : null,
+    };
   } else if (/^repos\\/(fixture\\/repo|openclaw\\/openclaw)\\/actions\\/runs\\?/.test(endpoint)) {
     if (control.remoteOnlyBase && !control.remoteOnlyBaseMoved) {
       runGit(['-C', origin, 'update-ref', 'refs/heads/main', control.remoteOnlyBase]);

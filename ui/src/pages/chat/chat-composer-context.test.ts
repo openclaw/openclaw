@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelAuthStatusProvider } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { ContextNotice } from "./components/chat-composer-context.tsx";
 
@@ -29,6 +30,8 @@ function renderComposer({
 
 const part = (root: ParentNode, name: string) => root.querySelector(`.context-usage__${name}`);
 const contextRingFor = (root: ParentNode) => root.querySelector(".context-ring");
+const compactButton = (root: ParentNode) =>
+  root.querySelector<HTMLButtonElement>(".context-usage__actions .chat-context__compact");
 const statsTitle = (root: ParentNode) => part(root, "stats [title]")?.getAttribute("title");
 const defaultSessions = () => ({ sessions: [], defaults: { contextTokens: 200_000 } });
 const textContents = (root: ParentNode, selector: string) =>
@@ -196,7 +199,7 @@ describe("renderChatComposer context usage", () => {
   it("deduplicates provider aliases and hides cost estimates for subscriptions", () => {
     const resetAt = Date.now() + 2 * 3_600_000 + 45_000;
     const windows: [string, number, number?][] = [
-      ["5h", 22, resetAt],
+      ["5h", 21.6, resetAt],
       ["Week", 25],
       ["Fable", 92],
     ];
@@ -247,6 +250,54 @@ describe("renderChatComposer context usage", () => {
     expect(limits[3]?.querySelector(".context-usage__limit-reset")).toBeNull();
     expect(part(container, "stats")).not.toBeNull();
     expect(part(container, "stats")?.textContent).not.toContain("Cost");
+  });
+
+  it("keeps distinct subscription accounts separate when selecting a provider", () => {
+    const providers = ["anthropic", "claude-cli"].map((id, index) =>
+      planProvider(id, "Claude", [["5h", 10]], {
+        usage: {
+          providerId: "anthropic",
+          accountEmail: ["work@example.com", "personal@example.com"][index],
+        },
+      }),
+    );
+    for (const [index, modelProvider] of ["anthropic", "claude-cli"].entries()) {
+      const container = renderComposer({
+        session: { modelProvider },
+        providerUsage: planUsage(providers),
+      });
+      expect(textContents(container, ".context-usage__account")).toEqual([
+        ["work@example.com", "personal@example.com"][index],
+      ]);
+      expect(textContents(container, ".context-usage__limit-value")).toEqual(["10%"]);
+    }
+  });
+
+  it("omits empty or invalid subscription quotas and clamps displayed window usage", () => {
+    const providers = [
+      planProvider("anthropic", "Claude", []),
+      planProvider("openrouter", "Claude", [], {
+        usage: {
+          billing: [
+            { type: "balance", amount: 10, unit: "USD" },
+            { type: "budget", used: 5, limit: 0, unit: "USD" },
+          ],
+        },
+      }),
+      planProvider("openai", "Claude", [["Week", 140]]),
+    ];
+    for (const modelProvider of ["anthropic", "openrouter", "openai"]) {
+      const container = renderComposer({
+        session: { modelProvider },
+        providerUsage: planUsage(providers),
+      });
+      expect(textContents(container, ".context-usage__limit-value")).toEqual(
+        modelProvider === "openai" ? ["100%"] : [],
+      );
+      expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(
+        modelProvider === "openai" ? 1 : 0,
+      );
+    }
   });
 
   it("uses response provenance only when the session provider is absent", () => {
@@ -321,6 +372,86 @@ describe("renderChatComposer context usage", () => {
 
     expect(part(container, "stats [title]")).toBeNull();
     expect(part(container, "stats")?.textContent).toContain("$0.00");
+  });
+
+  it("offers a secondary Compact beside View context in every popover state", () => {
+    const onCompact = vi.fn();
+    const render = (overrides: ComposerOverrides & { session?: Partial<GatewaySessionRow> }) =>
+      compactButton(
+        renderComposer({ sessions: defaultSessions() as never, onCompact, ...overrides }),
+      );
+    const state = (button: HTMLButtonElement | null) =>
+      button && {
+        label: button.textContent,
+        filled: button.classList.contains("chat-context__compact--high"),
+        disabled: button.disabled,
+        busy: button.getAttribute("aria-busy"),
+        title: button.title,
+      };
+    const ready = {
+      label: "Compact",
+      filled: false,
+      disabled: false,
+      busy: null,
+      title: "Replaces older context with a summary.",
+    };
+
+    expect(compactButton(renderComposer({ session: { totalTokens: 190_000 } }))).toBeNull();
+    // Near the limit the ring carries the warning; the action stays secondary.
+    for (const session of [
+      { totalTokens: 40_000 },
+      { totalTokens: 190_000 },
+      { totalTokens: 190_000, totalTokensFresh: false },
+    ]) {
+      expect(state(render({ session }))).toEqual(ready);
+    }
+    expect(state(render({ session: { totalTokens: 190_000 }, runActive: true }))).toEqual({
+      ...ready,
+      disabled: true,
+      title: "Available when the current run finishes.",
+    });
+    expect(state(render({ session: { totalTokens: 190_000 }, connected: false }))).toEqual({
+      ...ready,
+      disabled: true,
+    });
+    // A compaction the pane already tracks (runtime or another surface) reads as busy.
+    expect(
+      state(
+        render({
+          session: { totalTokens: 190_000 },
+          runActive: true,
+          compactionStatus: { phase: "active", runId: "run-1", startedAt: 1, completedAt: null },
+        }),
+      ),
+    ).toEqual({ ...ready, label: "Compacting", disabled: true, busy: "true" });
+    expect(onCompact).not.toHaveBeenCalled();
+  });
+
+  it("keeps the popover open and busy until the compaction request settles", async () => {
+    const pending = createDeferred();
+    const onCompact = vi.fn(() => pending.promise);
+    const container = renderComposer({
+      session: { totalTokens: 190_000 },
+      sessions: defaultSessions() as never,
+      onCompact,
+    });
+    const details = container.querySelector<HTMLDetailsElement>(".context-usage details")!;
+    const button = compactButton(container)!;
+    try {
+      button.click();
+      await waitForSolid(() => {
+        expect(button.disabled).toBe(true);
+        expect(button.textContent).toBe("Compacting");
+      });
+      button.click();
+      expect(onCompact).toHaveBeenCalledOnce();
+      expect(details.open).toBe(true);
+    } finally {
+      pending.resolve();
+    }
+    await waitForSolid(() => expect(button.textContent).toBe("Compact"));
+    expect(button.disabled).toBe(false);
+    expect(details.open).toBe(true);
   });
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {

@@ -10,11 +10,13 @@ import { defineTypographyModuleBoundaryTests } from "./typography-module-boundar
 
 const tempDirs = createTempDirTracker();
 const buildId = "e2e";
+const moduleRequests = new Map<string, RegExp>();
 let buildRoot: string;
 const suite = createControlUiE2eSuite({
   name: "Control UI module boundaries",
   trackBrowserContexts: true,
   startServer: async () => {
+    moduleRequests.clear();
     buildRoot = tempDirs.make("openclaw-ui-module-boundaries-");
     try {
       // Fault individual import owners without changing production preload,
@@ -35,7 +37,15 @@ const suite = createControlUiE2eSuite({
     }
   },
 });
-const moduleRequest = (sourcePath: string) => controlUiE2eBuiltModuleRequest(sourcePath, buildRoot);
+const moduleRequest = (sourcePath: string) => {
+  const cached = moduleRequests.get(sourcePath);
+  if (cached) {
+    return cached;
+  }
+  const request = controlUiE2eBuiltModuleRequest(sourcePath, buildRoot);
+  moduleRequests.set(sourcePath, request);
+  return request;
+};
 
 suite.define(() => {
   defineGatewayModuleBoundaryTests(suite, moduleRequest);

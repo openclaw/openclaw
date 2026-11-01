@@ -42,7 +42,20 @@ describe("comfy music-generation provider", () => {
     expectExplicitMusicGenerationCapabilities(comfyProviders.music);
   });
 
-  it("runs a music workflow and returns audio outputs", async () => {
+  it.each([
+    "audio/mpeg",
+    "application/ogg",
+    "application/octet-stream",
+    "binary/octet-stream",
+    null,
+  ])("runs a music workflow and returns audio outputs (%s)", async (contentType) => {
+    const download = fetchGuardResponse(
+      Buffer.from("music-bytes"),
+      contentType ?? "application/octet-stream",
+    );
+    if (contentType === null) {
+      download.response.headers.delete("content-type");
+    }
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "music-job-1" }))
       .mockResolvedValueOnce(
@@ -52,7 +65,7 @@ describe("comfy music-generation provider", () => {
           },
         }),
       )
-      .mockResolvedValueOnce(fetchGuardResponse(Buffer.from("music-bytes"), "audio/mpeg"));
+      .mockResolvedValueOnce(download);
 
     const result = await comfyProviders.music.generateMusic(request);
 
@@ -61,13 +74,51 @@ describe("comfy music-generation provider", () => {
       tracks: [
         {
           buffer: Buffer.from("music-bytes"),
-          mimeType: "audio/mpeg",
+          mimeType: contentType ?? "application/octet-stream",
           fileName: "song.mp3",
         },
       ],
       metadata: { promptId: "music-job-1", outputNodeIds: ["9"], inputImageCount: 0 },
     });
   });
+
+  it.each(["image/png", "video/mp4"])(
+    "rejects non-audio music output before consuming it (%s)",
+    async (contentType) => {
+      const cancel = vi.fn();
+      const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) =>
+        controller.close(),
+      );
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Buffer.from("not-audio"));
+          },
+          pull,
+          cancel,
+        }),
+        { headers: { "content-type": contentType } },
+      );
+      const release = vi.fn(async () => {});
+      fetchWithSsrFGuardMock
+        .mockResolvedValueOnce(fetchGuardJson({ prompt_id: "music-wrong-content" }))
+        .mockResolvedValueOnce(
+          fetchGuardJson({
+            "music-wrong-content": {
+              outputs: { "9": { audio: [{ filename: "song.mp3" }] } },
+            },
+          }),
+        )
+        .mockResolvedValueOnce({ response, release });
+
+      await expect(comfyProviders.music.generateMusic(request)).rejects.toThrow(
+        "Comfy music output download: malformed audio response",
+      );
+      expect(pull).not.toHaveBeenCalled();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("honors req.timeoutMs for the music workflow poll deadline", async () => {
     // Regression: music ignored timeoutMs and waited the five-minute default.

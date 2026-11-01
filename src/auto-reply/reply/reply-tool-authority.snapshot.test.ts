@@ -1,6 +1,8 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import * as requesterOrigin from "../../agents/requester-origin.js";
 import { withPreparedToolConstruction } from "../../agents/tool-construction-preparation.js";
+import * as channelRegistry from "../../channels/plugins/registry.js";
 import * as facts from "../../config/resolution-facts.js";
 import * as snapshots from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
@@ -28,6 +30,7 @@ async function prepare(config: OpenClawConfig, sessionId: string) {
 afterEach(() => {
   authorities.splice(0).forEach((authority) => authority.close());
   snapshots.clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
 });
 it("captures authority facts without copying unrelated attempt payloads", async () => {
   let payloadReads = 0;
@@ -76,6 +79,36 @@ it("keeps captured policy isolated and checks revocation after preparation", asy
   revocation.abort(new Error("synthetic authority revoked"));
   expect(() => authority.fingerprint(route)).toThrow("synthetic authority revoked");
   await expect(authority.fingerprintAsync(route)).rejects.toThrow("synthetic authority revoked");
+});
+
+it("evaluates interleaved reply policies without resolving question UI metadata", async () => {
+  const channelLookup = vi.spyOn(channelRegistry, "getChannelPlugin");
+  const revocation = new AbortController();
+  const operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "synthetic-operator",
+    scopes: ["operator.write"],
+    assertCurrent: () => revocation.signal.throwIfAborted(),
+  });
+  const authority = prepareReplyToolAuthority({
+    operatorAuthority,
+    run: { ...run, sessionId: "policy-only" },
+  });
+  authorities.push(authority);
+  const first = await authority.fingerprintAsync(route);
+  const fallback = { ...route, model: "fallback-model" };
+  const second = await authority.fingerprintAsync(fallback);
+  expect(second).not.toBe(first);
+  const caller = { ...overlay, operatorAuthority };
+  expect(await authority.projectAsync(caller, route)).toBe(first);
+  expect(await authority.projectAsync({ ...caller, disableTools: true }, route)).not.toBe(first);
+  expect(authority.project(caller, fallback)).toBe(second);
+  expect(authority.fingerprint(route)).toBe(first);
+  expect(channelLookup).not.toHaveBeenCalled();
+  revocation.abort(new Error("synthetic authority revoked"));
+  expect(() => authority.fingerprint(route)).toThrow("synthetic authority revoked");
+  await expect(authority.projectAsync(caller, route)).rejects.toThrow(
+    "synthetic authority revoked",
+  );
 });
 
 it("pins active turns across policy publication and reset", async () => {
@@ -286,4 +319,30 @@ it("treats absent and undefined classification fields equally but still checks l
   } finally {
     retained?.release();
   }
+});
+
+it("reuses the captured incumbent principal while validating interleaved callers", async () => {
+  const principal = vi.spyOn(requesterOrigin, "resolveRequesterPrincipalKey");
+  const alice = prepareReplyToolAuthority({ run: { ...run, sessionId: "alice" } });
+  const bob = prepareReplyToolAuthority({
+    run: { ...run, sessionId: "bob", senderId: "bob" },
+  });
+  authorities.push(alice, bob);
+  const aliceFingerprint = await alice.fingerprintAsync(route);
+  const bobFingerprint = await bob.fingerprintAsync(route);
+  expect(bobFingerprint).not.toBe(aliceFingerprint);
+  for (const [owner, caller, expected] of [
+    [alice, overlay, aliceFingerprint],
+    [bob, { ...overlay, senderId: "bob" }, bobFingerprint],
+    [alice, overlay, aliceFingerprint],
+  ] as const) {
+    principal.mockClear();
+    expect(await owner.projectAsync(caller, route)).toBe(expected);
+    // One arriving caller check plus two live fingerprint evaluations; the incumbent
+    // principal was already captured by this owner and needs no fourth derivation.
+    expect(principal).toHaveBeenCalledTimes(3);
+  }
+  await expect(alice.projectAsync({ ...overlay, senderId: "bob" }, route)).rejects.toThrow(
+    "requester",
+  );
 });

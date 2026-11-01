@@ -9,6 +9,30 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+it.skipIf(process.platform === "win32")(
+  "leaves admitted plugin path resolution to the relative-path operation",
+  () => {
+    const resolve = vi.spyOn(path, "resolve");
+    for (let index = 0; index < 40; index++) {
+      const root = `/synthetic/plugins/plugin-${index}`;
+      expect(relativePluginPathInsideRootSync(root, `${root}/nested/Entry.js`)).toBe(
+        "nested/Entry.js",
+      );
+    }
+    expect(resolve).not.toHaveBeenCalled();
+  },
+);
+
+it.skipIf(process.platform === "win32").each([
+  ["plugins/root", "plugins/root/nested/Entry.js", "nested/Entry.js"],
+  ["/plugins/root/", "/plugins/root/./nested/../Entry.js", "Entry.js"],
+  ["/plugins/root", "/plugins/root", ""],
+  ["/plugins/root", "/plugins/root/../outside/Entry.js", undefined],
+  ["/plugins/root", "/plugins/root-other/Entry.js", undefined],
+])("preserves relative source containment for %s and %s", (root, target, expected) => {
+  expect(relativePluginPathInsideRootSync(root, target)).toBe(expected);
+});
+
 function installWindowsPathFixture(params: {
   root: string;
   canonicalRoot?: string;

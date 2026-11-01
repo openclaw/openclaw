@@ -22,6 +22,7 @@ import {
   loadCronRuntimeAuthorities,
   replaceCronRuntimeAuthorityRows,
 } from "../cron/store/runtime-authority-store.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -476,14 +477,17 @@ export async function collectHeartbeatCadenceMigrationFindings(
       },
     ];
   } catch (error) {
+    const deferred = error instanceof CronStoreSelectionRequiredError;
     return [
       {
         checkId: CHECK_ID,
-        severity: "error",
+        severity: deferred ? "warning" : "error",
         path: storePath,
         message: formatErrorMessage(error),
-        requirement: "heartbeat-retirement-inspection",
-        fixHint: "Resolve the state error and rerun openclaw doctor --fix.",
+        requirement: deferred ? "heartbeat-migration-deferred" : "heartbeat-retirement-inspection",
+        fixHint: deferred
+          ? "Run openclaw doctor --fix in an interactive terminal and complete Select the default cron partition. --yes does not choose a partition."
+          : "Resolve the state error and rerun openclaw doctor --fix.",
       },
     ];
   }

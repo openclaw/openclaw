@@ -350,9 +350,9 @@ try {
     });
     const finalOutboundMs = Date.now() - start;
     const firstOutboundMs = await firstOutbound;
-    // The poll acknowledgement follows dispatch, preview cleanup and receipt settlement.
+    // Exact completion follows dispatch, preview cleanup and receipt settlement.
     const deadline = Date.now() + 180000;
-    while (state.getAcknowledgedPollCursor("default") < inboundCursor) {
+    while (!state.hasCompletedInboundEvent("default", inboundCursor)) {
       if (gateway.exitCode !== null || gateway.signalCode !== null) {
         throw new Error("Gateway exited during turn");
       }

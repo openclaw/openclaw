@@ -45,6 +45,7 @@ type ChatGoalProps = {
   goal?: SessionGoal;
   expanded: boolean;
   canAct: boolean;
+  resumeBusy?: boolean;
   resumeRecovery?: ChatGoalRecovery;
   connected?: boolean;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
@@ -62,7 +63,7 @@ const goalActionIcons = {
 
 type GoalPresentationProps = Pick<
   ChatGoalProps,
-  "canAct" | "resumeRecovery" | "connected" | "onGoalAction" | "onGoalEdit"
+  "canAct" | "resumeBusy" | "resumeRecovery" | "connected" | "onGoalAction" | "onGoalEdit"
 > & { goal: SessionGoal };
 
 /** Shared eligibility and callbacks; the parent supplies native write availability. */
@@ -95,11 +96,19 @@ export function ChatGoalActions(props: GoalPresentationProps) {
         {(action) => (
           <>
             {visibleAction(action) ? (
-              <openclaw-tooltip content={t(`chat.goals.${action}`)}>
+              <openclaw-tooltip
+                content={t(
+                  action === "resume" && props.resumeBusy
+                    ? "chat.goals.busy"
+                    : `chat.goals.${action}`,
+                )}
+              >
                 <button
                   class={["agent-chat__goal-action", `agent-chat__goal-${action}`]}
                   type="button"
                   aria-label={t(`chat.goals.${action}`)}
+                  disabled={action === "resume" && props.resumeBusy}
+                  style={{ opacity: action === "resume" && props.resumeBusy ? 0.5 : undefined }}
                   onClick={() => {
                     if (action === "edit") {
                       props.onGoalEdit?.(props.goal);
@@ -209,6 +218,7 @@ function GoalCard(props: Omit<ChatGoalProps, "goal"> & { goal: SessionGoal }) {
           <ChatGoalActions
             goal={props.goal}
             canAct={props.canAct}
+            resumeBusy={props.resumeBusy}
             resumeRecovery={props.resumeRecovery}
             connected={props.connected}
             onGoalAction={props.onGoalAction}
@@ -251,6 +261,7 @@ export function ChatGoal(props: ChatGoalProps) {
         goal={props.goal!}
         expanded={props.expanded}
         canAct={props.canAct}
+        resumeBusy={props.resumeBusy}
         resumeRecovery={props.resumeRecovery}
         connected={props.connected}
         onGoalAction={props.onGoalAction}

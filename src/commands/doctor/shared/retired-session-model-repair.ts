@@ -29,9 +29,10 @@ export function repairRetiredSessionModelRef(
   if (decision.kind === "unchanged") {
     return false;
   }
-  const replacement = splitTrailingAuthProfile(
+  const parsedReplacement = splitTrailingAuthProfile(
     decision.kind === "replace" ? decision.modelRef : (defaultModelRef ?? ""),
-  ).model;
+  );
+  const replacement = parsedReplacement.model;
   if (
     decision.kind === "clear" &&
     replacement === decision.modelRef &&
@@ -45,15 +46,28 @@ export function repairRetiredSessionModelRef(
     return false;
   }
   const slash = replacement.indexOf("/");
-  return applyModelOverrideToSessionEntry({
+  const updated = applyModelOverrideToSessionEntry({
     entry,
     selection: {
       provider: replacement.slice(0, slash),
       model: replacement.slice(slash + 1),
       isDefault: decision.kind === "clear",
     },
+    ...(parsedReplacement.profile && parsedReplacement.profile !== entry.authProfileOverride
+      ? { profileOverride: parsedReplacement.profile, profileOverrideSource: "user" as const }
+      : {}),
     preserveAuthProfileOverride:
       decision.kind === "replace" || replacement.slice(0, slash) === decision.provider,
     selectionSource: entry.modelOverrideSource === "auto" ? "auto" : "user",
   }).updated;
+  if (
+    decision.kind === "replace" &&
+    decision.reason === "retirement" &&
+    decision.cyberAccessProgram
+  ) {
+    const accessChanged = entry.cyberAccessProgram !== decision.cyberAccessProgram;
+    entry.cyberAccessProgram = decision.cyberAccessProgram;
+    return updated || accessChanged;
+  }
+  return updated;
 }

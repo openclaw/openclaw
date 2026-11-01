@@ -105,7 +105,9 @@ function renderRouterOutlet(
     ? { router, retryContext, error: renderedMatch.error, routeId }
     : undefined;
   if (!renderedMatch.module) {
-    return { state: error ? "empty" : "loading", error };
+    return error
+      ? { state: "empty", error }
+      : { state: "loading", composer: renderedMatch.routeId === "chat" };
   }
   const routeModule = renderedMatch.module;
   if (
@@ -143,7 +145,9 @@ type RouteContent =
       props: SolidRouteProps;
       error?: RouteErrorProps;
     }
-  | { state: "empty" | "loading" | "startup"; error?: RouteErrorProps };
+  | { state: "empty" | "startup"; error?: RouteErrorProps }
+  // A chat route's loading frame keeps the boot composer typeable.
+  | { state: "loading"; composer?: boolean };
 
 type Presentation = { key: string; render: (presented: boolean) => RouteContent };
 
@@ -165,6 +169,10 @@ function RoutePresentation(props: {
   const state = () => {
     const current = value();
     return "state" in current ? current.state : undefined;
+  };
+  const composer = () => {
+    const current = value();
+    return "composer" in current && current.composer === true;
   };
   const page = (
     <>
@@ -188,7 +196,7 @@ function RoutePresentation(props: {
         <AgentStartupState />
       </Show>
       <Show when={state() === "loading"}>
-        <LoadingState route />
+        <LoadingState route composer={composer()} />
       </Show>
     </>
   );
@@ -362,6 +370,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
     const retainedKey = `${scopeGeneration}:${retainedOwnerKey ?? "empty"}`;
     const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
     const retryContext = props.retryContext;
+    const loading: RouteContent = { state: "loading", composer: renderedMatch?.routeId === "chat" };
     const renderTransient = (): RouteContent => {
       if (snapshot.startupPending) {
         return { state: "startup" };
@@ -377,13 +386,13 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
                 routeId: renderedMatch.routeId,
               },
             }
-          : { state: "loading" };
+          : loading;
       }
       if (module?.retainOnNavigate && waiting) {
         if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
           return renderRouterOutlet(router, snapshot.settled, retryContext);
         }
-        return { state: "loading" };
+        return loading;
       }
       return renderRouterOutlet(router, renderedMatch, retryContext);
     };

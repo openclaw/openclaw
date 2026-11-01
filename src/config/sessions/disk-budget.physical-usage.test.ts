@@ -81,9 +81,9 @@ describe("physical session disk usage", () => {
         }
         const expanded = await countScan();
         expect(expanded.usage).toEqual({ databaseWalBytes: 0, totalBytes: 321 + 32 * 7 });
-        // Bounded mapping must not add task factories and async-context continuations per file.
+        // A stat uses one result continuation, without an extra catch/await promise layer.
         expect(initial.promises).toBeGreaterThan(0);
-        expect(expanded.promises - initial.promises).toBeLessThanOrEqual(32 * 22);
+        expect(expanded.promises - initial.promises).toBeLessThanOrEqual(32 * 20);
       });
     },
   );

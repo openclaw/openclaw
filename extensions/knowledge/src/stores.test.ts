@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdir, readFile, rename, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
 import { expect, it, vi } from "vitest";
@@ -525,6 +526,111 @@ it("the cutover fences old-assignment access before applying and after", async (
   );
   const next = await stores.open(principal, { provision: false });
   expect(next.kind, "the new assignment resolves to the named store").toBe("unprovisioned");
+});
+
+// Plugin reload starts the next generation as soon as stop/dispose resolve, so
+// both must wait for the old generation's workers to exit. Worker handles are
+// private; threadId becomes -1 once a worker has exited.
+// Worker handles are private to their clients; tests read them only to observe exit.
+const workerOf = (client: object) => Reflect.get(client, "worker") as Worker | undefined;
+
+async function runningStores() {
+  const f = await fixture();
+  await f.save("main", "Seed");
+  const stores = new Stores(f.api, parsePolicy({ writesEnabled: true }), () => {});
+  afterTest(() => stores.stop());
+  const opened = await stores.open(
+    (): Principal => ({ agentId: "main", scope: { visibility: "private" } }),
+    { provision: false },
+  );
+  if (opened.kind !== "ready") {
+    throw new Error("expected a ready store");
+  }
+  await opened.runtime.enqueue(opened.access.assertCurrent, () =>
+    opened.runtime.client.call("catalog", opened.access),
+  );
+  const workers = {
+    storage: workerOf(opened.runtime.client)!,
+    registry: workerOf(stores.registry)!,
+  };
+  expect(workers.storage.threadId).toBeGreaterThan(0);
+  expect(workers.registry.threadId).toBeGreaterThan(0);
+  return { f, stores, workers, opened };
+}
+
+it("service stop resolves only after the store and registry workers have exited", async () => {
+  const { stores, workers } = await runningStores();
+  await stores.stop();
+  expect(workers.storage.threadId, "storage worker exited").toBe(-1);
+  expect(workers.registry.threadId, "registry worker exited").toBe(-1);
+});
+
+it("disposal waits for workers and is final: later calls never start a worker", async () => {
+  const { stores, workers } = await runningStores();
+  await stores.dispose();
+  expect(workers.storage.threadId).toBe(-1);
+  expect(workers.registry.threadId).toBe(-1);
+  await expect(stores.registry.call("snapshot")).rejects.toThrow(/registry stopped/);
+  expect(workerOf(stores.registry), "no registry worker restarted").toBeUndefined();
+});
+
+it("the plugin instance disposes Knowledge through api.lifecycle.onDispose", async () => {
+  const base = tempDirs.make("knowledge-stores-");
+  const disposers: Array<() => Promise<void>> = [],
+    services: any = [];
+  const host = hostApi(base, {
+    policy: { operatorRead: true, writesEnabled: true },
+    extra: {
+      registerService: (s: any) => services.push(s),
+      lifecycle: {
+        onDispose: (d: () => Promise<void>) => {
+          disposers.push(d);
+          return () => {};
+        },
+      },
+    },
+  });
+  const service = createKnowledgeService(host.api);
+  await services[0].start({});
+  await service.save_page(
+    { requestId: randomUUID(), title: "Seed", type: "note", body: "Seed body." },
+    toolContext(host.api),
+  );
+  expect(disposers).toHaveLength(1);
+  await services[0].stop();
+  const [dispose] = disposers;
+  if (!dispose) {
+    throw new Error("expected a registered disposer");
+  }
+  await dispose();
+  await expect(service.records({}, toolContext(host.api))).rejects.toThrow(/reloaded/);
+});
+
+it("restart failures carry a stable retryable code and their reason", async () => {
+  const { stores, opened } = await runningStores();
+  const restart = (reason: string) =>
+    expect.objectContaining({ code: "UNAVAILABLE", retryable: true, reason });
+  const { runtime, access } = opened;
+  const inFlight = runtime.client.call("catalog", access);
+  const closed = runtime.client.close();
+  await expect(inFlight).rejects.toEqual(restart("storage-stopped"));
+  await closed;
+  await runtime.retire();
+  await expect(
+    runtime.enqueue(
+      () => {},
+      async () => {},
+    ),
+  ).rejects.toEqual(restart("runtime-retired"));
+  await stores.dispose();
+  let reloaded: unknown;
+  try {
+    stores.assertLive(stores.incarnation);
+  } catch (error) {
+    reloaded = error;
+  }
+  expect(reloaded).toEqual(restart("service-reloaded"));
+  await expect(stores.registry.call("snapshot")).rejects.toEqual(restart("registry-stopped"));
 });
 
 it("operator proxy is operator-only and validates inner operations", async () => {

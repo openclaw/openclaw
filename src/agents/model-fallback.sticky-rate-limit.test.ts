@@ -32,6 +32,15 @@ function failPrimary(status = 429) {
   });
 }
 
+async function expectSelectedModel(sessionId: string, model: string) {
+  const run = vi.fn<Parameters<typeof runWithModelFallback<string>>[0]["run"]>(
+    async (_provider, selected) => selected,
+  );
+  const result = await runTurn(sessionId, run, true);
+  expect(result.result).toBe(model);
+  return { run, result };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(start);
@@ -48,54 +57,31 @@ describe("session rate-limit fallback stickiness", () => {
     expect(first.mock.calls.map(([, model]) => model)).toEqual(["primary", "backup"]);
     expect(result.attempts).toMatchObject([{ model: "primary", reason: "rate_limit" }]);
 
-    const other = vi.fn(async () => "other reply");
-    await runTurn("other-session", other, true);
-    expect(other).toHaveBeenCalledExactlyOnceWith("sticky-provider", "primary", expect.any(Object));
+    await expectSelectedModel("other-session", "primary");
 
     vi.setSystemTime(start + minute);
-    const second = vi.fn(async () => "warm reply");
-    const warm = await runTurn("sticky-session", second, true);
+    const { run: second, result: warm } = await expectSelectedModel("sticky-session", "backup");
     // The skipped selected model keeps the rate-limit reason visible to /status.
     expect(warm.attempts).toMatchObject([
       { model: "primary", reason: "rate_limit", code: MODEL_FALLBACK_SKIPPED_CODE },
     ]);
-    expect(second).toHaveBeenCalledExactlyOnceWith(
-      "sticky-provider",
-      "backup",
-      expect.objectContaining({
-        modelRoutingProvenance: expect.objectContaining({
-          stage: "fallback",
-          fallbackReason: "rate_limit",
-        }),
-      }),
-    );
+    expect(second.mock.calls[0]?.[2]?.modelRoutingProvenance).toMatchObject({
+      stage: "fallback",
+      fallbackReason: "rate_limit",
+    });
 
     vi.setSystemTime(start + 11 * minute + 1);
-    const expired = vi.fn(async () => "primary reply");
-    await runTurn("sticky-session", expired, true);
-    expect(expired).toHaveBeenCalledExactlyOnceWith(
-      "sticky-provider",
-      "primary",
-      expect.any(Object),
-    );
+    await expectSelectedModel("sticky-session", "primary");
   });
 
   it("caps sliding reuse at 30 minutes and clears a failed sticky attempt", async () => {
     await runTurn("sticky-session", failPrimary(), true);
     for (const minutes of [5, 10, 15, 20, 25, 30]) {
       vi.setSystemTime(start + minutes * minute);
-      const warm = vi.fn(async () => "warm reply");
-      await runTurn("sticky-session", warm, true);
-      expect(warm).toHaveBeenCalledExactlyOnceWith("sticky-provider", "backup", expect.any(Object));
+      await expectSelectedModel("sticky-session", "backup");
     }
     vi.setSystemTime(start + 30 * minute + 1);
-    const capped = vi.fn(async () => "primary reply");
-    await runTurn("sticky-session", capped, true);
-    expect(capped).toHaveBeenCalledExactlyOnceWith(
-      "sticky-provider",
-      "primary",
-      expect.any(Object),
-    );
+    await expectSelectedModel("sticky-session", "primary");
 
     await runTurn("sticky-session", failPrimary(), true);
     const failingSticky = vi.fn(async (_provider: string, model: string) => {
@@ -106,13 +92,7 @@ describe("session rate-limit fallback stickiness", () => {
     });
     await runTurn("sticky-session", failingSticky, true);
     expect(failingSticky.mock.calls.map(([, model]) => model)).toEqual(["backup", "primary"]);
-    const recovered = vi.fn(async () => "primary reply");
-    await runTurn("sticky-session", recovered, true);
-    expect(recovered).toHaveBeenCalledExactlyOnceWith(
-      "sticky-provider",
-      "primary",
-      expect.any(Object),
-    );
+    await expectSelectedModel("sticky-session", "primary");
   });
 
   it("does not stick after other failures or without the opt-in", async () => {
@@ -123,13 +103,7 @@ describe("session rate-limit fallback stickiness", () => {
       const first = failPrimary(status);
       await runTurn("sticky-session", first, enabled);
       expect(first.mock.calls.map(([, model]) => model)).toEqual(["primary", "backup"]);
-      const next = vi.fn(async () => "primary reply");
-      await runTurn("sticky-session", next, true);
-      expect(next).toHaveBeenCalledExactlyOnceWith(
-        "sticky-provider",
-        "primary",
-        expect.any(Object),
-      );
+      await expectSelectedModel("sticky-session", "primary");
     }
   });
 });

@@ -17,9 +17,10 @@ import {
 } from "../../test-helpers/application-context.ts";
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
-import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import "../debug/debug-overlay-content.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
+import { mockDocumentVisibility as mockVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -71,15 +72,6 @@ function mockClock() {
   };
 }
 
-function mockVisibility() {
-  let value: DocumentVisibilityState = "visible";
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => value);
-  return (next: DocumentVisibilityState) => {
-    value = next;
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
-}
-
 function text(page: HTMLElement, selector: string) {
   return page.querySelector(selector)?.textContent;
 }
@@ -123,7 +115,6 @@ async function mount(
 ) {
   const context = {
     gateway,
-    channels: { state: { channelsLastSuccess: null }, subscribe: () => () => undefined },
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
   if (attached) {

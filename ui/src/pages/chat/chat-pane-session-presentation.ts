@@ -13,6 +13,7 @@ export function chatSessionPresentationTitle(
   row?: GatewaySessionRow,
   sessionKey = "",
   pending = false,
+  createdTitle?: string,
 ): string {
   const key = state
     ? resolveSessionKey(state.sessionKey, state.hello) || state.sessionKey
@@ -22,6 +23,9 @@ export function chatSessionPresentationTitle(
   );
   // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
   const source = presentation ?? row;
+  if (!source && createdTitle) {
+    return createdTitle;
+  }
   if (!source && pending) {
     return "";
   }

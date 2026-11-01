@@ -38,6 +38,7 @@ import {
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
+import type { ChatPaneProps } from "./chat-pane-inputs.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -50,26 +51,9 @@ const CATALOG_KEY = {
 const CATALOG_SESSION_KEY = buildCatalogSessionKey(CATALOG_KEY, "research");
 const sessionPath = (sessionKey: string) =>
   sessionNavigationTarget({ face: "chat", sessionKey, fallbackAgentId: "main" }).options.pathname;
-import type { ChatMessageCache } from "./session-message-cache.ts";
 import { setPaneSession } from "./split-layout.ts";
 
-type RenderedPane = HTMLElement & {
-  paneId: string;
-  paneLabel: string;
-  focusComposer: boolean;
-  chatMessagesBySession: ChatMessageCache;
-  sessionKey: string;
-  presented: boolean;
-  active: boolean;
-  narrow: boolean;
-  mergedChrome: boolean;
-  onboarding: boolean;
-  onOpenSplitView?: () => void;
-  onFocusPane?: (paneId: string) => void;
-  onClosePane?: (paneId: string) => void;
-  onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
-  captureNavigationFace?: () => "chat" | "dashboard";
-};
+type RenderedPane = HTMLElement & ChatPaneProps;
 
 type RenderedDivider = HTMLElement & { orientation: "horizontal" | "vertical"; splitRatio: number };
 
@@ -639,29 +623,20 @@ describe("chat page split layout host", () => {
     expect(navigation.replace).not.toHaveBeenCalled();
   });
 
-  it("creates and persists a classic-mode edge drop on the chosen side", async () => {
-    const { page, navigation } = await mountPage();
-    dispatchSessionDrag(stubDropBounds(page), "drop", 105);
-
+  it.each([
+    ["classic", 105, 100, [[WORK_SESSION_KEY], ["main"]], "p2"],
+    ["split", 200, 145, [["main", WORK_SESSION_KEY], ["main"]], "p3"],
+  ] as const)("persists an edge drop in %s mode", async (mode, x, y, columns, activePaneId) => {
+    const { page, navigation } = await mountPage(
+      undefined,
+      mode === "split" ? createSplitLayout("main") : undefined,
+    );
+    dispatchSessionDrag(stubDropBounds(page), "drop", x, y);
     const layout = loadSettings().chatSplitLayout;
-    expect(layout?.columns.map((column) => column.panes.map((pane) => pane.sessionKey))).toEqual([
-      [WORK_SESSION_KEY],
-      ["main"],
-    ]);
-    expect(layout?.activePaneId).toBe("p2");
-    expect(navigation.replace).toHaveBeenCalledWith("chat", preferredChat(WORK_SESSION_KEY));
-  });
-
-  it("inserts and persists a dropped session at a layout edge", async () => {
-    const { page, navigation } = await mountPage(undefined, createSplitLayout("main"));
-    dispatchSessionDrag(stubDropBounds(page), "drop", 200, 145);
-
-    const layout = loadSettings().chatSplitLayout;
-    expect(layout?.columns.at(0)?.panes.map((pane) => pane.sessionKey)).toEqual([
-      "main",
-      WORK_SESSION_KEY,
-    ]);
-    expect(layout?.activePaneId).toBe("p3");
+    expect(layout?.columns.map((column) => column.panes.map((pane) => pane.sessionKey))).toEqual(
+      columns,
+    );
+    expect(layout?.activePaneId).toBe(activePaneId);
     expect(navigation.replace).toHaveBeenCalledWith("chat", preferredChat(WORK_SESSION_KEY));
   });
 

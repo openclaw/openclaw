@@ -14,7 +14,7 @@ import {
 } from "./scratch-contract.js";
 import { readScratchStateFromDatabase } from "./scratch-read.kernel.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
-import { prepareMutableCronStoreKey, resolveCronStoreKeyInDatabase } from "./store/paths.js";
+import { resolveCronStoreKeyInDatabase } from "./store/paths.js";
 
 /** Doctor's synchronous transaction reads stay with the maintenance owner. */
 export function readCronJobScratchState(
@@ -45,21 +45,6 @@ type CronScratchWriteAdmission = {
   expectedConfigRevision?: string;
   createdAtMsFallback?: number;
 };
-
-/** Writes through the existing actor while retaining the original caller's admission. */
-export async function writeCronJobScratch(
-  params: CronScratchWriteParams & { storePath: string },
-  admission?: CronScratchWriteAdmission,
-): Promise<CronJobScratchWriteResult> {
-  const captured = { ...params };
-  const context = admission?.context ?? captureOpenClawStateWorkerContext(captured.options);
-  const storeKey = await prepareMutableCronStoreKey(
-    captured.storePath,
-    context,
-    captured.options?.env,
-  );
-  return writeCronJobScratchByKey({ ...captured, storeKey }, { ...admission, context });
-}
 
 /** Writes an already-selected partition without interpreting the key as a pathname. */
 export async function writeCronJobScratchByKey(

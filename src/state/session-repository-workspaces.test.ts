@@ -248,6 +248,23 @@ it("creates one stable logical-session owner without widening replayed setup int
   expect(await store.create({ ...source, runSetupScript: true })).toEqual(initial);
   expect(initial.runSetupScript).toBe(false);
   expect(initial.branch).toBe(`openclaw/${initial.workspaceId}`);
+  expect((await store.create({ ...source, branchPrefix: "clawson" })).branch).toBe(initial.branch);
+  const prefixed = await store.create({
+    ...source,
+    sessionKey: "agent:main:prefixed",
+    branchPrefix: "clawson",
+  });
+  expect(prefixed.branch).toBe(`clawson/${prefixed.workspaceId}`);
+  const explicit = await store.create({
+    ...source,
+    sessionKey: "agent:main:explicit",
+    branch: "saved/branch",
+    branchPrefix: "changed-prefix",
+  });
+  expect(explicit.branch).toBe("saved/branch");
+  await expect(
+    store.create({ ...source, sessionKey: "agent:main:invalid", branchPrefix: "refs/heads" }),
+  ).rejects.toThrow("branch prefix is invalid");
   await expect(store.create({ ...source, requestedRef: "other" })).rejects.toThrow(
     "different repository",
   );

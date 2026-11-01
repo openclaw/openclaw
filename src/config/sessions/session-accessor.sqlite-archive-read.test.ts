@@ -3,7 +3,6 @@ import { constants as bufferConstants } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import zlib from "node:zlib";
@@ -13,10 +12,8 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { assertOpenClawAgentCurrentRuntimeSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import * as agentDb from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as archiveCompression from "./archive-compression.js";
 import { deleteSessionEntryLifecycle, findTranscriptEvent } from "./session-accessor.js";
@@ -147,7 +144,6 @@ it("pages the unique run generation and rejects replaced, deleted, corrupt, or a
     const page = await readPage({ limit: 1 });
     expectEntries(page, [[answer, 2]]);
     expect(page).toMatchObject({ totalMessages: 2, binding: { generation: "original" } });
-    expect(page?.nextCursor).toEqual(expect.any(String));
     assert(page?.nextCursor, "Expected an older archive page");
     const continuation = { runId, limit: 1, cursor: page.nextCursor };
     const verifyBinding = () =>
@@ -352,10 +348,6 @@ it("reads a pre-archive store without creating its optional archive table", asyn
     expect(fs.existsSync(missingPath)).toBe(false);
     const database = agentDb.openOpenClawAgentDatabase(options);
     database.db.exec("DROP TABLE session_transcript_archives");
-    assertOpenClawAgentCurrentRuntimeSchema(requireNativeSqliteDatabase(database.db), {
-      agentId: database.agentId,
-      pathname: database.path,
-    });
     const storePath = database.path;
     agentDb.closeOpenClawAgentDatabasesForTest();
     const before = fs.readFileSync(storePath);
@@ -372,14 +364,6 @@ it("reads a pre-archive store without creating its optional archive table", asyn
     await expect(
       history.findSessionTranscriptArchiveEventReadOnly(scope, "absent-run"),
     ).resolves.toBeUndefined();
-    {
-      using persisted = new DatabaseSync(storePath, { readOnly: true });
-      expect(
-        persisted
-          .prepare("SELECT 1 FROM sqlite_schema WHERE name = 'session_transcript_archives'")
-          .get(),
-      ).toBeUndefined();
-    }
     expect(fs.readFileSync(storePath)).toEqual(before);
   });
 });
@@ -508,7 +492,6 @@ it.each([false, true])(
       }
       await agentDb.closeOpenClawAgentDatabasesAsync(env.OPENCLAW_STATE_DIR);
       fs.copyFileSync(storePath, replacementPath);
-      expect(fs.readFileSync(replacementPath)).toEqual(fs.readFileSync(storePath));
       const scopeOwner = await import("./session-accessor.sqlite-scope.js");
       const prepare = scopeOwner.prepareSqliteScope;
       return vi

@@ -14,6 +14,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
@@ -368,6 +369,7 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     this.sessionReplacedError = new McpSseSessionExpiredError(
       `MCP SSE server reconnected onto a replacement session endpoint: ${endpoint}`,
     );
+    materializeErrorStack(this.sessionReplacedError);
     this.emitError(this.sessionReplacedError);
     void this.close();
     // EventSource can arm its reconnect timer after this callback returns.

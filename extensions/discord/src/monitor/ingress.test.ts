@@ -22,6 +22,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAsyncGate } from "../../../test-support/async-gate.test-support.js";
 import * as ingressRuntime from "./ingress.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
 const createDiscordIngressMonitor = ingressRuntime.createDiscordIngressMonitor;
@@ -46,6 +47,12 @@ function createRawMessage(id: string, channelId = "channel-1"): APIMessage {
 
 function payloadFor(rawMessage: APIMessage): DiscordIngressPayload {
   return { version: 1, receivedAt: Date.now(), rawMessage };
+}
+
+function installIngressTransform(handler: (...args: unknown[]) => unknown) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_channel_ingress", handler }]),
+  );
 }
 
 let stateDir: string;
@@ -100,35 +107,26 @@ describe("Discord durable ingress", () => {
       content: "PRIVATE_PAYLOAD_SENTINEL",
       attachments: [{ id: "upload", url: "https://example.invalid/private-upload" }],
     } as unknown as APIMessage;
-    const prepared = createDeferred<void>();
-    const release = createDeferred<void>();
+    const preparation = createAsyncGate();
     const policyOrder: string[] = [];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_channel_ingress",
-          handler: async (input) => {
-            const message = (input as { event: APIMessage }).event;
-            policyOrder.push(message.id);
-            if (message.id === raw.id) {
-              prepared.resolve();
-              await release.promise;
-            }
-            return { event: { ...message, content: "[redacted]", attachments: [] } };
-          },
-        },
-      ]),
-    );
+    installIngressTransform(async (input) => {
+      const message = (input as { event: APIMessage }).event;
+      policyOrder.push(message.id);
+      if (message.id === raw.id) {
+        await preparation.wait();
+      }
+      return { event: { ...message, content: "[redacted]", attachments: [] } };
+    });
     const dispatch = vi.fn();
     const monitor = createPausedMonitor(dispatch);
     const admission = monitor.accept(raw);
     let follower: Promise<void> | undefined;
     try {
-      await Promise.race([prepared.promise, admission]);
+      await Promise.race([preparation.entered, admission]);
       follower = monitor.accept({ ...raw, id: "privacy-follower" });
       expect(policyOrder).toEqual([raw.id]);
       expect(await queue.listPending()).toEqual([]);
-      release.resolve();
+      preparation.release();
       await Promise.all([admission, follower]);
       expect(policyOrder).toEqual([raw.id, "privacy-follower"]);
       const pending = await queue.listPending();
@@ -156,22 +154,15 @@ describe("Discord durable ingress", () => {
       }
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
-      release.resolve();
+      preparation.release();
       await Promise.all([admission, follower]);
     }
   });
 
   it("rejects an ingress policy failure without storing its raw payload or error", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_channel_ingress",
-          handler: () => {
-            throw new Error("PRIVATE_SCOPE_LOOKUP_SENTINEL");
-          },
-        },
-      ]),
-    );
+    installIngressTransform(() => {
+      throw new Error("PRIVATE_SCOPE_LOOKUP_SENTINEL");
+    });
     const monitor = createPausedMonitor(vi.fn());
     await expect(monitor.accept(createRawMessage("denied"))).rejects.toThrow(
       "Channel ingress transform failed",
@@ -180,20 +171,18 @@ describe("Discord durable ingress", () => {
   });
 
   it.each(["id", "channel_id"] as const)(
-    "refuses a transform that changes the provider %s",
+    "rejects missing or transformed provider %s before durable allocation",
     async (field) => {
       const raw = createRawMessage("identity-event");
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_channel_ingress",
-            handler: () => ({ event: { ...raw, [field]: "changed" } }),
-          },
-        ]),
+      const dispatch = vi.fn();
+      const monitor = createMonitor(dispatch);
+      await expect(monitor.accept({ ...raw, [field]: undefined } as never)).rejects.toThrow(
+        field === "id" ? "snowflake" : "channel_id",
       );
-      const monitor = createPausedMonitor(vi.fn());
+      installIngressTransform(() => ({ event: { ...raw, [field]: "changed" } }));
       await expect(monitor.accept(raw)).rejects.toThrow("changed event identity or lane");
       expect(await queue.listPending()).toEqual([]);
+      expect(dispatch).not.toHaveBeenCalled();
     },
   );
 
@@ -283,12 +272,8 @@ describe("Discord durable ingress", () => {
   });
 
   it("does not normalize or dispatch before the durable append completes", async () => {
-    const appendGate = createDeferred<void>();
-    const appendStarted = createDeferred<void>();
-    const gateAppend = vi.fn(async () => {
-      appendStarted.resolve();
-      await appendGate.promise;
-    });
+    const appendGate = createAsyncGate();
+    const gateAppend = vi.fn(appendGate.wait);
     // An idle monitor admits a fresh singleton through the fused append-and-claim.
     const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
     const gatedQueue: ChannelIngressQueue<DiscordIngressPayload> = {
@@ -310,30 +295,18 @@ describe("Discord durable ingress", () => {
     const monitor = createMonitor(dispatch, gatedQueue);
     const accepted = monitor.accept(createRawMessage("1001"));
     try {
-      await Promise.race([appendStarted.promise, accepted]);
+      await Promise.race([appendGate.entered, accepted]);
       expect(gateAppend).toHaveBeenCalledTimes(1);
 
       expect(dispatch).not.toHaveBeenCalled();
 
-      appendGate.resolve();
+      appendGate.release();
       await accepted;
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     } finally {
-      appendGate.resolve();
+      appendGate.release();
       await accepted;
     }
-  });
-
-  it("rejects unstable message identity before durable allocation", async () => {
-    const dispatch = vi.fn();
-    const monitor = createMonitor(dispatch);
-    const missingMessageId = { ...createRawMessage("missing"), id: undefined };
-    const missingChannelId = { ...createRawMessage("missing"), channel_id: undefined };
-
-    await expect(monitor.accept(missingMessageId as never)).rejects.toThrow("snowflake");
-    await expect(monitor.accept(missingChannelId as never)).rejects.toThrow("channel_id");
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("recovers a claimed row with a fresh drain and dispatches it exactly once", async () => {
@@ -348,61 +321,31 @@ describe("Discord durable ingress", () => {
     });
     createMonitor(recoveredDispatch);
 
-    await vi.waitFor(() => expect(recoveredDispatch).toHaveBeenCalledTimes(1));
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
+    await vi.waitFor(async () => {
+      expect(await queue.enqueue("1002", payloadFor(createRawMessage("1002")))).toMatchObject({
+        kind: "completed",
+      });
     });
     expect(recoveredDispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects a duplicate after completion", async () => {
-    const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
-      await lifecycle.onAdopted();
-    });
-    const monitor = createMonitor(dispatch);
-    const rawMessage = createRawMessage("1003");
-    await monitor.accept(rawMessage);
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-    await vi.waitFor(async () => {
-      const verdict = await queue.enqueue("1003", payloadFor(rawMessage));
-      expect(verdict.kind).toBe("completed");
-    });
-
-    await monitor.accept(rawMessage);
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("matches the old guard for duplicate MESSAGE_CREATE delivery during RESUME", async () => {
+  it("deduplicates concurrent RESUME delivery and later delivery after completion", async () => {
     let lifecycle: DiscordIngressLifecycle | undefined;
     const dispatch = vi.fn(async (_event, claimedLifecycle: DiscordIngressLifecycle) => {
       lifecycle = claimedLifecycle;
       return { kind: "deferred" as const };
     });
     const monitor = createMonitor(dispatch);
-    const replayed = createRawMessage("1004");
-    await Promise.all([monitor.accept(replayed), monitor.accept(replayed)]);
+    const rawMessage = createRawMessage("1003");
+    await Promise.all([monitor.accept(rawMessage), monitor.accept(rawMessage)]);
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-
     await lifecycle?.onAdopted();
     await vi.waitFor(async () => {
-      const verdict = await queue.enqueue("1004", payloadFor(replayed));
+      const verdict = await queue.enqueue("1003", payloadFor(rawMessage));
       expect(verdict.kind).toBe("completed");
     });
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
 
-  it("dead-letters a permanent Discord authentication failure", async () => {
-    const monitor = createMonitor(async () => {
-      throw Object.assign(new Error("unauthorized"), { status: 401 });
-    });
-    const rawMessage = createRawMessage("1005");
     await monitor.accept(rawMessage);
-    await vi.waitFor(async () => {
-      const verdict = await queue.enqueue("1005", payloadFor(rawMessage));
-      expect(verdict.kind).toBe("failed");
-    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 });

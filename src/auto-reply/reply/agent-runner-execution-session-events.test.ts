@@ -295,6 +295,7 @@ describe("ordinary session event execution", () => {
           allowAuthProfileFallback: false,
           onSuccessfulAuthProfile,
         },
+        runtimeSessionEntry: (entry) => entry,
         assertCandidate,
         resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
         dispose,
@@ -345,6 +346,46 @@ describe("ordinary session event execution", () => {
       expect(dispose).toHaveBeenCalledOnce();
     },
   );
+
+  it("resolves a session job's candidates on its captured runtime, not the row's override", async () => {
+    const automation = createScheduledAutomation();
+    automation.job.inferenceBinding = {
+      version: 1,
+      provider: "anthropic",
+      profileId: "scheduled-profile",
+      authorizationId: "a".repeat(64),
+      authRequirement: "api-key",
+      source: "auto",
+      runtime: "openclaw",
+    };
+    const followupRun = createFollowupRun({ scheduledAutomation: automation });
+    const rowEntry = { sessionId: "row", updatedAt: 1, agentRuntimeOverride: "claude-cli" };
+    const runtimeSessionEntry = vi.fn(() => ({ agentRuntimeOverride: "openclaw" }));
+    const assertCandidate = vi.fn();
+    using acquire = vi.spyOn(cronInference, "prepareCronRunInference");
+    acquire.mockResolvedValue({
+      runParams: {
+        authProfileId: "scheduled-profile",
+        authProfileIdSource: "auto",
+        allowAuthProfileFallback: false,
+      },
+      runtimeSessionEntry,
+      assertCandidate,
+      resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
+      dispose: vi.fn(),
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => rowEntry,
+    });
+
+    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+    expect(runtimeSessionEntry).toHaveBeenCalledWith(rowEntry);
+    expect(assertCandidate).toHaveBeenCalledWith("anthropic", false, "openclaw");
+    expect(state.runCliAgentMock).not.toHaveBeenCalled();
+  });
 
   it.for([
     { runtime: "embedded", outcome: "start" },

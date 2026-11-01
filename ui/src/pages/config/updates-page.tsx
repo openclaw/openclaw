@@ -39,6 +39,7 @@ export function UpdatesPage(props: {
       nativeDeviceSettings={props.context.nativeDeviceSettings}
       configObject={props.configObject}
       gatewayVersion={config().read().serverVersion ?? snapshot().hello?.server?.version ?? null}
+      gatewayBuildId={snapshot().hello?.server?.buildId}
       controlUiCommit={CONTROL_UI_BUILD_INFO.commit}
       controlUiCommitAt={CONTROL_UI_BUILD_INFO.commitAt}
       controlUiBuiltAt={CONTROL_UI_BUILD_INFO.builtAt}

@@ -1388,6 +1388,10 @@ extension DashboardWindowController {
     /// Clearing here covers page/WebKit-initiated main-frame navigations that
     /// never pass through `load(_:)`, so commands queue for the new document.
     func webView(_ webView: WKWebView, didCommit _: WKNavigation!) {
+        if self.nativeBrowser.owns(webView) {
+            self.nativeBrowser.navigationDidCommit(in: webView)
+            return
+        }
         guard webView === self.webView else { return }
         self.documentHost.committed()
         self.invalidateGatewayHealth()

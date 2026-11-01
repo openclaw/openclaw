@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TICK_INTERVAL_MS } from "../gateway/server-constants.js";
@@ -269,7 +270,10 @@ it.each([
       const doctor = startDoctor(waitForMaintenance);
       const completed = await doctor.result;
       expect(completed).toMatchObject({
-        error: { refusal: { kind: "deferred", reason: "agent-database-in-use" } },
+        error: {
+          message: expect.stringContaining(`Observed lease holder PID ${holder.holderPid}.`),
+          refusal: { kind: "deferred", reason: "agent-database-in-use" },
+        },
       });
       expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
     } finally {
@@ -328,7 +332,7 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
     try {
       await doctor.firstWait;
       expect(doctor.isSettled()).toBe(false);
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       if (outcome === "slow-released") {
         await doctor.advanceTo(
           TICK_INTERVAL_MS +
@@ -337,7 +341,7 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
             1,
         );
         expect(doctor.isSettled()).toBe(false);
-        expect(fs.readFileSync(databasePath)).toEqual(before);
+        expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       }
       if (outcome === "rowless-released") {
         await doctor.advanceTo(GATEWAY_SHUTDOWN_RESERVE_MS - 50);

@@ -10,6 +10,7 @@ import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plug
 import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import {
   loadToolPlugin,
   runPluginsBuildCommand,
@@ -187,7 +188,7 @@ describe("plugin authoring commands", () => {
       extensions: ["./src/a/index.ts", "./src/b/index.ts"],
       runtimeExtensions: runtimeEntries,
     };
-    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    writeFixtureJsonSync(packagePath, packageManifest);
     const { installPluginFromPath } = await import("../plugins/install-package.js");
 
     await runPluginsBuildCommand({ root: tmpDir, entry: runtimeEntries[0] });
@@ -278,7 +279,7 @@ describe("plugin authoring commands", () => {
     const packagePath = path.join(rootDir, "package.json");
     const packageJson = readJson(rootDir, "package.json");
     packageJson.openclaw.controlUi = "./browser.ts";
-    fs.writeFileSync(packagePath, JSON.stringify(packageJson));
+    writeFixtureJsonSync(packagePath, packageJson);
     fs.writeFileSync(path.join(rootDir, "browser.ts"), 'export const label = "current";');
     fs.mkdirSync(path.join(rootDir, "node_modules"));
     fs.symlinkSync(
@@ -297,10 +298,7 @@ describe("plugin authoring commands", () => {
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath });
     await runPluginsBuildCommand({ root: rootDir, entry: entryPath, check: true });
     const generatedPath = path.join(rootDir, "dist/openclaw.plugin.json");
-    fs.writeFileSync(
-      generatedPath,
-      JSON.stringify({ controlUi: { entry: "dist/control-ui/stale/index.js" } }),
-    );
+    writeFixtureJsonSync(generatedPath, { controlUi: { entry: "dist/control-ui/stale/index.js" } });
     interceptExit();
     silenceRuntime("error");
     await expect(
@@ -621,7 +619,7 @@ describe("plugin authoring commands", () => {
     const manifestPath = path.join(tmpDir, "openclaw.plugin.json");
     const packageManifest = readJson(tmpDir, "package.json");
     packageManifest.openclaw.extensions = [];
-    fs.writeFileSync(packagePath, JSON.stringify(packageManifest));
+    writeFixtureJsonSync(packagePath, packageManifest);
     const packageBefore = fs.readFileSync(packagePath);
     const manifestBefore = '{\n  "id": "previous"\n}\n';
     fs.writeFileSync(manifestPath, manifestBefore);
@@ -667,8 +665,8 @@ describe("plugin authoring commands", () => {
       throw new Error("ENOENT: no such file or directory, uv_cwd");
     });
 
-    await runPluginsInitCommand("demo", { directory: projectDir });
-    expect(fs.existsSync(path.join(projectDir, "package.json"))).toBe(true);
+    await runPluginsInitCommand("@acme/demo", { directory: projectDir });
+    expect(readJson(projectDir, "package.json").name).toBe("@acme/openclaw-plugin-demo");
     expect(log).toHaveBeenCalledWith(`Created ${projectDir}`);
   });
 
@@ -676,7 +674,7 @@ describe("plugin authoring commands", () => {
     const tmpDir = tempDirs.make("openclaw-provider-init-");
     const projectDir = path.join(tmpDir, "plugin-init-test");
 
-    await runPluginsInitCommand("plugin-init-test", {
+    await runPluginsInitCommand("@acme/plugin-init-test", {
       directory: projectDir,
       name: "Plugin Init Test",
       type: "provider",
@@ -684,7 +682,7 @@ describe("plugin authoring commands", () => {
 
     const packageManifest = readJson(projectDir, "package.json");
     expect(packageManifest).toMatchObject({
-      name: "openclaw-plugin-plugin-init-test",
+      name: "@acme/openclaw-plugin-plugin-init-test",
       scripts: {
         build: "tsc -p tsconfig.json",
         test: "vitest run --config ./vitest.config.ts",
@@ -700,7 +698,7 @@ describe("plugin authoring commands", () => {
       openclaw: {
         extensions: ["./dist/index.js"],
         install: {
-          clawhubSpec: "clawhub:openclaw-plugin-plugin-init-test",
+          clawhubSpec: "clawhub:@acme/openclaw-plugin-plugin-init-test",
           defaultChoice: "clawhub",
           minHostVersion: `>=${VERSION}`,
         },
@@ -714,12 +712,12 @@ describe("plugin authoring commands", () => {
 
     const manifest = readJson(projectDir, "openclaw.plugin.json");
     expect(manifest).toMatchObject({
-      id: "plugin-init-test",
+      id: "@acme/plugin-init-test",
       name: "Plugin Init Test",
       version: "0.1.0",
-      providers: ["plugin-init-test"],
+      providers: ["@acme/plugin-init-test"],
       setup: {
-        providers: [{ id: "plugin-init-test", envVars: ["PLUGIN_INIT_TEST_API_KEY"] }],
+        providers: [{ id: "@acme/plugin-init-test", envVars: ["ACME_PLUGIN_INIT_TEST_API_KEY"] }],
       },
       configSchema: {
         type: "object",

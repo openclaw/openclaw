@@ -10,35 +10,6 @@ async function releaseAcquired(pending: Promise<(() => void) | null>) {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-it("admits FIFO without releasing another holder on a duplicate release", async () => {
-  const pool = createPermitPool(2);
-  const first = await pool.acquire();
-  const second = pool.tryAcquire();
-  expect(pool.tryAcquire()).toBeNull();
-  const admitted: string[] = [];
-  const queued = ["a", "b", "c"].map((name) =>
-    pool.acquire().then((release) => {
-      admitted.push(name);
-      return release;
-    }),
-  );
-
-  expect([first, second]).toEqual([expect.any(Function), expect.any(Function)]);
-  first?.();
-  first?.();
-  expect(pool.tryAcquire()).toBeNull();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(admitted).toEqual(["a"]);
-  second?.();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(admitted).toEqual(["a", "b"]);
-  (await queued[0])?.();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(admitted).toEqual(["a", "b", "c"]);
-  (await queued[1])?.();
-  (await queued[2])?.();
-});
-
 it("removes cancelled and expired waiters without revoking acquired permits", async () => {
   const pool = createPermitPool(1);
   const owner = new AbortController();
@@ -101,28 +72,26 @@ it.each([
 );
 
 it("preserves FIFO and capacity when a queued waiter cancels after sustained turnover", async () => {
-  const pool = createPermitPool(1);
+  const pool = createPermitPool(2);
+  const held = await pool.acquire();
   let release = pool.tryAcquire();
-  const cancelled: AbortController[] = [];
+  expect([held, release]).toEqual([expect.any(Function), expect.any(Function)]);
+  expect(pool.tryAcquire()).toBeNull();
+  const cancelled = Array.from({ length: 50 }, () => new AbortController());
   const admitted: number[] = [];
-  const waiting = Array.from({ length: 600 }, (_, index) => {
-    const cancellation = index >= 450 && index < 500 ? new AbortController() : undefined;
-    if (cancellation) {
-      cancelled.push(cancellation);
-    }
-    return pool.acquire(cancellation ? { signal: cancellation.signal } : {}).then((nextRelease) => {
-      if (nextRelease) {
+  const acquire = (index: number, signal?: AbortSignal) =>
+    pool.acquire({ signal }).then((next) => {
+      if (next) {
         admitted.push(index);
       }
-      return nextRelease;
+      return next;
     });
-  });
+  const waiting = Array.from({ length: 600 }, (_, index) =>
+    acquire(index, cancelled[index - 450]?.signal),
+  );
   expect(pool.pendingCount).toBe(600);
 
-  for (const [index, pending] of waiting.entries()) {
-    if (index === 280) {
-      break;
-    }
+  for (const pending of waiting.slice(0, 280)) {
     release?.();
     release = await pending;
   }
@@ -137,16 +106,7 @@ it("preserves FIFO and capacity when a queued waiter cancels after sustained tur
   expect(pool.pendingCount).toBe(270);
   expect(pool.tryAcquire()).toBeNull();
 
-  for (const index of [600, 601]) {
-    waiting.push(
-      pool.acquire().then((nextRelease) => {
-        if (nextRelease) {
-          admitted.push(index);
-        }
-        return nextRelease;
-      }),
-    );
-  }
+  waiting.push(acquire(600), acquire(601));
   expect(pool.pendingCount).toBe(272);
 
   for (const [index, pending] of waiting.entries()) {
@@ -170,5 +130,7 @@ it("preserves FIFO and capacity when a queued waiter cancels after sustained tur
   expect(pool.pendingCount).toBe(0);
   const fresh = pool.tryAcquire();
   expect(fresh).toBeTypeOf("function");
+  expect(pool.tryAcquire()).toBeNull();
+  held?.();
   fresh?.();
 });

@@ -138,6 +138,28 @@ const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-pa
 import { expect, vi, type RunnerTestFile } from "vitest";
 const resetModules = vi.resetModules;
 export default class FixtureRunner extends Runner {
+  private readonly domImport = Promise.withResolvers<void>();
+  private readonly domCollection = Promise.withResolvers<void>();
+
+  override async onCollectStart(file: RunnerTestFile) {
+    const held = file.filepath.endsWith("09-j-test-api-mock-only.test.ts");
+    // Reproduce Vitest's unawaited queue notification without a real timer.
+    if (held) await this.domImport.promise;
+    super.onCollectStart(file);
+    if (held) this.domCollection.resolve();
+  }
+
+  override async importFile(...args: Parameters<Runner["importFile"]>) {
+    try {
+      return await super.importFile(...args);
+    } finally {
+      if (args[1] === "collect" && args[0].endsWith("09-j-test-api-mock-only.test.ts")) {
+        this.domImport.resolve();
+        await this.domCollection.promise;
+      }
+    }
+  }
+
   override async onAfterRunFiles(files: RunnerTestFile[]) {
     const generation = files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
       ? "?mcp-retirement-generation"

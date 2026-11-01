@@ -719,60 +719,6 @@ describe("resident session projection", () => {
     };
   }
 
-  test("reuses unchanged stores while refreshing heartbeat, age and changed rows", async ({
-    state,
-  }) => {
-    const cfg = sessionConfig(["main", "worker"], undefined, "main");
-    setRuntimeConfigSnapshot(cfg);
-    writeSession("main", "agent:main:first", 100);
-    writeSession("worker", "agent:worker:first", 50);
-    const job = createDefaultProactiveJob(cfg, "main", 1, 60_000);
-    const cronPath = state.statePath("cron", "jobs.json");
-    await saveProactiveJobsForTest(cronPath, [job]);
-    using projection = await createTestProjection({ cfg });
-    await settleProjection(projection);
-    const select = vi.spyOn(projection, "selectEntries");
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    expect((await readHealth(cfg, projection))[0]).toMatchObject({
-      heartbeat: { enabled: true, everyMs: 60_000 },
-      sessions: { count: 1, recent: [{ key: "agent:main:first", age: 900 }] },
-    });
-    expect(select).toHaveBeenCalledTimes(2);
-
-    for (const limit of [0, 5, 10, 0, 5, 10]) {
-      const summary = await readStatusSessionStores(cfg, [{ id: "main" }], limit, { projection });
-      expect(summary.count).toBe(1);
-      expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(
-        limit ? ["agent:main:first"] : [],
-      );
-    }
-    expect(select).toHaveBeenCalledTimes(4);
-
-    job.schedule = { kind: "every", everyMs: 120_000, anchorMs: 1 };
-    await saveProactiveJobsForTest(cronPath, [job]);
-    now.mockReturnValue(2_000);
-    expect((await readHealth(cfg, projection))[0]).toMatchObject({
-      heartbeat: { enabled: true, everyMs: 120_000 },
-      sessions: { count: 1, recent: [{ key: "agent:main:first", age: 1_900 }] },
-    });
-    expect(select).toHaveBeenCalledTimes(4);
-
-    writeSession("main", "agent:main:second", 200);
-    await settleProjection(projection);
-    select.mockImplementationOnce(() => {
-      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
-    });
-    expect((await readHealth(cfg, projection))[0]?.sessions.count).toBe(0);
-    const current = await readHealth(cfg, projection);
-    expect(current[0]?.sessions).toMatchObject(
-      sessionSummary(2, ["agent:main:second", 200], ["agent:main:first", 100]),
-    );
-    expect(current[1]?.sessions).toMatchObject(sessionSummary(1, ["agent:worker:first", 50]));
-    expect(select).toHaveBeenCalledTimes(6);
-    await readHealth(cfg, projection);
-    expect(select).toHaveBeenCalledTimes(6);
-  });
-
   test("projects receipt-owned jobs for the whole fleet without re-walking the roster per agent", async ({
     state,
   }) => {

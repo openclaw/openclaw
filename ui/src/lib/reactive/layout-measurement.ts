@@ -8,7 +8,7 @@ export function createLayoutMeasurement<T>(
   changed: () => T,
   measure: (invalidation: T | undefined) => (() => void) | void,
   options: {
-    targets: () => readonly Element[];
+    targets: (invalidation: T | undefined) => readonly Element[];
     mutations?: () => Node;
     fonts?: boolean;
     /** Admit a known empty layout before a measurable element exists. */
@@ -23,7 +23,7 @@ export function createLayoutMeasurement<T>(
   let resizeAvailable = false;
   const observed = new Map<Element, () => void>();
   const read = () => {
-    const targets = options.targets();
+    const targets = options.targets(invalidation);
     if (!targets[0]?.isConnected) {
       for (const release of observed.values()) {
         release();

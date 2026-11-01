@@ -3,6 +3,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 function canPreload(): boolean {
   // SAFETY: Network Information is optional and is not in TypeScript's DOM library.
@@ -10,7 +11,6 @@ function canPreload(): boolean {
   return navigator.onLine && !connection?.saveData && document.visibilityState === "visible";
 }
 
-/** Fetch and compile code without evaluating modules or applying route styles. */
 /** Optional shell services share the existing deferred import and its lifetime. */
 export function connectShellIdle(
   host: ShellOwner,
@@ -66,7 +66,12 @@ export function connectShellIdle(
       return intent;
     }
     const currentRoute = router.getState().matches[0]?.routeId;
-    const currentNext = currentRoute ? `${currentRoute}-next` : undefined;
+    const currentNext =
+      currentRoute === "new-session" && context.theme.settings.sidebarAgentsMode === "roster"
+        ? "roster-next"
+        : currentRoute
+          ? `${currentRoute}-next`
+          : undefined;
     if (currentNext && manifest?.[currentNext]) {
       return pending.has(currentNext) ? currentNext : undefined;
     }
@@ -147,7 +152,12 @@ export function connectShellIdle(
       const loads: Promise<void>[] = [];
       for (const file of manifest?.[key] ?? []) {
         const href = new URL(file, base).href;
-        if (seen.has(href)) {
+        // Plugin activation owns its styles; roster warming only applies host Chat CSS.
+        const applyStyle =
+          key === "roster-next" && file.endsWith(".css") && !file.startsWith("assets/plugins/");
+        const styleApplied = () =>
+          [...document.styleSheets].some((stylesheet) => stylesheet.href === href);
+        if (seen.has(href) && (!applyStyle || styleApplied())) {
           continue;
         }
         seen.add(href);
@@ -166,14 +176,28 @@ export function connectShellIdle(
               stopError();
               resolve();
             };
-            const stopLoad = listen(link, "load", finish, { once: true });
+            const stopLoad = listen(
+              link,
+              "load",
+              () => {
+                if (applyStyle && !styleApplied()) {
+                  // Keep Chat's style matching out of Create Template, but its JS lazy.
+                  // Vite adopts this loaded sheet; it must outlive the idle owner.
+                  link.rel = "stylesheet";
+                  link.removeAttribute("as");
+                  links.delete(link);
+                }
+                finish();
+              },
+              { once: true },
+            );
             const stopError = listen(link, "error", finish, { once: true });
             links.set(link, finish);
             document.head.append(link);
           }),
         );
       }
-      await Promise.all(loads);
+      await trackForegroundActivity(Promise.all(loads));
     } catch {
       // Speculation never triggers stale-chunk recovery; navigation owns failures.
       manifest = {};
@@ -271,6 +295,7 @@ export function connectShellIdle(
   const stops = [
     router.subscribe(schedule),
     gateway.subscribe(schedule),
+    context.theme.subscribe(schedule),
     listen(shell, "pointerover", onIntent),
     listen(shell, "pointerout", onIntent),
     listen(shell, "focusin", onIntent),

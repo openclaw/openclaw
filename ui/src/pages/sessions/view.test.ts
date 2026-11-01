@@ -6,6 +6,7 @@ import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.t
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -160,6 +161,14 @@ describe("sessions view", () => {
         renderView(result, { ...sharedProps, allAgentsScope });
         columnCount = 4 + Number(allAgentsScope) + Number(categoryGrouping);
         expect(queryAll("thead th")).toHaveLength(columnCount);
+        if (!categoryGrouping) {
+          expectTexts(
+            "thead th",
+            allAgentsScope
+              ? ["", "Session", "Agent", "Updated", "Actions"]
+              : ["", "Session", "Updated", "Actions"],
+          );
+        }
         expect(queryAll(".session-data-row .session-agent-col")).toHaveLength(
           allAgentsScope ? 1 : 0,
         );
@@ -214,7 +223,7 @@ describe("sessions view", () => {
       "Older",
       "older",
     ]);
-    expect(queryAll("tbody > tr")).toHaveLength(9);
+    expect(queryAll("tbody > tr:not([aria-hidden]):not(.session-window-spacer)")).toHaveLength(9);
   });
 
   it("retains the focused sort button across direction changes", async () => {
@@ -431,9 +440,7 @@ describe("sessions view", () => {
 
     const keyCell = query(".session-key-cell");
     expect(text(".session-key-cell__primary", keyCell)).toBe("📊 Data Expert (dingtalk)");
-    expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
-      "📊 Data Expert (dingtalk)",
-    );
+    expect(keyCell?.getAttribute("data-tooltip")).toBe("📊 Data Expert (dingtalk)");
   });
 
   it("opens session details from row activation", async () => {
@@ -660,8 +667,13 @@ const unavailable = "Connect to the Gateway to search transcripts.";
 const connectionStatus = () => container.querySelector('.settings-section__desc [role="status"]');
 const transcriptTrigger = () =>
   container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger");
-const filterInput = () =>
-  container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const filterInput = () => {
+  if (!container.querySelector(".sessions-filter-popover__search input")) {
+    container.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
+    flush();
+  }
+  return container.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+};
 const escapeKey = (options: KeyboardEventInit = {}) =>
   new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...options });
 
@@ -700,7 +712,7 @@ describe("sessions transcript search view", () => {
       await Promise.resolve();
 
       const rosterFilter = container.querySelector<HTMLInputElement>(
-        '.sessions-filter-popover__search input[type="text"]',
+        ".sessions-filter-popover__search input",
       );
       const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");

@@ -338,6 +338,7 @@ test("does not invent or replace producer-owned lifecycle start timestamps", () 
 
 test("keeps hidden routing private while preserving lifecycle persistence identity", () => {
   const collectDescriptors = vi.spyOn(Object, "defineProperties");
+  const defineProperty = vi.spyOn(Object, "defineProperty");
   const privateRouting = {
     mainSessionRestartRecovery: true,
     projectSessionLifecycle: false,
@@ -380,6 +381,14 @@ test("keeps hidden routing private while preserving lifecycle persistence identi
   expect(
     collectDescriptors.mock.calls.filter(([target]) => received.some((entry) => entry === target)),
   ).toHaveLength(0);
+  for (const target of received) {
+    const descriptors = defineProperty.mock.calls
+      .filter(
+        ([definedEvent, key]) => definedEvent === target && key !== "admitLifecyclePublication",
+      )
+      .map((call) => call[2]);
+    expect(new Set(descriptors).size).toBe(1);
+  }
 });
 
 test("shares context, listeners, and sequences across duplicate module instances", async () => {

@@ -139,6 +139,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.assertContextReplacementActive = assertActive;
   }
 
+  override dispose(): void {
+    this.onContextReplaced = undefined;
+    super.dispose();
+  }
+
   /**
    * Manually compact the session context.
    * Aborts current agent operation first.

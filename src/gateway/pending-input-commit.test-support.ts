@@ -1,11 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  preparePendingInputStore,
-  type PendingInputScope,
-} from "../config/sessions/session-pending-input-store.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
-import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 
 /** Refuse one fixture's real worker commit without replacing its mutation or settlement. */
 export function refusePendingInputCommit(params: {
@@ -35,24 +30,4 @@ export function refusePendingInputCommit(params: {
     }
     callback(request, grant);
   });
-}
-
-/** Read the real worker-owned receipt and release its database lifetime. */
-export async function readUserTurnCompletionForTest(scope: PendingInputScope, runId: string) {
-  const store = await preparePendingInputStore(scope, () => {});
-  try {
-    const snapshot = await store.read({
-      kind: "stage",
-      sessionKey: scope.sessionKey,
-      sessionId: scope.sessionId,
-      idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
-      trackCompletion: true,
-    });
-    if (snapshot.kind !== "stage") {
-      throw new Error("Expected a staged user-turn completion snapshot");
-    }
-    return snapshot.previous;
-  } finally {
-    await store.release();
-  }
 }

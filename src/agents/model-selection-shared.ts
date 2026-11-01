@@ -1003,23 +1003,16 @@ function buildAllowedModelSetFromPrepared(
   };
 }
 
-/** Status of a candidate model against catalog and configured allowlist state. */
-export type ModelRefStatus = {
-  key: string;
-  inCatalog: boolean;
-  allowAny: boolean;
-  allowed: boolean;
-};
-
 type ResolveAllowedModelRefResult =
   | { ref: ModelRef; key: string }
   | {
       error: string;
     };
 
+/** Status of a candidate model against catalog and configured allowlist state. */
 export function getModelRefStatus(
   params: Parameters<typeof buildAllowedModelSet>[0] & { ref: ModelRef },
-): ModelRefStatus {
+) {
   const allowed = buildAllowedModelSet(params);
   const key = modelKey(params.ref.provider, params.ref.model);
   return {
@@ -1043,7 +1036,7 @@ export function resolveAllowedModelRefFromAliasIndex(
     defaultProvider: string;
     agentId?: string;
     aliasIndex: ModelAliasIndex;
-    getStatus: (ref: ModelRef) => ModelRefStatus;
+    getStatus: (ref: ModelRef) => ReturnType<typeof getModelRefStatus>;
   } & ModelManifestNormalizationContext,
 ): ResolveAllowedModelRefResult {
   const trimmed = params.raw.trim();

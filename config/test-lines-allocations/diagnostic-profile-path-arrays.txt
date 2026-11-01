@@ -1,0 +1,2 @@
+4
+# Extend the recorded-profile byte contract with a path-array allocation work-count regression.

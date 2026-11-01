@@ -2,9 +2,10 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/async-work-scope-measure.ts
 // Add --allocations for a separate sampled-allocation pass (never gate its timing).
 // --events 1000000 --stores 24 models long streams inside a populated async frame.
+// --nested-runs measures synchronous callbacks within already-owned work instead.
 // Use a future --start-at epoch (ms) for concurrent, swapped-CPU pairs. Require identical deliveries, detached
 // work ownership and inherited context. Gateway load proof remains separate:
-// use the ten-minute workload in scripts/bench-gateway-concurrency.ts.
+// use scripts/perf/team-shape-stress.ts against already-built revisions.
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Session, type HeapProfiler } from "node:inspector/promises";
@@ -24,6 +25,7 @@ const { values } = parseArgs({
     stores: { type: "string", default: "24" },
     "start-at": { type: "string", default: "0" },
     allocations: { type: "boolean", default: false },
+    "nested-runs": { type: "boolean", default: false },
   },
 });
 const events = parseStrictIntegerOption({
@@ -50,15 +52,21 @@ const contexts = Array.from({ length: stores }, () => new AsyncLocalStorage<numb
 const ready = Promise.resolve();
 let deliveries = 0;
 const deliver = () => {
-  assert.equal(getAsyncWorkSignal(), undefined);
-  assert.equal(isAsyncWorkScopeActiveHere(emitter), false);
-  for (const [index, context] of contexts.entries()) {
-    assert.equal(context.getStore(), index);
+  assert.equal(getAsyncWorkSignal(), values["nested-runs"] ? emitter.signal : undefined);
+  assert.equal(isAsyncWorkScopeActiveHere(emitter), values["nested-runs"]);
+  for (let index = 0; index < contexts.length; index++) {
+    assert.equal(contexts[index]!.getStore(), index);
   }
   deliveries++;
 };
 const dispatch = () => ready.then(deliver);
 async function stream(count: number) {
+  if (values["nested-runs"]) {
+    for (let index = 0; index < count; index++) {
+      emitter.run(deliver);
+    }
+    return;
+  }
   for (let offset = 0; offset < count; offset += 1000) {
     const pending: Promise<void>[] = [];
     for (let index = offset; index < Math.min(count, offset + 1000); index++) {
@@ -106,6 +114,7 @@ try {
     JSON.stringify({
       events,
       stores,
+      scenario: values["nested-runs"] ? "nested-runs" : "detached-delivery",
       deliveries,
       elapsedMs,
       mainThreadCpuUsPerEvent: (cpu.user + cpu.system) / events,

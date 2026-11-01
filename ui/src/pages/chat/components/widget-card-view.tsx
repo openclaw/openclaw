@@ -42,8 +42,8 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
-import "./browser-tab-card.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { TranscriptRowKeyContext } from "./chat-transcript-layout.ts";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
@@ -238,15 +238,11 @@ function installWidgetSizeListener() {
         continue;
       }
       if (frame.contentWindow === event.source) {
-        const height = Math.min(
+        const measured = Math.min(
           Math.max(Math.trunc(data.height), WIDGET_FRAME_MIN_HEIGHT),
           WIDGET_FRAME_MAX_HEIGHT,
         );
-        // The stylesheet floors the frame at min-height 420px; reported sizes
-        // must override both properties to fit short widgets.
-        frame.style.height = `${height}px`;
-        frame.style.minHeight = `${height}px`;
-        widgetFrameResize.get(frame)?.(height);
+        widgetFrameResize.get(frame)?.(measured);
         return;
       }
     }
@@ -258,7 +254,7 @@ type PreviewFrameParams = {
   src?: string;
   frameKey?: string;
   height?: number;
-  onHeightChange?: (height: number) => void;
+  onHeightChange?: (height: number | null, settled?: boolean) => number | undefined;
   sandbox?: string;
   promptCapable?: boolean;
 };
@@ -287,8 +283,8 @@ function WidgetFrame(props: {
     onSettled(() => {
       widgetFramePromptActive.set(element, () => props.promptAllowed());
       widgetFrameResize.set(element, (nextHeight) => {
-        setReportedHeight(nextHeight);
-        props.params.onHeightChange?.(nextHeight);
+        const appliedHeight = props.params.onHeightChange?.(nextHeight, true) ?? nextHeight;
+        setReportedHeight(appliedHeight);
       });
       const releaseTheme = registerWidgetThemeFrame(element, "*");
       props.onFrame(element);
@@ -311,6 +307,7 @@ function WidgetFrame(props: {
         title={props.params.title}
         sandbox={props.params.sandbox ?? ""}
         style={height() ? `height:${height()}px;min-height:${height()}px` : ""}
+        onError={() => props.params.onHeightChange?.(null, true)}
         onLoad={() => {
           loadedWidgetFrames.add(element);
           widgetFrameRegistry.add(element);
@@ -374,6 +371,7 @@ function WidgetContent(props: {
   options?: WidgetCardOptions;
   onExportSource: (source: WidgetExportSource) => void;
 }) {
+  const rowKey = useContext(TranscriptRowKeyContext);
   const managed = () =>
     props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
   const layoutKey = () => widgetPreviewLayoutKey(props.preview);
@@ -400,8 +398,8 @@ function WidgetContent(props: {
                   ),
                   frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
                   height: height(),
-                  onHeightChange: (nextHeight) =>
-                    props.options?.widgetLayout?.write(layoutKey(), nextHeight),
+                  onHeightChange: (nextHeight, settled) =>
+                    props.options?.widgetLayout?.write(layoutKey(), nextHeight, rowKey(), settled),
                   sandbox: props.sandbox,
                   promptCapable: isInternalCanvasEntryUrl(props.preview.url),
                 }}
@@ -427,8 +425,8 @@ function WidgetContent(props: {
                     messageTimestamp={props.options?.messageTimestamp}
                     title={props.preview.title?.trim() || t("chat.toolCards.canvas")}
                     preferredHeight={height()}
-                    onHeightChange={(nextHeight) =>
-                      props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                    onHeightChange={(nextHeight, settled) =>
+                      props.options?.widgetLayout?.write(layoutKey(), nextHeight, rowKey(), settled)
                     }
                     allowScripts={props.sandbox.includes("allow-scripts")}
                     connectionGeneration={getCanvasWidgetFrameConnectionGeneration()}
@@ -448,8 +446,8 @@ function WidgetContent(props: {
                 sessionKey={props.options?.sessionKey ?? ""}
                 viewId={app().viewId}
                 height={height()}
-                onHeightChange={(nextHeight: number) =>
-                  props.options?.widgetLayout?.write(layoutKey(), nextHeight)
+                onHeightChange={(nextHeight: number | null, settled?: boolean) =>
+                  props.options?.widgetLayout?.write(layoutKey(), nextHeight, rowKey(), settled)
                 }
                 title={props.preview.title?.trim() || t("mcpApp.title")}
               />

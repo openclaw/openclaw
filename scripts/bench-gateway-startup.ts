@@ -2,11 +2,19 @@
 // config-health recovery reads. Seed with --case teamBoot --fixture-root <path> --seed-only;
 // measure a fresh copy per boot with --runs 1 --warmup 0 and --output <json>.
 // Compare >=5 boots per revision; --heap-prof-dir collects allocations in a separate pass.
+// slowAgentDatabase measures authenticated connect and sessions.list while one real
+// integrity scan is held by --agent-gate-delay-ms. Seed separate fixtures per arm;
+// use --agent-database-mib 8 for an inexpensive controlled startup-recovery probe.
+// Every agent starts unsealed; ready-agent scans wait at most 6s, exceeding the
+// 5s foreground admission budget, so their migrations overlap the slow inspection.
+// --publication-api-delay-ms 500 seeds four historical publications; a private gh/fetch
+// fixture delays read-only GitHub observations and never uses real credentials or GitHub.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv } from "node:crypto";
 import { once } from "node:events";
 import {
+  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -16,13 +24,12 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
-import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../src/config/validation-core.js";
 import { isMainModule } from "../src/infra/is-main.js";
@@ -70,6 +77,7 @@ import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ran
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
 type GatewayBenchCase = {
+  agentDatabaseMib?: number;
   agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
   bundledPluginFixture?: OpenClawConfig;
   completionTracePhase?: string;
@@ -80,22 +88,25 @@ type GatewayBenchCase = {
   name: string;
   pluginActivationOnStartup?: boolean;
   pluginCount?: number;
+  pluginMigrationFixture?: "pending" | "deferred";
   providerCatalogStallMs?: number;
   providerStaticCatalogModelCount?: number;
   providerStaticCatalogStallMs?: number;
   publicationGitDelayMs?: number;
+  publicationApiDelayMs?: number;
+  teamScale?: boolean;
   runByDefault?: boolean;
 };
 
 type GatewaySample = {
+  pluginMigration?: { total: number; completed: number; warnings: number };
   publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
-  agentRecoveryMs?: Record<string, number>;
-  registryRecovery?: {
-    events: Record<string, number>;
-    retainedRuns: number;
-    recoveredRuns: number;
-    preservedTerminalRuns: number;
+  publicationApi?: {
+    calls: { endpoint: string; startedAtMs: number; releasedAtMs: number }[];
+    receipts: { request_id: string; status: string; pull_request_url: string | null }[];
   };
+  /** Successful ordinary per-agent chat.history completion, measured from spawn. */
+  agentRecoveryMs?: Record<string, number>;
   integrityGateMs?: Record<string, number>;
   agentDatabaseAdmissionErrors?: number;
   completionMs: number | null;
@@ -104,13 +115,20 @@ type GatewaySample = {
   exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
-  firstSessionRpc: { ms: number | null; attempts: number; lastError: string | null };
+  firstSessionRpc: {
+    ms: number | null;
+    connectMs: number | null;
+    attempts: number;
+    lastError: string | null;
+  };
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
   heapProfilePath?: string;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
+  hostLoadBefore: number[];
+  hostLoadAfter: number[];
   maxRssMb: number | null;
   outputTail: string;
   readyz: InitialProbeResult;
@@ -163,6 +181,7 @@ const BOOLEAN_FLAGS = new Set([
   "--installed-child",
   "--installed-cpu-diagnostic",
   "--seed-only",
+  "--team-scale",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -182,6 +201,8 @@ const VALUE_FLAGS = new Set([
   "--start-at",
   "--bundled-plugin-fixture",
   "--publication-git-delay-ms",
+  "--publication-api-delay-ms",
+  "--plugin-migration-fixture",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -223,6 +244,7 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
     id: "teamBoot",
+    completionTracePhase: "plugins.runtime-post-bind",
     name: "gateway, 44 startup plugins, eight agents and 10000 sessions",
     agentTopology: "incident-scale",
     pluginActivationOnStartup: true,
@@ -240,23 +262,12 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     },
   },
   {
-    id: "interruptedRegistry",
-    name: "gateway, 86 retained runs and eight interrupted executions after SIGKILL",
-    runByDefault: false,
-    completionTracePhase: "sidecars.subagent-recovery",
-    config: {
-      ...BASE_CONFIG,
-      plugins: { enabled: false },
-      cron: { enabled: false },
-    },
-    env: { OPENCLAW_SKIP_CHANNELS: "1" },
-  },
-  {
     id: "slowAgentDatabase",
     name: "gateway, one checking agent and four ready agents",
     runByDefault: false,
     config: {
       ...BASE_CONFIG,
+      gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
       plugins: { enabled: false },
       cron: { enabled: false },
     },
@@ -455,6 +466,37 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
   }
   let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  if (cases.length === 1 && cases[0]?.id === "teamBoot" && flags.has("--agent-database-mib")) {
+    cases = [
+      {
+        ...cases[0],
+        agentDatabaseMib: parseNonNegativeInt(
+          flags.get("--agent-database-mib")?.[0],
+          0,
+          "--agent-database-mib",
+        ),
+      },
+    ];
+  }
+  if (flags.has("--team-scale")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--team-scale requires --case teamBoot");
+    }
+    cases = [{ ...cases[0], teamScale: true, pluginCount: 46 }];
+  }
+  if (flags.has("--plugin-migration-fixture")) {
+    const pluginMigrationFixture = flags.get("--plugin-migration-fixture")?.[0];
+    if (
+      cases.length !== 1 ||
+      cases[0]?.id !== "teamBoot" ||
+      (pluginMigrationFixture !== "pending" && pluginMigrationFixture !== "deferred")
+    ) {
+      throw new CliArgumentError(
+        "--plugin-migration-fixture requires --case teamBoot and pending or deferred",
+      );
+    }
+    cases = [{ ...cases[0], pluginMigrationFixture }];
+  }
   if (flags.has("--publication-git-delay-ms")) {
     if (cases.length !== 1 || cases[0]?.id !== "teamBoot" || process.platform === "win32") {
       throw new CliArgumentError("--publication-git-delay-ms requires --case teamBoot on POSIX");
@@ -468,6 +510,27 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       throw new CliArgumentError("--publication-git-delay-ms must not exceed 30000");
     }
     cases = [{ ...cases[0], publicationGitDelayMs }];
+  }
+  if (flags.has("--publication-api-delay-ms")) {
+    if (
+      cases.length !== 1 ||
+      cases[0]?.id !== "teamBoot" ||
+      process.platform === "win32" ||
+      flags.has("--publication-git-delay-ms")
+    ) {
+      throw new CliArgumentError(
+        "--publication-api-delay-ms requires --case teamBoot on POSIX without --publication-git-delay-ms",
+      );
+    }
+    const publicationApiDelayMs = parsePositiveInt(
+      flags.get("--publication-api-delay-ms")?.[0],
+      500,
+      "--publication-api-delay-ms",
+    );
+    if (publicationApiDelayMs < 200 || publicationApiDelayMs > 800) {
+      throw new CliArgumentError("--publication-api-delay-ms must be between 200 and 800");
+    }
+    cases = [{ ...cases[0], publicationApiDelayMs }];
   }
   const bundledPluginFixturePath = flags.get("--bundled-plugin-fixture")?.[0];
   if (bundledPluginFixturePath !== undefined) {
@@ -503,6 +566,12 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     }
     const { plugins, models, tools, channels } = validated.config;
     cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels } }];
+  }
+  if (
+    cases[0]?.pluginMigrationFixture &&
+    (cases[0].bundledPluginFixture?.plugins?.allow?.length ?? 0) >= cases[0].pluginCount!
+  ) {
+    throw new CliArgumentError("--plugin-migration-fixture requires a synthetic plugin slot");
   }
   return {
     ...parseGatewayBenchRuntimeOptions(flags),
@@ -558,11 +627,14 @@ Options:
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
-  --fixture-root <path> Prepared teamBoot, slowAgentDatabase or interruptedRegistry fixture (requires --runs 1 --warmup 0)
+  --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
+  --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
+  --team-scale                   Seed 46 plugins, 12 GiB shared/35 GiB agent data and 62k workspace files
   --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
-  --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
+  --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
+  --agent-database-mib <n> Slow-agent cache payload (default: 512), or teamBoot total transcript database size
   --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
   --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
 
@@ -583,14 +655,17 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
     ...(benchCase.id === "teamBoot"
       ? {
           expectedPluginCount: benchCase.pluginCount ?? 44,
+          pluginMigrationFixture: benchCase.pluginMigrationFixture,
           bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
           publicationGitDelayMs: benchCase.publicationGitDelayMs,
+          publicationApiDelayMs: benchCase.publicationApiDelayMs,
         }
       : {}),
     samples,
     summary: {
       completionMs: summarize((sample) => sample.completionMs),
       firstOutputMs: summarize((sample) => sample.firstOutputMs),
+      firstConnectMs: summarize((sample) => sample.firstSessionRpc.connectMs),
       firstSessionRpcMs: summarize((sample) => sample.firstSessionRpc.ms),
       cpuCoreRatio: summarize((sample) => sample.cpuCoreRatio),
       cpuMs: summarize((sample) => sample.cpuMs),
@@ -637,28 +712,27 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       ) {
         missing.push("pending publication reached and completed its delayed Git read");
       }
+      if (
+        result.publicationApiDelayMs !== undefined &&
+        (sample.publicationApi?.receipts.length !== 4 ||
+          sample.publicationApi.receipts.some(
+            (row) => row.status !== "published" || !row.pull_request_url,
+          ) ||
+          sample.publicationApi.calls.filter((call) => call.endpoint.endsWith("/pulls")).length !==
+            4)
+      ) {
+        missing.push(
+          "four historical publications confirmed through mock GitHub and durable receipts",
+        );
+      }
       if (result.id === "slowAgentDatabase") {
         if (
           SLOW_DATABASE_AGENT_IDS.some((agentId) => sample.agentRecoveryMs?.[agentId] === undefined)
         ) {
-          missing.push("per-agent recovery");
+          missing.push("per-agent database admission");
         }
         if (sample.integrityGateMs?.["gate-passed"] === undefined) {
           missing.push("full integrity scan");
-        }
-      }
-      if (result.id === "interruptedRegistry") {
-        const recovery = sample.registryRecovery;
-        if (
-          !recovery ||
-          recovery.retainedRuns !== INTERRUPTED_REGISTRY_RUNS ||
-          recovery.recoveredRuns !== INTERRUPTED_REGISTRY_ACTIVE ||
-          recovery.preservedTerminalRuns !==
-            INTERRUPTED_REGISTRY_RUNS - INTERRUPTED_REGISTRY_ACTIVE ||
-          Object.keys(recovery.events).length !== INTERRUPTED_REGISTRY_ACTIVE ||
-          Object.values(recovery.events).some((count) => count !== 1)
-        ) {
-          missing.push("exactly one recovery per active run and preserved terminal outcomes");
         }
       }
       if (missing.length > 0) {
@@ -668,6 +742,21 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
           sampleIndex: index + 1,
         });
         return;
+      }
+      if (result.id === "teamBoot") {
+        const expectedMigrations = result.pluginMigrationFixture ? 1 : 0;
+        if (
+          sample.pluginMigration?.total !== expectedMigrations ||
+          sample.pluginMigration.completed !== expectedMigrations ||
+          sample.pluginMigration.warnings !== 0
+        ) {
+          failures.push({
+            id: result.id,
+            reason:
+              "plugin migration confirmation did not settle the synthetic obligations cleanly",
+            sampleIndex: index + 1,
+          });
+        }
       }
       if (result.expectedPluginCount !== undefined) {
         const inventory = /http server listening \((\d+) plugins?: ([^;)]+)/u.exec(
@@ -690,12 +779,12 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       if (result.id === "slowAgentDatabase") {
         const gatePassed = sample.integrityGateMs!["gate-passed"]!;
         for (const agentId of SLOW_DATABASE_AGENT_IDS) {
-          const recovered = sample.agentRecoveryMs![agentId]!;
+          const admitted = sample.agentRecoveryMs![agentId]!;
           const slow = agentId === "bench-slow";
-          if (slow ? recovered <= gatePassed : recovered >= gatePassed) {
+          if (slow ? admitted <= gatePassed : admitted >= gatePassed) {
             failures.push({
               id: result.id,
-              reason: `${agentId} recovered at ${recovered.toFixed(1)}ms; must recover ${slow ? "after" : "before"} integrity gate passed at ${gatePassed.toFixed(1)}ms`,
+              reason: `${agentId} database read completed at ${admitted.toFixed(1)}ms; must complete ${slow ? "after" : "before"} integrity gate passed at ${gatePassed.toFixed(1)}ms`,
               sampleIndex: index + 1,
             });
           }
@@ -1004,15 +1093,23 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
         providerStaticCatalogStallMs: benchCase.providerStaticCatalogStallMs,
       })
     : null;
+  if (benchCase.pluginMigrationFixture) {
+    const pluginRoot = path.join(root, "plugins", "bench-plugin-01");
+    const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ ...manifest, doctorContract: { stateMigrations: [] } }, null, 2)}\n`,
+    );
+    writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { stateMigrations: [] };\n",
+    );
+  }
   const agentList =
     benchCase.id === "slowAgentDatabase"
       ? SLOW_DATABASE_AGENT_IDS.map((id) => ({ id, workspace: path.join(root, "workspace", id) }))
-      : benchCase.id === "interruptedRegistry"
-        ? INTERRUPTED_REGISTRY_AGENT_IDS.map((id) => ({
-            id,
-            workspace: path.join(root, "workspace", id),
-          }))
-        : buildBenchAgentList(root, benchCase.agentTopology);
+      : buildBenchAgentList(root, benchCase.agentTopology);
   const plugins = benchCase.config.plugins as OpenClawConfig["plugins"];
   const config = fixture
     ? {
@@ -1045,245 +1142,13 @@ const SLOW_DATABASE_AGENT_IDS = [
   "bench-slow",
 ] as const;
 
-const INTERRUPTED_REGISTRY_RUNS = 86;
-const INTERRUPTED_REGISTRY_ACTIVE = 8;
-const INTERRUPTED_REGISTRY_AGENT_IDS = Array.from(
-  { length: INTERRUPTED_REGISTRY_ACTIVE },
-  (_, index) => `bench-registry-${index}`,
-);
-
-async function seedInterruptedRegistryFixture(root: string): Promise<void> {
-  if (process.env.OPENCLAW_BENCHMARK_FIXTURE_WRITER !== "1") {
-    const child = spawn(
-      process.execPath,
-      [
-        ...process.execArgv,
-        fileURLToPath(import.meta.url),
-        "--case",
-        "interruptedRegistry",
-        "--fixture-root",
-        root,
-        "--seed-only",
-      ],
-      {
-        env: { ...process.env, OPENCLAW_BENCHMARK_FIXTURE_WRITER: "1" },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-    let output = "";
-    let committed = false;
-    child.stdout.on("data", (chunk: Buffer) => {
-      output = (output + chunk.toString()).slice(-16_384);
-      if (!committed && output.includes("interrupted-registry-fixture-ready")) {
-        committed = true;
-        child.kill("SIGKILL");
-      }
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      output = (output + chunk.toString()).slice(-16_384);
-    });
-    const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
-    try {
-      const [, signal] = await once(child, "exit");
-      if (!committed || signal !== "SIGKILL") {
-        throw new Error(
-          `Interrupted registry fixture writer did not finish before SIGKILL: ${output}`,
-        );
-      }
-    } finally {
-      clearTimeout(timer);
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }
-    return;
-  }
-  mkdirSync(root);
-  const benchCase = GATEWAY_CASES.find((entry) => entry.id === "interruptedRegistry")!;
-  const configPath = writeConfig(root, benchCase);
-  const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
-  process.env = { ...env };
-  const [agentDb, stateDb, { writeSessionEntry }, { bindSubagentRunRecord }, registry] =
-    await Promise.all([
-      import("../src/state/openclaw-agent-db.js"),
-      import("../src/state/openclaw-state-db.js"),
-      import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
-      import("../src/agents/subagents/registry/subagent-registry.store.codec.js"),
-      import("../src/agents/subagents/registry/subagent-registry.store.kernel.js"),
-    ]);
-  const now = Date.now() - 60_000;
-  const databasePaths = new Set<string>();
-  const terminalExecutions: Record<string, string> = {};
-  const requesterAgentId = INTERRUPTED_REGISTRY_AGENT_IDS[0]!;
-  const requesterStorePath = agentDb.openOpenClawAgentDatabase({
-    agentId: requesterAgentId,
-    env,
-  }).path;
-  for (let index = 0; index < INTERRUPTED_REGISTRY_ACTIVE; index++) {
-    agentDb.runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, `agent:${requesterAgentId}:requester:${index}`, {
-          sessionId: `requester-${index}`,
-          lifecycleRevision: `requester-${index}`,
-          lifecycleRunId: `requester-turn-${index}`,
-          updatedAt: now,
-        });
-      },
-      { agentId: requesterAgentId, env },
-    );
-  }
-  const values = Array.from({ length: INTERRUPTED_REGISTRY_RUNS }, (_, index) => {
-    const agentId = INTERRUPTED_REGISTRY_AGENT_IDS[index % INTERRUPTED_REGISTRY_ACTIVE]!;
-    const runId = `interrupted-registry-${index}`;
-    const childSessionKey = `agent:${agentId}:subagent:${runId}`;
-    const active = index < INTERRUPTED_REGISTRY_ACTIVE;
-    const requester = active ? index % 2 : index % INTERRUPTED_REGISTRY_ACTIVE;
-    const requesterSessionKey = `agent:${requesterAgentId}:requester:${requester}`;
-    const interrupted = active && index >= INTERRUPTED_REGISTRY_ACTIVE / 2;
-    databasePaths.add(agentDb.openOpenClawAgentDatabase({ agentId, env }).path);
-    agentDb.runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, childSessionKey, {
-          sessionId: runId,
-          lifecycleRevision: runId,
-          lifecycleRunId: runId,
-          startedAt: now,
-          updatedAt: now,
-          ...(interrupted ? { abortedLastRun: true } : {}),
-        });
-      },
-      { agentId, env },
-    );
-    const entry: SubagentRunRecord = {
-      runId,
-      childSessionKey,
-      childAgentId: agentId,
-      childSessionIdentity: { sessionId: runId, lifecycleRevision: runId },
-      requesterSessionKey,
-      requesterAgentId,
-      requesterStorePath,
-      requesterDisplayKey: requesterSessionKey,
-      requesterTurnRunId: `requester-turn-${requester}`,
-      completionRequesterSessionId: `requester-${requester}`,
-      completionRequesterLifecycleRevision: `requester-${requester}`,
-      task: "Synthetic interrupted startup recovery",
-      cleanup: "keep",
-      createdAt: now,
-      execution: active
-        ? {
-            status: interrupted ? "interrupted" : "running",
-            startedAt: now,
-            lifecycleGeneration: "synthetic-killed-fixture-writer",
-            ...(interrupted
-              ? ({ interruptedAt: now + 1, interruptionReason: "gateway-restart" } as const)
-              : {}),
-          }
-        : { status: "terminal", startedAt: now, endedAt: now + 1, outcome: { status: "ok" } },
-      ...(!active ? { cleanupCompletedAt: now + 2 } : {}),
-      completion: {
-        required: true,
-        ...(!active ? { resultText: "Completed synthetic work" } : {}),
-      },
-      delivery: active
-        ? { status: "pending" }
-        : { status: "delivered", deliveredAt: now + 2, announcedAt: now + 2 },
-      expectsCompletionMessage: true,
-    };
-    if (!active) {
-      terminalExecutions[runId] = JSON.stringify(entry.execution);
-    }
-    return bindSubagentRunRecord(entry);
-  });
-  stateDb.runOpenClawStateWriteTransaction(
-    (database) => {
-      registry.writeSubagentRunValuesInDatabase(database, values, []);
-    },
-    { env },
-  );
-  const statePath = stateDb.openOpenClawStateDatabase({ env }).path;
-  databasePaths.add(statePath);
-  writeFileSync(
-    path.join(root, "interrupted-registry-fixture.json"),
-    JSON.stringify(
-      {
-        retainedRuns: INTERRUPTED_REGISTRY_RUNS,
-        activeRuns: INTERRUPTED_REGISTRY_ACTIVE,
-        runningRuns: 4,
-        interruptedRuns: 4,
-        predecessor:
-          "SIGKILL of fixture writer after committed writes; no predecessor Gateway or model turns",
-        statePath,
-        terminalExecutions,
-        requesterCohorts: INTERRUPTED_REGISTRY_ACTIVE,
-        activeRequesterCohorts: 2,
-        operatorSource:
-          "Absent synthetic source; exercises missing-source settlement, not successful authority restoration",
-        databaseBytes: [...databasePaths].reduce(
-          (bytes, databasePath) =>
-            bytes +
-            statSync(databasePath).size +
-            (existsSync(`${databasePath}-wal`) ? statSync(`${databasePath}-wal`).size : 0),
-          0,
-        ),
-      },
-      null,
-      2,
-    ),
-  );
-  writeFileSync(
-    path.join(root, "interrupted-registry-preload.mjs"),
-    `
-import { isMainThread } from 'node:worker_threads';
-if (isMainThread) {
-  const listeners = globalThis[Symbol.for('openclaw.sessionLifecycleEventListeners')] ??= new Set();
-  listeners.add((event) => {
-    if (event.reason === 'subagent-status' && /:subagent:interrupted-registry-/.test(event.sessionKey)) {
-      console.log('[interrupted-registry-bench] recovered ' + event.sessionKey.split(':').at(-1));
-    }
-  });
-}
-`,
-  );
-  // The parent kills this writer with open SQLite handles, preserving real WAL/crash residue.
-  setInterval(() => {}, 1000);
-  console.log("interrupted-registry-fixture-ready");
-  await new Promise<never>(() => {});
-}
-
-async function inspectInterruptedRegistryRecovery(root: string, events: Record<string, number>) {
-  const fixture = JSON.parse(
-    readFileSync(path.join(root, "interrupted-registry-fixture.json"), "utf8"),
-  ) as {
-    statePath: string;
-    terminalExecutions: Record<string, string>;
-  };
-  const { DatabaseSync } = await import("node:sqlite");
-  const database = new DatabaseSync(fixture.statePath, { readOnly: true });
-  try {
-    const rows = database.prepare("SELECT run_id, payload_json FROM subagent_runs").all();
-    return {
-      events,
-      retainedRuns: rows.length,
-      recoveredRuns: rows.filter((row) => {
-        const record = JSON.parse(String(row.payload_json)) as SubagentRunRecord;
-        return (
-          !(String(row.run_id) in fixture.terminalExecutions) &&
-          record.execution.status === "terminal" &&
-          record.execution.outcome?.status === "error"
-        );
-      }).length,
-      preservedTerminalRuns: rows.filter(
-        (row) =>
-          fixture.terminalExecutions[String(row.run_id)] ===
-          JSON.stringify((JSON.parse(String(row.payload_json)) as SubagentRunRecord).execution),
-      ).length,
-    };
-  } finally {
-    database.close();
-  }
-}
-
-async function seedTeamBootPublication(root: string, delayMs: number, agentId: string) {
+async function seedTeamBootPublication(
+  root: string,
+  delayMs: number,
+  agentId: string,
+  api = false,
+  index = 0,
+) {
   const [
     { resolveExecutablePath },
     { insertRegistryWorktreeInDatabase },
@@ -1291,7 +1156,11 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
     stateDb,
     agentDb,
     { writeSessionEntry },
-    { insertGitHubPublicationRequest },
+    {
+      insertGitHubPublicationRequest,
+      claimGitHubPublicationExecutionInDatabase,
+      createGitHubPublicationExecutionStoreInDatabase,
+    },
     { digestGitHubPublicationRequest },
   ] = await Promise.all([
     import("../src/infra/executable-path.js"),
@@ -1307,9 +1176,10 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
   if (!gitPath) {
     throw new Error("The pending-publication fixture requires Git");
   }
-  const repoRoot = path.join(root, "publication-repository");
-  const worktreePath = path.join(root, "publication-worktree");
-  const branch = "bench-publication";
+  const suffix = api ? `-${index}` : "";
+  const repoRoot = path.join(root, `publication-repository${suffix}`);
+  const worktreePath = path.join(root, `publication-worktree${suffix}`);
+  const branch = `bench-publication${suffix}`;
   const git = (...args: string[]) => execFileSync(gitPath, args, { stdio: "pipe" });
   git("init", "--initial-branch=main", repoRoot);
   git(
@@ -1327,13 +1197,35 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
     "test: seed synthetic publication workspace",
   );
   git("-C", repoRoot, "worktree", "add", "-b", branch, worktreePath);
+  if (api) {
+    git("-C", repoRoot, "remote", "add", "origin", "https://github.com/synthetic/startup.git");
+  }
   const repository = await resolveRepositoryIdentity(repoRoot);
-  const sessionKey = `agent:${agentId}:bench-0`;
-  const sessionId = `team-boot-${agentId}-0`;
-  const requestId = "startup-publication";
-  const now = Date.parse("2026-10-19T00:00:00Z");
+  const sessionKey = `agent:${agentId}:bench-${index}`;
+  const sessionId = `team-boot-${agentId}-${index}`;
+  const requestId = `startup-publication${suffix}`;
+  const sourceHeadCommit = git("-C", worktreePath, "rev-parse", "HEAD").toString().trim();
+  const workspaceTree = git("-C", worktreePath, "rev-parse", "HEAD^{tree}").toString().trim();
+  if (api) {
+    git(
+      "-C",
+      worktreePath,
+      "-c",
+      "user.name=Startup Benchmark",
+      "-c",
+      "user.email=startup-benchmark@example.invalid",
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--allow-empty",
+      "--message",
+      `test: synthetic published commit\n\nOpenClaw-Publication: ${requestId}`,
+    );
+  }
+  const headCommit = git("-C", worktreePath, "rev-parse", "HEAD").toString().trim();
+  const now = api ? Date.now() : Date.parse("2026-10-19T00:00:00Z");
   const worktree = {
-    id: "startup-publication-worktree",
+    id: `startup-publication-worktree${suffix}`,
     name: "Synthetic publication workspace",
     path: worktreePath,
     repoRoot: repository.repoRoot,
@@ -1350,7 +1242,7 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
       writeSessionEntry(database, sessionKey, {
         sessionId,
         updatedAt: now,
-        label: "Synthetic startup session 0",
+        label: `Synthetic startup session ${index}`,
         visibility: "shared",
         worktree: { id: worktree.id, branch, repoRoot: worktree.repoRoot },
         spawnedCwd: worktreePath,
@@ -1358,7 +1250,8 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
     },
     { agentId },
   );
-  stateDb.runOpenClawStateWriteTransaction(({ db }) => {
+  stateDb.runOpenClawStateWriteTransaction((database) => {
+    const { db } = database;
     insertRegistryWorktreeInDatabase(db, { record: worktree, provisionedPaths: [] });
     const request = { sessionKey, agentId, idempotencyKey: requestId, draft: false };
     insertGitHubPublicationRequest(db, {
@@ -1371,20 +1264,40 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
       now,
       worktree,
       identity: {
-        source: "system-configured",
-        profileId: "startup-fixture",
+        source: api ? "system-detected" : "system-configured",
+        ...(api ? {} : { profileId: "startup-fixture" }),
         account: { accountId: 1, login: "startup-fixture", avatarUrl: null },
       },
+      ...(api
+        ? { snapshot: { sourceHeadCommit, sourceIndexTree: workspaceTree, workspaceTree } }
+        : {}),
       assertCurrent() {},
     });
-    // Offline historical receipt: recovery inspects its workspace, then refuses absent
-    // requester authority before credential preparation or any GitHub operation.
+    if (api) {
+      const instance = "synthetic-retired-gateway";
+      const row = claimGitHubPublicationExecutionInDatabase(database, requestId, instance);
+      createGitHubPublicationExecutionStoreInDatabase(database, instance).updatePublishingFacts({
+        row,
+        repository: "synthetic/startup",
+        branch,
+        baseBranch: "main",
+        sourceHeadCommit,
+        workspaceTree,
+        headCommit,
+      });
+    }
+    // Historical custody permits observation of recorded effects, never a new publication.
+    // The Git-only fixture has no effects and refuses before any GitHub operation.
     db.prepare(
-      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'",
+      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN ('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3')",
     ).run();
   });
+  if (api) {
+    return { requestId, branch, sourceHeadCommit, workspaceTree, headCommit };
+  }
   const bin = path.join(root, "publication-bin");
   mkdirSync(bin);
+  writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
   writeFileSync(
     path.join(bin, "git"),
     `#!${process.execPath}
@@ -1412,6 +1325,122 @@ const { setTimeout } = require("node:timers/promises");
 `,
     { mode: 0o755 },
   );
+  return undefined;
+}
+
+function writePublicationApiFixture(
+  root: string,
+  delayMs: number,
+  receipts: Awaited<ReturnType<typeof seedTeamBootPublication>>[],
+) {
+  const bin = path.join(root, "publication-bin");
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
+  const calls = path.join(root, "publication-api-calls.jsonl");
+  writeFileSync(
+    path.join(root, "publication-api-preload.mjs"),
+    `import { appendFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (url.hostname !== "api.github.com") return originalFetch(input, init);
+  if (url.href !== "https://api.github.com/user" || init?.method !== "GET" || init?.headers?.Authorization !== "Bearer synthetic-startup-publication-token") throw new Error("Unexpected mock GitHub fetch");
+  const startedAtMs = Date.now();
+  await setTimeout(${delayMs});
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ endpoint: "/user", startedAtMs, releasedAtMs: Date.now() }) + "\\n");
+  return new Response(JSON.stringify({ id: 1, login: "startup-fixture", avatar_url: null }), { status: 200, headers: { "x-oauth-scopes": "repo" } });
+};
+`,
+  );
+  writeFileSync(
+    path.join(bin, "gh"),
+    `#!${process.execPath}
+const { appendFileSync } = require("node:fs");
+const { setTimeout } = require("node:timers/promises");
+const receipts = ${JSON.stringify(receipts)};
+(async () => {
+  const args = process.argv.slice(2);
+  const methodIndex = args.indexOf("--method");
+  if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "github.com" || args.includes("--input") || (methodIndex !== -1 && args[methodIndex + 1] !== "GET")) throw new Error("Unexpected mock GitHub command");
+  const endpoint = args.find((arg) => arg.startsWith("repos/"));
+  let result;
+  if (endpoint === "repos/synthetic/startup") {
+    result = { fork: false, default_branch: "main", parent: { name: null, default_branch: null, owner: { login: null } } };
+  } else if (endpoint?.startsWith("repos/synthetic/startup/git/commits/")) {
+    const receipt = receipts.find((row) => endpoint.endsWith("/" + row.headCommit));
+    if (!receipt) throw new Error("Unknown mock GitHub commit");
+    result = { sha: receipt.headCommit, tree: { sha: receipt.workspaceTree }, parents: [{ sha: receipt.sourceHeadCommit }], message: "test: synthetic published commit\\n\\nOpenClaw-Publication: " + receipt.requestId };
+  } else if (endpoint === "repos/synthetic/startup/pulls") {
+    const receipt = receipts.find((row) => args.includes("head=synthetic:" + row.branch));
+    if (!receipt) throw new Error("Unknown mock GitHub branch");
+    result = [{ url: "https://github.com/synthetic/startup/pull/" + (receipts.indexOf(receipt) + 1), userId: 1, state: "open", body: "<!-- openclaw-publication:" + receipt.requestId + " -->", headSha: receipt.headCommit, headRef: receipt.branch, baseRef: "main" }];
+  } else throw new Error("Unexpected mock GitHub endpoint: " + endpoint);
+  const startedAtMs = Date.now();
+  await setTimeout(${delayMs});
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ endpoint, startedAtMs, releasedAtMs: Date.now() }) + "\\n");
+  process.stdout.write(JSON.stringify(result));
+})().catch((error) => { console.error(error.message); process.exitCode = 1; });
+`,
+    { mode: 0o755 },
+  );
+}
+
+async function inspectPublicationApiFixture(
+  root: string,
+): Promise<NonNullable<GatewaySample["publicationApi"]>> {
+  const env = createGatewayBenchEnv(root, path.join(root, "openclaw.json"), {});
+  const stateDb = await import("../src/state/openclaw-state-db.js");
+  const previousEnv = process.env;
+  process.env = env;
+  try {
+    const database = stateDb.openOpenClawStateDatabase({ env });
+    const { listSharedGitHubPublicationsInDatabase } =
+      await import("../src/gateway/github-publication-store.worker.js");
+    const receipts = listSharedGitHubPublicationsInDatabase(database.db, {}).map(
+      ({ request_id, status, pull_request_url }) => ({ request_id, status, pull_request_url }),
+    );
+    const callsPath = path.join(root, "publication-api-calls.jsonl");
+    const calls = existsSync(callsPath)
+      ? readFileSync(callsPath, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+    return { calls, receipts };
+  } finally {
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    process.env = previousEnv;
+  }
+}
+
+async function inspectTeamBootPluginMigrations(root: string) {
+  const env = createGatewayBenchEnv(root, path.join(root, "openclaw.json"), {});
+  const stateDb = await import("../src/state/openclaw-state-db.js");
+  const previousEnv = process.env;
+  process.env = env;
+  try {
+    const { db } = stateDb.openOpenClawStateDatabase({ env });
+    const counts = db
+      .prepare(
+        `SELECT COUNT(*) AS total,
+                COUNT(CASE WHEN status = 'completed' THEN 1 END) AS completed
+         FROM migration_runs WHERE id LIKE ?`,
+      )
+      .get("deferred-plugin-migration:%");
+    if (
+      !isRecord(counts) ||
+      typeof counts.total !== "number" ||
+      typeof counts.completed !== "number"
+    ) {
+      throw new Error("Plugin migration fixture counts are unavailable");
+    }
+    return { total: counts.total, completed: counts.completed };
+  } finally {
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    process.env = previousEnv;
+  }
 }
 
 async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
@@ -1428,8 +1457,11 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
         import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
         import("../src/state/config-machine-state-async.js"),
       ]);
+    const { appendTranscriptEventsInTransaction } =
+      await import("../src/config/sessions/session-accessor.sqlite-transcript-store.js");
     const now = Date.parse("2026-10-19T00:00:00Z");
     const agents = buildBenchAgentList(root, benchCase.agentTopology)!;
+    const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
     const databasePaths: string[] = [];
     let statePath = "";
     try {
@@ -1450,17 +1482,109 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           { agentId, env },
         );
         database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        // Real incompressible transcript pages exercise state-size-dependent startup work.
+        const targetBytes = ((benchCase.agentDatabaseMib ?? 0) * 1024 * 1024) / agents.length;
+        let message = 0;
+        while (statSync(database.path).size < targetBytes) {
+          agentDb.runOpenClawAgentWriteTransaction(
+            (writable) => {
+              for (let index = 0; index < 32; index++) {
+                const sessionIndex = message % 1250;
+                appendTranscriptEventsInTransaction(
+                  writable,
+                  {
+                    agentId,
+                    sessionKey: `agent:${agentId}:bench-${sessionIndex}`,
+                    sessionId: `team-boot-${agentId}-${sessionIndex}`,
+                  },
+                  [
+                    {
+                      type: "message",
+                      id: `startup-size-${message++}`,
+                      parentId: null,
+                      timestamp: new Date(now).toISOString(),
+                      message: {
+                        role: "user",
+                        content: [
+                          {
+                            type: "text",
+                            text: cipher.update(Buffer.alloc(192 * 1024)).toString("base64"),
+                          },
+                        ],
+                        timestamp: now,
+                      },
+                    },
+                  ],
+                );
+              }
+            },
+            { agentId, env },
+          );
+          database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        if (benchCase.teamScale && databasePaths.length === 0) {
+          // Inert canonical cache pages model a large agent DB without inventing schema.
+          const insert = database.db.prepare(
+            "INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES ('startup-benchmark', ?, ?, ?)",
+          );
+          for (let index = 0; index < 35 * 1024; index++) {
+            insert.run(String(index), cipher.update(Buffer.alloc(1024 * 1024)), now);
+            if (index % 32 === 31) {
+              database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+            }
+          }
+        }
         databasePaths.push(database.path);
       }
       const state = stateDb.openOpenClawStateDatabase({ env });
       statePath = state.path;
+      if (benchCase.pluginMigrationFixture) {
+        const { recordDeferredPluginMigrationsInTransaction } =
+          await import("../src/infra/deferred-plugin-migrations.js");
+        // Config-only obligations can complete from an explicit stateless contract.
+        const obligation = {
+          pluginId: "bench-plugin-01",
+          reason: "Synthetic config-only completion fixture",
+          command: "openclaw doctor --fix",
+        };
+        stateDb.runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            recordDeferredPluginMigrationsInTransaction(db, { pending: [obligation] });
+            if (benchCase.pluginMigrationFixture === "deferred") {
+              recordDeferredPluginMigrationsInTransaction(db, {
+                pending: [],
+                expectedPending: [obligation],
+                settlements: [
+                  { pluginId: obligation.pluginId, status: "deferred", reason: obligation.reason },
+                ],
+              });
+            }
+          },
+          { env, database: state },
+        );
+      }
       if (benchCase.publicationGitDelayMs !== undefined) {
         await seedTeamBootPublication(root, benchCase.publicationGitDelayMs, agents[0]!.id);
       }
+      if (benchCase.publicationApiDelayMs !== undefined) {
+        const receipts = [];
+        for (let index = 0; index < 4; index++) {
+          receipts.push(
+            await seedTeamBootPublication(
+              root,
+              benchCase.publicationApiDelayMs,
+              agents[0]!.id,
+              true,
+              index,
+            ),
+          );
+        }
+        writePublicationApiFixture(root, benchCase.publicationApiDelayMs, receipts);
+      }
       // An inert machine-state namespace adds real, incompressible pages without
       // making startup parse 128 MiB of synthetic records or changing the schema.
-      const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
-      for (let index = 0; index < 128; index++) {
+      const sharedMib = benchCase.teamScale ? 12 * 1024 : 128;
+      for (let index = 0; index < sharedMib; index++) {
         if (index % 8 === 0 && process.platform === "linux") {
           const dirtyKb = Number(
             /^Dirty:\s+(\d+) kB$/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1],
@@ -1478,16 +1602,31 @@ async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): P
           await delay(100);
         }
       }
+      if (benchCase.teamScale) {
+        for (let index = 0; index < 62_000; index++) {
+          const workspace = agents[index % agents.length]!.workspace;
+          const directory = path.join(workspace, `synthetic-${Math.floor(index / 1000)}`);
+          mkdirSync(directory, { recursive: true });
+          writeFileSync(path.join(directory, `${index}.bin`), cipher.update(Buffer.alloc(19_050)));
+        }
+      }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
       await stateDb.closeOpenClawStateDatabaseAsync();
     }
     writeBenchmarkJson(
       {
-        pluginCount: 44,
+        pluginCount: benchCase.pluginCount,
+        agentDatabaseMib: benchCase.agentDatabaseMib,
+        pluginMigrationFixture: benchCase.pluginMigrationFixture,
+        teamScale: benchCase.teamScale ?? false,
+        workspaceFileCount: benchCase.teamScale ? 62_000 : 0,
+        workspaceBytes: benchCase.teamScale ? 62_000 * 19_050 : 0,
         bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
         publicationGitDelayMs: benchCase.publicationGitDelayMs,
-        externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
+        publicationApiDelayMs: benchCase.publicationApiDelayMs,
+        externalPluginCount:
+          benchCase.pluginCount! - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
         agentCount: agents.length,
         sessionCount: agents.length * 1250,
         stateDatabaseBytes: statSync(statePath).size,
@@ -1509,75 +1648,25 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
   const previousEnv = process.env;
   process.env = { ...env };
   try {
-    const [agentDb, stateDb, { writeSessionEntry }, { bindSubagentRunRecord }, registry] =
-      await Promise.all([
-        import("../src/state/openclaw-agent-db.js"),
-        import("../src/state/openclaw-state-db.js"),
-        import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
-        import("../src/agents/subagents/registry/subagent-registry.store.codec.js"),
-        import("../src/agents/subagents/registry/subagent-registry.store.kernel.js"),
-      ]);
+    const [agentDb, { writeSessionEntry }] = await Promise.all([
+      import("../src/state/openclaw-agent-db.js"),
+      import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+    ]);
     const now = Date.now() - 60_000;
-    const requesterAgentId = SLOW_DATABASE_AGENT_IDS[0];
     const databases: Array<{ agentId: string; path: string }> = [];
     let slowPath = "";
     try {
       for (const agentId of SLOW_DATABASE_AGENT_IDS) {
         const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
-        const runId = `slow-db-bench-${agentId}`;
-        const childSessionKey = `agent:${agentId}:subagent:${runId}`;
-        const requesterSessionKey = `agent:${requesterAgentId}:requester:${agentId}`;
         agentDb.runOpenClawAgentWriteTransaction(
           (writable) => {
-            writeSessionEntry(writable, requesterSessionKey, {
-              sessionId: `requester-${agentId}`,
-              updatedAt: now,
-            });
-          },
-          { agentId: requesterAgentId, env },
-        );
-        agentDb.runOpenClawAgentWriteTransaction(
-          (writable) => {
-            writeSessionEntry(writable, childSessionKey, {
-              sessionId: runId,
-              lifecycleRevision: runId,
-              lifecycleRunId: runId,
-              startedAt: now,
+            writeSessionEntry(writable, `agent:${agentId}:bench-0`, {
+              sessionId: `slow-db-bench-${agentId}`,
+              label: "Synthetic startup session 0",
               updatedAt: now,
             });
           },
           { agentId, env },
-        );
-        stateDb.runOpenClawStateWriteTransaction(
-          (state) => {
-            registry.writeSubagentRunValuesInDatabase(
-              state,
-              [
-                bindSubagentRunRecord({
-                  runId,
-                  childSessionKey,
-                  childAgentId: agentId,
-                  childSessionIdentity: { sessionId: runId, lifecycleRevision: runId },
-                  requesterSessionKey,
-                  requesterAgentId,
-                  requesterDisplayKey: requesterSessionKey,
-                  task: "Synthetic interrupted startup recovery",
-                  cleanup: "keep",
-                  createdAt: now,
-                  execution: {
-                    status: "running",
-                    startedAt: now,
-                    lifecycleGeneration: "synthetic-previous-gateway",
-                  },
-                  completion: { required: false },
-                  delivery: { status: "not_required" },
-                  expectsCompletionMessage: false,
-                }),
-              ],
-              [],
-            );
-          },
-          { env },
         );
         if (agentId === "bench-slow") {
           slowPath = database.path;
@@ -1600,10 +1689,11 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
       }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
-      await stateDb.closeOpenClawStateDatabaseAsync();
     }
     // Exclusive offline fixture custody: the next owner must perform its real full scan.
-    rmSync(`${slowPath}.seal`, { force: true });
+    for (const database of databases) {
+      rmSync(`${database.path}.seal`, { force: true });
+    }
     writeFileSync(
       path.join(root, "slow-agent-fixture.json"),
       JSON.stringify(
@@ -1613,6 +1703,7 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
             bytes: statSync(databasePath).size,
           })),
           gateDelayMs,
+          readyAgentGateDelayMs: Math.min(6_000, gateDelayMs),
         },
         null,
         2,
@@ -1622,18 +1713,19 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
       path.join(root, "slow-agent-preload.mjs"),
       `
 import { DatabaseSync } from 'node:sqlite';
-import { isMainThread } from 'node:worker_threads';
 const slowPath = ${JSON.stringify(slowPath)};
+const databasePaths = new Set(${JSON.stringify(databases.map((database) => database.path))});
 const original = DatabaseSync.prototype.prepare;
 DatabaseSync.prototype.prepare = function(sql) {
-  if (this.location() === slowPath && /^PRAGMA integrity_check;?$/i.test(sql.trim())) {
-    console.log('[slow-agent-bench] gate-start');
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${gateDelayMs});
+  if (databasePaths.has(this.location()) && /^PRAGMA integrity_check(?:\\(\\d+\\))?;?$/i.test(sql.trim())) {
+    const slow = this.location() === slowPath;
+    if (slow) console.log('[slow-agent-bench] gate-start');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, slow ? ${gateDelayMs} : ${Math.min(6_000, gateDelayMs)});
     const statement = original.call(this, sql);
     const all = statement.all;
     statement.all = function(...args) {
       const rows = all.apply(this, args);
-      if (rows.length === 1 && rows[0].integrity_check === 'ok') {
+      if (slow && rows.length === 1 && rows[0].integrity_check === 'ok') {
         console.log('[slow-agent-bench] gate-passed');
       }
       return rows;
@@ -1642,15 +1734,6 @@ DatabaseSync.prototype.prepare = function(sql) {
   }
   return original.call(this, sql);
 };
-if (isMainThread) {
-  const key = Symbol.for('openclaw.sessionLifecycleEventListeners');
-  const listeners = globalThis[key] ??= new Set();
-  listeners.add((event) => {
-    if (event.reason === 'subagent-status' && /:subagent:slow-db-bench-/.test(event.sessionKey)) {
-      console.log('[slow-agent-bench] recovered ' + event.sessionKey.split(':')[1]);
-    }
-  });
-}
 `,
     );
   } finally {
@@ -1664,10 +1747,15 @@ async function waitForFirstSessionRpc(params: {
   deadlineAt: number;
   isDone: () => boolean;
   requireSeededSession: boolean;
+  readyAgentId?: string;
+  agentId?: string;
   authToken?: string;
 }): Promise<GatewaySample["firstSessionRpc"]> {
   let attempts = 0;
   let lastError: string | null = null;
+  let connectMs: number | null = null;
+  const method = params.agentId ? "chat.history" : "sessions.list";
+  const sessionKey = `agent:${params.agentId ?? "incident-agent-01"}:bench-0`;
   while (performance.now() < params.deadlineAt && !params.isDone()) {
     attempts++;
     const remaining = () => Math.max(1, params.deadlineAt - performance.now());
@@ -1700,40 +1788,66 @@ async function waitForFirstSessionRpc(params: {
       if (!connected.ok) {
         throw new Error(`connect: ${JSON.stringify(connected.error)}`);
       }
+      connectMs ??= performance.now() - params.startAt;
       const response = await client.request(
-        "sessions.list",
-        {
-          limit: 1,
-          ...(params.requireSeededSession
-            ? { agentId: "incident-agent-01", label: "Synthetic startup session 0" }
-            : {}),
-        },
+        method,
+        params.agentId
+          ? { sessionKey, agentId: params.agentId, limit: 1 }
+          : {
+              limit: params.readyAgentId ? 100 : 1,
+              ...(params.requireSeededSession
+                ? { agentId: "incident-agent-01", label: "Synthetic startup session 0" }
+                : {}),
+            },
         remaining(),
       );
       if (!response.ok) {
-        throw new Error(`sessions.list: ${JSON.stringify(response.error)}`);
+        throw new Error(`${method}: ${JSON.stringify(response.error)}`);
       }
-      if (
-        !response.payload ||
-        typeof response.payload !== "object" ||
-        !("sessions" in response.payload) ||
-        !Array.isArray(response.payload.sessions)
-      ) {
-        throw new Error("sessions.list returned no sessions array");
+      if (params.agentId) {
+        // Keyed history reads use the selected agent's DB worker, unlike the shared list projection.
+        if (
+          !isRecord(response.payload) ||
+          response.payload.sessionKey !== sessionKey ||
+          response.payload.sessionId !== `slow-db-bench-${params.agentId}` ||
+          !Array.isArray(response.payload.messages)
+        ) {
+          throw new Error("chat.history has not returned the seeded session");
+        }
+      } else {
+        if (
+          !response.payload ||
+          typeof response.payload !== "object" ||
+          !("sessions" in response.payload) ||
+          !Array.isArray(response.payload.sessions)
+        ) {
+          throw new Error("sessions.list returned no sessions array");
+        }
+        if (
+          params.requireSeededSession &&
+          !response.payload.sessions.some(
+            (session: unknown) =>
+              session !== null &&
+              typeof session === "object" &&
+              "key" in session &&
+              session.key === sessionKey,
+          )
+        ) {
+          throw new Error("sessions.list has not returned the seeded session");
+        }
+        if (
+          params.readyAgentId &&
+          !response.payload.sessions.some(
+            (session: unknown) =>
+              isRecord(session) &&
+              typeof session.key === "string" &&
+              session.key.startsWith(`agent:${params.readyAgentId}:`),
+          )
+        ) {
+          throw new Error("sessions.list has not returned a ready agent's session");
+        }
       }
-      if (
-        params.requireSeededSession &&
-        !response.payload.sessions.some(
-          (session: unknown) =>
-            session !== null &&
-            typeof session === "object" &&
-            "key" in session &&
-            session.key === "agent:incident-agent-01:bench-0",
-        )
-      ) {
-        throw new Error("sessions.list has not returned the seeded session");
-      }
-      return { ms: performance.now() - params.startAt, attempts, lastError };
+      return { ms: performance.now() - params.startAt, connectMs, attempts, lastError };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1752,7 +1866,7 @@ async function waitForFirstSessionRpc(params: {
     }
     await delay(25);
   }
-  return { ms: null, attempts, lastError };
+  return { ms: null, connectMs, attempts, lastError };
 }
 
 async function captureStartupHeapProfile(
@@ -1816,12 +1930,7 @@ async function runGatewaySample(
     : withGatewayBenchRoot;
   return await withRoot(async (root) => {
     const slowAgent = options.benchCase.id === "slowAgentDatabase";
-    const interruptedRegistry = options.benchCase.id === "interruptedRegistry";
-    const preload = slowAgent
-      ? path.join(root, "slow-agent-preload.mjs")
-      : interruptedRegistry
-        ? path.join(root, "interrupted-registry-preload.mjs")
-        : undefined;
+    const preload = slowAgent ? path.join(root, "slow-agent-preload.mjs") : undefined;
     let port = 0;
     for (let attempt = 0; port < 40000 && attempt < 32; attempt++) {
       port = await getFreePort();
@@ -1850,13 +1959,22 @@ async function runGatewaySample(
       // Keep startup PATH hardening from moving the real Git ahead of the fixture wrapper.
       env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
     }
+    if (options.benchCase.publicationApiDelayMs !== undefined) {
+      if (existsSync(path.join(root, "publication-api-calls.jsonl"))) {
+        throw new CliArgumentError("The publication API fixture has already run; seed a new root");
+      }
+      env.PATH = `${path.join(root, "publication-bin")}${path.delimiter}${env.PATH ?? ""}`;
+      env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
+      env.GH_TOKEN = "synthetic-startup-publication-token";
+      env.NODE_OPTIONS = `--import=${path.join(root, "publication-api-preload.mjs")}`;
+    }
     if (preload) {
-      env.NODE_OPTIONS = `--import=${preload}`;
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${preload}`.trim();
     }
     const agentRecoveryMs: Record<string, number> = {};
-    const registryRecoveryEvents: Record<string, number> = {};
     const integrityGateMs: Record<string, number> = {};
     let agentDatabaseAdmissionErrors = 0;
+    let pluginMigrationWarnings = 0;
     if (options.benchCase.incidentFixture) {
       await writeIncidentFixture(root, { kind: options.benchCase.incidentFixture });
       if (fixtureIncludesPackagedPlugins(options.benchCase.incidentFixture)) {
@@ -1870,6 +1988,7 @@ async function runGatewaySample(
       }
       await delay(remaining);
     }
+    const hostLoadBefore = loadavg();
     const startAt = performance.now();
     const deadlineAt = startAt + options.timeoutMs;
     const startupTrace: Record<string, number> = {};
@@ -1901,7 +2020,7 @@ async function runGatewaySample(
         options.entry,
         port,
         nodeOptions,
-        options.benchCase.id === "teamBoot" ? "token" : "none",
+        options.benchCase.id === "teamBoot" || slowAgent ? "token" : "none",
       );
       const command = buildGatewayBenchCommand(childArgs, options);
       child = spawn(command.command, command.args, {
@@ -1926,17 +2045,22 @@ async function runGatewaySample(
       });
 
       const onLine = (line: string, nowMs: number) => {
+        if (options.benchCase.publicationApiDelayMs !== undefined) {
+          appendFileSync(path.join(root, "publication-gateway.log"), `${line}\n`);
+        }
+        if (
+          line.includes("Plugin data/settings readiness could not be confirmed:") ||
+          line.includes("Plugin data/settings upgrade awaits config repair:") ||
+          line.includes("Refused plugin migrations that do not match the immutable action order") ||
+          line.includes("failed to load doctor contract for ") ||
+          /Plugin "[^"]+" data\/settings upgrade is blocked(?: in [^:]+)?:|Plugin \S+ is not prepared:|Failed detecting [^\r\n]+:/u.test(
+            line,
+          )
+        ) {
+          pluginMigrationWarnings++;
+        }
         if (line.includes("AgentDatabaseAdmissionError")) {
           agentDatabaseAdmissionErrors++;
-        }
-        const recoveredAgent = /\[slow-agent-bench\] recovered (\S+)/u.exec(line)?.[1];
-        if (recoveredAgent && SLOW_DATABASE_AGENT_IDS.some((id) => id === recoveredAgent)) {
-          agentRecoveryMs[recoveredAgent] ??= nowMs;
-        }
-        const recoveredRun = /\[interrupted-registry-bench\] recovered (\S+)/u.exec(line)?.[1];
-        if (recoveredRun) {
-          agentRecoveryMs[recoveredRun] ??= nowMs;
-          registryRecoveryEvents[recoveredRun] = (registryRecoveryEvents[recoveredRun] ?? 0) + 1;
         }
         const gate = /\[slow-agent-bench\] (gate-start|gate-passed)/u.exec(line);
         if (gate) {
@@ -2003,22 +2127,35 @@ async function runGatewaySample(
                 deadlineAt,
                 isDone: () => childExited,
                 requireSeededSession: options.benchCase.id === "teamBoot",
-                ...(options.benchCase.id === "teamBoot" ? { authToken: TEAM_BOOT_AUTH_TOKEN } : {}),
+                ...(slowAgent ? { readyAgentId: SLOW_DATABASE_AGENT_IDS[0] } : {}),
+                ...(options.benchCase.id === "teamBoot" || slowAgent
+                  ? { authToken: TEAM_BOOT_AUTH_TOKEN }
+                  : {}),
               })
-            : { ms: null, attempts: 0, lastError: "Gateway never became healthy" },
+            : { ms: null, connectMs: null, attempts: 0, lastError: "Gateway never became healthy" },
         ),
+        healthzProbe.then(async (health) => {
+          if (!slowAgent || health.status !== 200) {
+            return;
+          }
+          await Promise.all(
+            SLOW_DATABASE_AGENT_IDS.map(async (agentId) => {
+              const observation = await waitForFirstSessionRpc({
+                port,
+                startAt,
+                deadlineAt,
+                isDone: () => childExited,
+                requireSeededSession: true,
+                agentId,
+                authToken: TEAM_BOOT_AUTH_TOKEN,
+              });
+              if (observation.ms !== null) {
+                agentRecoveryMs[agentId] = observation.ms;
+              }
+            }),
+          );
+        }),
       ]);
-      if (slowAgent || interruptedRegistry) {
-        while (
-          Object.keys(agentRecoveryMs).length <
-            (slowAgent ? SLOW_DATABASE_AGENT_IDS.length : INTERRUPTED_REGISTRY_ACTIVE) &&
-          startedChild.exitCode === null &&
-          startedChild.signalCode === null &&
-          performance.now() < deadlineAt
-        ) {
-          await delay(25);
-        }
-      }
       // Keep the recovered request alive through its real subprocess boundary even
       // when readyz and the first RPC complete before this optional work finishes.
       if (publicationMarker) {
@@ -2029,21 +2166,30 @@ async function runGatewaySample(
           await delay(25);
         }
       }
+      if (options.benchCase.publicationApiDelayMs !== undefined) {
+        await waitForStartupTracePhase({
+          deadlineAt,
+          isDone: () => childExited,
+          phase: "sidecars.worker-environments.publications",
+          startupTrace,
+        });
+      }
       // Compare CPU/RSS after the same optional startup work, even when publication
       // recovery overlaps that work on only one side of the comparison.
-      const postReadyCompletion = publicationMarker
-        ? await Promise.all(
-            ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
-              waitForStartupTracePhase({
-                deadlineAt,
-                isDone: () => childExited,
-                phase,
-                startupTrace,
-              }),
-            ),
-          )
-        : [];
-      const completionMs = postReadyCompletion.includes(null)
+      const postReadyCompletion =
+        publicationMarker || options.benchCase.publicationApiDelayMs !== undefined
+          ? await Promise.all(
+              ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
+                waitForStartupTracePhase({
+                  deadlineAt,
+                  isDone: () => childExited,
+                  phase,
+                  startupTrace,
+                }),
+              ),
+            )
+          : [];
+      let completionMs = postReadyCompletion.includes(null)
         ? null
         : options.benchCase.completionTracePhase
           ? await waitForStartupTracePhase({
@@ -2053,6 +2199,10 @@ async function runGatewaySample(
               startupTrace,
             })
           : performance.now() - startAt;
+      if (options.benchCase.id === "teamBoot" && completionMs !== null) {
+        // The trace stores a phase duration, not elapsed time from process spawn.
+        completionMs = performance.now() - startAt;
+      }
       const completedAt = performance.now();
       const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
       const cpuMs =
@@ -2072,6 +2222,14 @@ async function runGatewaySample(
       flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
       return {
+        ...(options.benchCase.id === "teamBoot"
+          ? {
+              pluginMigration: {
+                ...(await inspectTeamBootPluginMigrations(root)),
+                warnings: pluginMigrationWarnings,
+              },
+            }
+          : {}),
         ...(publicationMarker && existsSync(publicationMarker)
           ? {
               publicationRecovery: JSON.parse(
@@ -2079,16 +2237,10 @@ async function runGatewaySample(
               ) as NonNullable<GatewaySample["publicationRecovery"]>,
             }
           : {}),
-        ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
-        ...(interruptedRegistry
-          ? {
-              agentRecoveryMs,
-              registryRecovery: await inspectInterruptedRegistryRecovery(
-                root,
-                registryRecoveryEvents,
-              ),
-            }
+        ...(options.benchCase.publicationApiDelayMs !== undefined
+          ? { publicationApi: await inspectPublicationApiFixture(root) }
           : {}),
+        ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
         completionMs,
         cpuCoreRatio,
         cpuMs,
@@ -2102,6 +2254,8 @@ async function runGatewaySample(
         ...(heapProfilePath ? { heapProfilePath } : {}),
         httpListenLogLine,
         httpListenLogMs,
+        hostLoadBefore,
+        hostLoadAfter: loadavg(),
         maxRssMb,
         outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
@@ -2208,31 +2362,21 @@ async function main() {
   const options = parseOptions(argv);
   const slowAgent = options.cases.length === 1 && options.cases[0]?.id === "slowAgentDatabase";
   const teamBoot = options.cases.length === 1 && options.cases[0]?.id === "teamBoot";
-  const interruptedRegistry =
-    options.cases.length === 1 && options.cases[0]?.id === "interruptedRegistry";
-  const fixtureFile = teamBoot
-    ? "team-boot-fixture.json"
-    : interruptedRegistry
-      ? "interrupted-registry-fixture.json"
-      : "slow-agent-fixture.json";
+  const fixtureFile = teamBoot ? "team-boot-fixture.json" : "slow-agent-fixture.json";
   const needsPreparedFixture = options.cases.some(
-    ({ id }) => id === "slowAgentDatabase" || id === "teamBoot" || id === "interruptedRegistry",
+    ({ id }) => id === "slowAgentDatabase" || id === "teamBoot",
   );
   if (options.fixtureRoot || options.seedOnly || needsPreparedFixture) {
     if (
-      (!slowAgent && !teamBoot && !interruptedRegistry) ||
+      (!slowAgent && !teamBoot) ||
       !options.fixtureRoot ||
       (!options.seedOnly && (options.runs !== 1 || options.warmup !== 0))
     ) {
       throw new CliArgumentError(
-        "teamBoot, slowAgentDatabase and interruptedRegistry require --fixture-root and either --seed-only or --runs 1 --warmup 0",
+        "teamBoot and slowAgentDatabase require --fixture-root and either --seed-only or --runs 1 --warmup 0",
       );
     }
     if (options.seedOnly) {
-      if (interruptedRegistry) {
-        await seedInterruptedRegistryFixture(path.resolve(options.fixtureRoot));
-        return;
-      }
       if (teamBoot) {
         await seedTeamBootFixture(path.resolve(options.fixtureRoot), options.cases[0]!);
         return;
@@ -2250,12 +2394,31 @@ async function main() {
     if (teamBoot) {
       const fixture = JSON.parse(
         readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
-      ) as { bundledPluginFixture?: OpenClawConfig; publicationGitDelayMs?: number };
+      ) as {
+        agentDatabaseMib?: number;
+        bundledPluginFixture?: OpenClawConfig;
+        publicationGitDelayMs?: number;
+        publicationApiDelayMs?: number;
+        teamScale?: boolean;
+        pluginMigrationFixture?: GatewayBenchCase["pluginMigrationFixture"];
+      };
+      if (fixture.agentDatabaseMib !== options.cases[0]?.agentDatabaseMib) {
+        throw new CliArgumentError("--agent-database-mib must match the prepared fixture");
+      }
+      if (fixture.pluginMigrationFixture !== options.cases[0]?.pluginMigrationFixture) {
+        throw new CliArgumentError("--plugin-migration-fixture must match the prepared fixture");
+      }
+      if (Boolean(fixture.teamScale) !== Boolean(options.cases[0]?.teamScale)) {
+        throw new CliArgumentError("--team-scale must match the prepared fixture");
+      }
       if (
         JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
         JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
       ) {
         throw new CliArgumentError("--bundled-plugin-fixture must match the prepared fixture");
+      }
+      if (fixture.publicationApiDelayMs !== options.cases[0]?.publicationApiDelayMs) {
+        throw new CliArgumentError("--publication-api-delay-ms must match the prepared fixture");
       }
       if (fixture.publicationGitDelayMs !== options.cases[0]?.publicationGitDelayMs) {
         throw new CliArgumentError("--publication-git-delay-ms must match the prepared fixture");
@@ -2295,7 +2458,7 @@ async function main() {
     gatewayRuntime: options.gatewayRuntime,
     gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
-    ...(teamBoot || interruptedRegistry
+    ...(teamBoot
       ? {
           fixture: JSON.parse(readFileSync(path.join(options.fixtureRoot!, fixtureFile), "utf8")),
         }

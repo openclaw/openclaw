@@ -6,6 +6,7 @@ import { collectEnvVarNames } from "../../scripts/check-env-var-count.mts";
 import { collectCurrentSuppressionState, main } from "../../scripts/check-max-lines-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
@@ -32,17 +33,11 @@ function git(cwd: string, args: string[]): void {
 
 const baselinePath = "config/max-lines-baseline.txt";
 const suppression = "/* oxlint-disable max-lines */\n";
-function write(root: string, file: string, source: string) {
-  const target = path.join(root, file);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, source);
-}
-
 function makeRepo(entries: string[], files: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-max-lines-");
-  write(root, baselinePath, entries.map((file) => `${file}\n`).join(""));
-  entries.forEach((file) => write(root, file, suppression));
-  Object.entries(files).forEach(([file, source]) => write(root, file, source));
+  fixtureFiles(root).write(baselinePath, entries.map((file) => `${file}\n`).join(""));
+  entries.forEach((file) => fixtureFiles(root).write(file, suppression));
+  Object.entries(files).forEach(([file, source]) => fixtureFiles(root).write(file, source));
   [["init"], ["add", "."], ["commit", "-m", "base"]].forEach((args) => git(root, args));
   return root;
 }
@@ -54,8 +49,8 @@ afterEach(() => {
 
 it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {
   const root = makeRepo(["src/a.ts"]);
-  write(root, baselinePath, "src/a.ts\nsrc/b.ts\n");
-  write(root, "src/b.ts", suppression);
+  fixtureFiles(root).write(baselinePath, "src/a.ts\nsrc/b.ts\n");
+  fixtureFiles(root).write("src/b.ts", suppression);
   git(root, ["add", "."]);
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubEnv("GITHUB_ACTIONS", "true");
@@ -71,7 +66,7 @@ it("blocks a moved suppression and its stale entry in GitHub Actions", () => {
   const root = makeRepo(["src/page.ts"]);
   git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
   fs.rmSync(path.join(root, "src/page.ts"));
-  write(root, "src/page-state.ts", "export const state = 1;\n" + suppression);
+  fixtureFiles(root).write("src/page-state.ts", "export const state = 1;\n" + suppression);
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubEnv("GITHUB_ACTIONS", "true");
 
@@ -80,7 +75,7 @@ it("blocks a moved suppression and its stale entry in GitHub Actions", () => {
     expect.stringMatching(/New max-lines suppressions are forbidden.*\n {2}src\/page-state\.ts$/u),
   );
 
-  write(root, "src/page-state.ts", "export const state = 1;\n");
+  fixtureFiles(root).write("src/page-state.ts", "export const state = 1;\n");
   expect(main(root)).toBe(1);
   expect(error).toHaveBeenLastCalledWith(
     "Remove stale max-lines baseline entries (or run with --prune):\n  src/page.ts",
@@ -92,7 +87,7 @@ it("transfers grandfathered debt across a verified rename", () => {
   git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
   git(root, ["mv", "src/a.ts", "src/b.ts"]);
-  write(root, baselinePath, "src/b.ts\n");
+  fixtureFiles(root).write(baselinePath, "src/b.ts\n");
 
   expect(main(root)).toBe(0);
 });
@@ -106,11 +101,11 @@ it("reports base-resolution failures", () => {
 
 it("checks staged content instead of unstaged worktree edits", () => {
   const root = makeRepo([], { "src/a.ts": "export const a = 1;\n" });
-  write(root, baselinePath, "src/a.ts\n");
-  write(root, "src/a.ts", "/* oxlint-disable */\n");
+  fixtureFiles(root).write(baselinePath, "src/a.ts\n");
+  fixtureFiles(root).write("src/a.ts", "/* oxlint-disable */\n");
   git(root, ["add", "."]);
-  write(root, baselinePath, "");
-  write(root, "src/a.ts", "export const a = 1;\n");
+  fixtureFiles(root).write(baselinePath, "");
+  fixtureFiles(root).write("src/a.ts", "export const a = 1;\n");
   vi.spyOn(console, "error").mockImplementation(() => {});
 
   expect(main(root, ["--staged", "--base", "HEAD"])).toBe(1);
@@ -129,7 +124,7 @@ it("checks untracked sources and tolerates unstaged deletions", () => {
   fs.rmSync(path.join(root, "src/deleted.ts"));
   expect(main(root)).toBe(0);
 
-  write(root, "src/untracked.ts", "// eslint-disable-next-line eslint/max-lines\n");
+  fixtureFiles(root).write("src/untracked.ts", "// eslint-disable-next-line eslint/max-lines\n");
   vi.spyOn(console, "error").mockImplementation(() => {});
 
   expect(main(root)).toBe(1);
@@ -162,9 +157,9 @@ it("keeps candidate batches aligned and counts environment names outside them", 
     ".gitignore": "src/ignored.ts\n",
     "src/plain.ts": "process.env.OPENCLAW_PLAIN;\n",
   });
-  write(root, ".gitignore", "src/ignored.ts\nsrc/file-04.ts\n");
-  write(root, "src/ignored.ts", "/* eslint-disable */\n");
-  write(root, "src/untracked.ts", suppression + "process.env.OPENCLAW_UNTRACKED;\n");
+  fixtureFiles(root).write(".gitignore", "src/ignored.ts\nsrc/file-04.ts\n");
+  fixtureFiles(root).write("src/ignored.ts", "/* eslint-disable */\n");
+  fixtureFiles(root).write("src/untracked.ts", suppression + "process.env.OPENCLAW_UNTRACKED;\n");
   const envVarNames = new Map<string, ReadonlySet<string>>();
 
   expect(collectCurrentSuppressionState(root, { envVarNames })).toEqual({
@@ -192,12 +187,12 @@ it.skipIf(process.platform === "win32")(
     git(root, ["add", "."]);
     git(root, ["update-index", "--assume-unchanged", "src/assumed.ts"]);
     git(root, ["update-index", "--skip-worktree", "src/skipped.ts"]);
-    write(root, "src/assumed.ts", suppression);
-    write(root, "src/skipped.ts", suppression);
+    fixtureFiles(root).write("src/assumed.ts", suppression);
+    fixtureFiles(root).write("src/skipped.ts", suppression);
     fs.unlinkSync(path.join(root, "src/replaced.ts"));
     fs.symlinkSync("../fixture.txt", path.join(root, "src/replaced.ts"));
     fs.unlinkSync(path.join(root, "src/reverse.ts"));
-    write(root, "src/reverse.ts", suppression);
+    fixtureFiles(root).write("src/reverse.ts", suppression);
     fs.symlinkSync("../fixture.txt", path.join(root, "src/untracked.ts"));
 
     expect(collectCurrentSuppressionState(root)).toEqual({

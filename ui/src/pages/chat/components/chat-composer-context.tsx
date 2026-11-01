@@ -2,7 +2,7 @@ import { Show, createMemo, createSignal } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
-import { collectProviderQuotaGroups } from "../../../lib/provider-quota-summary.ts";
+import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   getContextNoticeViewModel,
@@ -21,16 +21,83 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 export function ContextNotice(props: ContextNoticeProps) {
   const model = createMemo(() => getContextNoticeViewModel(props.session));
   const currentGroup = createMemo(() => {
-    const provider = (
+    const currentProvider = (
       props.session?.modelProvider?.trim() || latestAssistantProvider(props.messages)
     )?.toLowerCase();
-    if (!provider || !props.providerUsage) {
+    if (!currentProvider || !props.providerUsage) {
       return undefined;
     }
-    return collectProviderQuotaGroups(
-      props.providerUsage.modelAuthStatusResult ?? null,
+    const groups = new Map<string, ProviderQuotaGroup>();
+    for (const provider of (props.providerUsage.modelAuthStatusResult?.providers ?? []).filter(
       isMonitoredAuthProvider,
-    ).find((group) => group.providers.some((id) => id.trim().toLowerCase() === provider));
+    )) {
+      const usage = provider.usage;
+      if (!usage) {
+        continue;
+      }
+      const windows: ProviderQuotaGroup["windows"] = (usage.windows ?? []).map((limit) =>
+        Object.assign(
+          {
+            label: (limit.label || "").trim(),
+            usedPercent: Math.max(0, Math.min(100, Math.round(limit.usedPercent))),
+          },
+          limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {},
+        ),
+      );
+      const budgets: ProviderQuotaGroup["budgets"] = (usage.billing ?? []).flatMap((entry) => {
+        if (
+          entry.type !== "budget" ||
+          !Number.isFinite(entry.used) ||
+          !Number.isFinite(entry.limit) ||
+          entry.used < 0 ||
+          entry.limit <= 0
+        ) {
+          return [];
+        }
+        return [
+          {
+            used: entry.used,
+            limit: entry.limit,
+            unit: entry.unit,
+            ...(entry.label ? { label: entry.label } : {}),
+          },
+        ];
+      });
+      if (windows.length === 0 && budgets.length === 0) {
+        continue;
+      }
+      // Session rows report canonical model providers while auth rows may use
+      // CLI aliases (claude-cli vs anthropic); expose both ids for matching.
+      const providerIds = [
+        ...new Set([provider.provider, usage.providerId].filter((id): id is string => Boolean(id))),
+      ];
+      const identity = JSON.stringify([
+        provider.displayName,
+        usage.accountEmail ?? null,
+        windows,
+        budgets,
+      ]);
+      const existing = groups.get(identity);
+      if (existing) {
+        for (const id of providerIds) {
+          if (!existing.providers.includes(id)) {
+            existing.providers.push(id);
+          }
+        }
+        continue;
+      }
+      groups.set(identity, {
+        providers: providerIds,
+        displayName: provider.displayName,
+        ...(usage.plan ? { plan: usage.plan } : {}),
+        ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
+        windows,
+        budgets,
+      });
+    }
+    return [...groups.values()].find((group) =>
+      group.providers.some((id) => id.trim().toLowerCase() === currentProvider),
+    );
   });
   const summary = createMemo(() => {
     const context = model();

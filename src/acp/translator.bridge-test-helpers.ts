@@ -9,6 +9,7 @@ import type {
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { createRequireRecord } from "../../test/helpers/record.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   createAcpConnection,
@@ -88,12 +89,7 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-export function requireAcpObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+export const requireAcpObject = createRequireRecord("object", "expected-label");
 
 export function expectConfigOption(options: unknown, id: string, fields: Record<string, unknown>) {
   expect(Array.isArray(options), "config options").toBe(true);

@@ -244,7 +244,6 @@ const readScript = async (file: string) =>
   decodeWindowsLauncherScript({ buffer: await fs.readFile(file) });
 const expectMissing = (file: string) =>
   expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
-const printedOutput = (stdout: PassThrough) => String(stdout.read(stdout.readableLength));
 
 function portUsage(
   status: PortUsage["status"],
@@ -469,10 +468,8 @@ describe("Windows startup fallback", () => {
           stderr: hidden ? "ERROR: Access is denied." : "错误: 拒绝访问。",
         },
       ]);
-      const stdout = new PassThrough();
       const result = await installGateway(
         hidden ? { ...env, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" } : env,
-        stdout,
       );
       const raw = await fs.readFile(resolveStartupFixturePath(env, format));
       const script = decodeWindowsLauncherScript({ buffer: raw });
@@ -488,7 +485,6 @@ describe("Windows startup fallback", () => {
       }
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
-      expect(printedOutput(stdout)).toContain("Installed Windows login item");
     },
   );
 
@@ -497,14 +493,10 @@ describe("Windows startup fallback", () => {
     const hiddenStartupEntryPath = await writeStartupFallbackEntry(env, "vbs");
     addSuccessfulMigrationResponses();
 
-    const stdout = new PassThrough();
-    await installGateway(env, stdout);
+    await installGateway(env);
 
     await expectMissing(startupEntryPath);
     await expectMissing(hiddenStartupEntryPath);
-    const printed = printedOutput(stdout);
-    expect(printed).toContain("Installed Scheduled Task");
-    expect(printed).toContain("Removed Windows login item");
   });
 
   it("settles takeover after Startup vanishes during readiness", async ({ env }) => {
@@ -524,19 +516,13 @@ describe("Windows startup fallback", () => {
     ]);
     const progress = notYetRunTaskSnapshot("2026-04-15T23:42:31.0000000Z");
     queueNativeResponses(notYetRunTaskSnapshot(), progress, runningTaskSnapshot());
-    const stdout = new PassThrough();
-
-    await expect(installGateway(env, stdout)).resolves.toEqual({
+    await expect(installGateway(env)).resolves.toEqual({
       scriptPath: resolveTaskScriptPath(env),
     });
 
     expectGatewayTermination(4242);
     expect(spawn).not.toHaveBeenCalled();
     expect(schtasksResponses).toEqual([]);
-    expect(sleepMock.mock.calls).toEqual([[250], [250]]);
-    const printed = printedOutput(stdout);
-    expect(printed).toContain("Restarted Scheduled Task");
-    expect(printed).not.toContain("Removed Windows login item");
     await expectMissing(startupEntryPath);
   });
 

@@ -161,10 +161,7 @@ export function detectOpenAICompletionsCompat(
     capability: "llm",
     transport: "stream",
     modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
+    compat: model.compat ?? undefined,
   });
   const {
     provider,
@@ -227,6 +224,7 @@ export function detectOpenAICompletionsCompat(
     openRouterModelId?.startsWith("google/gemini") === true;
   const isLocalEndpoint = endpointClass === "local";
   const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
+  const modelStudioEndpoint = isModelStudioLike ? URL.parse(baseUrl ?? "") : null;
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
     endpointClass === "novita-native" ||
@@ -235,6 +233,9 @@ export function detectOpenAICompletionsCompat(
     isCloudflareAiGateway ||
     isZai ||
     isTogether ||
+    (modelStudioEndpoint &&
+      /(?:^|\.)(?:dashscope(?:-[^.]+)?|maas)\.aliyuncs\.com$/i.test(modelStudioEndpoint.hostname) &&
+      /^\/compatible-mode(?:\/|$)/i.test(modelStudioEndpoint.pathname)) ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   const defaults: OpenAICompletionsCompatDefaults = {
     supportsStore: !isNonStandard && !isMistral && !usesExplicitProxyLikeEndpoint,

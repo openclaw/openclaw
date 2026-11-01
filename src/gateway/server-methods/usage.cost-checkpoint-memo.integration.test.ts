@@ -99,8 +99,9 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
       } finally {
         await work.drain();
       }
+      // The report refreshes the appended session before it answers.
       expect(respond.mock.calls).toMatchObject([
-        [true, { totals: { totalTokens: 40 } }, undefined],
+        [true, { totals: { totalTokens: 50 } }, undefined],
       ]);
       const fresh = await loadCostUsageSummaryFromCache({ ...params, requestRefresh: false });
       expect(fresh).toMatchObject({

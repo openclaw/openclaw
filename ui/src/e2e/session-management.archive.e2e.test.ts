@@ -75,7 +75,7 @@ async function confirmDelete(page: Page, proofName?: string) {
 }
 
 async function setSidebarStatus(page: Page, status: "Archived" | "Active") {
-  await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+  await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
   await chooseSidebarMenuOption(page, "Status", status);
   await closeSidebarMenu(page);
 }
@@ -262,7 +262,9 @@ suite.define(() => {
       await rowFor("Alpha").locator('input[type="checkbox"]').check();
       await page.locator(".data-table-bulk-bar").getByText("1 selected").waitFor();
       await page.getByRole("button", { name: "Filters", exact: true }).click();
-      await page.locator('.sessions-filter-popover:popover-open input[type="text"]').fill("Bravo");
+      const filters = page.locator(".sessions-filter-popover:popover-open");
+      await filters.locator(".header-search__toggle").click();
+      await filters.getByRole("searchbox").fill("Bravo");
 
       await expectCount(rowFor("Alpha"), 0);
       await expectCount(page.locator(".data-table-bulk-bar"), 0);
@@ -780,19 +782,6 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(requestsBeforeDeletion);
-      await expect
-        .poll(
-          async () => {
-            const count = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-            await new Promise((resolve) => {
-              setTimeout(resolve, 350);
-            });
-            return (await gateway.getRequests("sessions.list", rosterMatch)).length - count;
-          },
-          { timeout: 5_000 },
-        )
-        .toBe(0);
-
       const settledRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await expectRequestCountStable(
         gateway,

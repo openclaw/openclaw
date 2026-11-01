@@ -17,10 +17,12 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { getSessionRowSelectionMetrics } from "../../infra/gateway-work-metrics.js";
 import { mergeProfiles } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { prepareProjectedSessionList } from "../session-utils-list.js";
 import {
   identifiedClient,
   listSessions as readList,
@@ -142,6 +144,24 @@ it("counts caller-visible conversations once through direct and delegated work b
     try {
       await read();
       const projection = getSessionRowProjection(context)!;
+      const candidateSelections = () =>
+        getSessionRowSelectionMetrics().selections.reduce(
+          (total, selection) =>
+            total + (selection.kind === "running-candidate" ? selection.calls : 0),
+          0,
+        );
+      // The RPC may reselect after awaited row preparation; each synchronous read resolves once.
+      const prepared = prepareProjectedSessionList({
+        projection,
+        context,
+        client,
+        opts: request,
+        now,
+        metadataPrepared: true,
+      });
+      const before = candidateSelections();
+      expect(prepared.ownerRunningCandidateKeys().has(running)).toBe(true);
+      expect(candidateSelections() - before).toBe(1);
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       for (const offset of [0, 3, 100]) {
         expect((await read({ offset })).ownerSessionCounts).toEqual(expected(8, 2));
@@ -209,7 +229,9 @@ it("counts caller-visible conversations once through direct and delegated work b
       // Retained terminal history is not a candidate for the live running-count facet.
       expect(
         selections.mock.calls.filter(
-          ([query]) => query?.sessionIdOrKey === idle || query?.sessionIdOrKey === child,
+          ([query]) =>
+            query?.candidateSessionIdsOrKeys?.has(idle) ||
+            query?.candidateSessionIdsOrKeys?.has(child),
         ),
       ).toEqual([]);
       selections.mockRestore();

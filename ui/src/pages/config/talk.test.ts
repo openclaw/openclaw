@@ -48,6 +48,14 @@ const expectFocused = (input: HTMLTextAreaElement, value: string) => {
   expect(input.value).toBe(value);
   expect(document.activeElement).toBe(input);
 };
+const modelPicker = (page: HTMLElement) =>
+  page.querySelector<SelectPicker>("openclaw-select-picker");
+const waitCatalogCalls = (request: unknown, count: number) =>
+  waitForSolid(() => expect(request).toHaveBeenCalledTimes(count));
+const realtimePath = (field: string) => ["talk", "realtime", field];
+const settingRows = (page: HTMLElement) => [...page.querySelectorAll<HTMLElement>(".settings-row")];
+const rowTitle = (row: HTMLElement) =>
+  row.querySelector(".settings-row__title")?.textContent?.trim();
 
 type TriggerReply = { triggers: string[] };
 async function voiceWakeFixture(
@@ -237,12 +245,11 @@ async function selectMutation(
   options: TalkMutationHarnessOptions = {},
 ) {
   const harness = createTalkMutationHarness(options);
-  await waitForSolid(() => expect(harness.request).toHaveBeenCalledWith("talk.catalog", {}));
   await waitForSolid(() =>
     expect(
-      harness.page.querySelector(
-        field === "model" ? "openclaw-select-picker" : 'input[type="radio"]',
-      ),
+      field === "model"
+        ? modelPicker(harness.page)
+        : harness.page.querySelector('input[type="radio"]'),
     ).not.toBeNull(),
   );
   if (field === "model") {
@@ -250,7 +257,7 @@ async function selectMutation(
   } else {
     harness.page.changeProvider(value);
   }
-  expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "realtime", field], value);
+  expect(harness.runtimeConfig.patchForm).toHaveBeenCalledWith(realtimePath(field), value);
   return harness.runtimeConfig.removeFormValue;
 }
 
@@ -263,9 +270,7 @@ afterEach(() => {
 
 async function readyTalk(options: TalkMutationHarnessOptions = {}) {
   const harness = createTalkMutationHarness(options);
-  await waitForSolid(() =>
-    expect(harness.page.querySelector("openclaw-select-picker")).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(modelPicker(harness.page)).not.toBeNull());
   await updatePickers(harness.page);
   return harness;
 }
@@ -283,14 +288,8 @@ it("commits provider-local model ids without qualifying them", async () => {
   const { page, runtimeConfig } = await readyTalk({
     providerOption: { models: ["gpt-live", "gpt-realtime"] },
   });
-  await choosePickerValue(
-    page.querySelector<SelectPicker>("openclaw-select-picker")!,
-    "gpt-realtime",
-  );
-  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
-    ["talk", "realtime", "model"],
-    "gpt-realtime",
-  );
+  await choosePickerValue(modelPicker(page)!, "gpt-realtime");
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(realtimePath("model"), "gpt-realtime");
 });
 
 it.each([
@@ -301,7 +300,7 @@ it.each([
   const { page } = await readyTalk({ model });
   expect(page.textContent?.includes(t("talkPage.gptLive.hint"))).toBe(showsHint);
   if (showsHint) {
-    const row = [...page.querySelectorAll(".settings-row")].find((entry) =>
+    const row = settingRows(page).find((entry) =>
       entry.textContent?.includes("Released browser/Gateway-owned WebRTC"),
     );
     expect(row?.textContent).toContain("GPT-Live");
@@ -344,23 +343,23 @@ describe("Talk catalog boundaries", () => {
       catalogRequest: (index, catalog) =>
         index === 1 ? initial.promise : index === 2 ? catalog : refresh.promise.then(() => catalog),
     });
-    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
-    const input = page.querySelector("textarea");
+    await waitForSolid(() => expect(triggerInput(page)?.value).toBe("openclaw"));
+    const input = triggerInput(page);
     initial.reject(new Error("catalog temporarily unavailable"));
     await waitForSolid(() => expect(page.textContent).toContain(t("talkPage.status.unavailable")));
     expect(page.textContent).toContain("gpt-realtime-2.1");
-    expect(page.querySelector("textarea")).toBe(input);
+    expect(triggerInput(page)).toBe(input);
 
     window.dispatchEvent(new Event("focus"));
-    await waitForSolid(() => expect(page.querySelector("openclaw-select-picker")).not.toBeNull());
-    expect(page.querySelector("textarea")).toBe(input);
+    await waitForSolid(() => expect(modelPicker(page)).not.toBeNull());
+    expect(triggerInput(page)).toBe(input);
     expect(request).toHaveBeenCalledTimes(2);
 
-    const picker = page.querySelector("openclaw-select-picker");
+    const picker = modelPicker(page);
     window.dispatchEvent(new Event("focus"));
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
-    expect(page.querySelector("openclaw-select-picker")).toBe(picker);
-    expect(page.querySelector("textarea")).toBe(input);
+    await waitCatalogCalls(request, 3);
+    expect(modelPicker(page)).toBe(picker);
+    expect(triggerInput(page)).toBe(input);
     expect(page.textContent).not.toContain(t("common.loading"));
     refresh.resolve();
     await request.mock.results[2]?.value;
@@ -389,9 +388,9 @@ describe("Talk catalog boundaries", () => {
           },
         })),
     });
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+    await waitCatalogCalls(request, 1);
     setGatewayConnection(true, "wss://replacement.example.test");
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitCatalogCalls(request, 2);
     current.resolve();
     await waitForSolid(() => expect(page.textContent).toContain("Current provider"));
     old.resolve();
@@ -399,11 +398,7 @@ describe("Talk catalog boundaries", () => {
     flush();
     expect(page.textContent).not.toContain("Old provider");
     page.changeProvider("openai");
-    expect(runtimeConfig.removeFormValue).not.toHaveBeenCalledWith([
-      "talk",
-      "realtime",
-      "transport",
-    ]);
+    expect(runtimeConfig.removeFormValue).not.toHaveBeenCalledWith(realtimePath("transport"));
   });
 });
 
@@ -420,10 +415,8 @@ describe("Talk device and voice wake settings", () => {
         element.querySelector(".settings-section__heading")?.textContent?.trim() === "This iPhone",
     )!;
     expect(section).toBeDefined();
-    const rows = [...section.querySelectorAll<HTMLElement>(".settings-row")];
-    expect(
-      rows.map((row) => row.querySelector(".settings-row__title")?.textContent?.trim()),
-    ).toEqual(["Voice Wake"]);
+    const rows = settingRows(section);
+    expect(rows.map(rowTitle)).toEqual(["Voice Wake"]);
     const next = !rows[0]!.querySelector<HTMLInputElement>(".settings-toggle__input")!.checked;
     rows[0]!.click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledExactlyOnceWith(
@@ -441,21 +434,22 @@ describe("Talk device and voice wake settings", () => {
       .mockReturnValueOnce(pending.promise)
       .mockResolvedValue({ triggers: ["new trigger"] });
     const { page, setGatewayConnection } = createTalkMutationHarness({ voiceWakeRequest: request });
-    const alert = () => page.querySelector("[role='alert']");
     await waitForSolid(() => expect(page.querySelector(".model-picker")).not.toBeNull());
-    expect(page.querySelector("textarea")).toBeNull();
+    expect(triggerInput(page)).toBeNull();
     if (mode === "retry") {
       pending.reject(new Error("trigger read unavailable"));
-      await waitForSolid(() => expect(alert()?.textContent).toContain("trigger read unavailable"));
-      alert()?.querySelector<HTMLButtonElement>("button")?.click();
+      await waitForSolid(() =>
+        expect(triggerAlert(page)?.textContent).toContain("trigger read unavailable"),
+      );
+      retryTrigger(page);
     } else {
       setGatewayConnection(false);
       setGatewayConnection(true, "wss://replacement-gateway.example.test");
       pending.reject(new Error("retired Gateway read"));
     }
-    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("new trigger"));
+    await waitForSolid(() => expect(triggerInput(page)?.value).toBe("new trigger"));
     expect(request).toHaveBeenCalledTimes(2);
-    expect(alert()).toBeNull();
+    expect(triggerAlert(page)).toBeNull();
   });
 
   it("retains rejected trigger edits and recovers through retry or typing", async () => {
@@ -666,11 +660,8 @@ describe("Talk device and voice wake settings", () => {
     const { page, request } = createTalkMutationHarness({ nativeDeviceSettings });
     await waitForSolid(() => expect(request).toHaveBeenCalled());
     flush();
-    const rows = [...page.querySelectorAll<HTMLElement>(".settings-row")];
-    const row = (title: string) =>
-      rows.find(
-        (element) => element.querySelector(".settings-row__title")?.textContent?.trim() === title,
-      )!;
+    const rows = settingRows(page);
+    const row = (title: string) => rows.find((element) => rowTitle(element) === title)!;
     const expectWakeDisabled = (disabled: boolean) =>
       expect(
         row("Voice Wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
@@ -737,7 +728,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     });
     await waitForSolid(() => {
       expect(harness.request).toHaveBeenCalledExactlyOnceWith("talk.catalog", {});
-      expect(harness.page.querySelector("openclaw-select-picker")).not.toBeNull();
+      expect(modelPicker(harness.page)).not.toBeNull();
     });
     return harness;
   }
@@ -765,14 +756,14 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     window.dispatchEvent(new Event("focus"));
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitCatalogCalls(request, 2);
     await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     Object.assign(runtimeConfig.state.configSnapshot, { configRevisionHash: "revision-2" });
     setConfigHash(null);
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitCatalogCalls(request, 3);
     window.dispatchEvent(new Event("focus"));
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitCatalogCalls(request, 4);
     await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
     hashCatalog.resolve();
     await request.mock.results[2]?.value;
@@ -790,7 +781,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     flush();
 
     window.dispatchEvent(new Event("focus"));
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitCatalogCalls(request, 2);
     expectVoiceState(page, DEFAULT_VOICES, false);
     await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
@@ -798,7 +789,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     setConfigHash("hash-3");
     expectVoiceState(page, DEFAULT_VOICES, false);
     setGatewayConnection(true);
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitCatalogCalls(request, 3);
     await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
   });
 
@@ -826,7 +817,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     flush();
     expect(readVoiceOptions(page)).toEqual(["", "ara"]);
     setGatewayConnection(true, "wss://replacement.example.test");
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitCatalogCalls(request, 2);
     await waitForSolid(() => expect(readVoiceOptions(page)).toEqual(["", "xai-active"]));
   });
 
@@ -873,53 +864,46 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     async (_name, options, removed, model = "gpt-live-test-canary") => {
       const remove = await selectMutation("model", model, options);
       if (removed) {
-        expect(remove).toHaveBeenCalledExactlyOnceWith(["talk", "realtime", removed]);
+        expect(remove).toHaveBeenCalledExactlyOnceWith(realtimePath(removed));
       } else {
         expect(remove).not.toHaveBeenCalled();
       }
     },
   );
 
-  it("keeps generic transport handling when a catalog has no family facts", async () => {
-    const removeFormValue = await selectMutation("provider", "openai", {
-      provider: "xai",
-      transport: "provider-websocket",
-      transports: ["provider-websocket", "gateway-relay"],
-      catalogRequest: (_index, catalog) => ({
-        ...catalog,
-        realtime: {
-          ...catalog.realtime,
-          providers: catalog.realtime.providers.map((provider) => ({
-            ...provider,
-            modelFamilySettings: undefined,
-          })),
-        },
-      }),
-    });
-
-    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
-  });
-
-  it("removes forced consult when a provider switch activates a GPT-Live fallback", async () => {
-    const removeFormValue = await selectMutation("provider", "openai", {
-      consultRouting: "force-agent-consult",
-      defaultModel: "gpt-realtime-2.1",
-      openAIProviderModel: "gpt-live-test-canary",
-      provider: "xai",
-      transports: ["gateway-relay", "webrtc"],
-    });
-
-    expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
-    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-  });
-
-  it("removes transport when switching to a provider that positively rejects it", async () => {
-    const removeFormValue = await selectMutation("provider", "openai", {
-      provider: "xai",
-      transports: ["webrtc"],
-    });
-
-    expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
-  });
+  it.each([
+    [
+      "no family facts",
+      {
+        transport: "provider-websocket",
+        transports: ["provider-websocket", "gateway-relay"],
+        providerOption: { modelFamilySettings: undefined },
+      },
+      null,
+      ["transport", "consultRouting"],
+    ],
+    [
+      "GPT-Live fallback",
+      {
+        consultRouting: "force-agent-consult",
+        defaultModel: "gpt-realtime-2.1",
+        openAIProviderModel: "gpt-live-test-canary",
+        transports: ["gateway-relay", "webrtc"],
+      },
+      "consultRouting",
+      ["transport"],
+    ],
+    ["positive rejection", { transports: ["webrtc"] }, "transport", []],
+  ] satisfies [string, TalkMutationHarnessOptions, string | null, string[]][])(
+    "applies provider transport policy: %s",
+    async (_name, options, removed, retained) => {
+      const remove = await selectMutation("provider", "openai", { provider: "xai", ...options });
+      if (removed) {
+        expect(remove).toHaveBeenCalledWith(realtimePath(removed));
+      }
+      for (const field of retained) {
+        expect(remove).not.toHaveBeenCalledWith(realtimePath(field));
+      }
+    },
+  );
 });

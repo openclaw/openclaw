@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseCrabboxJson, sanitizeCrabboxNotice } from "./crabbox-worker-command.js";
 import { parseCrabboxDurationMs } from "./crabbox-worker-profile.js";
+import { readCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
 
 export type CrabboxLeaseLifetime = {
   expiresAtMs?: number;
@@ -54,18 +55,9 @@ export function parseCrabboxLeaseLifetime(value: Record<string, unknown>): Crabb
   return Object.fromEntries(Object.entries(fields).filter(([, field]) => field !== undefined));
 }
 
-export type ParsedInspect = {
-  awsInstanceProfileAttached?: boolean;
-  failureError?: string;
-  id: string;
-  ready?: boolean;
-  sshUser?: string;
-  state: string;
-  tailscaleEnabled: boolean;
-  lifetime?: CrabboxLeaseLifetime;
-};
+export type ParsedInspect = ReturnType<typeof parseInspectJson>;
 
-export function parseInspectJson(stdout: string): ParsedInspect {
+export function parseInspectJson(stdout: string) {
   const value = parseCrabboxJson(stdout, "inspect");
   if (!isRecord(value)) {
     throw new Error("Crabbox inspect returned invalid JSON");
@@ -101,10 +93,12 @@ export function parseInspectJson(stdout: string): ParsedInspect {
 
   const failureError = nonEmptyString(value.failureError);
   const lifetime = parseCrabboxLeaseLifetime(value);
+  const resourceReceipt = readCrabboxResourceReceipt(value);
   return {
     id,
     state,
     tailscaleEnabled,
+    ...(resourceReceipt ? { resourceReceipt } : {}),
     ...(Object.keys(lifetime).length ? { lifetime } : {}),
     ...(failureError
       ? {

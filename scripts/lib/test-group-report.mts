@@ -452,15 +452,16 @@ function pushRows<Entry>(
   entries: Entry[],
   limit: number,
   formatRow: (entry: Entry, index: number) => string,
+  emptyRow: string | null = "  (none)",
 ): void {
   lines.push("", `${label} (${Math.min(limit, entries.length)} of ${entries.length})`);
   const selected = entries.slice(0, limit);
-  if (selected.length === 0) {
-    lines.push("  (none)");
-  } else {
-    for (const [index, entry] of selected.entries()) {
-      lines.push(formatRow(entry, index));
-    }
+  // A null placeholder preserves the bare headings used by report and run sections.
+  if (selected.length === 0 && emptyRow !== null) {
+    lines.push(emptyRow);
+  }
+  for (const [index, entry] of selected.entries()) {
+    lines.push(formatRow(entry, index));
   }
 }
 
@@ -469,6 +470,18 @@ const formatChangeRow = (entry: GroupedTestComparison["groups"][number], index: 
 
 const formatFileChangeRow = (entry: GroupedTestComparison["files"][number], index: number) =>
   `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | tests=${formatCountDelta(entry.delta.testCount).padStart(4, " ")} | ${entry.config} | ${entry.file}`;
+
+const formatCounterRow = (entry: GroupedCounter, index: number) =>
+  `${String(index + 1).padStart(2, " ")}. ${formatMs(entry.durationMs).padStart(10, " ")} | files=${String(entry.fileCount).padStart(4, " ")} | tests=${String(entry.testCount).padStart(5, " ")} | ${entry.key}`;
+
+const formatFileRow = (file: GroupedFile, index: number) =>
+  `${String(index + 1).padStart(2, " ")}. ${formatMs(file.durationMs).padStart(10, " ")} | tests=${String(file.testCount).padStart(4, " ")} | ${file.config} | ${file.file}`;
+
+const formatSlowTestRow = (test: SlowTestEntry, index: number) =>
+  `${String(index + 1).padStart(2, " ")}. ${formatMs(test.durationMs).padStart(10, " ")} | ${test.status} | ${test.config} | ${test.file} | ${test.fullName}`;
+
+const formatRunChangeRow = (run: GroupedTestComparison["runs"][number], index: number) =>
+  `${String(index + 1).padStart(2, " ")}. wall=${formatOptionalSignedMs(run.delta.elapsedMs).padStart(11, " ")} before=${formatOptionalMs(run.before.elapsedMs).padStart(10, " ")} after=${formatOptionalMs(run.after.elapsedMs).padStart(10, " ")} | rss=${formatOptionalSignedBytes(run.delta.maxRssBytes).padStart(10, " ")} before=${formatOptionalBytes(run.before.maxRssBytes).padStart(9, " ")} after=${formatOptionalBytes(run.after.maxRssBytes).padStart(9, " ")} | status=${run.before.status ?? "n/a"}->${run.after.status ?? "n/a"} | ${run.key}`;
 
 export function renderGroupedTestComparison(
   comparison: GroupedTestComparison,
@@ -497,15 +510,7 @@ export function renderGroupedTestComparison(
   pushRows(lines, "Config duration deltas", comparison.configs, limit, formatChangeRow);
 
   if (comparison.runs.length > 0) {
-    lines.push(
-      "",
-      `Config wall/RSS deltas (${Math.min(limit, comparison.runs.length)} of ${comparison.runs.length})`,
-    );
-    for (const [index, run] of comparison.runs.slice(0, limit).entries()) {
-      lines.push(
-        `${String(index + 1).padStart(2, " ")}. wall=${formatOptionalSignedMs(run.delta.elapsedMs).padStart(11, " ")} before=${formatOptionalMs(run.before.elapsedMs).padStart(10, " ")} after=${formatOptionalMs(run.after.elapsedMs).padStart(10, " ")} | rss=${formatOptionalSignedBytes(run.delta.maxRssBytes).padStart(10, " ")} before=${formatOptionalBytes(run.before.maxRssBytes).padStart(9, " ")} after=${formatOptionalBytes(run.after.maxRssBytes).padStart(9, " ")} | status=${run.before.status ?? "n/a"}->${run.after.status ?? "n/a"} | ${run.key}`,
-      );
-    }
+    pushRows(lines, "Config wall/RSS deltas", comparison.runs, limit, formatRunChangeRow, null);
   }
 
   pushRows(lines, "Top file regressions", fileRegressions, topFiles, formatFileChangeRow);
@@ -530,31 +535,13 @@ export function renderGroupedTestReport(
     ["groups", report.groups],
     ["configs", report.configs],
   ] as const) {
-    lines.push("", `Top ${label} (${Math.min(limit, entries.length)} of ${entries.length})`);
-    for (const [index, entry] of entries.slice(0, limit).entries()) {
-      lines.push(
-        `${String(index + 1).padStart(2, " ")}. ${formatMs(entry.durationMs).padStart(10, " ")} | files=${String(entry.fileCount).padStart(4, " ")} | tests=${String(entry.testCount).padStart(5, " ")} | ${entry.key}`,
-      );
-    }
+    pushRows(lines, `Top ${label}`, entries, limit, formatCounterRow, null);
   }
 
-  lines.push(
-    "",
-    `Top files (${Math.min(topFiles, report.topFiles.length)} of ${report.topFiles.length})`,
-  );
-  for (const [index, file] of report.topFiles.slice(0, topFiles).entries()) {
-    lines.push(
-      `${String(index + 1).padStart(2, " ")}. ${formatMs(file.durationMs).padStart(10, " ")} | tests=${String(file.testCount).padStart(4, " ")} | ${file.config} | ${file.file}`,
-    );
-  }
+  pushRows(lines, "Top files", report.topFiles, topFiles, formatFileRow, null);
 
   if (slowTests.length > 0) {
-    lines.push("", `Slow tests (${Math.min(topFiles, slowTests.length)} of ${slowTests.length})`);
-    for (const [index, test] of slowTests.slice(0, topFiles).entries()) {
-      lines.push(
-        `${String(index + 1).padStart(2, " ")}. ${formatMs(test.durationMs).padStart(10, " ")} | ${test.status} | ${test.config} | ${test.file} | ${test.fullName}`,
-      );
-    }
+    pushRows(lines, "Slow tests", slowTests, topFiles, formatSlowTestRow, null);
   }
 
   return lines.join("\n");

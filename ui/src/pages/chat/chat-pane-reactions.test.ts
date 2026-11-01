@@ -17,6 +17,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 
 const peerReaction: MessageReactionSummary[] = [
   { emoji: "👍", count: 1, identities: [{ id: "riley", label: "Riley" }] },
@@ -147,9 +148,23 @@ function fixture(
 }
 
 describe("pane reaction ownership", () => {
-  it("defers the baseline until transcript readiness while publishing live reactions", async () => {
+  it("revalidates cached reactions before transcript readiness and retains later events", async () => {
     const list = createDeferred<SessionReactionsListResult>();
     const f = fixture(list.promise);
+    f.state.chatMessages = [{ role: "user", messageId: "message-1", content: "hello" }];
+    cacheChatSessionSnapshot(
+      f.state.chatMessagesBySession,
+      f.state,
+      {
+        sessionKey: f.state.sessionKey,
+      },
+      {
+        sessionId: "session-1",
+        messages: f.state.chatMessages,
+        pagination: { hasMore: false },
+        messageReactions: { "message-1": selfReaction },
+      },
+    );
     setChatHistoryLoad(f.state, {
       phase: "pending-connection",
       sessionKey: f.state.sessionKey,
@@ -157,8 +172,9 @@ describe("pane reaction ownership", () => {
       startup: true,
     });
     f.pane.syncSessionReactions();
+    expect(f.reactions()).toEqual(selfReaction);
+    expect(f.requests).toEqual(["session.reactions.list"]);
     f.pane.handleSessionReactionEvent(f.event());
-    expect(f.requests).toEqual([]);
     expect(f.reactions()).toEqual(peerReaction);
     f.commitHistory();
     f.pane.syncSessionReactions();
@@ -167,6 +183,34 @@ describe("pane reaction ownership", () => {
     await list.promise;
     await Promise.resolve();
     expect(f.reactions()).toEqual(peerReaction);
+  });
+
+  it("replaces reactions changed while away and never restores a previous session incarnation", async () => {
+    const list = createDeferred<SessionReactionsListResult>();
+    const f = fixture(list.promise);
+    f.state.chatMessages = [{ role: "user", messageId: "message-1", content: "hello" }];
+    cacheChatSessionSnapshot(
+      f.state.chatMessagesBySession,
+      f.state,
+      {
+        sessionKey: f.state.sessionKey,
+      },
+      {
+        sessionId: "session-1",
+        messages: f.state.chatMessages,
+        pagination: { hasMore: false },
+        messageReactions: { "message-1": peerReaction },
+      },
+    );
+    f.pane.syncSessionReactions();
+    expect(f.reactions()).toEqual(peerReaction);
+    list.resolve({ sessionId: "session-1", reactions: {} });
+    await list.promise;
+    await Promise.resolve();
+    expect(f.reactions()).toBeUndefined();
+    f.session("session-2");
+    f.pane.syncSessionReactions();
+    expect(f.pane.collaboration.reactions.size).toBe(0);
   });
 
   it.each(["list", "set"] as const)(

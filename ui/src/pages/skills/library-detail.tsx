@@ -7,15 +7,13 @@ import { registerSessionSkillLibraryEnglish } from "../../i18n/locales/en-sessio
 import { t } from "../../lib/reactive/i18n.ts";
 import { libraryFileText } from "./library-file-text.ts";
 
-type LibraryPinReadProps = {
+/** Session access grants a read of one pin, never the library editor or revision history. */
+export function LibraryPinRead(props: {
   read: SkillsLibraryReadResult;
   file: string;
   onFile: (file: string) => void;
   onClose: () => void;
-};
-
-/** Session access grants a read of one pin, never the library editor or revision history. */
-export function LibraryPinRead(props: LibraryPinReadProps) {
+}) {
   const text = createMemo(() => {
     if (props.file === "SKILL.md") {
       return props.read.content;

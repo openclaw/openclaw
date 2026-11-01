@@ -1,55 +1,127 @@
-import { Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { CyberAccessProgram } from "../../../api/types.ts";
+import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ChatPreferenceSegments } from "./chat-preference-segments.tsx";
+import "../../../styles/settings-native-controls.css";
 
 const programLabels = {
-  standard: "chat.modelControls.standard",
-  daybreak_blue: "chat.modelControls.daybreakBlue",
-  daybreak_red: "chat.modelControls.daybreakRed",
+  daybreak_blue: "chat.modelControls.daybreakBlueShort",
+  daybreak_red: "chat.modelControls.daybreakRedShort",
 } as const;
 
 export type ChatAccessProgramControlProps = {
-  programs: readonly CyberAccessProgram[];
+  programs?: readonly CyberAccessProgram[];
+  effectiveAccessProgram?: CyberAccessProgram;
+  previous?: Exclude<CyberAccessProgram, "standard">;
   requested?: CyberAccessProgram;
   disabled: boolean;
   sessionKey: string;
-  onSelect: (value: CyberAccessProgram | null, sessionKey: string) => unknown;
+  onSelect: (
+    value: CyberAccessProgram,
+    sessionKey: string,
+    previous?: Exclude<CyberAccessProgram, "standard">,
+  ) => unknown;
 };
 
 export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
-  const hasDaybreak = () => props.programs.some((program) => program !== "standard");
+  const programs = () => (props.programs ?? []).filter((program) => program !== "standard");
+  const selected = () => props.requested ?? props.effectiveAccessProgram;
+  // Streamed snapshots must not reset native activation before the change event.
+  const enabled = createMemo(() => selected() !== undefined && selected() !== "standard");
+  const disabled = createMemo(() => props.disabled);
+  const unavailable = () => {
+    const current = selected();
+    return props.programs !== undefined &&
+      current &&
+      current !== "standard" &&
+      !programs().includes(current)
+      ? current
+      : undefined;
+  };
   return (
-    <Show when={hasDaybreak()}>
-      <div class="chat-controls__speed-panel">
-        <div class="chat-controls__reasoning-head">
-          <span class="chat-controls__effort-heading">{t("chat.modelControls.access")}</span>
-          <button
-            type="button"
-            class="btn btn--ghost btn--xs"
-            data-chat-access-default
-            disabled={props.disabled || props.requested === undefined}
-            onClick={() => {
-              if (!props.disabled && props.requested !== undefined) {
-                void props.onSelect(null, props.sessionKey);
+    <Show when={programs().length > 0 || enabled()}>
+      <div
+        class="chat-controls__access-panel"
+        style={{
+          "--access-motion-duration": `${DETAILS_SECTION_MOTION.duration}ms`,
+          "--access-motion-easing": DETAILS_SECTION_MOTION.easing,
+        }}
+      >
+        <div class="chat-controls__access-head">
+          <span class="chat-controls__effort-heading">{t("chat.modelControls.daybreak")}</span>
+          <SettingsToggle
+            ariaLabel={t("chat.modelControls.daybreak")}
+            checked={enabled()}
+            disabled={disabled()}
+            onChange={(checked) => {
+              if (checked) {
+                const next =
+                  props.previous && programs().includes(props.previous)
+                    ? props.previous
+                    : programs()[0];
+                if (next) {
+                  void props.onSelect(next, props.sessionKey);
+                }
+              } else {
+                const current = selected();
+                void props.onSelect(
+                  "standard",
+                  props.sessionKey,
+                  current !== "standard" ? current : undefined,
+                );
               }
             }}
-          >
-            {t("chat.modelControls.accessDefault")}
-          </button>
+          />
         </div>
-        <ChatPreferenceSegments
-          kind="access"
-          label={t("chat.modelControls.access")}
-          options={props.programs.map((value) => ({ value, label: t(programLabels[value]) }))}
-          selected={props.requested}
-          disabled={props.disabled}
-          onSelect={(value) => {
-            if (value !== props.requested) {
-              void props.onSelect(value, props.sessionKey);
-            }
-          }}
-        />
+        <div
+          class="chat-controls__access-choices"
+          data-expanded={enabled() ? "true" : "false"}
+          aria-hidden={enabled() ? "false" : "true"}
+          inert={!enabled()}
+        >
+          <div class="chat-controls__access-clip">
+            <div
+              class="chat-controls__access-options"
+              role="group"
+              aria-label={t("chat.modelControls.daybreak")}
+              data-chat-access-program="true"
+            >
+              <Show when={unavailable()}>
+                <span class="chat-controls__access-option" aria-disabled="true">
+                  {t("chat.modelControls.accessUnavailable", {
+                    program:
+                      selected() === "daybreak_red"
+                        ? t(programLabels.daybreak_red)
+                        : t(programLabels.daybreak_blue),
+                  })}
+                </span>
+              </Show>
+              <For each={programs()}>
+                {(program) => (
+                  <button
+                    type="button"
+                    class="chat-controls__access-option"
+                    data-chat-access-option={program}
+                    aria-pressed={selected() === program ? "true" : "false"}
+                    disabled={disabled()}
+                    onClick={() => {
+                      if (program !== selected()) {
+                        void props.onSelect(program, props.sessionKey);
+                      }
+                    }}
+                  >
+                    <span>{t(programLabels[program])}</span>
+                    <span class="chat-controls__access-check" aria-hidden="true">
+                      <Icon name="check" />
+                    </span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+        </div>
       </div>
     </Show>
   );

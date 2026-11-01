@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,11 +68,19 @@ function resolvePackageJson(packageName: string): string | undefined {
   }
 }
 
-function detectLinuxLibc(): "gnu" | "musl" {
-  const report = process.report?.getReport() as
-    | { header?: { glibcVersionRuntime?: unknown } }
-    | undefined;
-  return typeof report?.header?.glibcVersionRuntime === "string" ? "gnu" : "musl";
+function detectLinuxLibc(): "gnu" | "musl" | undefined {
+  // Diagnostic reports also enumerate native stacks and network interfaces,
+  // which can block Gateway registration for minutes. Read the loaded libc instead.
+  try {
+    const maps = fs.readFileSync("/proc/self/maps", "utf8");
+    if (/\/(?:ld-musl-|libc\.musl-)/u.test(maps)) {
+      return "musl";
+    }
+    return /\/libc(?:\.so\.6|-\d[\d.]*\.so)(?:\s|$)/mu.test(maps) ? "gnu" : undefined;
+  } catch {
+    // Restricted procfs must produce the existing unknown-libc diagnostic, not a guess.
+    return undefined;
+  }
 }
 
 let installedVerification: CuaDriverArtifactVerification | undefined;

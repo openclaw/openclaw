@@ -9,6 +9,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import * as migrationRuntime from "../plugins/migration-provider-runtime.js";
@@ -243,14 +244,11 @@ it.each([
     const unrelated = { type: "token" as const, provider: "other-proof", token: "fixture-other" };
     const pluginDir = path.join(state.workspaceDir, ".openclaw", "extensions", provider);
     await fs.mkdir(pluginDir, { recursive: true, mode: 0o755 });
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: provider,
-        providers: [provider],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: provider,
+      providers: [provider],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    });
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {

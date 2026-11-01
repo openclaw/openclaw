@@ -34,36 +34,36 @@ const localImage = (imagePath: string): CodexUserInput => ({ type: "localImage",
 const remoteImage = (url: string): CodexUserInput => ({ type: "image", url });
 const png = (file: string): PluginHookMediaFact => ({ path: file, contentType: "image/png" });
 
-it("preserves sparse mixed media associations and source order", () => {
+it("preserves sparse media order and staged paths instead of original iMessage paths", () => {
   const inlineImage = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+  const stagedPath = "/tmp/openclaw-proof/.openclaw/media/remote-cache/imessage/photo.jpg";
   expectImages(
     [
       { url: "https://example.test/first.webp" },
       {},
       { path: "/tmp/voice", contentType: "audio/ogg" },
-      { path: "/tmp/photo", url: "https://example.test/photo.png", contentType: "image/png" },
+      { path: stagedPath, url: "https://example.test/photo.png", contentType: "image/png" },
       { url: inlineImage, contentType: "image/gif" },
     ],
     [
       remoteImage("https://example.test/first.webp"),
-      localImage("/tmp/photo"),
+      localImage(stagedPath),
       remoteImage(inlineImage),
     ],
+    {
+      channelId: "imessage",
+      originalMedia: [
+        {
+          path: "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg",
+          contentType: "image/jpeg",
+        },
+      ],
+    },
   );
-});
-
-it("uses staged remote-cache paths instead of original iMessage attachment paths", () => {
-  const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
-  const stagedPath = "/tmp/openclaw-proof/.openclaw/media/remote-cache/imessage/photo.jpg";
-  expectImages([{ path: stagedPath, contentType: "image/jpeg" }], [localImage(stagedPath)], {
-    channelId: "imessage",
-    originalMedia: [{ path: rawPath, contentType: "image/jpeg" }],
-  });
 });
 
 const photo = "/tmp/photo.png";
 const windows = "C:\\QA test\\a.png";
-const second = path.resolve("OpenClaw QA", "second.jpg");
 it.each([
   ["duplicate attachments", [png(photo), png(photo)], [localImage(photo), localImage(photo)]],
   ["kind-only", [{ path: "/tmp/photo", kind: "image" }], [localImage("/tmp/photo")]],
@@ -71,14 +71,7 @@ it.each([
   ["Windows", [{ url: windows, contentType: "image/png" }], [localImage(windows)]],
   ["malformed encoding", [{ url: "FiLe:///tmp/%zz/photo.png", contentType: "image/png" }], []],
   ["encoded separator", [{ url: "FiLe:///tmp/hidden%2Fphoto.png", contentType: "image/png" }], []],
-  [
-    "local URLs",
-    [
-      { url: "/tmp/staged-photo.png", contentType: "image/png" },
-      { url: pathToFileURL(second).href, contentType: "image/jpeg" },
-    ],
-    [localImage("/tmp/staged-photo.png"), localImage(second)],
-  ],
+  ["absolute URL path", [{ url: photo, contentType: "image/png" }], [localImage(photo)]],
 ] satisfies [string, PluginHookMediaFact[], CodexUserInput[]][])(
   "handles %s",
   (_label, media, images) => {

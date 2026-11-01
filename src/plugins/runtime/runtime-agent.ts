@@ -9,10 +9,8 @@ import {
   resolveEmbeddedCliBackendDispatchEligibilityAsync,
 } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
-import {
-  buildConfiguredModelCatalog,
-  resolveThinkingDefault,
-} from "../../agents/model-selection.js";
+import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { buildThinkingCatalog } from "../../agents/model-thinking-default-core.js";
 import {
   concretizeAgentRuntime,
   resolveEffectiveAgentRuntime,
@@ -38,6 +36,7 @@ import {
 } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   listSessionEntriesAsync,
+  withSessionEntriesAsync,
   patchSessionEntry,
   prepareSessionEntryPatch,
   updateSessionStoreEntry,
@@ -239,7 +238,13 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
               modelId: params.model,
             })
           : undefined;
-      const catalog = params.catalog ?? buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
+      const catalog =
+        params.catalog ??
+        buildThinkingCatalog({
+          cfg: getRuntimeConfig(),
+          provider: params.provider,
+          model: params.model,
+        });
       const profile = resolveThinkingProfile({
         ...params,
         agentRuntime: effectiveRuntime,
@@ -278,7 +283,6 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
             },
             runtime,
             undefined,
-            {},
           ),
     ),
   );
@@ -293,6 +297,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     getSessionEntryByIdAsync,
     listSessionEntries,
     listSessionEntriesAsync,
+    withSessionEntriesAsync,
     createSessionEntryListReader: async (
       params: Parameters<RuntimeSession["createSessionEntryListReader"]>[0],
     ) =>

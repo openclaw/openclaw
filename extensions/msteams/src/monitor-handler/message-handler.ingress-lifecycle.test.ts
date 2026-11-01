@@ -84,6 +84,10 @@ describe("Microsoft Teams drain claim ownership", () => {
     const clock = createDebounceControl();
     const gated = mode === "gated";
     const html = mode === "html";
+    const mentions = [
+      { type: "mention", text: "<at>Bot</at>", mentioned: { id: "bot-id" } },
+      { type: "mention", text: "<at>Other User</at>", mentioned: { id: "other-user-id" } },
+    ];
     const cfg: OpenClawConfig = gated
       ? { channels: { msteams: { groupPolicy: "open", requireMention: true } } }
       : openDM;
@@ -93,16 +97,25 @@ describe("Microsoft Teams drain claim ownership", () => {
         ? [
             {
               ...directActivity("html", ""),
+              entities: mentions,
               attachments: [
                 {
                   contentType: "TEXT/HTML",
                   content:
-                    "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;</p>",
+                    "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;; " +
+                    "ask <at>Other User</at>; once &amp;lt;tag&amp;gt; " +
+                    '<img src="https://statics.teams.cdn.office.net/emoji/smile.png" alt="🙂"></p>',
                 },
               ],
             },
           ]
-        : [directActivity("first", "part one"), directActivity("second", "part two")];
+        : [
+            {
+              ...directActivity("first", "<at>Bot</at> part one <at>Other User</at>"),
+              entities: mentions,
+            },
+            directActivity("second", "part two <at>Unidentified User</at>"),
+          ];
     const handler = createHandler(cfg, clock.createDebouncer);
     const claims = messages.map(() => createLifecycle());
     try {
@@ -120,9 +133,9 @@ describe("Microsoft Teams drain claim ownership", () => {
       if (!gated) {
         expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
           ctx: {
-            BodyForAgent: expect.stringContaining(
-              html ? "Use x < 5 ©; literal <at>Alice</at>" : "part one\npart two",
-            ),
+            BodyForAgent: html
+              ? "Use x < 5 ©; literal <at>Alice</at>; ask @Other User; once &lt;tag&gt; 🙂"
+              : "part one @Other User\npart two @Unidentified User",
           },
           replyOptions: { turnAdoptionLifecycle: { admission: "exclusive" } },
         });

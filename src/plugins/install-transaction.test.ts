@@ -1,20 +1,36 @@
 import { expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { withPluginCohortConfigCapture } from "../config/plugin-cohort-recovery.js";
+import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   attachPluginInstallTransaction,
+  copyPluginInstallTransactionRequest,
   requestDeferredPluginInstall,
   resolvePluginInstallTransactionRequest,
   retainPluginInstallTransaction,
   settlePluginInstallTransactions,
   withPluginInstallTransactions,
   type PluginInstallTransaction,
+  type PluginCohortInstallObserver,
 } from "./install-transaction.js";
+import { beginUpdatePluginCohort } from "./update-cohort-recovery.js";
 import {
   createPluginUpdateTransactionState,
   finalizePluginUpdateSummary,
 } from "./update-summary.js";
 
 const repairPeerLinks = vi.hoisted(() => vi.fn());
-vi.mock("./update-config.js", () => ({ repairOpenClawPeerLinksForNpmInstalls: repairPeerLinks }));
+const createCohortPublication = vi.hoisted(() => vi.fn());
+vi.mock("./update-cohort-recovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cohort-recovery.js")>()),
+  createPluginCohortPublication: createCohortPublication,
+}));
+vi.mock("./plugin-peer-link.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-peer-link.js")>()),
+  repairInstalledOpenClawHostLinks: repairPeerLinks,
+}));
 
 function retainTransaction(owner: object, transaction: PluginInstallTransaction) {
   retainPluginInstallTransaction(owner, attachPluginInstallTransaction({}, transaction));
@@ -27,7 +43,7 @@ function install(
   params: InstallParams = {},
   assertOwned = () => {},
 ) {
-  return withPluginInstallTransactions(params, assertOwned, run);
+  return withPluginInstallTransactions(params, { assertCurrent: assertOwned, assertOwned }, run);
 }
 function refuse(reason: unknown): never {
   throw reason;
@@ -42,6 +58,21 @@ function authority(refusal: unknown = 0) {
     },
   };
 }
+
+it("carries the original awaited settlement owner through copied install requests", async () => {
+  const refusal = new Error("original durable owner retired");
+  const prepareSettlement = vi.fn(async () => {
+    throw refusal;
+  });
+  const source = requestDeferredPluginInstall({}, undefined, () => {}, prepareSettlement);
+  const copied = copyPluginInstallTransactionRequest(source, {});
+  await expect(
+    install(async (owned) => {
+      await owned.beforePersistentEffect?.();
+    }, copied),
+  ).rejects.toBe(refusal);
+  expect(prepareSettlement).toHaveBeenCalledOnce();
+});
 
 it("keeps synchronous planning callbacks synchronous", async () => {
   const beforePersistentEffect = vi.fn(() => {});
@@ -74,6 +105,78 @@ it.each([false, true])("commits after publication (cleanupFails=%s)", async (cle
   expect(transaction.commit).toHaveBeenCalledOnce();
   expect(transaction.rollback).not.toHaveBeenCalled();
 });
+
+it.each(["commit", "rollback", "refusal"] as const)(
+  "uses the bound Doctor cohort observer while retaining local %s ownership",
+  async (outcome) => {
+    await withOpenClawTestState(
+      { label: "install-doctor-cohort", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      async (state) => {
+        await state.writeConfig({ plugins: { enabled: false } });
+        const refusal = new Error("original Doctor owner retired");
+        const owner = authority(refusal);
+        const transaction = makeTransaction();
+        const observer: PluginCohortInstallObserver = {
+          forceFreshGeneration: true,
+          beforeManagedNpmPublish: async () => {},
+        };
+        createCohortPublication.mockReturnValue({ observer });
+        const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+        const context = {
+          runId,
+          installKey: state.root,
+          env: state.env,
+          assertCurrent: () => owner.assertCurrent(),
+        };
+        const from = {
+          root: state.root,
+          nodePath: process.execPath,
+          version: "2026.10.9",
+          buildId: "old",
+        };
+        await beginUpdatePluginCohort({
+          ...context,
+          fence: { assertCurrent: context.assertCurrent },
+          from,
+          to: { ...from, version: "2026.10.10", buildId: "new" },
+        });
+        const failedPublication = new Error("Doctor index publication failed");
+        const operation = withPluginCohortConfigCapture(context, () =>
+          install(async (owned) => {
+            const request = resolvePluginInstallTransactionRequest(owned);
+            expect(request?.cohort).toBe(observer);
+            expect(request?.cohort?.deferRecordPublication).toBeUndefined();
+            retainTransaction(owned, transaction);
+            if (outcome === "rollback") {
+              throw failedPublication;
+            }
+            if (outcome === "refusal") {
+              owner.active = false;
+            }
+          }),
+        );
+        if (outcome === "commit") {
+          await operation;
+          expect(transaction.commit).toHaveBeenCalledOnce();
+          expect(transaction.rollback).not.toHaveBeenCalled();
+        } else if (outcome === "rollback") {
+          await expect(operation).rejects.toBe(failedPublication);
+          expect(transaction.rollback).toHaveBeenCalledOnce();
+          expect(transaction.commit).not.toHaveBeenCalled();
+        } else {
+          await expect(operation).rejects.toBe(refusal);
+          expect(transaction.rollback).not.toHaveBeenCalled();
+          expect(transaction.commit).not.toHaveBeenCalled();
+        }
+        expect(createCohortPublication).toHaveBeenCalledWith({
+          runId: context.runId,
+          env: context.env,
+          fence: { assertCurrent: expect.any(Function) },
+        });
+      },
+    );
+  },
+);
 
 it.each([false, true])("rolls back in reverse order (rollbackFails=%s)", async (rollbackFails) => {
   const settled: string[] = [];
@@ -228,3 +331,46 @@ it.each([false, true])("retains peer-link failure (rollbackFails=%s)", async (ro
   }
   expect(transaction.rollback).toHaveBeenCalledOnce();
 });
+
+it.each(["commit", "rollback"] as const)(
+  "awaits current durable authority before %s effects",
+  async (action) => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const refusal = new Error("install lease replaced");
+    const transaction = makeTransaction();
+    let current = true;
+    const operation = withPluginInstallTransactions(
+      {},
+      {
+        assertCurrent() {},
+        async assertOwned() {
+          entered.resolve();
+          await release.promise;
+          if (!current) {
+            throw refusal;
+          }
+        },
+      },
+      async (owned) => {
+        retainTransaction(owned, transaction);
+        if (action === "rollback") {
+          throw new Error("publication failed");
+        }
+      },
+    );
+    const rejected = expect(operation).rejects.toBe(refusal);
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      operation,
+      "settlement never verified authority",
+    );
+    expect(transaction.commit).not.toHaveBeenCalled();
+    expect(transaction.rollback).not.toHaveBeenCalled();
+    current = false;
+    release.resolve();
+    await rejected;
+    expect(transaction.commit).not.toHaveBeenCalled();
+    expect(transaction.rollback).not.toHaveBeenCalled();
+  },
+);

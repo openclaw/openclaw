@@ -8,7 +8,7 @@ import { observeScrollState } from "../../../components/scroll-state-observer.ts
 import { progressCardPresentation } from "../../../components/session-progress-card.ts";
 import { BrandIcon, Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -19,10 +19,10 @@ import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
-import { chatPullRequestId } from "./chat-pull-requests.ts";
+import { chatPullRequestId, publicationPullRequestTarget } from "./chat-pull-requests.ts";
 import "./chat-activity-pills.css";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 registerEnglishCatalog(registerGitHubEnglish);
@@ -145,6 +145,7 @@ function progressView(input: NonNullable<ChatActivityPillsProps["progress"]>): P
     input.startedAt,
     input.endedAt,
     input.hasActiveRun,
+    input.runtime,
   );
   let badge: Badge;
   if (input.refresh === "pending") {
@@ -154,6 +155,24 @@ function progressView(input: NonNullable<ChatActivityPillsProps["progress"]>): P
       icon: "alertTriangle",
       tone: "warn",
       label: t("chat.activityPills.progress.updateUnavailable"),
+    };
+  } else if (input.runtime?.connected === false || input.runtime?.known === false) {
+    badge = {
+      icon: "alertTriangle",
+      tone: "warn",
+      label: t(
+        input.runtime.connected === false
+          ? "sessionProgressCard.runtime.offline"
+          : "sessionProgressCard.runtime.unknown",
+      ),
+    };
+  } else if (input.runtime?.children?.failed) {
+    badge = {
+      icon: "x",
+      tone: "danger",
+      label: t("sessionProgressCard.runtime.failed", {
+        count: String(input.runtime.children.failed),
+      }),
     };
   } else if (!view.counts) {
     return { label: t("sessionProgressCard.composerTitle"), icon: "listChecks" };
@@ -296,8 +315,12 @@ function publicationView(view: GitHubPublicationView): PillView {
     };
   }
   if (view.result?.status === "published") {
+    // Bridges the receipt until the PR snapshot lists it and the PR pill takes over.
+    const target = publicationPullRequestTarget(view);
     return {
-      label: t("chat.activityPills.publication.published"),
+      label: target
+        ? t("chat.activityPills.pullRequest.number", { number: String(target.number) })
+        : t("chat.activityPills.publication.published"),
       icon: "gitPullRequest",
       badge: {
         icon: "check",

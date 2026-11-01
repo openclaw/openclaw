@@ -206,6 +206,16 @@ function isGatewayAuthRejection(reason: string): boolean {
   );
 }
 
+function isVerifiedUserRequiredResponse(error: unknown): boolean {
+  // The exact close-reason allowlist does not include this sentence. The
+  // structured code is the Gateway's correlated refusal, so the probe can stop.
+  return (
+    isGatewayProtocolResponseError(error) &&
+    readConnectErrorDetailCode(error.details) ===
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED
+  );
+}
+
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
   const errors = asOptionalRecord(asOptionalRecord(health)?.plugins)?.errors;
   if (!Array.isArray(errors)) {
@@ -363,7 +373,11 @@ export async function confirmGatewayReachable(params: {
       : isGatewayTransportError(error) && error.code === 1008
         ? error.reason
         : undefined;
-    if ((reason && isGatewayAuthRejection(reason)) || isGatewayCredentialsRequiredError(error)) {
+    if (
+      (reason && isGatewayAuthRejection(reason)) ||
+      isGatewayCredentialsRequiredError(error) ||
+      isVerifiedUserRequiredResponse(error)
+    ) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
     }
     // Updates verify with the previous package, so any protocol change between it and the
@@ -447,17 +461,20 @@ export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
   explicitAuth?: GatewayRestartProbeAuth,
   signal?: AbortSignal,
+  config?: OpenClawConfig,
 ): Promise<GatewayRestartProbeContext> {
   signal?.throwIfAborted();
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
-  const cfg = await createConfigIO({
-    env: mergedEnv,
-    observe: false,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch((): OpenClawConfig => ({}));
+  const cfg =
+    config ??
+    (await createConfigIO({
+      env: mergedEnv,
+      observe: false,
+      pluginValidation: "skip",
+      suppressFutureVersionWarning: true,
+    })
+      .readBestEffortConfig()
+      .catch((): OpenClawConfig => ({})));
   signal?.throwIfAborted();
   const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
@@ -475,7 +492,10 @@ export async function inspectGatewayPortHealth(params: {
   config?: OpenClawConfig;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   expectedListenerPid?: number;
+  /** Command-owned cancellation for the in-flight listener probe. */
+  signal?: AbortSignal;
 }): Promise<GatewayPortHealthSnapshot> {
+  params.signal?.throwIfAborted();
   let portUsage: PortUsage;
   try {
     portUsage = await inspectPortUsage(params.port, {
@@ -491,6 +511,7 @@ export async function inspectGatewayPortHealth(params: {
     };
   }
 
+  params.signal?.throwIfAborted();
   if (portUsage.status !== "busy") {
     return { portUsage, healthy: false };
   }
@@ -505,6 +526,7 @@ export async function inspectGatewayPortHealth(params: {
     ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
     env: process.env,
     allowDeviceIdentityRequired: listenerOwnershipVerified,
+    signal: params.signal,
   });
   return { portUsage, healthy: reachable, ...(probeError ? { probeError } : {}) };
 }

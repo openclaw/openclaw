@@ -121,7 +121,9 @@ openclaw voicecall call -m "Heads up" --mode notify
 
 Use `--brief` for a task in plain text or a JSON object. `--brief-file` reads a
 JSON object from a regular file or a symlink to one; the flags are mutually exclusive.
-Special files such as FIFOs are rejected before starting a call. The existing
+Special files such as FIFOs are rejected before starting a call. File contents
+must be valid UTF-8; re-save a file named in an encoding error as
+UTF-8 before retrying. Rejected files do not start a call. The existing
 16,000-character input limit also applies to file briefs. The opening message
 is still spoken verbatim first. See [Per-call briefs](/plugins/voice-call/realtime-and-streaming#per-call-briefs-and-errands)
 for the schema, permissions, and duration cap.
@@ -139,6 +141,10 @@ Alias for `call` with a different default flag shape.
 ### `continue`
 
 Speak a message and wait for a response.
+
+When waiting for a Gateway response, Ctrl-C or SIGTERM stops local polling and
+exits with status 130 or 143. It does not end the call or cancel the Gateway's
+speech operation. A request already starting that operation settles before exit.
 
 | Flag               | Required | Description       |
 | ------------------ | -------- | ----------------- |
@@ -211,6 +217,8 @@ whose basename is not `calls.jsonl`, prints the last `--since` nonempty complete
 lines on start, then streams new complete lines. Partial lines wait for a newline;
 file replacement or observed truncation starts a fresh stream. Slow output pipes
 pause reading instead of accumulating the rest of the log in memory.
+SIGINT or SIGTERM stops either tail source, settles any active history read,
+and exits with status 130 or 143 without printing later records.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |

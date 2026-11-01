@@ -116,7 +116,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId);
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId, "read");
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
@@ -265,7 +265,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId);
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId, "read");
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;

@@ -21,7 +21,7 @@ import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-sourc
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
-import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
+import { resolveHostRootAsync } from "./workspace-write-scope.js";
 
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
@@ -157,7 +157,7 @@ export async function assertSandboxPath(params: {
   allowFinalHardlinkForUnlink?: boolean;
 }) {
   const root = params.allowLinkedWorktrees
-    ? resolveHostWorkspaceRoot(params.root, resolveSandboxInputPath(params.filePath, params.cwd))
+    ? await resolveHostRootAsync(params.root, resolveSandboxInputPath(params.filePath, params.cwd))
     : path.resolve(params.root);
   const cwd = path.resolve(params.cwd);
   let resolutionCwd = cwd;

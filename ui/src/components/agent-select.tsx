@@ -1,4 +1,4 @@
-import { createMemo, onSettled, Show } from "solid-js";
+import { createMemo, createProjection, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -12,7 +12,7 @@ import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
-import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
+import { Menu, type MenuItem, type MenuHandle, type MenuItemBindings } from "./solid/menu.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
@@ -33,87 +33,121 @@ defineSolidBridge<AgentSelectProps>(
     const id = `agent-select-${generateUUID()}`;
     let menu: MenuHandle | undefined;
     const selected = createMemo(() => props.options.find((option) => option.value === props.value));
-    const triggerOption = () =>
-      selected() ??
-      (props.value
-        ? { value: props.value, label: props.value, agent: { id: props.value } }
-        : undefined);
+    const fallbackOption = createMemo<AgentSelectOption | undefined>(() =>
+      selected() || !props.value
+        ? undefined
+        : { value: props.value, label: props.value, agent: { id: props.value } },
+    );
+    const triggerOption = () => selected() ?? fallbackOption();
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
     const gateway = useAvatarGatewayContext();
-    const loader = createIdentityAvatars();
-    onSettled(() => loader.connect());
-    const avatarSource = projectOwner(loader, (owner) => owner);
-    const avatars = createMemo(() => {
-      gateway();
-      const current = triggerOption();
-      const candidates = [...props.options, ...(current ? [current] : [])];
-      const identities = props.identityById;
-      return avatarSource.read().withActiveRoutes(
-        () =>
-          new Map(
-            candidates.map((option) => {
-              const identity = option.agent ? (identities[option.agent.id] ?? null) : null;
-              const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
-              return [
-                option.value,
-                {
-                  textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
-                  image: url ? loader.resolve(url) : null,
-                  onError: url ? loader.imageErrorHandler(url) : undefined,
-                },
-              ] as const;
-            }),
-          ),
+    function createAvatars(candidates: () => readonly AgentSelectOption[]) {
+      const loader = createIdentityAvatars();
+      onSettled(() => loader.connect());
+      const avatarSource = projectOwner(loader, (owner) => owner);
+      return createMemo(
+        () => {
+          gateway();
+          const identities = props.identityById;
+          return avatarSource.read().withActiveRoutes(
+            () =>
+              new Map(
+                candidates().map((option) => {
+                  const identity = option.agent ? (identities[option.agent.id] ?? null) : null;
+                  const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;
+                  return [
+                    option.value,
+                    {
+                      textAvatar: option.agent
+                        ? resolveAgentTextAvatar(option.agent, identity)
+                        : null,
+                      image: url ? loader.resolve(url) : null,
+                      onError: url ? loader.imageErrorHandler(url) : undefined,
+                    },
+                  ] as const;
+                }),
+              ),
+          );
+        },
+        { lazy: true },
       );
+    }
+    // Each visible region owns its leases; the lazy menu never warms the closed roster.
+    const triggerAvatars = createAvatars(() => {
+      const option = triggerOption();
+      return option ? [option] : [];
     });
-    function Avatar(avatarProps: { option: AgentSelectOption }) {
-      const resolved = () => avatars().get(avatarProps.option.value);
+    const optionAvatars = createAvatars(() => props.options);
+    function Avatar(avatarProps: { option: AgentSelectOption; fromMenu?: boolean }) {
+      const resolved = () =>
+        (avatarProps.fromMenu ? optionAvatars() : triggerAvatars()).get(avatarProps.option.value);
       return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
     }
-    const items = createMemo<readonly MenuItem[]>(() =>
-      props.options.map((option) => ({
-        id: `option:${option.value}`,
-        label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
-        class: "agent-select__option",
-        type: "radio" as const,
-        checked: option.value === props.value,
-        disabled: props.disabled || option.disabled,
-        icon: <Avatar option={option} />,
-        content: (
-          <span class="agent-select__option-copy">
-            <span class="agent-select__option-heading">
-              <span class="agent-select__option-label">{option.label}</span>
-              <Show when={option.badge}>
-                <span class="agent-select__badge">{option.badge}</span>
+    // Menu retains a custom renderer per key; retain that key's live option fields too.
+    const optionRows = createProjection(() => props.options, [], { key: "value" });
+    function OptionRow(row: { option: AgentSelectOption; bindings: MenuItemBindings }) {
+      const isSelected = createMemo(() => row.option.value === props.value);
+      return (
+        <button
+          {...row.bindings}
+          type="button"
+          class="oc-menu-item agent-select__option"
+          value={row.option.value}
+          disabled={props.disabled || row.option.disabled}
+          data-agent-option=""
+          data-selected={isSelected() ? "" : undefined}
+          data-initial-focus={
+            isSelected() && !props.disabled && !row.option.disabled ? "" : undefined
+          }
+        >
+          <span class="oc-menu-item__check" aria-hidden="true">
+            {isSelected() ? "✓" : ""}
+          </span>
+          <span class="oc-menu-item__icon">
+            <Avatar option={row.option} fromMenu />
+          </span>
+          <span class="oc-menu-item__label">
+            <span class="agent-select__option-copy">
+              <span class="agent-select__option-heading">
+                <span class="agent-select__option-label">{row.option.label}</span>
+                <Show when={row.option.badge}>
+                  <span class="agent-select__badge">{row.option.badge}</span>
+                </Show>
+              </span>
+              <Show when={row.option.description}>
+                <span class="agent-select__option-description">{row.option.description}</span>
               </Show>
             </span>
-            <Show when={option.description}>
-              <span class="agent-select__option-description">{option.description}</span>
-            </Show>
           </span>
-        ),
-        details: (
-          <span class="agent-select__option-state" aria-hidden="true">
-            <Show when={option.value === props.value}>
-              <span class="agent-select__option-check">
-                <Icon name="check" />
-              </span>
-            </Show>
+          <span class="oc-menu-item__details">
+            <span class="agent-select__option-state" aria-hidden="true">
+              <Show when={isSelected()}>
+                <span class="agent-select__option-check">
+                  <Icon name="check" />
+                </span>
+              </Show>
+            </span>
           </span>
-        ),
-        attributes: {
-          "data-agent-option": "",
-          "data-selected": option.value === props.value ? "" : undefined,
-          value: option.value,
-          "data-initial-focus":
-            option.value === props.value && !props.disabled && !option.disabled ? "" : undefined,
-        },
-      })),
+        </button>
+      );
+    }
+    const items = createMemo<readonly MenuItem[]>(
+      () =>
+        optionRows.map((option) => ({
+          id: `option:${option.value}`,
+          label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
+          type: "radio" as const,
+          checked: option.value === props.value,
+          disabled: props.disabled || option.disabled,
+          render: (bindings: MenuItemBindings) => <OptionRow option={option} bindings={bindings} />,
+        })),
+      { lazy: true },
     );
     return (
       <Menu
         id={id}
+        lazy
         ref={(handle) => {
           menu = handle;
           props.focusTargetsRef?.(() => {

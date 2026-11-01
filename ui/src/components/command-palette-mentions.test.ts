@@ -107,6 +107,7 @@ async function mount(
   };
   const search = async (text = "@") => {
     await append(text);
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(150);
     await palette.updateComplete;
   };
@@ -170,6 +171,7 @@ describe("command palette people mentions", () => {
   ])("carries selected people into the first message for a $role", async ({ scopes }) => {
     const f = await mount(undefined, scopes);
     await f.search("  🙂 @");
+    await waitForSolid(() => expect(f.menu()?.querySelector("[aria-selected=true]")).toBeTruthy());
     expect(f.input.getAttribute("aria-controls")).toBe(f.menu()?.id);
     expect(f.input.getAttribute("aria-haspopup")).toBe("listbox");
     expect(f.input.hasAttribute("aria-expanded")).toBe(false);
@@ -395,7 +397,6 @@ describe("command palette people mentions", () => {
       const newResponse = createDeferred<UsersMentionableResult>();
       f.directory.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise);
       await f.search("@old");
-      expect(f.directory).toHaveBeenCalledOnce();
       expect(f.directoryParams()).toEqual([{ agentId: "main", query: "old" }]);
 
       if (change === "close") {

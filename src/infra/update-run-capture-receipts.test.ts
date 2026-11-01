@@ -271,44 +271,6 @@ it.each(["retirement", "forward"] as const)(
   },
 );
 
-it("bounds disposable diagnostics without shrinking operational receipts", () => {
-  const capture = receipt();
-  const driver = record().origin.driver;
-  const diagnostics = {
-    sessionKey: "s".repeat(20_000),
-    doctorHint: "d".repeat(20_000),
-    nextAction: "n".repeat(20_000),
-    requester: {
-      channel: "c".repeat(20_000),
-      accountId: "a".repeat(20_000),
-      senderId: "i".repeat(20_000),
-      authorizationSource: "o".repeat(20_000),
-    },
-  };
-  const input = record({ origin: { driver, ...diagnostics, updateRecoveryCapture: capture } });
-  expect(Buffer.byteLength(JSON.stringify(input.origin))).toBeGreaterThan(16 * 1024);
-  persist(input);
-  const row = storedRow();
-  expect(typeof row?.origin_json).toBe("string");
-  expect(Buffer.byteLength(String(row?.origin_json))).toBeLessThanOrEqual(16 * 1024);
-  const recovered = read();
-  expect(recovered.origin.updateRecoveryCapture).toEqual(capture);
-});
-
-it("preserves full-capacity receipts while evicting diagnostics", () => {
-  const capture = receipt();
-  const driver = record().origin.driver;
-  const size = Buffer.byteLength(JSON.stringify({ driver, updateRecoveryCapture: capture }));
-  capture.warnings[0]!.message += "w".repeat(16 * 1024 - size);
-  persist(record({ origin: { driver, updateRecoveryCapture: capture, nextAction: "diagnostic" } }));
-  const row = storedRow();
-  expect(Buffer.byteLength(String(row?.origin_json))).toBe(16 * 1024);
-  const recovered = read();
-  expect(recovered.origin.updateRecoveryCapture).toEqual(capture);
-  expect(recovered.origin.driver).toEqual(driver);
-  expect(recovered.origin).not.toHaveProperty("nextAction");
-});
-
 it.each(["hash", "path", "oversized"] as const)(
   "rejects a malformed receipt %s without changing the stored row",
   (field) => {

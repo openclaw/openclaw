@@ -1,7 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
-import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
 type CatalogMetadataSnapshot = Pick<ModelDefinitionConfig, "contextWindow" | "cost" | "maxTokens">;
 
@@ -129,10 +128,4 @@ export function normalizeConfig(params: {
   }
 
   return { ...providerConfig, models: nextModels };
-}
-
-export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
-  return params.provider.trim().toLowerCase() === "deepseek"
-    ? resolveDeepSeekV4ThinkingProfile(params.modelId)
-    : null;
 }

@@ -159,6 +159,31 @@ async function readJson<Body extends object>(
   return { status: response.status, body };
 }
 
+export async function readGatewayAdminResponse(
+  response: Response,
+  method: string,
+  signal: AbortSignal,
+): Promise<GatewayAdminResponse> {
+  if (method === "gateway.suspend.prepare" && response.status === 503) {
+    signal.throwIfAborted();
+    const retryAfterSeconds = Number(response.headers.get("Retry-After"));
+    return {
+      status: response.status,
+      body: {
+        ok: true,
+        payload: {
+          status: "busy",
+          retryAfterMs:
+            Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+              ? Math.ceil(retryAfterSeconds * 1_000)
+              : 100,
+        },
+      },
+    };
+  }
+  return readJson<GatewayFrame>(response, `Admin RPC ${method}`, signal);
+}
+
 async function adminRpc(
   { deadline, fetchImpl, token, url }: GatewayRequestContext,
   method: string,
@@ -174,7 +199,7 @@ async function adminRpc(
     body: JSON.stringify({ id: `e2e-${method}`, method, params }),
     signal,
   });
-  return readJson<GatewayFrame>(response, `Admin RPC ${method}`, signal);
+  return readGatewayAdminResponse(response, method, signal);
 }
 
 async function readProbe(
@@ -244,14 +269,14 @@ export async function prepareReadySuspension(
       throw new DOMException("gateway suspension preparation timeout", "TimeoutError");
     }
     const response = await rpc("gateway.suspend.prepare", { requestId });
-    if (
-      response?.status !== 200 ||
-      response.body?.ok !== true ||
-      response.body.payload?.status !== "busy"
-    ) {
+    const payload = response.body.payload;
+    const isRetryableBusyResponse =
+      (response?.status === 200 || response?.status === 503) &&
+      response.body?.ok === true &&
+      payload?.status === "busy";
+    if (!isRetryableBusyResponse || !payload) {
       return assertReadySuspensionResponse(response, now());
     }
-    const payload = response.body.payload;
     const retryAfterMs =
       typeof payload.retryAfterMs === "number" && Number.isFinite(payload.retryAfterMs)
         ? Math.max(1, Math.floor(payload.retryAfterMs))

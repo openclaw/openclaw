@@ -1,4 +1,8 @@
+import type { AssistantMessageEvent } from "@openclaw/llm-core";
 import { expect, it } from "vitest";
+import { makeOpenAIProviderModel } from "../providers/openai-provider.test-support.js";
+import { createAssistantOutput } from "./assistant-output.js";
+import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import {
   blockEvent,
   completed,
@@ -23,6 +27,67 @@ const argumentEvent = (type: string, slot: number, fields: Record<string, unknow
   ...fields,
 });
 const cipher = "synthetic-ciphertext";
+
+it.each([
+  { added: true, itemOnly: false },
+  { added: false, itemOnly: true },
+  { added: false, itemOnly: false },
+])(
+  "keeps generated tool-call ids stable and unique (added=$added, item-only=$itemOnly)",
+  async ({ added: hasAdded, itemOnly }) => {
+    const runOnce = async () => {
+      const model = makeOpenAIProviderModel(
+        hasAdded || itemOnly ? "openai-responses" : "azure-openai-responses",
+      );
+      const output = createAssistantOutput(model);
+      const events: AssistantMessageEvent[] = [];
+      const item = {
+        type: "function_call",
+        name: "computer",
+        arguments: '{"action":"screenshot"}',
+        status: "completed",
+        ...(itemOnly ? { id: "fc_item_only" } : {}),
+      };
+      async function* source() {
+        if (hasAdded) {
+          yield outputItem("added", { ...item, arguments: "", status: "in_progress" }, 0);
+        }
+        yield outputItem("done", item, 0);
+        yield completed("resp_idless", [item]);
+      }
+      // The parity fixture normalizes generated ids; compare the actual identities here.
+      await processResponsesStream(
+        source(),
+        output,
+        { push: (event) => events.push(event) },
+        model,
+      );
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([
+        {
+          type: "toolCall",
+          id: expect.stringMatching(
+            itemOnly ? /^call_[0-9a-f]{24}\|fc_item_only$/ : /^call_[0-9a-f]{24}$/,
+          ),
+          name: "computer",
+          arguments: { action: "screenshot" },
+        },
+      ]);
+      expect(events).toMatchObject([
+        { type: "toolcall_start", contentIndex: 0 },
+        { type: "toolcall_end", contentIndex: 0 },
+      ]);
+      const block = output.content[0];
+      const end = events[1];
+      if (block?.type !== "toolCall" || end?.type !== "toolcall_end") {
+        throw new Error("missing tool-call lifecycle");
+      }
+      expect(end.toolCall.id).toBe(block.id);
+      return block.id;
+    };
+    expect(await runOnce()).not.toBe(await runOnce());
+  },
+);
 
 it.each([
   ["completed", cipher, "completed", undefined],

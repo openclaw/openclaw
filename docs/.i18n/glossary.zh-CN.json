@@ -1,5 +1,17 @@
 [
   {
+    "source": "Particle",
+    "target": "Particle"
+  },
+  {
+    "source": "particle",
+    "target": "particle"
+  },
+  {
+    "source": "Particle plugin reference",
+    "target": "Particle 插件参考"
+  },
+  {
     "source": "Get support",
     "target": "获取支持"
   },
@@ -848,6 +860,10 @@
     "target": "NVIDIA"
   },
   {
+    "source": "NVIDIA Jetson",
+    "target": "NVIDIA Jetson"
+  },
+  {
     "source": "NVIDIA API key",
     "target": "NVIDIA API key"
   },
@@ -1118,6 +1134,18 @@
   {
     "source": "Fireworks",
     "target": "Fireworks"
+  },
+  {
+    "source": "Google (Gemini)",
+    "target": "Google（Gemini）"
+  },
+  {
+    "source": "Google (Vertex AI)",
+    "target": "Google（Vertex AI）"
+  },
+  {
+    "source": "google-vertex",
+    "target": "google-vertex"
   },
   {
     "source": "Google Chat",
@@ -5162,5 +5190,21 @@
   {
     "source": "Runtime compatibility lint",
     "target": "运行时兼容性静态检查"
+  },
+  {
+    "source": "Liquid AI",
+    "target": "Liquid AI"
+  },
+  {
+    "source": "Liquid AI plugin reference",
+    "target": "Liquid AI 插件参考"
+  },
+  {
+    "source": "liquid-ai",
+    "target": "liquid-ai"
+  },
+  {
+    "source": "Liquid AI (Decision models)",
+    "target": "Liquid AI（决策模型）"
   }
 ]

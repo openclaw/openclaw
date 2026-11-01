@@ -1062,7 +1062,9 @@ try {
                     ).toHaveCount(0);
                     await expect(page.locator(".new-session-page__message")).toBeEditable();
                   },
-                  settle: () => frames(page),
+                  settle: async () => {
+                    await frames(page);
+                  },
                   update: async (sequence) => {
                     if (plugin === "workboard") {
                       const title = `Leak cycle ${sequence}`;
@@ -1146,6 +1148,7 @@ try {
               continue;
             }
             if (plugin === "workboard" && !values["loads-only"]) {
+              const toolbar = page.locator(".workboard-toolbar");
               const menuTrigger = page.locator(".workboard-card__menu-trigger").nth(1);
               await menuTrigger.focus();
               await step("open-menu", async () => {
@@ -1159,17 +1162,17 @@ try {
               await page.keyboard.press("Escape");
               await expect(menuTrigger).toBeFocused();
               await step("search", async () => {
-                await page.getByRole("button", { name: "Search cards", exact: true }).click();
-                await page
+                await toolbar.getByRole("button", { name: "Search cards", exact: true }).click();
+                await toolbar
                   .getByRole("searchbox", { name: "Search cards" })
                   .fill("Benchmark card 000");
                 await assertWorkboardCards(seed.cards.filter((card) => card.id === "bench-0"));
               });
               await step("clear-search", async () => {
-                await page.getByRole("searchbox", { name: "Search cards" }).fill("");
+                await toolbar.getByRole("searchbox", { name: "Search cards" }).fill("");
                 await assertWorkboardCards(seed.cards);
               });
-              await page.getByRole("button", { name: "Filters", exact: true }).click();
+              await toolbar.getByRole("button", { name: "Filters", exact: true }).click();
               await step("filter-priority", async () => {
                 await page
                   .locator(
@@ -1178,7 +1181,7 @@ try {
                   .check();
                 await assertWorkboardCards(seed.cards.filter((card) => card.priority === "high"));
               });
-              await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+              await toolbar.getByRole("button", { name: "Clear filters", exact: true }).click();
               await assertWorkboardCards(seed.cards);
               await page.keyboard.press("Escape");
               await step("select", async () => {

@@ -74,7 +74,7 @@ async function setup() {
 
 it("context annotations preserve assertion text/lifecycle, append evidence, and fence retries/conflicts", async () => {
   const f = await setup(),
-    original = await f.claim();
+    original = await f.claim({ body: `${"x".repeat(3999)}😀tail` });
   const second = await f.claim({
     body: "Alex reaffirmed the investigation.",
     title: "Reaffirmed investigation",
@@ -103,6 +103,7 @@ it("context annotations preserve assertion text/lifecycle, append evidence, and 
   expect(read.record!.metadata!.evidence!.length, "Identical support is not duplicated").toBe(1);
   expect(read.record!.metadata!.continuity![0]!.id).toBe(original.id);
   expect(read.relatedStatements![0]!.incoming).toBe(false);
+  expect(read.relatedStatements![0]!.text).toBe("x".repeat(3999));
   const reverse = await f.service.record({ id: original.id, includeEvidence: true }, f.owner);
   expect(reverse.relatedStatements![0]!.record.id).toBe(second.id);
   expect(reverse.relatedStatements![0]!.incoming).toBe(true);

@@ -20,8 +20,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { verifyBoardViewTicket } from "../board-view-ticket.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
+import * as sessionObserverModel from "../session-observer-model.js";
 import {
   createBoardHarness as createHarness,
   createMcpAppDependencies,
@@ -158,6 +160,16 @@ describe("board gateway methods", () => {
       content: html("work"),
     });
     expect(work.mock.calls[0]).toMatchObject([true, { sessionKey: "agent:work:global" }]);
+    const workBoard = responseBoard(
+      await invoke("board.get", { sessionKey: "global", agentId: "work" }),
+    );
+    const ownerWidget = findWidget(workBoard, "owner");
+    expect(ownerWidget.frameUrl).toContain("/agent%3Awork%3Aglobal/owner/index.html?");
+    expect(verifyBoardViewTicket(ownerWidget.viewTicket!)).toMatchObject({
+      sessionKey: "global",
+      agentId: "work",
+      name: "owner",
+    });
     const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
     expect(main.mock.calls[0]).toMatchObject([
       true,
@@ -193,7 +205,10 @@ describe("board gateway methods", () => {
     await grant(status);
     const { widget: rejected } = await put("rejected", html("no"), { tools: ["status.reject"] });
     await grant(rejected, "rejected");
+    const scopeKey = vi.spyOn(sessionObserverModel, "sessionObserverScopeKey");
+    onTestFinished(() => scopeKey.mockRestore());
     const first = await withoutBoardReads(get);
+    expect(scopeKey).toHaveBeenCalledTimes(1);
     expect(ensureSandboxHostPort).toHaveBeenCalledOnce();
     for (const name of ["plain", "status"]) {
       const widget = findWidget(first, name);

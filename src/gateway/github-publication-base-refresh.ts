@@ -63,7 +63,9 @@ export async function integrateManagedWorkspaceSource(
       commit: string;
       githubHost: string;
       review: { repository: string; commit: string };
+      projectBase?: { repository: string; branch: string };
       initial: boolean;
+      reviewOnly: boolean;
       emptySource: boolean;
       resuming: boolean;
       accept: () => Promise<void>;
@@ -105,6 +107,12 @@ export async function integrateManagedWorkspaceSource(
       }
     : await prepareGitHubPublicationTarget({
         worktree: owner.worktree,
+        session: {
+          agentId: owner.agentId,
+          sessionKey: owner.sessionKey,
+          sessionId: owner.sessionId,
+          lifecycleRevision: owner.lifecycleRevision,
+        },
         identity,
         assertCurrent,
       });
@@ -114,7 +122,7 @@ export async function integrateManagedWorkspaceSource(
   let pendingStaged: { path: string; indexEntry?: string }[] = [];
   const stagedError =
     "Commit the staged changes in files that also have unstaged changes before refreshing this PR; its existing files and index were preserved.";
-  if (params.source) {
+  if (params.source && !params.source.reviewOnly) {
     if (params.source.resuming) {
       // An accepted transfer may retain a paused runtime. Recover it through its
       // owner before asking that runtime to execute the workspace check.
@@ -146,12 +154,23 @@ export async function integrateManagedWorkspaceSource(
       ) {
         throw new Error("The base refresh sandbox no longer belongs to this workspace.");
       }
+      // A destination change selects a comparison, not a source to merge or stage.
+      if (params.source?.reviewOnly) {
+        previousBase = state.current().base_commit ?? undefined;
+        return {
+          status: "current",
+          repository: target.repository,
+          baseBranch: target.baseBranch,
+          baseCommit: params.source.commit,
+          changedPaths: [],
+          conflictPaths: [],
+        };
+      }
       // This operation prepares an existing private checkout; it never creates a new binding.
       state.current();
       await state.settle();
       previousBase = state.current().base_commit ?? undefined;
       const check = () => {
-        assertCurrent();
         state.current();
       };
       return await withWorktreeGitConfig<SessionGitHubBaseRefreshResult>(
@@ -283,7 +302,7 @@ export async function integrateManagedWorkspaceSource(
               throw new Error(pristineError);
             }
             // A projection may first be captured after unrelated commits already exist.
-            // Only verified PR/base history or the immutable empty source is disposable.
+            // Only verified published history or the immutable empty source is disposable.
             if (source.emptySource) {
               if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
                 throw new Error(pristineError);
@@ -315,7 +334,40 @@ export async function integrateManagedWorkspaceSource(
                 baseCommit,
               ]);
               if (fromBase.code !== 0 && fromHead.code !== 0) {
-                throw new Error(pristineError);
+                // The selected project source may be newer than, or differ from, the PR base.
+                // Verify its recorded branch on the original repository, including forks.
+                if (!source.projectBase) {
+                  throw new Error(pristineError);
+                }
+                const publishedBase = await readGitHubPublicationBaseSha(
+                  run,
+                  source.projectBase.repository,
+                  source.projectBase.branch,
+                  target.githubHost,
+                  identity.env,
+                );
+                await requireGitHubPublicationCommit(
+                  run,
+                  source.projectBase.repository,
+                  publishedBase,
+                  target.githubHost,
+                  cwd,
+                  {
+                    ...identity.env,
+                    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+                    GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+                  },
+                  `The current repository base ancestry could not be fetched; retry ${action}.`,
+                );
+                const fromPublishedBase = await probe([
+                  "merge-base",
+                  "--is-ancestor",
+                  initialHead,
+                  publishedBase,
+                ]);
+                if (fromPublishedBase.code !== 0) {
+                  throw new Error(pristineError);
+                }
               }
             }
             const buildCacheInputs = new Set(await state.buildCacheInputs());
@@ -644,16 +696,19 @@ export async function integrateManagedWorkspaceSource(
       { contents: true, commitPresent: true },
     );
   }
-  return {
-    ...result,
-    review: await prepareManagedWorkspaceReviewBase({
-      owner,
-      sandbox,
-      reviewCommit,
-      previousBase,
-      signal: params.signal,
-      assertCurrent,
-      reviewPreparationError,
-    }),
-  };
+  const review = await prepareManagedWorkspaceReviewBase({
+    owner,
+    sandbox,
+    reviewCommit,
+    previousBase,
+    signal: params.signal,
+    assertCurrent,
+    stageChanges: !params.source?.reviewOnly,
+    reviewPreparationError,
+  });
+  if (params.source?.reviewOnly) {
+    // Keep the old binding retryable until its new comparison is installed.
+    await params.source.accept();
+  }
+  return { ...result, review };
 }

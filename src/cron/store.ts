@@ -8,6 +8,7 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { CronJobConfigRevisionResult } from "./config-revision.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js";
 import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
@@ -130,7 +131,8 @@ export async function loadCronJobsStoreWithConfigJobs(
 
 export async function loadCronJobsStoreWithConfigJobsByKey(
   storeKey: string | undefined,
-): Promise<LoadedCronStore> {
+  opts?: { includeConfigRevisions?: boolean },
+): Promise<LoadedCronStore & { configRevisions: Map<string, CronJobConfigRevisionResult> }> {
   const context = captureOpenClawStateWorkerContext();
   const input =
     storeKey === undefined
@@ -139,7 +141,10 @@ export async function loadCronJobsStoreWithConfigJobsByKey(
   let received = false;
   try {
     return await runOpenClawStateWorkerOperation(context, async (scope) => {
-      const result = await scope.execute({ type: "cron.loadMutable", input });
+      const result = await scope.execute({
+        type: "cron.loadMutable",
+        input: { ...input, ...opts },
+      });
       received = true;
       for (let index = 0; index < result.repairCommits; index += 1) {
         noteCronJobsStoreCommit(result.storeKey);
@@ -171,18 +176,6 @@ export function assertCronJobsStoreUnchanged(
   if (readCronJobsFingerprint(db, storeKey) !== expectedJobsFingerprint) {
     throw new CronJobsStoreChangedError(storePath);
   }
-}
-
-/** Removes an owned declarative job family left under obsolete absolute store keys. */
-export async function removeStaleCronJobFamilyRows(
-  storePath: string,
-  family: CronJobFamilyIdentity,
-  opts?: { commitGuard?: () => void },
-): Promise<number> {
-  const context = captureOpenClawStateWorkerContext();
-  const selectedFamily = { ...family };
-  const storeKey = await prepareMutableCronStoreKey(storePath, context);
-  return removeStaleCronJobFamilyRowsByKey(storeKey, selectedFamily, opts);
 }
 
 export async function removeStaleCronJobFamilyRowsByKey(
@@ -410,7 +403,7 @@ function saveCronJobsStoreWithRevisionNative(
 }
 
 /** Persist cron data and return only this operation's publication revision. */
-export async function saveCronJobsStoreWithRevision(
+async function saveCronJobsStoreWithRevision(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,

@@ -9,7 +9,10 @@ import * as clawhub from "./clawhub.js";
 import * as installer from "./install.js";
 import * as catalog from "./official-external-plugin-catalog.js";
 import { installableEntry } from "./official-external-plugin-catalog.test-support.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
+} from "./plugin-lifecycle-lease.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import {
   withUpdater,
@@ -114,73 +117,78 @@ describe("plugin update authority", () => {
     });
   });
 
-  it("stops unchanged-package host repair after revocation and lets a fresh updater finish", async () => {
-    await withPluginState("plugin-update-host-owner", async (state) => {
-      const pluginId = "registered-peer";
-      const packageDir = state.statePath("extensions", pluginId);
-      const peerLink = path.join(packageDir, "node_modules", "openclaw");
-      const oldHost = state.path("old-host");
-      await fs.mkdir(oldHost);
-      await fs.writeFile(
-        path.join(oldHost, "package.json"),
-        '{"name":"openclaw","version":"0.0.0"}',
-      );
-      await fs.mkdir(path.dirname(peerLink), { recursive: true });
-      await state.writeJson(`extensions/${pluginId}/package.json`, {
-        name: pluginId,
-        version: "1.0.0",
-        peerDependencies: { openclaw: "*" },
-      });
-      await fs.symlink(oldHost, peerLink, "junction");
-      const config = singleInstallConfig(pluginId, {
-        source: "npm" as const,
-        spec: `${pluginId}@1.0.0`,
-        installPath: packageDir,
-        resolvedName: pluginId,
-        resolvedSpec: `${pluginId}@1.0.0`,
-        resolvedVersion: "1.0.0",
-      });
-      await useUpdateControl(state);
-      vi.spyOn(installMetadata, "resolveNpmSpecMetadata").mockResolvedValue({
-        ok: true,
-        metadata: { name: pluginId, version: "1.0.0", resolvedSpec: `${pluginId}@1.0.0` },
-      });
-      const npmInstall = vi.spyOn(installer, "installPluginFromNpmSpec");
-      for (const revoke of [true, false]) {
-        await withUpdater(state, true, async (fence) => {
-          const unlink = fsSync.unlinkSync.bind(fsSync);
-          const removal = vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
-            unlink(file);
-            if (String(file) === peerLink && revoke) {
-              releaseUpdateCommandPreflightForHandoff(fence);
+  it.each(["native", "worker"] as const)(
+    "stops unchanged-package host repair after revocation under a %s owner and lets a fresh updater finish",
+    async (owner) => {
+      await withPluginState("plugin-update-host-owner", async (state) => {
+        const pluginId = "registered-peer";
+        const packageDir = state.statePath("extensions", pluginId);
+        const peerLink = path.join(packageDir, "node_modules", "openclaw");
+        const oldHost = state.path("old-host");
+        await fs.mkdir(oldHost);
+        await fs.writeFile(
+          path.join(oldHost, "package.json"),
+          '{"name":"openclaw","version":"0.0.0"}',
+        );
+        await fs.mkdir(path.dirname(peerLink), { recursive: true });
+        await state.writeJson(`extensions/${pluginId}/package.json`, {
+          name: pluginId,
+          version: "1.0.0",
+          peerDependencies: { openclaw: "*" },
+        });
+        await fs.symlink(oldHost, peerLink, "junction");
+        const config = singleInstallConfig(pluginId, {
+          source: "npm" as const,
+          spec: `${pluginId}@1.0.0`,
+          installPath: packageDir,
+          resolvedName: pluginId,
+          resolvedSpec: `${pluginId}@1.0.0`,
+          resolvedVersion: "1.0.0",
+        });
+        await useUpdateControl(state);
+        vi.spyOn(installMetadata, "resolveNpmSpecMetadata").mockResolvedValue({
+          ok: true,
+          metadata: { name: pluginId, version: "1.0.0", resolvedSpec: `${pluginId}@1.0.0` },
+        });
+        const npmInstall = vi.spyOn(installer, "installPluginFromNpmSpec");
+        for (const revoke of [true, false]) {
+          await withUpdater(state, true, async (fence) => {
+            const unlink = fsSync.unlinkSync.bind(fsSync);
+            const removal = vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
+              unlink(file);
+              if (String(file) === peerLink && revoke) {
+                releaseUpdateCommandPreflightForHandoff(fence);
+              }
+            });
+            syncBuiltinESMExports();
+            try {
+              const withLease =
+                owner === "native" ? withPluginLifecycleLease : withPluginLifecycleLeaseAsync;
+              const operation = withLease(
+                { env: state.env, assertCurrent: fence.assertCurrent },
+                () => updateNpmInstalledPlugins({ config }),
+              );
+              if (revoke) {
+                await expect(operation).rejects.toThrow("ownership is no longer current");
+                await expect(fs.lstat(peerLink)).rejects.toHaveProperty("code", "ENOENT");
+              } else {
+                expect(await operation).toMatchObject({
+                  changed: true,
+                  outcomes: [{ status: "unchanged" }],
+                });
+                expect(
+                  await auditDeclaredOpenClawHostDependency({ packageDir, packageName: pluginId }),
+                ).toBeNull();
+                expect(await fs.realpath(peerLink)).not.toBe(oldHost);
+              }
+            } finally {
+              removal.mockRestore();
+              syncBuiltinESMExports();
             }
           });
-          syncBuiltinESMExports();
-          try {
-            const operation = withPluginLifecycleLease(
-              { env: state.env, assertCurrent: fence.assertCurrent },
-              () => updateNpmInstalledPlugins({ config }),
-            );
-            if (revoke) {
-              await expect(operation).rejects.toThrow("ownership is no longer current");
-              await expect(fs.lstat(peerLink)).rejects.toHaveProperty("code", "ENOENT");
-            } else {
-              expect(await operation).toMatchObject({
-                changed: true,
-                outcomes: [{ status: "unchanged" }],
-              });
-              expect(
-                await auditDeclaredOpenClawHostDependency({ packageDir, packageName: pluginId }),
-              ).toBeNull();
-              expect(await fs.realpath(peerLink)).not.toBe(oldHost);
-            }
-          } finally {
-            removal.mockRestore();
-            syncBuiltinESMExports();
-          }
-        });
-      }
-      expect(npmInstall).not.toHaveBeenCalled();
-    });
-  });
+        }
+        expect(npmInstall).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

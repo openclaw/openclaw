@@ -13,11 +13,25 @@ export const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
 });
 
-const PARTIAL_RECORD_KEYS = new Set(["type", "event", "uuid", "session_id", "parent_tool_use_id"]);
+// Claude Code attaches `api_message_id` to every partial frame and the
+// `thinking_display` display setting to thinking frames. The parser reads
+// neither; both stay bounded, and `thinking_display` only on thinking deltas.
+const PARTIAL_RECORD_METADATA_LIMITS = {
+  uuid: 128,
+  session_id: 128,
+  parent_tool_use_id: 128,
+  api_message_id: 64,
+  thinking_display: 32,
+} as const;
+const PARTIAL_RECORD_KEYS = new Set([
+  "type",
+  "event",
+  ...Object.keys(PARTIAL_RECORD_METADATA_LIMITS),
+]);
 const PARTIAL_EVENT_KEYS = new Set(["type", "index", "delta"]);
 
 /** Discount recognized token envelopes, retaining payload, padding, and a per-frame budget. */
-export function measureClaudePartialMessage(
+function measureClaudePartialMessage(
   parsed: Record<string, unknown>,
   rawLine: string,
 ): number | undefined {
@@ -28,9 +42,9 @@ export function measureClaudePartialMessage(
   ) {
     return undefined;
   }
-  for (const key of ["uuid", "session_id", "parent_tool_use_id"]) {
+  for (const [key, limit] of Object.entries(PARTIAL_RECORD_METADATA_LIMITS)) {
     const value = parsed[key];
-    if (value != null && (typeof value !== "string" || value.length > 128)) {
+    if (value != null && (typeof value !== "string" || value.length > limit)) {
       return undefined;
     }
   }
@@ -57,6 +71,7 @@ export function measureClaudePartialMessage(
   if (
     typeof payload !== "string" ||
     !payload ||
+    (parsed.thinking_display != null && delta.type !== "thinking_delta") ||
     Object.keys(delta).some(
       (key) =>
         key !== "type" &&
@@ -74,8 +89,12 @@ export function measureClaudePartialMessage(
     return undefined;
   }
   // The fixed charge bounds tiny delta floods and retained chunk bookkeeping:
-  // the 8 MiB budget admits fewer than 262,144 partial frames. Empty deltas,
-  // unknown fields, and oversized metadata keep the ordinary raw/frame limits.
+  // the smallest frame costs 36 characters with its newline, so the 8 MiB
+  // budget admits at most 233,016 partial frames. Metadata is not charged: the
+  // per-field caps allow up to 480 characters of values per frame, so a flood
+  // can pass more raw bytes through the parser than the budget counts. Empty
+  // deltas, unknown fields, and oversized metadata keep the ordinary raw/frame
+  // limits.
   return (
     JSON.stringify(payload).length +
     32 +

@@ -41,16 +41,20 @@ it("representative vault: records, ontology, diagnostics, citations, and zero wr
   expect(result.evidence[0]!.verified).toBe(true);
   expect(result.evidence[0]!.excerpt).toMatch(/small pilot garden/);
   expect(result.references.some((r) => r.id === "sample_person_alex")).toBeTruthy();
-  expect(
-    Check(
-      contract.operations.record.output,
-      await inspectRecord(vault, { id: "sample_claim_pilot" }),
-    ),
-  ).toBe(true);
+  const inspected = await inspectRecord(vault, { id: "sample_claim_pilot" });
+  expect(Check(contract.operations.record.output, inspected)).toBe(true);
   expect(await hashes(sampleVaultRoot())).toStrictEqual(before);
 });
-it("bounded listing supports exhaustive pagination, aliases and kind filters", async () => {
-  const vault = new SampleVault();
+it.each(["München", "Mu\u0308nchen"])("lists canonical %s titles", async (title) => {
+  const { root, vault } = await fixture();
+  const person = path.join(root, "people/alex-rivera.md");
+  await writeFile(
+    person,
+    (await readFile(person, "utf8")).replace("title: Alex Rivera", `title: ${title}`),
+  );
+  const query = title.normalize(title === title.normalize("NFC") ? "NFD" : "NFC");
+  const records = (await vault.list({ query })).records;
+  expect(records).toMatchObject([{ id: "sample_person_alex", title }]);
   let offset: number | null = 0;
   const rows = [];
   do {
@@ -61,11 +65,8 @@ it("bounded listing supports exhaustive pagination, aliases and kind filters", a
   } while (offset !== null);
   expect(rows.length).toBe(7);
   expect(new Set(rows.map((r) => r.path)).size).toBe(7);
-  expect(
-    (await vault.list({ query: "Garden pilot" })).records.some(
-      (r) => r.id === "sample_project_garden",
-    ),
-  ).toBeTruthy();
+  const aliases = (await vault.list({ query: "Garden pilot" })).records.map((r) => r.id);
+  expect(aliases).toContain("sample_project_garden");
   expect((await vault.list({ kind: "claim" })).total).toBe(1);
   expect((await vault.list({ query: "not here" })).total).toBe(0);
   expect(Check(contract.operations.records.input, { limit: 101 })).toBe(false);
@@ -82,19 +83,15 @@ it("rename preserves identity and metadata; duplicate IDs never pick a winner", 
     "Unknown user metadata is preserved.",
   );
   await cp(new URL("../test-fixtures/invalid-vault/", import.meta.url), root, { recursive: true });
-  expect((await vault.detail("sample_duplicate_id")).record).toBe(null);
-  expect((await vault.detail("missing-id")).record).toBe(null);
-});
-it("invalid record fixtures stay separate from the visible sample and remain byte-preserved", async () => {
-  const { root, vault } = await fixture();
-  await cp(new URL("../test-fixtures/invalid-vault/", import.meta.url), root, { recursive: true });
-  const before = await hashes(root),
+  const hashesBefore = await hashes(root),
     data = await vault.scan();
   expect(new Set(data.issues.map((i) => i.code))).toStrictEqual(
     new Set(["invalid-record", "ontology-unavailable", "broken-reference", "duplicate-id"]),
   );
   expect(data.records.length).toBe(11);
-  expect(await hashes(root)).toStrictEqual(before);
+  expect(await hashes(root)).toStrictEqual(hashesBefore);
+  expect((await vault.detail("sample_duplicate_id")).record).toBe(null);
+  expect((await vault.detail("missing-id")).record).toBe(null);
 });
 it("changed source invalidates evidence without serving unverified content", async () => {
   const { root, vault } = await fixture();
@@ -124,22 +121,21 @@ it("file symlinks and path traversal are not followed", async () => {
 it("duplicate keys, unknown scope, YAML alias expansion and oversize records are diagnosed", async () => {
   const { root, vault } = await fixture();
   const original = await readFile(path.join(root, "people/alex-rivera.md"), "utf8");
-  await writeFile(
-    path.join(root, "notes/duplicate-key.md"),
-    original.replace("revision: 1", "revision: 1\nrevision: 2"),
-  );
-  await writeFile(
-    path.join(root, "notes/unknown-scope.md"),
+  const writeNote = (name: string, content: string) =>
+    writeFile(path.join(root, "notes", `${name}.md`), content);
+  await writeNote("duplicate-key", original.replace("revision: 1", "revision: 1\nrevision: 2"));
+  await writeNote(
+    "unknown-scope",
     original.replace("visibility: sample", "visibility: agent-private"),
   );
-  await writeFile(
-    path.join(root, "notes/alias.md"),
+  await writeNote(
+    "alias",
     original.replace(
       "custom_note: Unknown user metadata is preserved.",
       "custom_note: &x [1, 2]\nextra: *x",
     ),
   );
-  await writeFile(path.join(root, "notes/large.md"), "x".repeat(65537));
+  await writeNote("large", "x".repeat(65537));
   const data = await vault.scan();
   for (const file of ["duplicate-key", "unknown-scope", "alias", "large"]) {
     expect(

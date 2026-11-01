@@ -375,6 +375,7 @@ export function DebugPage() {
             <button class="btn" onClick={() => requestDebugOverlayToggle()}>
               <Show when={!isNativeEmbedHost()} fallback={t("debug.overlay.open")}>
                 <ShortcutText
+                  fallback={t("debug.overlay.open")}
                   text={t("debug.overlay.openWithShortcut", { shortcut: "{shortcut}" })}
                   shortcut={() => (
                     <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.debugOverlay} inline />

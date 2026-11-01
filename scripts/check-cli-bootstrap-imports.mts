@@ -9,6 +9,7 @@ import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
   WORKER_BUNDLE_CHUNK_PATH_PATTERN,
 } from "../src/shared/worker-bundle-hash.js";
+import { checkWorkerModuleBudget } from "./check-worker-module-budget.mjs";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
@@ -576,8 +577,10 @@ export function checkCliBootstrapExternalImports(params: CliBootstrapCheckParams
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     checkCliBootstrapExternalImports({ requireNativeHookRelay: true });
+    await checkWorkerModuleBudget(process.cwd());
     console.log("CLI bootstrap import guard passed.");
-  } catch {
+  } catch (error) {
+    console.error(error);
     process.exit(1);
   }
 }

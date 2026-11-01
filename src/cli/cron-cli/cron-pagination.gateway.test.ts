@@ -11,18 +11,10 @@ import { callCron } from "../../gateway/server-methods/cron-read.test-support.js
 import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 
-const mocks = vi.hoisted(() => {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
-  return { runtime, rpc: vi.fn() };
-});
+const mocks = await vi.hoisted(async () => ({
+  runtime: (await import("../test-runtime-mock.js")).createInertRuntime(vi),
+  rpc: vi.fn(),
+}));
 
 vi.mock("../gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js");

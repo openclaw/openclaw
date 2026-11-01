@@ -209,6 +209,36 @@ export function createTestCronState(overrides: Partial<GatewayCronState> = {}): 
   };
 }
 
+export function createHotReloadHandlerTestParams(
+  params: Pick<GatewayReloadHandlerParams, "scheduler" | "deps"> &
+    Partial<GatewayReloadHandlerParams>,
+  initialState = createDefaultGatewayReloadState(),
+): GatewayReloadHandlerParams {
+  let state: ReturnType<GatewayReloadHandlerParams["getState"]> = initialState;
+  return {
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    broadcast: vi.fn(),
+    getPluginRegistry: vi.fn(),
+    startChannel: vi.fn(async () => new Map()),
+    stopChannel: vi.fn(async () => {}),
+    releaseChannelRouteHandoffs: vi.fn(),
+    pruneInactiveChannelAccountState: vi.fn(),
+    reloadPlugins: vi.fn(async () => makePluginReloadResult()),
+    logHooks: createInfoWarnErrorLogger(),
+    logChannels: { info: vi.fn(), error: vi.fn() },
+    logCron: { error: vi.fn() },
+    logReload: createInfoWarnErrorLogger(),
+    cronReconciliation: {
+      arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
+      invalidate: vi.fn(),
+    },
+    ...params,
+  };
+}
+
 export function createManagedReloadTestParams(
   params: Pick<
     ManagedGatewayConfigReloaderParams,

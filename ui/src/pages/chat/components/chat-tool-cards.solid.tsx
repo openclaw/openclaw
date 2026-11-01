@@ -171,7 +171,7 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
         </Show>
       </span>
       <Show when={!props.options.expanded}>
-        <ToolOutcomeSummary cards={activityCards()} includeCount={Boolean(props.hasChildren)} />
+        <ToolOutcomeSummary card={props.card} />
       </Show>
       <span class="chat-tool-row__chevron" aria-hidden="true">
         <Icon name="chevronRight" />

@@ -1,6 +1,6 @@
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { Type } from "typebox";
-import { assert, describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
@@ -26,6 +26,21 @@ function expectFiniteDefault(value: unknown) {
 }
 
 describe("runtime tool input schema projection", () => {
+  it("projects mutable schemas without materializing property entry pairs", () => {
+    const parameters = objectSchema({
+      query: { type: "string" },
+      options: { type: "object", properties: { limit: { type: "integer", maximum: 100 } } },
+    });
+    const bytes = JSON.stringify(parameters);
+    using entries = vi.spyOn(Object, "entries");
+    const projection = projectRuntimeToolInputSchema(parameters);
+    const enumerations = entries.mock.calls.length;
+    entries.mockRestore();
+    expect(JSON.stringify(projection.schema)).toBe(bytes);
+    expect(projection.violations).toEqual([]);
+    expect(enumerations).toBe(0);
+  });
+
   it("reports dynamic JSON Schema keywords in traversal order with exact paths", () => {
     const schema = {
       type: "object",

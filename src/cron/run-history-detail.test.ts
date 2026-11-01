@@ -20,6 +20,7 @@ it.each([
   const entry = cronRunLogEntryFromEvent(
     { jobId: BASE.jobId, action: "finished", status: "ok", result },
     100,
+    undefined,
   );
   expect(entry.result).toEqual(result);
   expect(cronRunRecordToRunLogEntry(recordFromEntry(entry))?.result).toEqual(result);
@@ -133,7 +134,7 @@ it.each([
   },
 );
 
-it("authors failure reasons on write and trusts stored values on read", () => {
+it("preserves prepared failure reasons through history storage", () => {
   const entry = cronRunLogEntryFromEvent(
     {
       jobId: BASE.jobId,
@@ -143,6 +144,7 @@ it("authors failure reasons on write and trusts stored values on read", () => {
       provider: "anthropic",
     },
     1,
+    "overloaded",
   );
   expect(entry.errorReason).toBe("overloaded");
   expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe("overloaded");

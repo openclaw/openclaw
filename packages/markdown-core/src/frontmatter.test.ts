@@ -9,21 +9,19 @@ const block = (body: string) => `---\n${body}\n---\n`;
 const parse = (body: string) => parseFrontmatterBlock(block(body));
 const parseResult = (body: string) => parseFrontmatterBlockResult(block(body));
 const task = "signals: user announcing a conversion task";
+const colonText = "Use anime style IMPORTANT: Must be kawaii";
 
-it.each<[string, string, Record<string, string>]>([
+it.each<[string, Record<string, string>]>([
   [
-    "JSON5 metadata",
     'metadata:\n  {\n    "openclaw":\n      {\n        "emoji": "disk",\n        "events": ["command:new"],\n      },\n  }',
     { metadata: '{"openclaw":{"emoji":"disk","events":["command:new"]}}' },
   ],
   [
-    "indented YAML flow",
     "  metadata: {openclaw: {emoji: lobster}} # display metadata",
     { metadata: '{"openclaw":{"emoji":"lobster"}}' },
   ],
-  ["multiline flow", "metadata: {a: 1,\n  b: 2}", { metadata: '{"a":1,"b":2}' }],
+  ["metadata: {a: 1,\n  b: 2}", { metadata: '{"a":1,"b":2}' }],
   [
-    "objects and arrays",
     "enabled: true\nretries: 3\ntags:\n  - alpha\n  - beta\nmetadata:\n  openclaw:\n    events:\n      - command:new",
     {
       enabled: "true",
@@ -32,50 +30,27 @@ it.each<[string, string, Record<string, string>]>([
       metadata: '{"openclaw":{"events":["command:new"]}}',
     },
   ],
+  ["description: " + colonText, { description: colonText }],
   [
-    "colon-rich description",
-    "description: Use anime style IMPORTANT: Must be kawaii",
-    { description: "Use anime style IMPORTANT: Must be kawaii" },
-  ],
-  [
-    "multiple colon-rich fields",
     "read_when: " + task + "\nsummary: handles formats: pdf and docx",
     { read_when: task, summary: "handles formats: pdf and docx" },
   ],
   [
-    "structured sibling",
-    "read_when: " + task + "\nmetadata:\n  openclaw:\n    emoji: beaker",
-    { read_when: task, metadata: '{"openclaw":{"emoji":"beaker"}}' },
+    'description: "line\\n: detail" # note\nread_when: ' +
+      task +
+      "\nmetadata:\n  openclaw:\n    emoji: beaker",
+    { description: "line\n: detail", read_when: task, metadata: '{"openclaw":{"emoji":"beaker"}}' },
   ],
+  ["description: text # note\nread_when: " + task, { description: "text", read_when: task }],
+  ['"description": ' + task, { description: task }],
+  ["'read_when': " + task, { read_when: task }],
+  ["description: | # note\n  line one\n  line two", { description: "line one\nline two" }],
   [
-    "commented sibling",
-    "description: text # note\nread_when: " + task,
-    { description: "text", read_when: task },
-  ],
-  [
-    "escaped sibling",
-    'description: "line\\n: detail"\nread_when: ' + task,
-    { description: "line\n: detail", read_when: task },
-  ],
-  ["double-quoted key", '"description": ' + task, { description: task }],
-  ["single-quoted key", "'read_when': " + task, { read_when: task }],
-  ["quoted escape", 'description: "line\\nbreak"', { description: "line\nbreak" }],
-  [
-    "block scalar",
-    "description: | # note\n  line one\n  line two",
-    { description: "line one\nline two" },
-  ],
-  [
-    "hash-led text",
     "description: # Add a description here\nsummary: #1 pick for audits\ncolor: #ff8800",
     { summary: "#1 pick for audits", color: "#ff8800" },
   ],
-  [
-    "chomped block scalar",
-    "description: |-\n  {json-like text}",
-    { description: "{json-like text}" },
-  ],
-])("parses frontmatter: %s", (_name, body, frontmatter) => {
+  ["description: |-\n  {json-like text}", { description: "{json-like text}" }],
+])("parses frontmatter: %s", (body, frontmatter) => {
   expect(parseResult(body)).toEqual({ frontmatter, issues: [] });
 });
 
@@ -86,20 +61,12 @@ it.each(["", " # display metadata", " #"])("preserves inline JSON before %j", (c
 });
 
 it.each([
-  [
-    "strict structured field",
-    "read_when: " + task + "\nmetadata: owner: value",
-    "BLOCK_AS_IMPLICIT_KEY",
-  ],
-  ["malformed sequence", "name: [broken\ndescription: Broken skill", "BAD_INDENT"],
-  ["duplicate key", "name: first\ndescription: Working skill\nname: second", "DUPLICATE_KEY"],
-  ["unresolved alias", "name: sample-skill\nmetadata: *missing", "YAML_EXCEPTION"],
-  [
-    "quoted alias key",
-    'name: sample-skill\ndescription: Working skill\n"metadata": *missing',
-    "YAML_EXCEPTION",
-  ],
-])("retains parser error: %s", (_name, body, code) => {
+  ["read_when: " + task + "\nmetadata: owner: value", "BLOCK_AS_IMPLICIT_KEY"],
+  ["name: [broken\ndescription: Broken skill", "BAD_INDENT"],
+  ["name: first\ndescription: Working skill\nname: second", "DUPLICATE_KEY"],
+  ["name: sample-skill\nmetadata: *missing", "YAML_EXCEPTION"],
+  ['name: sample-skill\ndescription: Working skill\n"metadata": *missing', "YAML_EXCEPTION"],
+])("retains parser error: %s", (body, code) => {
   const result = parseResult(body);
   expect(result.issues[0]).toMatchObject({ code });
   if (code === "BAD_INDENT") {
@@ -107,34 +74,28 @@ it.each([
   }
 });
 
-it.each(["*legacy", "Use anime style IMPORTANT: Must be kawaii"])(
-  "recovers description %s without masking structured aliases",
-  (description) => {
-    expect(parseResult("description: " + description + "\nmetadata: *missing").issues).toEqual([
-      expect.objectContaining({ code: "YAML_EXCEPTION" }),
-    ]);
-  },
-);
-
-it("returns empty when frontmatter is missing", () => {
-  expect(parseFrontmatterBlock("# No frontmatter")).toStrictEqual({});
+it.each(["*legacy", colonText])("recovery of %s does not mask structured aliases", (text) => {
+  expect(parseResult("description: " + text + "\nmetadata: *missing").issues).toEqual([
+    expect.objectContaining({ code: "YAML_EXCEPTION" }),
+  ]);
 });
 
 it("reports an unterminated frontmatter block", () => {
-  expect(
-    parseFrontmatterBlockResult("---\nname: broken\ndescription: Missing delimiter\n"),
-  ).toEqual({
+  expect(parseFrontmatterBlockResult("---\nname: broken\n")).toEqual({
     frontmatter: {},
     issues: [expect.objectContaining({ code: "UNTERMINATED_FRONTMATTER" })],
   });
 });
 
-it.each(["---not", "----", "--- name"])("ignores opening prefix %s", (prefix) => {
-  expect(parseFrontmatterBlock(prefix + "\nname: nope\n---\nBody text")).toStrictEqual({});
-});
-
-it.each(["---not", "---\u2028Body text"])("ignores closing prefix %s", (closing) => {
-  const content = "---\nname: nope\n" + closing + "\nBody text";
+it.each([
+  "# No frontmatter",
+  "---not\nname: nope\n---\nBody text",
+  "----\nname: nope\n---\nBody text",
+  "--- name\nname: nope\n---\nBody text",
+  "---\nname: nope\n---not\nBody text",
+  "---\nname: nope\n---\u2028Body text\nBody text",
+  "---not\nname: nope\n---not\nBody text",
+])("preserves content without valid delimiters: %j", (content) => {
   expect(parseFrontmatterBlock(content)).toStrictEqual({});
   expect(stripFrontmatterBlock(content)).toBe(content);
 });
@@ -156,14 +117,7 @@ it("preserves prototype-named keys when YAML value is null", () => {
 });
 
 it("parses frontmatter after a leading UTF-8 BOM", () => {
-  expect(
-    parseFrontmatterBlock(
-      "\uFEFF" + block("name: windows-skill\ndescription: Written by PowerShell"),
-    ),
-  ).toEqual({ name: "windows-skill", description: "Written by PowerShell" });
-});
-
-it("preserves Markdown that starts with a non-delimiter prefix", () => {
-  const content = "---not\nname: nope\n---not\nBody text";
-  expect(stripFrontmatterBlock(content)).toBe(content);
+  expect(parseFrontmatterBlock("\uFEFF" + block("name: windows-skill"))).toEqual({
+    name: "windows-skill",
+  });
 });

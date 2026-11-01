@@ -127,6 +127,19 @@ async function listTarball(tarballPath: string): Promise<string[]> {
   return entries;
 }
 
+async function extract(tarballPath: string, destination: string) {
+  await fs.mkdir(destination);
+  await tar.extract({ file: tarballPath, cwd: destination });
+  return destination;
+}
+
+async function expectExecutableContents(root: string, name: string, contents: string) {
+  await expect(readText(root, name)).resolves.toBe(contents);
+  if (process.platform !== "win32") {
+    expect((await fs.stat(path.join(root, name))).mode & 0o777).toBe(0o700);
+  }
+}
+
 function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBundleArtifact {
   return {
     install: "bundle",
@@ -236,16 +249,12 @@ describe("worker bundle producer", () => {
         path.join(packageA, "dist", "control-ui", "index.html"),
         "<main>UI</main>",
       );
-      await fs.utimes(
-        path.join(packageA, "dist", "worker", "worker.mjs"),
-        new Date(1_000),
-        new Date(1_000),
-      );
-      await fs.utimes(
-        path.join(packageB, "dist", "worker", "worker.mjs"),
-        new Date(9_000),
-        new Date(9_000),
-      );
+      for (const [directory, timestamp] of [
+        [packageA, 1_000],
+        [packageB, 9_000],
+      ] as const) {
+        await fs.utimes(artifactPath(directory), new Date(timestamp), new Date(timestamp));
+      }
 
       const first = await producer(packageA, path.join(root, "cache-a"), {
         openclawVersion: "1.2.3",
@@ -264,18 +273,11 @@ describe("worker bundle producer", () => {
       const receiverPath = workerWorkspaceRsyncReceiverEntryPath(first.bundleHash);
       expect(receiverPath.startsWith(installPrefix)).toBe(true);
       expect(entries).toContain(receiverPath.slice(installPrefix.length));
-      const extractRoot = path.join(root, "extract");
-      await fs.mkdir(extractRoot);
-      await tar.extract({ file: first.tarballPath, cwd: extractRoot });
+      const extractRoot = await extract(first.tarballPath, path.join(root, "extract"));
       for (const [artifactName, expectedContents] of Object.entries(ARTIFACTS).filter(
         ([name]) => !["code-mode-node.worker.mjs", "windows-security-helper.exe"].includes(name),
       )) {
-        await expect(fs.readFile(path.join(extractRoot, artifactName), "utf8")).resolves.toBe(
-          expectedContents,
-        );
-        if (process.platform !== "win32") {
-          expect((await fs.stat(path.join(extractRoot, artifactName))).mode & 0o777).toBe(0o700);
-        }
+        await expectExecutableContents(extractRoot, artifactName, expectedContents);
       }
       await expect(fs.access(path.join(extractRoot, "package.json"))).rejects.toThrow();
       await expect(fs.access(path.join(extractRoot, "node_modules"))).rejects.toThrow();
@@ -320,14 +322,8 @@ describe("worker bundle producer", () => {
       await fs.link(artifactPath(packageRoot), path.join(root, "source-alias.mjs"));
 
       const artifact = await producer(packageRoot, cacheDir).prepare();
-      const extractDir = path.join(root, "extract");
-      await fs.mkdir(extractDir);
-      await tar.extract({ file: artifact.tarballPath, cwd: extractDir });
-
-      await expect(readText(extractDir, "worker.mjs")).resolves.toBe(contents);
-      if (process.platform !== "win32") {
-        expect((await fs.stat(path.join(extractDir, "worker.mjs"))).mode & 0o777).toBe(0o700);
-      }
+      const extractDir = await extract(artifact.tarballPath, path.join(root, "extract"));
+      await expectExecutableContents(extractDir, "worker.mjs", contents);
     });
   });
 
@@ -450,30 +446,6 @@ describe("worker bundle producer", () => {
     },
   );
 
-  it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
-    await withBundleFixture(async ({ packageRoot, cacheDir }) => {
-      await writeFixture(packageRoot);
-      const owner = producer(packageRoot, cacheDir);
-      const current = await owner.prepare();
-      const staging = path.join(cacheDir, ".staging-stale");
-      const temporary = path.join(
-        cacheDir,
-        `${"b".repeat(64)}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
-      );
-      const unknown = path.join(cacheDir, "keep-me.txt");
-      await fs.mkdir(staging);
-      await fs.writeFile(temporary, "partial");
-      await fs.writeFile(unknown, "operator-owned");
-
-      await owner.prune(() => []);
-
-      await expectMissing(staging);
-      await expectMissing(temporary);
-      await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
-      await expectPresent(current.tarballPath);
-    });
-  });
-
   it.each(["all", "staging", "temporary"] as const)(
     "preserves cleanup candidates when retention cannot be read (%s)",
     async (kind) => {
@@ -481,25 +453,21 @@ describe("worker bundle producer", () => {
         await writeFixture(packageRoot);
         const owner = producer(packageRoot, cacheDir);
         const current = await owner.prepare();
-        const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
-        const staging = path.join(cacheDir, ".staging-stale");
-        const temporary = path.join(
-          cacheDir,
-          `${current.bundleHash}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
-        );
-        const candidates =
-          kind === "all"
-            ? [historical, staging, temporary]
-            : [kind === "staging" ? staging : temporary];
-        if (candidates.includes(historical)) {
-          await fs.writeFile(historical, "historical");
-        }
-        if (candidates.includes(staging)) {
-          await fs.mkdir(staging);
-          await fs.writeFile(path.join(staging, "partial"), "staged");
-        }
-        if (candidates.includes(temporary)) {
-          await fs.writeFile(temporary, "partial");
+        const unknown = path.join(cacheDir, "keep-me.txt");
+        await fs.writeFile(unknown, "operator-owned");
+        const candidates = [
+          { kind: "historical", name: `${"b".repeat(64)}.tgz`, contents: "historical" },
+          { kind: "staging", name: ".staging-stale/partial", contents: "staged" },
+          {
+            kind: "temporary",
+            name: `${current.bundleHash}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
+            contents: "partial",
+          },
+        ].filter((candidate) => kind === "all" || candidate.kind === kind);
+        for (const { name, contents } of candidates) {
+          const file = path.join(cacheDir, name);
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(file, contents);
         }
         const failure = new Error("Retention records are unavailable");
 
@@ -509,18 +477,16 @@ describe("worker bundle producer", () => {
           }),
         ).rejects.toBe(failure);
 
-        for (const candidate of candidates) {
-          const file = candidate === staging ? path.join(staging, "partial") : candidate;
-          const contents =
-            candidate === historical ? "historical" : candidate === staging ? "staged" : "partial";
-          await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
+        for (const { name, contents } of candidates) {
+          await expect(readText(cacheDir, name)).resolves.toBe(contents);
         }
         await expectPresent(current.tarballPath);
 
         await owner.prune(() => []);
-        for (const removed of candidates) {
-          await expectMissing(removed);
+        for (const { name } of candidates) {
+          await expectMissing(path.join(cacheDir, name.split("/")[0]!));
         }
+        await expect(readText(cacheDir, "keep-me.txt")).resolves.toBe("operator-owned");
         await expectPresent(current.tarballPath);
       });
     },
@@ -616,9 +582,7 @@ describe("worker bundle producer", () => {
 
       try {
         const artifact = await producer(packageRoot, cacheDir).prepare();
-        const extractDir = path.join(root, "extract");
-        await fs.mkdir(extractDir);
-        await tar.extract({ file: artifact.tarballPath, cwd: extractDir });
+        const extractDir = await extract(artifact.tarballPath, path.join(root, "extract"));
 
         expect(sourceMutated).toBe(true);
         expect(artifact.bundleHash).toBe(baseline.bundleHash);

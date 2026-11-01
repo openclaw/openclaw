@@ -204,14 +204,7 @@ export function clampText(value: string, max = 120): string {
   return `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
-export function truncateText(
-  value: string,
-  max: number,
-): {
-  text: string;
-  truncated: boolean;
-  total: number;
-} {
+export function truncateText(value: string, max: number) {
   if (value.length <= max) {
     return { text: value, truncated: false, total: value.length };
   }

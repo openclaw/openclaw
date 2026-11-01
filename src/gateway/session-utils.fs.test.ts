@@ -11,7 +11,10 @@ import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
-import { createArchiveSourceSnapshotFixture } from "./session-transcript-archive.test-support.js";
+import {
+  createArchiveSourceSnapshotFixture,
+  createResetKeptTailTranscriptFixture,
+} from "./session-transcript-archive.test-support.js";
 import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import {
   readLatestSessionUsageFromTranscriptFileAsync,
@@ -130,19 +133,7 @@ describe("archive selection", () => {
   test("places the reset marker between retained and new turns", async () => {
     archive([
       { type: "metadata", padding: "x".repeat(20 * 1024) },
-      message("old", null, "user", "old"),
-      message("kept-user", "old", "user", "kept question"),
-      message("kept-tool", "kept-user", "toolResult", "hidden tool"),
-      message("kept-assistant", "kept-tool", "assistant", "kept answer"),
-      {
-        type: "reset",
-        id: "reset-boundary",
-        parentId: "kept-assistant",
-        timestamp: "2026-07-22T00:00:00.000Z",
-        reason: "new",
-        firstKeptEntryId: "kept-user",
-      },
-      message("post-reset", "reset-boundary", "user", "new turn"),
+      ...createResetKeptTailTranscriptFixture(),
     ]);
     const shortReads = installShortReads(16);
     const recent = await reader().readRecentWithStats({ maxMessages: 10, maxBytes: 16_384 });

@@ -114,7 +114,7 @@ async function recoverIncognito(page: Page) {
   }
   await pendingRow.locator(".chat-bubble").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Copy as markdown", exact: true }).click();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(pendingText);
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(pendingText);
   await discard.click();
   await pendingRow.waitFor({ state: "detached" });
   expect(await gateway.getRequests("chat.send")).toHaveLength(1);

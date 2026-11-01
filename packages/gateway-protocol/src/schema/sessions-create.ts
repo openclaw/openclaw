@@ -36,7 +36,6 @@ export const SessionsCreateParamsSchema = closedObject({
         "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
     }),
   ),
-  displayNameGenerated: Type.Optional(Type.Boolean()),
   titleSource: Type.Optional(
     Type.String({
       maxLength: 1_000,

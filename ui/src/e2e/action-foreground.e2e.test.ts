@@ -98,7 +98,7 @@ async function inspectStates(
   for (const [index, state] of ["rest", "hover", "pressed"].entries()) {
     if (state === "rest") {
       await page.mouse.move(0, 0);
-    } else {
+    } else if (state === "hover") {
       await button.hover();
     }
     if (state === "pressed") {
@@ -202,14 +202,18 @@ suite.define(() => {
               )
               .toBe(true);
           }
-          const palette = await page.evaluate(() => ({
-            theme: document.documentElement.dataset.theme,
-            links: [
-              ...document.querySelectorAll<HTMLLinkElement>('link[id^="openclaw-theme-palette-"]'),
-            ].map((link) => ({ href: link.href, loaded: Boolean(link.sheet) })),
-            accent: getComputedStyle(document.documentElement).getPropertyValue("--accent"),
-            primary: getComputedStyle(document.documentElement).getPropertyValue("--primary"),
-          }));
+          const palette = capture
+            ? await page.evaluate(() => ({
+                theme: document.documentElement.dataset.theme,
+                links: [
+                  ...document.querySelectorAll<HTMLLinkElement>(
+                    'link[id^="openclaw-theme-palette-"]',
+                  ),
+                ].map((link) => ({ href: link.href, loaded: Boolean(link.sheet) })),
+                accent: getComputedStyle(document.documentElement).getPropertyValue("--accent"),
+                primary: getComputedStyle(document.documentElement).getPropertyValue("--primary"),
+              }))
+            : undefined;
           const rail = page.locator(".sidebar-rail__create .sidebar-new-session");
           const railSamples = await inspectStates(
             page,

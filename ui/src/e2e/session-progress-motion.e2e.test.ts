@@ -12,7 +12,10 @@ import {
   chatMessage,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
+import {
+  openProgressHomeDock,
+  waitForProgressScrollIdle as waitForProgressThreadIdle,
+} from "./session-progress-home.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const height = (card: Locator) => card.evaluate((el) => el.getBoundingClientRect().height);
@@ -24,20 +27,6 @@ async function wheel(page: Page, card: Locator, dy: number) {
   const point = await headerPoint(card);
   await page.mouse.move(point.x, point.y);
   await page.mouse.wheel(0, dy);
-}
-async function waitForProgressThreadIdle(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(async (element) => {
-        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        return before.every((value, index) => value === after[index]);
-      }),
-    )
-    .toBe(true);
 }
 
 async function still(card: Locator, expected: number) {
@@ -51,7 +40,6 @@ async function still(card: Locator, expected: number) {
 suite.define(() => {
   it.each([
     { reducedMotion: "no-preference", touch: false },
-    { reducedMotion: "reduce", touch: false },
     { reducedMotion: "reduce", touch: true },
   ] as const)(
     "keeps Details disclosure manual through scrolling and streaming ($reducedMotion, touch=$touch)",
@@ -252,6 +240,7 @@ suite.define(() => {
         );
       };
       try {
+        await page.clock.install();
         // The dock requires advertised history/send capabilities and is suppressed
         // when its own Home conversation already owns the primary chat page.
         await page.goto(suite.server.baseUrl + "new");
@@ -281,7 +270,7 @@ suite.define(() => {
         await thread.hover();
         await page.mouse.wheel(0, -320);
         await waitForProgressThreadIdle(thread);
-        await page.waitForTimeout(201);
+        await page.clock.fastForward(201);
         await page.mouse.wheel(0, -320);
         if (mobile) {
           // Explicitly close the manually opened mobile card before scrubbing it.

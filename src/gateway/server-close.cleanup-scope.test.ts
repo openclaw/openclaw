@@ -2,6 +2,7 @@ import "./server-worker-free.test-support.js";
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
@@ -12,11 +13,13 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -58,9 +61,61 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
 });
+
+it.each(["rejected", "slow", "timed out"])(
+  "closes its listener and resources after restart marker persistence %s",
+  async (outcome) => {
+    const { listener, releaseListener, claim } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => createServer(),
+    });
+    const entered = createDeferredCore();
+    const committed = createDeferredCore();
+    const params = createGatewayCloseTestDeps({
+      httpServer: listener,
+      channelIds: ["telegram"],
+      persistRunningSessionsForRestart: async (signal) => {
+        entered.resolve();
+        if (outcome === "rejected") {
+          throw new Error("marker store refused");
+        }
+        await committed.promise;
+        signal.throwIfAborted();
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const closing = runWithProcessCleanupBudget(
+      { deadline: performance.now() + 2_000, warn() {} },
+      () => closeGateway(params).catch((error: unknown) => error),
+    );
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(outcome === "timed out" ? 2_000 : 1_100);
+      committed.resolve();
+      expect(await closing).toMatchObject(
+        outcome === "slow"
+          ? { warnings: [] }
+          : outcome === "rejected"
+            ? new Error("marker store refused")
+            : new Error("Shutdown session persistence did not settle within 2000ms"),
+      );
+      expect(listener.listening).toBe(false);
+      expect(params.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(sharedStateLifecycle.size).toBe(0);
+    } finally {
+      committed.resolve();
+      vi.useRealTimers();
+      if (listener.listening) {
+        await releaseListener();
+      }
+      await claim.release();
+    }
+  },
+);
 
 it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
   const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");

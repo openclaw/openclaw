@@ -13,9 +13,9 @@ import {
   sameBootRecordOwner,
   type BootRecordOwner,
 } from "./boot-record.ts";
-import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
 import type { ApplicationGatewayConnection } from "./gateway.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+import { clearWarmBootState } from "./warm-boot-retirement.ts";
 
 type GatewayCredentials = Pick<
   GatewayBrowserClientOptions,
@@ -29,6 +29,9 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
   let capturedOwner: BootRecordOwner | undefined;
   let liveOwner: BootRecordOwner | undefined;
   return {
+    get hasWarmBoot() {
+      return capturedOwner !== undefined;
+    },
     prepare(
       connection: ApplicationGatewayConnection,
       credentialsChanged: boolean,

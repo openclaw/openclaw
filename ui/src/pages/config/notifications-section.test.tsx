@@ -268,6 +268,9 @@ it("keeps settings available after an admitted command rejects", async () => {
   expect(view.container.querySelectorAll(".cfg-field__error")).toHaveLength(1);
   expect(view.getByRole("button", { name: "Send test" }).hasAttribute("disabled")).toBe(false);
   expect(view.container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false);
+  expect(view.container.querySelector('.cfg-field__error[role="alert"]')?.textContent).toContain(
+    "Example notification service is unavailable.",
+  );
 });
 
 type DevicePreferencesListener = NonNullable<NotificationProps["onWebPushSetDevicePreferences"]>;

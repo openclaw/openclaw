@@ -54,26 +54,20 @@ describe("cron model schema regressions", () => {
       { management: "only" as const },
       { management: "also" as const },
       { selfRemoveOnly: true },
-      { readOnly: true },
     ]) {
       const changed = createCronToolSchema(options);
       expect(changed).not.toEqual(unscoped);
       expect(createCronToolSchema({ ...options })).toBe(changed);
     }
-    const recovery = createCronToolSchema({ readOnly: true });
     expect(Value.Check(unscoped, { action: "remove", jobId: "saved-job" })).toBe(true);
-    for (const [action, accepted] of [
-      ["list", true],
-      ["get", true],
-      ["status", false],
-      ["remove", false],
-    ] as const) {
-      expect(Value.Check(recovery, { action, jobId: "saved-job" })).toBe(accepted);
-    }
   });
 
   it("does not advertise forbidden automation management inside a scheduled run", () => {
-    const restricted = createCronTool({ selfRemoveOnlyJobId: "current", runId: "run-current" });
+    const restricted = createCronTool({
+      agentSessionKey: "agent:main:cron:current",
+      selfRemoveOnlyJobId: "current",
+      runId: "run-current",
+    });
     expect(restricted.parameters).toHaveProperty("properties.action.enum", [
       "status",
       "list",
@@ -93,20 +87,46 @@ describe("cron model schema regressions", () => {
       activeRun: true,
       nextCheckEnabled: true,
     });
-    const recovery = createCronToolSchema({
-      selfRemoveOnly: true,
-      activeRun: true,
-      nextCheckEnabled: true,
-      readOnly: true,
-    });
     for (const action of ["scratch_get", "scratch_set", "record_result"]) {
       expect(Value.Check(restricted.parameters, { action })).toBe(false);
       expect(Value.Check(active, { action })).toBe(true);
-      expect(Value.Check(recovery, { action })).toBe(false);
     }
     expect(Value.Check(active, { action: "next_check" })).toBe(false);
     expect(Value.Check(paced, { action: "next_check" })).toBe(true);
-    expect(Value.Check(recovery, { action: "next_check" })).toBe(false);
+  });
+
+  it("keeps conversation definitions stable while scheduled calls stay self-scoped", async () => {
+    const agentSessionKey = "agent:main:prefix-proof";
+    const user = createCronTool({ agentSessionKey });
+    const scheduled = createCronTool({
+      agentSessionKey,
+      selfRemoveOnlyJobId: "current",
+      runId: "run-current",
+    });
+    expect(scheduled.description).toBe(user.description);
+    expect(scheduled.parameters).toEqual(user.parameters);
+    for (const action of ["scratch_get", "scratch_set", "record_result", "next_check"]) {
+      expect(Value.Check(user.parameters, { action })).toBe(true);
+      await expect(user.execute(action, { action })).rejects.toThrow(
+        /only available (?:inside|to) the currently running/,
+      );
+    }
+    for (const action of ["add", "update", "run", "wake"]) {
+      const args = { action, jobId: "current" };
+      expect(Value.Check(scheduled.parameters, args)).toBe(true);
+      await expect(scheduled.execute(action, args)).rejects.toThrow(
+        "Automations tool is restricted to the current automation.",
+      );
+    }
+    await expect(
+      scheduled.execute("other-job", { action: "remove", jobId: "other" }),
+    ).rejects.toThrow("Automations tool is restricted to the current automation.");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    await scheduled.execute("own-job", { action: "remove", jobId: "current" });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      { method: "cron.remove", params: { id: "current" } },
+      expect.anything(),
+    );
   });
 
   it("advertises timeout clears while retaining numeric bounds", () => {

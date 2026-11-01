@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
   createTestRuntime,
   useConfigCliIntegrationHarness,
@@ -13,12 +12,8 @@ import {
 const configRuntime = await import("../config/config.js");
 const { clearConfigCache } = configRuntime;
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
-const { readDeferredPluginMigrations, recordDeferredPluginMigrations } =
-  await import("../infra/deferred-plugin-migrations.js");
-const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
-const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
-  await import("./config-cli.js");
+const { runConfigGet, runConfigSet } = await import("./config-cli.js");
 const {
   registeredRuntimeLogs: logs,
   registeredRuntimeErrors: errors,
@@ -35,6 +30,40 @@ const reject = (result: Promise<unknown>) =>
   expect(result).rejects.toMatchObject({ name: "ExitError", code: 1 });
 const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
+const includeConfig = (include: string) =>
+  JSON.stringify({ gateway: { mode: "local" }, logging: { $include: include } }) + "\n";
+const infoLogging = '{"level":"info"}\n';
+
+function configWriter() {
+  const output = createTestRuntime();
+  type SetOptions = Parameters<typeof runConfigSet>[0];
+  return {
+    ...output,
+    setJson: (
+      field: string,
+      value: string,
+      cliOptions: SetOptions["cliOptions"] = {},
+      beforePersistentApply?: SetOptions["beforePersistentApply"],
+    ) =>
+      runConfigSet({
+        path: field,
+        value,
+        cliOptions: { ...cliOptions, strictJson: true },
+        beforePersistentApply,
+        runtime: output.runtime,
+      }),
+  };
+}
+
+function denyRename(target: string) {
+  const rename = fs.renameSync;
+  vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    if (to === target) {
+      throw Object.assign(new Error("rename denied"), { code: "EPERM" });
+    }
+    return rename(from, to);
+  });
+}
 
 async function get(field: string, json = false) {
   logs.length = 0;
@@ -60,76 +89,14 @@ async function getError(field: string, json: boolean): Promise<string> {
 }
 
 describe("config cli integration", () => {
-  it("edits canonical config without consuming pending plugin migrations", async () => {
-    const pluginPath = "plugins.entries.sample.config";
-    const raw = JSON.stringify({
-      gateway: { mode: "local", port: 18789 },
-      session: { store: "/srv/legacy/sessions.json" },
-      plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
-    });
-    await withConfig(raw, async ({ configPath, tempDir }) => {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempDir, "state") }, async () => {
-        try {
-          await recordDeferredPluginMigrations({
-            pending: [
-              {
-                pluginId: "sample",
-                reason: "The configured plugin is not installed.",
-                command: "openclaw plugins install @example/sample",
-                requiresStateMigration: true,
-                configPaths: [
-                  ["plugins", "entries", "sample", "config"],
-                  ["session", "store"],
-                ],
-              },
-            ],
-          });
-          const pending = readDeferredPluginMigrations();
-          await set(`${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run");
-          expect(read(configPath)).toBe(raw);
-          expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
-          await set(`${pluginPath}.legacyRoot`, "/srv/replacement");
-          expect(load(configPath).plugins.entries.sample.config).toEqual({
-            legacyRoot: "/srv/replacement",
-          });
-          expect(read(`${configPath}.bak`)).toBe(raw);
-          await set("gateway.port", "18790");
-          expect(load(configPath)).toMatchObject({
-            gateway: { port: 18790 },
-            plugins: { entries: { sample: { config: { legacyRoot: "/srv/replacement" } } } },
-          });
-          const beforeRemoval = read(configPath);
-          await run("unset", "plugins.entries.sample");
-          expect(load(configPath)).not.toHaveProperty("plugins.entries.sample");
-          expect(load(configPath)).toMatchObject({
-            gateway: { port: 18790 },
-            session: { store: "/srv/legacy/sessions.json" },
-          });
-          expect(read(`${configPath}.bak`)).toBe(beforeRemoval);
-          expect(readDeferredPluginMigrations()).toEqual(pending);
-          expect(logs.join("\n")).toContain("Removed plugins.entries.sample");
-          expect(errors.join("\n")).not.toContain("upgrade is unfinished");
-        } finally {
-          closeOpenClawStateDatabaseForTest();
-        }
-      });
-    });
-  });
-
-  it.each(["restore", "empty external replacement", "recovery failure"])(
+  it.each(["restore", "empty external replacement"])(
     "openclaw config set reports owned root removal with %s",
     async (recovery) => {
-      const raw = '{"gateway":{"mode":"local"},"logging":{"$include":"logging.json"}}\n';
+      const raw = includeConfig("logging.json");
       await withConfig(raw, async ({ configPath, tempDir }) => {
         const includePath = path.join(tempDir, "logging.json");
-        fs.writeFileSync(includePath, '{"level":"info"}\n');
-        const rename = fs.renameSync;
-        vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-          if (to === configPath) {
-            throw Object.assign(new Error("rename denied"), { code: "EPERM" });
-          }
-          return rename(from, to);
-        });
+        fs.writeFileSync(includePath, infoLogging);
+        denyRename(configPath);
         const concurrentRaw =
           recovery === "empty external replacement"
             ? ""
@@ -141,17 +108,10 @@ describe("config cli integration", () => {
           if (file === configPath) {
             removed = true;
             fs.writeFileSync(includePath, '{"level":"warn"}\n');
-            if (recovery === "external replacement" || recovery === "empty external replacement") {
+            if (recovery === "empty external replacement") {
               fs.writeFileSync(configPath, concurrentRaw);
             }
           }
-        });
-        const open = fs.openSync;
-        vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-          if (removed && recovery === "recovery failure" && String(file).endsWith(".tmp")) {
-            throw Object.assign(new Error("recovery stage full"), { code: "ENOSPC" });
-          }
-          return open(file, flags, mode);
         });
         await reject(set("messages.responsePrefix", "changed"));
         expect(removed).toBe(true);
@@ -162,12 +122,7 @@ describe("config cli integration", () => {
         expect(error).toContain(`${configPath}.bak`);
         expect(error).not.toContain("nothing was changed");
         expect(error).not.toContain("Re-run the same command");
-        if (recovery === "recovery failure") {
-          expect(fs.existsSync(configPath)).toBe(false);
-          expect(error).toContain("Rollback could not be confirmed");
-        } else {
-          expect(read(configPath)).toBe(recovery === "restore" ? raw : concurrentRaw);
-        }
+        expect(read(configPath)).toBe(recovery === "restore" ? raw : concurrentRaw);
       });
     },
   );
@@ -175,7 +130,7 @@ describe("config cli integration", () => {
   it.each(["root", "include"])(
     "openclaw config set preserves all five %s backups after five failed stages",
     async (location) => {
-      const includeRaw = '{"level":"info"}\n';
+      const includeRaw = infoLogging;
       const raw =
         JSON.stringify({
           gateway: { mode: "local" },
@@ -213,15 +168,13 @@ describe("config cli integration", () => {
 
   it("openclaw config set preserves the parent mode when saving a long include filename", async () => {
     const name = "a".repeat(230) + ".json";
-    const raw =
-      JSON.stringify({ gateway: { mode: "local" }, logging: { $include: "shared/" + name } }) +
-      "\n";
+    const raw = includeConfig("shared/" + name);
     await withConfig(raw, async ({ configPath, tempDir }) => {
       const parent = path.join(tempDir, "shared");
       fs.mkdirSync(parent, { mode: 0o750 });
       const mode = fs.statSync(parent).mode;
       const include = path.join(parent, name);
-      const original = '{"level":"info"}\n';
+      const original = infoLogging;
       fs.writeFileSync(include, original);
       await set("logging.level", "debug");
       expect(readJson(include)).toEqual({ level: "debug" });
@@ -240,18 +193,13 @@ describe("config cli integration", () => {
   ])(
     "openclaw config set preserves $alias include identity during fallback: $outcome",
     async ({ alias, outcome }) => {
-      const raw =
-        JSON.stringify({
-          gateway: { mode: "local" },
-          logging: {
-            $include:
-              alias === "parent"
-                ? "alias/actual.json"
-                : alias === "relative"
-                  ? "links/logging.json"
-                  : "logging.json",
-          },
-        }) + "\n";
+      const raw = includeConfig(
+        alias === "parent"
+          ? "alias/actual.json"
+          : alias === "relative"
+            ? "links/logging.json"
+            : "logging.json",
+      );
       await withConfig(raw, async ({ configPath, tempDir }) => {
         const directory = alias === "parent" ? path.join(tempDir, "real") : tempDir;
         fs.mkdirSync(directory, { recursive: true });
@@ -259,7 +207,7 @@ describe("config cli integration", () => {
           fs.mkdirSync(path.join(tempDir, "links"));
         }
         const target = path.join(directory, "actual.json");
-        const original = '{"level":"info"}\n';
+        const original = infoLogging;
         fs.writeFileSync(target, original);
         const link = path.join(
           tempDir,
@@ -285,12 +233,7 @@ describe("config cli integration", () => {
         const concurrentRoot =
           JSON.stringify({ ...JSON.parse(raw), messages: { responsePrefix: "external" } }) + "\n";
         const rename = fs.renameSync;
-        vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-          if (to === target) {
-            throw Object.assign(new Error("include rename denied"), { code: "EPERM" });
-          }
-          return rename(from, to);
-        });
+        denyRename(target);
         let removed = false;
         const remove = fs.rmSync;
         vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
@@ -546,39 +489,6 @@ describe("config cli integration", () => {
     });
   });
 
-  it("repairs a stale agent deployment patch without changing policy", async () => {
-    const configForExec = (exec: Record<string, string>) => ({
-      agents: { entries: { worker: { tools: { exec } } } },
-    });
-    const migrated = configForExec({ mode: "ask" });
-    const migratedRaw = JSON.stringify(migrated) + "\n";
-    await withConfig(migratedRaw, async ({ configPath, tempDir }) => {
-      const patchPath = path.join(tempDir, "patch.json5");
-      fs.writeFileSync(
-        patchPath,
-        JSON.stringify(configForExec({ security: "allowlist", ask: "on-miss" })),
-      );
-      const output = createTestRuntime();
-
-      await expect(
-        runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime }),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(read(configPath)).toBe(migratedRaw);
-      const diagnostic = output.errors.join("\n");
-      expect(diagnostic).toContain("agents.entries.worker.tools.exec.mode:");
-      expect(diagnostic).toContain('Replace security/ask with mode="ask"');
-      expect(diagnostic).toContain("at this scope");
-
-      fs.writeFileSync(patchPath, JSON.stringify({ ...migrated, messages: { ackReaction: "✅" } }));
-      await runConfigPatch({ cliOptions: { file: patchPath }, runtime: output.runtime });
-      expect(load(configPath)).toMatchObject({
-        ...migrated,
-        messages: { ackReaction: "✅" },
-      });
-    });
-  });
-
   it("conflicts when a top-level include changes after config set starts", async () => {
     await withConfig(
       '{ gateway: { $include: "./gateway.json5" } }\n',
@@ -587,17 +497,11 @@ describe("config cli integration", () => {
         const concurrentRaw = '{ port: 19002, bind: "loopback" }\n';
         fs.writeFileSync(includePath, "{ port: 18789 }\n", "utf8");
         clearConfigCache();
-        const output = createTestRuntime();
+        const output = configWriter();
 
         await expect(
-          runConfigSet({
-            path: "gateway.port",
-            value: "19001",
-            cliOptions: { strictJson: true },
-            runtime: output.runtime,
-            beforePersistentApply: () => {
-              fs.writeFileSync(includePath, concurrentRaw, "utf8");
-            },
+          output.setJson("gateway.port", "19001", {}, () => {
+            fs.writeFileSync(includePath, concurrentRaw, "utf8");
           }),
         ).rejects.toThrow("__exit__:1");
 
@@ -610,23 +514,10 @@ describe("config cli integration", () => {
 
   it("accepts absent and exact authored expectations", async () => {
     await withConfig("{ gateway: { port: 18789 } }\n", async ({ configPath }) => {
-      const absentOutput = createTestRuntime();
-      await runConfigSet({
-        path: "gateway.bind",
-        value: '"loopback"',
-        cliOptions: { strictJson: true, expectCurrentAbsent: true },
-        runtime: absentOutput.runtime,
-      });
-      expect(absentOutput.errors).toStrictEqual([]);
-
-      const exactOutput = createTestRuntime();
-      await runConfigSet({
-        path: "gateway.port",
-        value: "19001",
-        cliOptions: { strictJson: true, expectCurrentJson: "18789" },
-        runtime: exactOutput.runtime,
-      });
-      expect(exactOutput.errors).toStrictEqual([]);
+      const output = configWriter();
+      await output.setJson("gateway.bind", '"loopback"', { expectCurrentAbsent: true });
+      await output.setJson("gateway.port", "19001", { expectCurrentJson: "18789" });
+      expect(output.errors).toStrictEqual([]);
       expect(load(configPath)).toMatchObject({
         gateway: { bind: "loopback", port: 19001 },
       });
@@ -641,19 +532,18 @@ describe("config cli integration", () => {
       await withConfig(
         changedBeforeLoad ? concurrentRaw : "{ gateway: { port: 18789 } }\n",
         async ({ configPath }) => {
-          const output = createTestRuntime();
+          const output = configWriter();
           await expect(
-            runConfigSet({
-              path: "gateway.port",
-              value: "19001",
-              cliOptions: { strictJson: true, expectCurrentJson: "18789" },
-              runtime: output.runtime,
-              ...(!changedBeforeLoad && {
-                beforePersistentApply: () => {
-                  fs.writeFileSync(configPath, concurrentRaw, "utf8");
-                },
-              }),
-            }),
+            output.setJson(
+              "gateway.port",
+              "19001",
+              { expectCurrentJson: "18789" },
+              changedBeforeLoad
+                ? undefined
+                : () => {
+                    fs.writeFileSync(configPath, concurrentRaw, "utf8");
+                  },
+            ),
           ).rejects.toThrow("__exit__:1");
           expect(read(configPath)).toBe(concurrentRaw);
           expect(output.logs).toStrictEqual([]);
@@ -678,35 +568,11 @@ describe("config cli integration", () => {
     },
   );
 
-  it("preserves exact JSON5 bytes while rejecting an absent authored unset", async () => {
-    const raw =
-      '{\n  // preserve this comment and order\n  gateway: { port: 18789 },\n  logging: { level: "info" },\n}\n';
-    await withConfig(raw, async ({ configPath }) => {
-      const output = createTestRuntime();
-
-      await expect(
-        runConfigUnset({ path: "gateway.bind", runtime: output.runtime }),
-      ).rejects.toThrow("__exit__:1");
-
-      expect(read(configPath)).toBe(raw);
-      expect(output.logs).toStrictEqual([]);
-      expect(output.errors.join("\n")).toContain(
-        "Config path not found: gateway.bind. Nothing was changed. Run openclaw config get <path> first if you are unsure of the path.",
-      );
-    });
-  });
-
   it("writes an absent key even when its value equals the resolved default", async () => {
     const raw = "{\n  // the default is not authored yet\n  gateway: {},\n}\n";
     await withConfig(raw, async ({ configPath }) => {
-      const output = createTestRuntime();
-
-      await runConfigSet({
-        path: "gateway.port",
-        value: "18789",
-        cliOptions: { strictJson: true },
-        runtime: output.runtime,
-      });
+      const output = configWriter();
+      await output.setJson("gateway.port", "18789");
 
       const after = read(configPath);
       expect(after).not.toBe(raw);

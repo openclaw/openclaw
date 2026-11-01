@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type {
   PaginatedSessionHistory,
@@ -273,7 +274,13 @@ export class SessionHistorySseState {
       isDeepStrictEqual(projectedPrefix, this.sentHistory.messages)
     ) {
       const addedMessages = projectedMessages.slice(this.sentHistory.messages.length);
-      if (hadPendingTurnBoundary && !this.turnBoundaryPending) {
+      // The full projection no longer contains the hidden input that armed the
+      // boundary. Copy the flag only when this append itself carried it.
+      // A visible user consumes the flag without carrying it.
+      const attachedPendingBoundary = nextProjection.messages.some(
+        (projected) => asOptionalRecord(projected["__openclaw"])?.turnBoundary === true,
+      );
+      if (attachedPendingBoundary) {
         const firstAdded = attachOpenClawTranscriptMeta(addedMessages[0], {
           turnBoundary: true,
         }) as SessionHistoryMessage;

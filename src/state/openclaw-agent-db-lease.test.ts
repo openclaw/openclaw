@@ -18,9 +18,22 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 
+const logger = vi.hoisted(() => ({ info: vi.fn() }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => {
+      const original = actual.createSubsystemLogger(name);
+      return name === "state/agent-db" ? { ...original, info: logger.info } : original;
+    },
+  };
+});
+
 const tempDirs = createTempDirTracker();
 afterEach(() => {
   vi.restoreAllMocks();
+  logger.info.mockClear();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
@@ -76,6 +89,7 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
   const { params, state } = createLeaseOwner();
   claimOpenClawAgentDatabaseLease(params, "dead");
   claimOpenClawAgentDatabaseLease(params, "unknown-peer");
+  recordOpenClawAgentDatabaseAdmission("dead", params, "full-required");
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       db.prepare("UPDATE agent_database_leases SET owner_pid = -1 WHERE lease_id = ?").run("dead");
@@ -92,7 +106,7 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
   expect(verification).toHaveBeenLastCalledWith(
     false,
     true,
-    "predecessor-admission-incomplete",
+    "predecessor-full-required",
     undefined,
   );
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id", [
@@ -146,13 +160,15 @@ it("records admission on its held claim and refuses to resurrect a released clai
   const leaseId = claimOpenClawAgentDatabaseLease(params);
   vi.spyOn(Date, "now").mockReturnValue(123_456);
   const controls = vi.spyOn(state.db, "exec");
+  const openedAt = () =>
+    state.db.prepare("SELECT opened_at FROM agent_database_leases WHERE lease_id = ?").get(leaseId);
 
+  recordOpenClawAgentDatabaseAdmission(leaseId, params, "full-required");
+  expect(openedAt()).toEqual({ opened_at: -1 });
   recordOpenClawAgentDatabaseAdmission(leaseId, params);
 
   expect(controls).not.toHaveBeenCalled();
-  expect(
-    state.db.prepare("SELECT opened_at FROM agent_database_leases WHERE lease_id = ?").get(leaseId),
-  ).toEqual({ opened_at: 123_456 });
+  expect(openedAt()).toEqual({ opened_at: 123_456 });
   releaseOpenClawAgentDatabaseLease(leaseId, { env: params.env }, "read-only");
   controls.mockClear();
 
@@ -161,4 +177,62 @@ it("records admission on its held claim and refuses to resurrect a released clai
   );
   expect(controls).not.toHaveBeenCalled();
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases", []);
+});
+
+it("reports committed close-state transitions without repeating unchanged peer receipts", () => {
+  const { params, state } = createLeaseOwner();
+  claimOpenClawAgentDatabaseLease(params, "peer");
+  const publishSeal = vi.fn(() => true);
+  const close = (id: string, checkpoint = true) => {
+    claimOpenClawAgentDatabaseLease(params, id);
+    releaseOpenClawAgentDatabaseLease(
+      id,
+      { env: params.env },
+      checkpoint ? { path: params.path, publishSeal } : "uncheckpointed",
+    );
+  };
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    close(`warm-${iteration}`);
+  }
+  expect(publishSeal).not.toHaveBeenCalled();
+  expectRows(state.db, "SELECT lease_id FROM agent_database_leases", [{ lease_id: "peer" }]);
+  const sibling = { ...params, agentId: "sibling", path: `${params.path}.sibling` };
+  claimOpenClawAgentDatabaseLease(sibling, "sibling");
+  releaseOpenClawAgentDatabaseLease("sibling", { env: params.env }, "uncheckpointed");
+
+  // A rolled-back result must not replace the last published diagnostic state.
+  expect(() =>
+    runOpenClawStateWriteTransaction(
+      () => {
+        close("rolled-back", false);
+        throw new Error("synthetic rollback");
+      },
+      { env: params.env },
+    ),
+  ).toThrow("synthetic rollback");
+  close("still-active");
+  close("incomplete", false);
+  close("incomplete-again", false);
+  close("active-again");
+  releaseOpenClawAgentDatabaseLease(
+    "peer",
+    { env: params.env },
+    {
+      path: params.path,
+      publishSeal,
+    },
+  );
+  expect(publishSeal).toHaveBeenCalledOnce();
+  expectRows(state.db, "SELECT lease_id FROM agent_database_leases", []);
+  expect(
+    logger.info.mock.calls
+      .filter(([message]) => String(message).includes("clean-close receipt"))
+      .map(([, detail]) => [detail.agentId, detail.receipt]),
+  ).toEqual([
+    ["main", "active-leases"],
+    ["sibling", "checkpoint-incomplete"],
+    ["main", "checkpoint-incomplete"],
+    ["main", "active-leases"],
+    ["main", "written"],
+  ]);
 });

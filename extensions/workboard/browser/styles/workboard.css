@@ -1832,7 +1832,14 @@
   scroll-padding-block: 24px;
 }
 
-.workboard-column__window,
+.workboard-column__window {
+  /* Keep an aggregate content box for the scroll viewport's resize observer. */
+  display: grid;
+  grid-auto-rows: max-content;
+  gap: inherit;
+  align-content: start;
+}
+
 .workboard-column__slot {
   display: contents;
 }

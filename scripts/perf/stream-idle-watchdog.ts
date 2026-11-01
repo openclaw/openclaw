@@ -4,6 +4,9 @@
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/stream-idle-watchdog.ts --mode timing
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/stream-idle-watchdog.ts --mode allocation
  * --owner accepts an equivalent owner module for comparisons without a build.
+ * --accept-before-iterate measures the request-to-iterator handoff; for example,
+ * --turns 8192 --deltas 1 --concurrency 65 --accept-before-iterate. Use --mode
+ * counts separately to count timer creation.
  * Synthetic concurrent streams notify real provider activity and alternate text
  * and tool-call fragments; all events must preserve identity and order. Timing
  * excludes allocation profiling. Acceptance: fewer allocations/CPU per event,
@@ -29,16 +32,18 @@ const { values } = parseArgs({
     turns: { type: "string", default: "64" },
     deltas: { type: "string", default: "256" },
     concurrency: { type: "string", default: "8" },
+    "accept-before-iterate": { type: "boolean", default: false },
   },
 });
-assert(values.mode === "timing" || values.mode === "allocation");
+assert(["timing", "allocation", "counts"].includes(values.mode));
 const count = (label: "turns" | "deltas" | "concurrency", fallback: number) =>
   parseStrictIntegerOption({ raw: values[label], fallback, min: 1, label });
 const turns = count("turns", 64);
 const deltas = count("deltas", 256);
 const concurrency = count("concurrency", 8);
+const ownerPath = resolve(values.owner);
 const owner: { streamWithIdleTimeout: typeof streamWithIdleTimeout } = await import(
-  pathToFileURL(resolve(values.owner)).href
+  pathToFileURL(ownerPath).href
 );
 const model: Model = {
   id: "synthetic-stream",
@@ -85,6 +90,9 @@ async function run(turnCount: number) {
         let signal: AbortSignal | undefined;
         const provider: StreamFn = (_model, _context, options) => {
           signal = options?.signal;
+          if (values["accept-before-iterate"]) {
+            notifyLlmRequestActivity(signal);
+          }
           return source;
         };
         const stream = await owner.streamWithIdleTimeout(provider, 120_000)(
@@ -116,16 +124,33 @@ const inspector = values.mode === "allocation" ? new Session() : undefined;
 if (inspector) {
   inspector.connect();
   await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16_384,
+    samplingInterval: 4096,
     includeObjectsCollectedByMajorGC: true,
     includeObjectsCollectedByMinorGC: true,
+  });
+}
+const originalSetTimeout = globalThis.setTimeout;
+let timerCreations = 0;
+if (values.mode === "counts") {
+  globalThis.setTimeout = new Proxy(originalSetTimeout, {
+    apply(target, receiver, args) {
+      if (new Error().stack?.split("\n")[2]?.includes(ownerPath)) {
+        timerCreations++;
+      }
+      return Reflect.apply(target, receiver, args);
+    },
   });
 }
 const beforeLoad = loadavg();
 const startCpu = process.cpuUsage();
 const startThreadCpu = process.threadCpuUsage();
 const started = performance.now();
-const checksum = await run(turns);
+let checksum: number;
+try {
+  checksum = await run(turns);
+} finally {
+  globalThis.setTimeout = originalSetTimeout;
+}
 const elapsedMs = performance.now() - started;
 const cpu = process.cpuUsage(startCpu);
 const threadCpu = process.threadCpuUsage(startThreadCpu);
@@ -144,6 +169,8 @@ console.log(
     turns,
     deltas,
     concurrency,
+    acceptBeforeIterate: values["accept-before-iterate"],
+    timerCreations: values.mode === "counts" ? timerCreations : undefined,
     events: turns * deltas,
     checksum,
     elapsedMs,
