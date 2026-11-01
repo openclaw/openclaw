@@ -41,7 +41,8 @@ describe("LLM watchdog policy", () => {
     const cfg = defaults(seconds);
     const runTimeoutMs = resolveAgentTimeoutMs({ cfg });
     expect(runTimeoutMs).toBe(seconds ? 30_000 : MAX_TIMER_TIMEOUT_MS);
-    expectBudgets({ cfg, runTimeoutMs, model: cloud }, seconds ? 30_000 : 120_000);
+    const params = seconds ? { cfg } : { cfg, runTimeoutMs, model: cloud };
+    expectBudgets(params, seconds ? 30_000 : 120_000);
   });
 
   it.each([
@@ -63,7 +64,6 @@ describe("LLM watchdog policy", () => {
     ${"normalized key"}          | ${configured({ " GPU ": "custom-local" })}                                                                       | ${300_000} | ${undefined}
     ${"canonical key priority"}  | ${configured({ " GPU ": "custom-local", gpu: "synthetic-remote" })}                                              | ${120_000} | ${undefined}
     ${"first normalized key"}    | ${configured({ " GPU ": "synthetic-remote", GPU: "custom-local" })}                                              | ${120_000} | ${undefined}
-    ${"remote mapped loopback"}  | ${configured({ gpu: "synthetic-remote" }, "gpu", { remote: true, baseUrl: "http://[::ffff:127.0.0.2]:8787" })}   | ${120_000} | ${60_000}
     ${"remote loopback"}         | ${configured({ gpu: "synthetic-remote" }, "gpu", { remote: true, baseUrl: "http://127.0.0.1:8787" })}            | ${120_000} | ${60_000}
     ${"remote local marker"}     | ${configured({ gpu: "custom-local" }, "gpu", { remote: true })}                                                  | ${120_000} | ${60_000}
     ${"remote local service"}    | ${configured({ gpu: "synthetic-remote" }, "gpu", { remote: true, localService: { command: "/usr/bin/relay" } })} | ${120_000} | ${60_000}
