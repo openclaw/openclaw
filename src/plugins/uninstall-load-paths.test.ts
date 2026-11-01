@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -89,4 +89,29 @@ describe("plugin uninstall load-path lifecycle", () => {
       expect((await fs.stat(unrelatedPath)).isDirectory()).toBe(true);
     },
   );
+
+  it("removes a home-relative linked load path with its install record", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/home/tester");
+    try {
+      const installPath = "/home/tester/plugins/demo";
+      const plan = planPluginUninstall({
+        config: {
+          plugins: {
+            entries: { demo: { enabled: true } },
+            installs: { demo: { source: "path", sourcePath: installPath, installPath } },
+            load: { paths: ["~/plugins/demo", "~/plugins/other"] },
+          },
+        },
+        pluginId: "demo",
+        deleteFiles: false,
+      });
+      if (!plan.ok) {
+        throw new Error(plan.error);
+      }
+      expect(plan.config.plugins?.load?.paths).toEqual(["~/plugins/other"]);
+      expect(plan.actions.loadPath).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
