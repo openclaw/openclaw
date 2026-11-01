@@ -38,7 +38,7 @@ export function AgentsPageMenu(props: {
       id={id}
       lazy
       class="agents-page-menu"
-      label={t("tabs.agents")}
+      label={t("browser.moreActions")}
       placement="bottom-end"
       pointerFocus="trigger"
       triggerClass="btn btn--sm agents-page-menu__trigger"
