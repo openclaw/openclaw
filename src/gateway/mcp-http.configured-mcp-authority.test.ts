@@ -31,6 +31,8 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -39,6 +41,8 @@ import {
 import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import * as mcp from "./mcp-http.test-support.js";
+import type { SkillLibraryRequestOwner } from "./server-methods/skills-library.js";
+import { captureGatewayToolDiscovery } from "./tool-discovery.js";
 
 // Guidance past the old 1,200-character metadata cap must still reach Claude.
 const PROBE_INSTRUCTIONS = "Probe usage guidance. ".repeat(80) + "PROBE_TAIL: one word per call.";
@@ -258,6 +262,24 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
+const createdSessions = new Set<string>();
+
+/** Gateway human ingress records the conversation's Workshop presentation for later turns. */
+async function humanPresentation(authoring: SkillLibraryAuthoringCapability) {
+  const profile = ensureProfileForEmail("presentation@example.test");
+  const catalog = await prepareUserProfileCatalog();
+  const owner: SkillLibraryRequestOwner = {
+    client: {
+      authenticatedUserProfile: { profileId: profile.id },
+      connect: { scopes: ["operator.admin"] },
+      // SAFETY: Discovery capture reads only this client's profile and scopes.
+    } as SkillLibraryRequestOwner["client"],
+    // SAFETY: Discovery capture reads only runtime config from the request context.
+    context: { getRuntimeConfig: () => config } as SkillLibraryRequestOwner["context"],
+  };
+  return { capture: captureGatewayToolDiscovery(owner, true, authoring), release: catalog.release };
+}
+
 /** Prepares a real CLI turn and returns a client bound to its loopback grant. */
 async function prepareTurn(
   name: string,
@@ -265,6 +287,7 @@ async function prepareTurn(
   signal: AbortSignal,
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability,
   agentId = "main",
+  toolDiscoveryCapture?: ReturnType<typeof captureGatewayToolDiscovery>,
 ) {
   const sessionId = "configured-" + name;
   const sessionKey = "agent:" + agentId + ":" + sessionId;
@@ -283,7 +306,11 @@ async function prepareTurn(
     sessionStartedAt: Date.now(),
     permissionMode: "full" as const,
   };
-  await replaceSessionEntry({ agentId, sessionKey }, entry);
+  // Later turns continue the same session row, as in production, keeping its saved presentation.
+  if (!createdSessions.has(sessionKey)) {
+    await replaceSessionEntry({ agentId, sessionKey }, entry);
+    createdSessions.add(sessionKey);
+  }
   if (completion) {
     await replaceSessionEntry({ agentId, sessionKey: childSessionKey }, childEntry(sessionKey));
   }
@@ -313,6 +340,7 @@ async function prepareTurn(
     skillsSnapshot: { prompt: "", skills: [] },
     senderIsOwner: true,
     ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+    ...(toolDiscoveryCapture ? { toolDiscoveryCapture } : {}),
     runId,
     timeoutMs: 60_000,
     abortSignal: signal,
@@ -439,9 +467,11 @@ it.for(["personal", "workspace"] as const)(
       },
     };
     const name = "workshop-" + defaultTarget;
-    const humanTurn = await prepareTurn(name, false, signal, human);
+    const presentation = await humanPresentation(human);
+    const humanTurn = await prepareTurn(name, false, signal, human, "main", presentation.capture);
     const humanDefinition = await workshopDefinition(humanTurn);
     const completionTurn = await prepareTurn(name, true, signal);
+    presentation.release();
     expect(humanDefinition).toBeDefined();
     // Same definition on the completion turn keeps Claude's cached prefix.
     expect(await workshopDefinition(completionTurn)).toEqual(humanDefinition);
@@ -487,17 +517,20 @@ it.for([
         .toSorted();
     const before = await snapshot();
     const name = "workshop-" + agentId;
+    const presentation = await humanPresentation(human);
     const humanDefinition = await workshopDefinition(
-      await prepareTurn(name, false, signal, human, agentId),
+      await prepareTurn(name, false, signal, human, agentId, presentation.capture),
     );
     const completionTurn = await prepareTurn(name, true, signal, undefined, agentId);
+    presentation.release();
     // Human and completion turns list the same Workshop surface.
     expect(await workshopDefinition(completionTurn)).toEqual(humanDefinition);
     expect(humanDefinition !== undefined).toBe(listed);
     expect(await completionTurn.call("skill_workshop", create)).toEqual({
       isError: true,
       text: listed
-        ? expect.stringContaining("Workshop is unavailable in a sandboxed run")
+        ? // The saved presentation lists Workshop; writes still need fresh human authority.
+          expect.stringContaining("needs a fresh message from the person")
         : "Tool not available: skill_workshop",
     });
     expect(await snapshot()).toEqual(before);

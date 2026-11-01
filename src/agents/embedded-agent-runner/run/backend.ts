@@ -63,11 +63,14 @@ export async function runEmbeddedAttemptWithBackend(
     getConfig: () => getRuntimeConfigSnapshot() ?? params.config ?? getRuntimeConfig(),
     assertCurrent: () => assertAdmittedCurrent?.(),
   });
+  const { toolDiscovery: _callerPresentation, ...ownParams } = params;
   const preparedParams: EmbeddedRunAttemptInternalParams = {
-    ...params,
+    ...ownParams,
     ...(attachmentMedia?.length ? { inputAttachmentMedia: attachmentMedia } : {}),
-    toolDiscovery: discovery.presentation,
-    toolDiscoveryPreparation: discovery,
+    // Only a reconstructed presentation reaches the attempt; skipped owners add nothing.
+    ...(discovery.presentation
+      ? { toolDiscovery: discovery.presentation, toolDiscoveryPreparation: discovery }
+      : {}),
   };
   const result = await runAgentHarnessAttempt(
     attachmentNote
