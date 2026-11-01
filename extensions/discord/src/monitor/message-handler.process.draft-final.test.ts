@@ -503,7 +503,7 @@ describe("processDiscordMessage queued thread replies", () => {
   it.each([true, false])(
     "recognizes a thread answer when queued execution starts before dispatch returns: %s",
     async (startsBeforeReturn) => {
-      let endQueuedRoute: (() => void) | void;
+      let endQueuedRoute: (() => void) | void = undefined;
       mockDispatch(async (params) => {
         if (startsBeforeReturn) {
           endQueuedRoute = params?.replyOptions?.queuedDeliveryCorrelations?.at(-1)?.begin();
