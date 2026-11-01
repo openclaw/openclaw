@@ -1,0 +1,3 @@
+3
+# Source 74276d8245e1cabe4e13f8e8fc69964f4d3a78c1; src/gateway/server-run-shutdown.ts compute remaining cleanup budget at subagent settlement instead of fixed one-second timeout; preserve lifecycle deadline and required physical joins.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
