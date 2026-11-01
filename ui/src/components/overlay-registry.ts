@@ -337,26 +337,34 @@ function createRegistryEvents(registry: OverlayRegistry) {
     }
   };
   // A tap outside only dismisses: the click that follows it must not act on the page beneath.
-  // Keyboard activation reports no clicks in `detail` and still goes through.
+  // Keyboard activation reports no clicks in `detail` and still goes through. The tap can release
+  // the registry's last root before its click arrives, so this holds its own listeners, and a tap
+  // that produces no click stops holding them at the next press.
   const absorbNextClick = () => {
     const { document } = registry;
-    const absorb = (event: MouseEvent) => {
-      stopAbsorbingClick?.();
-      if (event.detail > 0) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    };
     stopAbsorbingClick?.();
-    document.addEventListener("click", absorb, true);
+    const stops = [
+      listen(
+        document,
+        "click",
+        (event: MouseEvent) => {
+          if (event.detail > 0) {
+            stopAbsorbingClick?.();
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        },
+        true,
+      ),
+      listen(document, "pointerdown", () => stopAbsorbingClick?.(), true),
+    ];
     stopAbsorbingClick = () => {
-      document.removeEventListener("click", absorb, true);
+      stops.forEach((stop) => stop());
       stopAbsorbingClick = undefined;
     };
   };
   const pointerdown = (event: PointerEvent) => {
     lastRelease = undefined;
-    stopAbsorbingClick?.();
     let started = starts.get(event);
     if (!started) {
       reconcileNative(registry);
