@@ -427,7 +427,7 @@ it("keeps interval message and tool counts unavailable for initial failure", () 
   ]);
 });
 
-it.each(["tool", "user"])("keeps stale counts independent of %s and search", (role) => {
+it.each(["tool", "user"] as const)("keeps stale counts independent of %s and search", (role) => {
   const start = Date.parse("2026-08-20T12:00:00Z");
   const container = mount([point({ timestamp: start }), point({ timestamp: start + 1000 })], {
     start,
