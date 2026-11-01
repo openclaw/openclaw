@@ -837,7 +837,6 @@ public protocol OpenClawChatTransport: Sendable {
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
     func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload
-    }
 
     func requestHistoryPage(sessionKey: String, offset: Int) async throws -> OpenClawChatHistoryPayload
     /// Tri-state hello-catalog negotiation: true/false when the connected

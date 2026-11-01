@@ -42,7 +42,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     }
 
     private var label: String {
-        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
+        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded.wrappedValue)
     }
 }
 

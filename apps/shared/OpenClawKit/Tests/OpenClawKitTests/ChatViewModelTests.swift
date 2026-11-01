@@ -15358,6 +15358,9 @@ struct ChatHistoryMutationTests {
         await model.bootstrapTask?.value
         #expect(await !(oldRead.value).applied)
         #expect(model.messages.isEmpty)
+    }
+}
+
 struct ChatTranscriptRevisionTests {
     private static func readerMessage(role: String, timestamp: Double? = nil) -> OpenClawChatMessage {
         OpenClawChatMessage(

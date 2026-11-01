@@ -462,7 +462,7 @@ extension OpenClawChatView {
                 self.isAtHistoryStart = isAtHistoryStart
                 if isAtHistoryStart { self.loadEarlierHistoryIfNeeded() }
             }
-            // Lazy row sizing can cross the threshold repeatedly within one layout. Observe the
+            // Row sizing can cross the threshold repeatedly within one layout. Observe the
             // distance so a coalesced update still reconciles the stored live-edge state.
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
                 geometry.contentSize.height - geometry.visibleRect.maxY
