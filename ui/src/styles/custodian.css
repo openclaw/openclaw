@@ -447,6 +447,7 @@ openclaw-custodian-page {
   width: 14px;
   height: 14px;
   margin: 6px auto;
+  color: var(--accent);
   border: var(--spinner-stroke) solid currentColor;
   border-right-color: var(--spinner-gap);
   border-radius: var(--radius-full);
