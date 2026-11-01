@@ -1,0 +1,5 @@
+7
+# LOCAL 2026.11.8 row 149; source 6c96aff8e06116c47c796cd770ac1645c0312fd5.
+# M4V uses existing codec-aware playback and single-flight transcode policy, retaining oversized codec distinctions.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
