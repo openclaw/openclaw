@@ -1101,13 +1101,21 @@ select.settings-select:not([multiple]) {
     select.settings-select:not([multiple], [size]) {
       appearance: base-select;
       display: inline-flex;
-      align-items: center;
+      overflow: hidden;
+      align-items: flex-start;
+      padding-block: 0;
       padding-right: 10px;
       background-image: none;
+      /* The engine's value text can't shrink unless it may wrap. Each line fills
+         the box, so a long value shows one clipped line and keeps its chevron. */
+      line-height: calc(var(--settings-control-height) - 2px);
+      overflow-wrap: anywhere;
+      white-space: normal;
 
       &::picker-icon {
         content: "";
         flex: none;
+        align-self: center;
         width: 16px;
         height: 16px;
         margin-inline-start: auto;

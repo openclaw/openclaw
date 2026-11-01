@@ -718,8 +718,9 @@
   height: 14px;
 }
 
+/* Room for a one-word group at either type size, plus the select's own chrome. */
 select.session-group-select {
-  width: 9em;
+  width: calc(6.5em + 44px);
 }
 
 .session-group-row__count {
