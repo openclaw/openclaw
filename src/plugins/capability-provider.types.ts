@@ -50,7 +50,7 @@ import type {
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
-import type { VideoGenerationProvider } from "../video-generation/types.js";
+import type { VideoGenerationProvider } from "../video-generation/provider-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
