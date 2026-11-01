@@ -146,25 +146,6 @@ describe("plugins cli inspect", () => {
     });
   });
 
-  it.each(["fish-audio", "Fish-Audio-Speech"])(
-    "resolves %s to its canonical plugin id like enable and disable",
-    async (requested) => {
-      loadPluginMetadataSnapshotMock.mockReturnValue(
-        createPluginMetadataSnapshotFixture({
-          plugins: [{ id: "fish-audio-speech", legacyPluginIds: ["fish-audio"] }],
-        }),
-      );
-      const plugin = createPluginRecord({ id: "fish-audio-speech", name: "Fish Audio" });
-      mockInspection(plugin);
-
-      await plugins("inspect", requested);
-
-      expect(inspectOne).toHaveBeenCalledWith(expect.objectContaining({ id: "fish-audio-speech" }));
-      expect(runtimeErrors).toEqual([]);
-      expect(stripVTControlCharacters(logs.join("\n"))).toContain("id: fish-audio-speech");
-    },
-  );
-
   it.each([{ selection: ["--all", "extra"] }, { selection: [] }])(
     "rejects invalid runtime selection before acquisition: $selection",
     async ({ selection }) => {
@@ -349,22 +330,21 @@ describe("plugins cli inspect", () => {
 
   it("runtime-inspects exact plugin ids and display names without repairing deps", async () => {
     const plugin = createPluginRecord({ id: "openclaw-mem0", name: "Mem0" });
-    mockInspection(
-      plugin,
-      {
-        gatewayDiscoveryServices: ["mem0-runtime-discovery"],
-      },
-      [createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }), plugin],
+    loadPluginMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: plugin.id, legacyPluginIds: ["mem0-old"] }],
+      }),
     );
+    mockInspection(plugin, { gatewayDiscoveryServices: ["mem0-runtime-discovery"] }, [
+      createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }),
+      plugin,
+    ]);
+    const selection = { config: {}, onlyPluginIds: [plugin.id], runtimeInspection: true };
 
-    for (const selector of ["openclaw-mem0", "Mem0"]) {
+    for (const selector of ["openclaw-mem0", "Mem0", "OPENCLAW-MEM0", "mem0-old"]) {
       await plugins("inspect", selector, "--runtime");
       expect(withDiagnostics).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          config: {},
-          onlyPluginIds: ["openclaw-mem0"],
-          runtimeInspection: true,
-        }),
+        expect.objectContaining(selection),
         expect.any(Function),
       );
       expect(logs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");
