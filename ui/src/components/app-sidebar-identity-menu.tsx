@@ -13,7 +13,12 @@ import type { PresenceViewer } from "../lib/presence-users.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
-import { openClawIdMenuEntries, selectOpenClawIdMenuValue } from "./openclaw-id/account-menu.tsx";
+import {
+  openClawIdMenuEntries,
+  openClawIdMenuIdentity,
+  openClawIdSignOutEntries,
+  selectOpenClawIdMenuValue,
+} from "./openclaw-id/account-menu.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import {
   COMMAND_VALUE_PREFIX,
@@ -203,13 +208,19 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
     content: <div class="sidebar-customize-menu__title">{t("nav.gateway.sectionLabel")}</div>,
   };
   const profileSeparator = separator("profile-separator");
+  const openclawSeparator = separator("openclaw-id-actions-separator");
   const gatewaySeparator = separator("gateway-separator");
   const usageSeparator = separator("usage-separator");
   const helpSeparator = separator("help-separator");
   const retrySeparator = separator("retry-separator");
   const footerSeparator = separator("footer-separator");
+  const openclawIdentity = () =>
+    params.openclawIdStatus ? openClawIdMenuIdentity(params.openclawIdStatus) : null;
   const profileName = () =>
-    params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
+    openclawIdentity()?.name ??
+    params.profileViewer?.name ??
+    params.profileViewer?.email ??
+    t("nav.owner");
   const avatarUser = createMemo(() => ({
     id: "owner",
     watchedSessions: [],
@@ -217,9 +228,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
     name: profileName(),
   }));
   const profileEmail = () =>
-    params.profileViewer?.email && params.profileViewer.email !== profileName()
+    openclawIdentity()?.detail ??
+    (params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
-      : null;
+      : null);
   const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
     const gateways = renderIdentityGateways(params.nativeGatewaySnapshot, params.onClose);
@@ -230,7 +242,13 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         class: "sidebar-customize-menu__item sidebar-identity-menu__header",
         icon: (
           <span class="sidebar-identity-menu__avatar" aria-hidden="true">
-            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            {openclawIdentity() ? (
+              <span class="sidebar-openclaw-id__initial">
+                {profileName().slice(0, 1).toUpperCase()}
+              </span>
+            ) : (
+              <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            )}
           </span>
         ),
         content: (
@@ -248,6 +266,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
       },
       profileSeparator,
       ...openClawIdMenuEntries(params.openclawIdStatus ?? null),
+      ...(params.openclawIdStatus ? [openclawSeparator] : []),
       ...(gateways ? [gatewayTitle, gateways, gatewaySeparator] : []),
       renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
         details: (
@@ -258,6 +277,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           />
         ),
       }),
+      ...openClawIdSignOutEntries(params.openclawIdStatus ?? null),
       {
         ...renderSidebarMenuAction("command:updates", titleForRoute("updates"), "download", {
           details: params.updateAvailable ? (
@@ -365,7 +385,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
             status: params.openclawIdStatus ?? null,
             client: params.gatewayClient,
             basePath: params.basePath,
-            onNavigate: params.onNavigate,
           })
         ) {
           return;

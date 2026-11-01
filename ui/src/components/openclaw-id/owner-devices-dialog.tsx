@@ -8,17 +8,26 @@ import {
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { openClawIdAccount } from "../../lib/openclaw-id/account.ts";
 import {
   devicesApprovedBy,
   signOwnerDeviceRevocation,
   thisOwnerDevice,
 } from "../../lib/openclaw-id/owner-devices.ts";
-import type { OpenClawIdOwnerDevice, OpenClawIdPeopleLink } from "../../lib/openclaw-id/types.ts";
+import type {
+  OpenClawIdStatusResult,
+  OpenClawIdOwnerDevice,
+  OpenClawIdPeopleLink,
+} from "../../lib/openclaw-id/types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { showToast } from "../../lib/toast.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
+import { showRegenerateOwnerKeyDialog } from "./regenerate-owner-key-dialog.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
+registerEnglishCatalog(registerOpenClawIdEnglish);
 
 type Link = OpenClawIdPeopleLink;
 
@@ -111,11 +120,16 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
       const [link, setLink] = createSignal<Link | null>(null);
       const [ownPub, setOwnPub] = createSignal<string | null>(null);
       const [ownerFp, setOwnerFp] = createSignal<string | null>(null);
+      const [localOperator, setLocalOperator] = createSignal(false);
       const [busy, setBusy] = createSignal(false);
       const [error, setError] = createSignal<string | null>(null);
       const refresh = async () => {
         try {
-          const next = await readLink(params.client);
+          const [next, status] = await Promise.all([
+            readLink(params.client),
+            params.client.request<OpenClawIdStatusResult>("openclawId.status", {}),
+          ]);
+          setLocalOperator(status.channel === "local_operator" && next.linked);
           setOwnPub((await thisOwnerDevice(next).catch(() => undefined))?.devicePub ?? null);
           setOwnerFp(await ownerFingerprint(next));
           setLink(next);
@@ -139,6 +153,14 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           setBusy(false);
           await refresh();
         }
+      };
+      // Close this dialog before opening regeneration so modal focus has one owner.
+      const regenerate = () => {
+        modal.finish(undefined);
+        void showRegenerateOwnerKeyDialog({
+          client: params.client,
+          signedIn: openClawIdAccount(),
+        }).catch((failure: unknown) => showToast({ message: formatUiError(failure) }));
       };
       void refresh();
       const devices = () => link()?.ownerDevices ?? [];
@@ -188,7 +210,17 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                 </p>
               )}
             </Show>
+            <Show when={localOperator() && link()?.frozen}>
+              <div class="callout danger" role="alert">
+                {t("openclawId.frozenAlert")}
+              </div>
+            </Show>
             <openclaw-modal-actions class="exec-approval-actions">
+              <Show when={localOperator()}>
+                <button type="button" class="btn" disabled={busy()} onClick={regenerate}>
+                  {t("openclawId.regenerateOwnerKey")}
+                </button>
+              </Show>
               <button
                 type="button"
                 class="btn primary"

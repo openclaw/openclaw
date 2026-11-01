@@ -1,11 +1,16 @@
 /* @vitest-environment jsdom */
-
-import { createRoot } from "solid-js";
+import { createRoot, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
 import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
 import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
-import { openClawIdMenuEntries, selectOpenClawIdMenuValue } from "./account-menu.tsx";
+import {
+  openClawIdMenuEntries,
+  openClawIdMenuIdentity,
+  openClawIdSignOutEntries,
+  selectOpenClawIdMenuValue,
+} from "./account-menu.tsx";
 
 function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStatusResult {
   return {
@@ -13,8 +18,10 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
     link: { linked: false },
     channel: "local_operator",
     owner: true,
+    connection: { kind: "local" },
+    ownerDeviceCount: 2,
     services: {
-      issuerUrl: "https://issuer.example.test/api/auth",
+      issuerUrl: "https://issuer.example.test",
       discoveryUrl: "https://discovery.example.test",
       loaderDomain: "claws.example.test",
       clientId: "control-ui",
@@ -23,239 +30,233 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
   };
 }
 
-// Builds the section inside a root, as the identity menu's memo does.
+// Read the exact rendered content in the same owned scope as the sidebar memo.
 function menu(current: OpenClawIdStatusResult | null) {
   return createRoot((dispose) => {
-    const entries = openClawIdMenuEntries(current);
+    const entries = [...openClawIdMenuEntries(current), ...openClawIdSignOutEntries(current)];
+    const rows = entries.filter((entry) => !("kind" in entry));
+    const text = entries
+      .map((entry) => ("content" in entry ? (entry.content as HTMLElement)?.textContent : ""))
+      .join(" ");
+    const result = { labels: rows.map((entry) => entry.label), rows, text };
     dispose();
-    return entries;
+    return result;
   });
 }
 
-// The selectable rows of the section, by label.
-function rows(entries: ReturnType<typeof openClawIdMenuEntries>) {
-  return entries
-    .filter((entry) => !("kind" in entry))
-    .map((entry) => entry as { id: string; label: string; disabled?: boolean });
+const linked = { linked: true, hostname: "studio-e61zr.crabd.xyz" };
+const account = {
+  sub: "never-display-this-id",
+  email: "owner@example.test",
+  name: "Owner",
+  exp: 4_102_444_800,
+};
+
+async function signIn(current: OpenClawIdStatusResult) {
+  const popup = { location: { href: "" }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+  const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+    params.action === "account_begin"
+      ? { authorizationUrl: "https://issuer.example.test/authorize", state: "s1" }
+      : { account, idToken: "test-token" },
+  );
+  selectOpenClawIdMenuValue("openclaw-id:sign-in", {
+    status: current,
+    client: { request } as unknown as GatewayBrowserClient,
+    basePath: "",
+  });
+  await vi.waitFor(() => expect(popup.location.href).toContain("issuer.example.test"));
+  window.dispatchEvent(
+    new StorageEvent("storage", {
+      key: `${OPENCLAW_ID_CALLBACK_KEY_PREFIX}s1`,
+      newValue: JSON.stringify({ state: "s1", code: "test-code", error: null }),
+    }),
+  );
+  await vi.waitFor(() => expect(menu(current).labels).toContain("Sign out of OpenClaw ID"));
+  return request;
 }
 
-// The text of the section's non-interactive lines.
-function texts(entries: ReturnType<typeof openClawIdMenuEntries>) {
-  return entries
-    .filter((entry) => "kind" in entry && entry.kind === "content")
-    .map((entry) => ((entry as { content: unknown }).content as HTMLElement).textContent ?? "")
-    .filter(Boolean);
-}
-
-function labels(entries: ReturnType<typeof openClawIdMenuEntries>) {
-  return rows(entries).map((row) => row.label);
-}
-
-const ACCOUNT = { sub: "acct-1", email: "owner@example.test", name: "Owner", exp: 4_102_444_800 };
-
-describe("OpenClaw ID account menu", () => {
+describe("approved OpenClaw ID account menu", () => {
   afterEach(() => {
-    selectOpenClawIdMenuValue("openclaw-id:sign-out", {
-      status: null,
-      client: null,
-      basePath: "",
-      onNavigate: () => {},
-    });
+    signOutOfOpenClawId();
+    flush();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it("is hidden while the Labs flag is off", () => {
-    expect(menu(null)).toEqual([]);
+  it("is absent when the Labs flag is off", () => {
+    expect(menu(null).labels).toEqual([]);
+    expect(menu(status({ status: { state: "off" } })).text.trim()).toBe("");
   });
 
-  it("signed out: local operator, sign-in, Make reachable and People", () => {
-    const entries = menu(status());
-    expect(texts(entries)).toContain("Local operator · Not signed in · this computer only");
-    expect(texts(entries)).toContain("Your conversations stay on this computer");
-    expect(rows(entries).map((row) => row.label)).toEqual([
-      "Sign in with OpenClaw ID",
-      "Make reachable",
-      "People",
-    ]);
-    expect(rows(entries).every((row) => !row.disabled)).toBe(true);
+  it("local signed-out shows one sign-in action, explanation, and the local header", () => {
+    const current = status({ link: linked });
+    expect(openClawIdMenuIdentity(current)).toEqual({
+      name: "Local operator",
+      detail: "This computer",
+    });
+    expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
+    expect(menu(current).text).toContain("Reach this claw from other devices and invite people");
+    expect(menu(current).text).not.toMatch(/People|Make reachable|Regenerate|Unlink/);
   });
 
-  it("keeps sign-in and Make reachable local to this machine on any other connection", () => {
-    const entries = rows(
-      menu(status({ channel: null, owner: false, connection: { kind: "none" } })),
+  it("does not allow loopback sign-in over an untrusted connection", () => {
+    expect(
+      menu(status({ channel: null, owner: false, connection: { kind: "none" } })).rows[0]?.disabled,
+    ).toBe(true);
+  });
+
+  it("remote owner shows verified account, encrypted device, count, and no local actions", () => {
+    const current = status({
+      channel: "tunnel",
+      link: linked,
+      connection: {
+        kind: "owner",
+        deviceLabel: "Owner phone",
+        ownerAccountId: account.sub,
+        accountEmail: account.email,
+        accountName: account.name,
+      },
+    });
+    expect(openClawIdMenuIdentity(current)).toEqual({
+      name: "Owner",
+      detail: "owner@example.test · Owner",
+    });
+    expect(menu(current).labels).toEqual(["Your devices"]);
+    expect(menu(current).text).toContain("End-to-end encryptedOwner phone · this device");
+    expect(menu(current).text).not.toMatch(
+      /reachable|crabd|People|Sign in|Regenerate|never-display/,
     );
-    expect(entries.find((row) => row.label === "Sign in with OpenClaw ID")?.disabled).toBe(true);
-    expect(entries.find((row) => row.label === "Make reachable")?.disabled).toBe(true);
-    expect(entries.find((row) => row.label === "People")).toBeUndefined();
+    expect((menu(current).rows[0]?.details as HTMLElement).textContent).toBe("2");
   });
 
-  it("over the tunnel as an owner device: the device, the owner account, remote and owner items", () => {
-    const entries = menu(
-      status({
-        channel: "tunnel",
-        owner: true,
-        link: { linked: true, hostname: "studio-e61zr.crabd.xyz" },
-        connection: { kind: "owner", deviceLabel: "Josh's iPhone", ownerAccountId: "acct-owner" },
-      }),
-    );
-    expect(labels(entries)).toEqual(["studio is reachable", "Your devices", "People"]);
-    expect(texts(entries)).toEqual(
-      expect.arrayContaining([
-        "Owner device ‘Josh's iPhone’",
-        "Linked to OpenClaw ID account acct-owner",
-        "Connected remotely · end-to-end encrypted",
-      ]),
-    );
-    const all = [...labels(entries), ...texts(entries)].join(" ");
-    expect(all).not.toMatch(
-      /Local operator|Not signed in|stays? on this computer|Sign in|Sign out/,
-    );
-  });
-
-  it("over the tunnel as a member: the account and role, remote, and no owner items", () => {
-    const entries = menu(
-      status({
+  it.each(["viewer", "operator"] as const)(
+    "remote %s shows own email, role and known inviter with no owner items",
+    (role) => {
+      const current = status({
         channel: "tunnel",
         owner: false,
-        link: { linked: true, hostname: "studio-e61zr.crabd.xyz" },
+        link: linked,
         connection: {
           kind: "member",
-          role: "viewer",
-          accountId: "acct-member",
+          role,
+          accountId: "member-id",
           email: "member@example.test",
-          displayName: null,
+          displayName: "Member",
+          invitedBy: { name: "Owner", email: "owner@example.test" },
         },
-      }),
-    );
-    expect(labels(entries)).toEqual(["studio is reachable"]);
-    expect(texts(entries)).toEqual(
-      expect.arrayContaining([
-        "member@example.test · member (viewer)",
-        "Connected remotely · end-to-end encrypted",
-      ]),
-    );
-    const all = [...labels(entries), ...texts(entries)].join(" ");
-    expect(all).not.toMatch(/People|Your devices|Regenerate|Local operator|Sign in|Sign out/);
-  });
+      });
+      expect(openClawIdMenuIdentity(current)).toEqual({
+        name: "member@example.test",
+        detail: `${role === "viewer" ? "Viewer" : "Operator"} on studio`,
+      });
+      expect(menu(current).labels).toEqual([]);
+      expect(menu(current).text).toContain("Invited by Owner");
+      expect(menu(current).text).not.toMatch(
+        /People|Your devices|Regenerate|Remote access|Sign in/,
+      );
+    },
+  );
 
-  it("over the tunnel without a known identity still says it is remote, not local", () => {
-    const entries = menu(status({ channel: "tunnel", owner: false }));
-    expect(labels(entries)).toEqual([]);
-    expect(texts(entries)).toContain("Connected remotely · end-to-end encrypted");
-    expect(texts(entries).join(" ")).not.toMatch(/Local operator|this computer/);
-  });
-
-  it("offers Regenerate owner key only on direct loopback of a linked claw", () => {
-    const linked = { linked: true, hostname: "studio-e61zr.crabd.xyz" };
-    expect(labels(menu(status({ link: linked })))).toContain("Regenerate owner key");
-    expect(labels(menu(status({ channel: "tunnel", link: linked })))).not.toContain(
-      "Regenerate owner key",
-    );
-    expect(labels(menu(status({ channel: null, link: linked })))).not.toContain(
-      "Regenerate owner key",
-    );
-    expect(labels(menu(status()))).not.toContain("Regenerate owner key");
-  });
-
-  it("explains a frozen claw next to Regenerate owner key", () => {
-    const frozen = { linked: true, hostname: "studio-e61zr.crabd.xyz", frozen: true };
-    expect(texts(menu(status({ link: frozen }))).join(" ")).toContain(
-      "Conflicting owner-key changes reached this claw",
-    );
-    expect(texts(menu(status({ channel: "tunnel", link: frozen }))).join(" ")).not.toContain(
-      "Conflicting owner-key changes",
-    );
-  });
-
-  it("offers People and Your devices only to an owner", () => {
-    const linked = { linked: true, hostname: "studio-e61zr.crabd.xyz" };
-    const member = labels(menu(status({ channel: "tunnel", owner: false, link: linked })));
-    expect(member).not.toContain("People");
-    expect(member).not.toContain("Your devices");
-    const owner = labels(menu(status({ channel: "tunnel", owner: true, link: linked })));
-    expect(owner).toEqual(expect.arrayContaining(["People", "Your devices"]));
-  });
-
-  it("signs in through the popup and shows the account until sign-out", async () => {
-    const popup = { location: { href: "" }, close: vi.fn() };
-    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
-    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => {
-      if (params.action === "account_begin") {
-        return { authorizationUrl: "https://issuer.example.test/authorize?x=1", state: "s1" };
-      }
-      return { account: ACCOUNT, idToken: "id-token" };
+  it("omits the unknown inviter rather than inventing one", () => {
+    const current = status({
+      channel: "tunnel",
+      owner: false,
+      connection: {
+        kind: "member",
+        role: "viewer",
+        accountId: "secret-id",
+        email: null,
+        displayName: null,
+      },
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const current = status({ link: { linked: true, hostname: "studio-e61zr.crabd.xyz" } });
+    expect(openClawIdMenuIdentity(current).name).toBe("OpenClaw ID account");
+    expect(menu(current).text).not.toContain("Invited by");
+  });
 
-    selectOpenClawIdMenuValue("openclaw-id:sign-in", {
-      status: current,
-      client,
-      basePath: "",
-      onNavigate: () => {},
+  it("does not claim Owner when tunnel identity is unavailable", () => {
+    const current = status({ channel: "tunnel", owner: false, connection: { kind: "none" } });
+    expect(openClawIdMenuIdentity(current)).toEqual({
+      name: "OpenClaw ID account",
+      detail: "End-to-end encrypted",
     });
-    await vi.waitFor(() => expect(popup.location.href).toContain("issuer.example.test"));
-    expect(request).toHaveBeenCalledWith("openclawId.authority", {
-      action: "account_begin",
-      redirectUri: `${window.location.origin}/openclaw-id/callback`,
+    expect(menu(current).labels).toEqual([]);
+  });
+
+  it("uses the account fallback, never a raw ID, when the owner email is missing", () => {
+    const current = status({
+      channel: "tunnel",
+      link: linked,
+      connection: { kind: "owner", deviceLabel: null, ownerAccountId: account.sub },
     });
-    // The callback popup writes its result; this tab hears it as a storage event.
-    window.dispatchEvent(
-      new StorageEvent("storage", {
-        key: `${OPENCLAW_ID_CALLBACK_KEY_PREFIX}s1`,
-        newValue: JSON.stringify({ state: "s1", code: "the-code", error: null }),
-      }),
-    );
-    await vi.waitFor(() =>
-      expect(labels(menu(current))).toEqual([
-        "Signed in to OpenClaw ID as owner@example.test",
-        "studio is reachable",
+    expect(openClawIdMenuIdentity(current)).toEqual({
+      name: "OpenClaw ID account",
+      detail: "Owner",
+    });
+    expect(menu(current).text).not.toContain(account.sub);
+  });
+
+  it.each([true, false])(
+    "local linked reflects relayOnline=%s and offers a copy link and devices",
+    async (relayOnline) => {
+      const current = status({
+        link: linked,
+        status: { state: "on", tunnel: { state: "running", relayOnline } },
+        connection: { kind: "local", accountEmail: account.email, accountName: account.name },
+      });
+      await signIn(current);
+      expect(openClawIdMenuIdentity(current).detail).toBe("owner@example.test · Local operator");
+      expect(menu(current).labels).toEqual([
+        "Copy remote link",
         "Your devices",
-        "Regenerate owner key",
-        "People",
         "Sign out of OpenClaw ID",
-      ]),
-    );
-    expect(texts(menu(current))).toEqual(
-      expect.arrayContaining([
-        "https://studio-e61zr.crabd.xyz",
-        "End-to-end encrypted · relays can't read it",
-      ]),
-    );
+      ]);
+      expect(menu(current).text).toContain(
+        `Remote access onstudio-e61zr.crabd.xyz${relayOnline ? "Online" : "Offline"}`,
+      );
+      expect(menu(current).text).not.toMatch(/People|Regenerate|Turn off remote|Unlink/);
+    },
+  );
+
+  it("only offers Make reachable after sign-in, without trusting browser profile storage", async () => {
+    const current = status();
+    const request = await signIn(current);
+    expect(menu(current).labels).toEqual(["Make reachable", "Sign out of OpenClaw ID"]);
+    expect(openClawIdMenuIdentity(current).name).toBe("OpenClaw ID account");
     expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
       action: "account_complete",
       state: "s1",
-      code: "the-code",
+      code: "test-code",
     });
-
     selectOpenClawIdMenuValue("openclaw-id:sign-out", {
       status: current,
-      client,
-      basePath: "",
-      onNavigate: () => {},
-    });
-    await vi.waitFor(() => expect(labels(menu(current))[0]).toBe("Sign in with OpenClaw ID"));
-  });
-
-  it("opens the People plugin page", () => {
-    const onNavigate = vi.fn();
-    const handled = selectOpenClawIdMenuValue("openclaw-id:people", {
-      status: status(),
       client: null,
       basePath: "",
-      onNavigate,
     });
-    expect(handled).toBe(true);
-    const [route, location] = onNavigate.mock.calls[0]!;
-    expect(route).toBe("plugin");
-    expect(`${location.pathname}${location.search}`).toContain("openclaw-id-access");
+    flush();
+    expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
+  });
+
+  it("copies the canonical HTTPS remote link", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    selectOpenClawIdMenuValue("openclaw-id:copy-link", {
+      status: status({ link: linked }),
+      client: null,
+      basePath: "",
+    });
+    await vi.waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("https://studio-e61zr.crabd.xyz"),
+    );
+  });
+
+  it("offers remote sign-out only with the loader's real service worker", () => {
+    vi.stubGlobal("navigator", { serviceWorker: { controller: { postMessage: vi.fn() } } });
+    expect(menu(status({ channel: "tunnel", link: linked })).labels).toContain(
+      "Sign out of OpenClaw ID",
+    );
     expect(
-      selectOpenClawIdMenuValue("command:settings", {
-        status: null,
-        client: null,
-        basePath: "",
-        onNavigate,
-      }),
+      selectOpenClawIdMenuValue("command:settings", { status: null, client: null, basePath: "" }),
     ).toBe(false);
   });
 });

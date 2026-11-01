@@ -1,46 +1,33 @@
-// The OpenClaw ID section of the sidebar account (identity) menu. It appears
-// only while the Labs flag (gateway.openclawId.enabled) is on and follows the
-// onboarding mockup (steps 2, 4 and 9): Sign in with OpenClaw ID, the account,
-// Make reachable or the linked address, People (the openclaw-id-access plugin
-// page), Your devices (owner devices, revoke) and Sign out. The link-code path
-// of Make reachable stays available when signed out.
+// Connection-aware OpenClaw ID account menu. Gateway-verified identity owns the
+// header; local browser sign-in controls only the loopback onboarding actions.
 import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { pluginTabLocation } from "../../app-route-paths.ts";
-import type { ApplicationNavigationOptions } from "../../app/context.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   openClawIdAccount,
   signInWithOpenClawId,
   signOutOfOpenClawId,
 } from "../../lib/openclaw-id/account.ts";
+import { signOutOfRemoteOpenClawId } from "../../lib/openclaw-id/remote-sign-out.ts";
 import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import { renderSidebarMenuAction } from "../app-sidebar-dropdown.tsx";
-import { Icon } from "../solid/icon.tsx";
+import { Icon, type IconName } from "../solid/icon.tsx";
 import type { MenuEntry } from "../solid/menu.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
 
 registerEnglishCatalog(registerOpenClawIdEnglish);
-
-/** The bundled plugin page ("People") for invites, requests and members. */
-export const OPENCLAW_ID_PEOPLE_PAGE = { pluginId: "openclaw-id-access", id: "people" } as const;
-
 const VALUE_PREFIX = "openclaw-id:";
 const SIGN_IN = `${VALUE_PREFIX}sign-in`;
 const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
-const PEOPLE = `${VALUE_PREFIX}people`;
 const DEVICES = `${VALUE_PREFIX}devices`;
-const REGENERATE = `${VALUE_PREFIX}regenerate-owner-key`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
-const ACCOUNT = `${VALUE_PREFIX}account`;
+const COPY_LINK = `${VALUE_PREFIX}copy-link`;
 
-/**
- * Reads `openclawId.status` once for an open menu. Resolves to null while the
- * flag is off, on Gateways without OpenClaw ID, or when the read fails.
- */
+/** Reads the Gateway-owned menu summary once for this open menu. */
 export function createOpenClawIdMenuStatus(client: GatewayBrowserClient | null | undefined) {
   const [status, setStatus] = createSignal<OpenClawIdStatusResult | null>(null);
   if (client) {
@@ -52,15 +39,77 @@ export function createOpenClawIdMenuStatus(client: GatewayBrowserClient | null |
   return status;
 }
 
-// Why sign-in is unavailable here, or undefined when it can start.
-function signInBlocker(status: OpenClawIdStatusResult): string | undefined {
-  if (status.channel !== "local_operator") {
-    return t("openclawId.signInLocalOnly");
+/** Derives the compact account header without ever displaying an account ID. */
+export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
+  const identity = status.connection;
+  if (status.channel === "tunnel") {
+    if (identity?.kind === "member") {
+      const role = t(
+        identity.role === "viewer" ? "openclawId.roleViewer" : "openclawId.roleOperator",
+      );
+      return {
+        name: identity.email || t("openclawId.accountFallback"),
+        detail: t("openclawId.memberRoleOnClaw", {
+          role,
+          claw: status.link.hostname
+            ? clawNameFromHostname(status.link.hostname)
+            : t("openclawId.thisClaw"),
+        }),
+      };
+    }
+    if (identity?.kind !== "owner") {
+      return { name: t("openclawId.accountFallback"), detail: t("openclawId.encryptedConnection") };
+    }
+    const email = identity.accountEmail;
+    const name = identity.accountName;
+    return {
+      name: name || email || t("openclawId.accountFallback"),
+      detail: email ? `${email} · ${t("openclawId.ownerRole")}` : t("openclawId.ownerRole"),
+    };
   }
-  return status.services.clientId ? undefined : t("openclawId.signInUnconfigured");
+  if (openClawIdAccount()) {
+    // Browser storage never supplies the displayed profile; only this RPC does.
+    const email = identity?.kind === "local" ? identity.accountEmail : null;
+    const name = identity?.kind === "local" ? identity.accountName : null;
+    return {
+      name: name || email || t("openclawId.accountFallback"),
+      detail: email ? `${email} · ${t("openclawId.localOperator")}` : t("openclawId.localOperator"),
+    };
+  }
+  return { name: t("openclawId.localOperator"), detail: t("openclawId.thisComputer") };
 }
 
-// Why Make reachable is unavailable here, or undefined when it can start.
+// One noninteractive status row, aligned with the sidebar's existing icon column.
+function statusRow(
+  id: string,
+  label: string,
+  icon: IconName,
+  detail?: string | null,
+  online?: boolean,
+): MenuEntry {
+  return {
+    kind: "content",
+    id: `openclaw-id-${id}`,
+    content: (
+      <div class="sidebar-openclaw-id__status">
+        <span class="nav-item__icon" aria-hidden="true">
+          <Icon name={icon} />
+        </span>
+        <span class="sidebar-openclaw-id__lines">
+          <span>{label}</span>
+          {detail ? <span class="sidebar-openclaw-id__detail">{detail}</span> : undefined}
+        </span>
+        {online !== undefined ? (
+          <span class="sidebar-openclaw-id__pill" data-online={online ? "true" : "false"}>
+            {t(online ? "openclawId.online" : "openclawId.offline")}
+          </span>
+        ) : undefined}
+      </div>
+    ),
+  };
+}
+
+// Make reachable is offered only after loopback sign-in.
 function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefined {
   if (status.channel !== "local_operator") {
     return t("openclawId.makeReachableLocalOnly");
@@ -68,203 +117,97 @@ function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefine
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
 
-// Spacing of the section's status lines, aligned with the menu's rows. Inline
-// so the sketch adds no Control UI CSS; the sidebar-openclaw-id__info hook
-// lets a later stylesheet take over.
-const INFO_STYLE = { padding: "2px 8px 6px", "font-size": "var(--control-ui-text-xs)" };
-
-// The section's heading line.
-function titleLine(id: string, text: string): MenuEntry {
-  return {
-    kind: "content",
-    id: `openclaw-id-${id}`,
-    content: <div class="sidebar-customize-menu__title sidebar-openclaw-id__title">{text}</div>,
-  };
-}
-
-// A non-interactive status line of the section (not a command), in normal case.
-function infoLine(id: string, text: string): MenuEntry {
-  return {
-    kind: "content",
-    id: `openclaw-id-${id}`,
-    content: (
-      <div class="muted sidebar-openclaw-id__info" style={INFO_STYLE}>
-        {text}
-      </div>
-    ),
-  };
-}
-
-// A line naming who this connection is: icon and text in the rows' columns, wrapping
-// instead of truncating, in the normal text colour (it states a fact; it is not a
-// disabled command).
-function identityRow(id: string, label: string, icon: "key" | "users" | "lock"): MenuEntry {
-  return {
-    kind: "content",
-    id: `openclaw-id-${id}`,
-    content: (
-      <div
-        class="sidebar-openclaw-id__identity"
-        style={{
-          display: "flex",
-          gap: "8px",
-          "align-items": "flex-start",
-          padding: "4px 8px",
-          "overflow-wrap": "anywhere",
-        }}
-      >
-        <Icon name={icon} />
-        <span>{label}</span>
-      </div>
-    ),
-  };
-}
-
-// Who this tunnel connection is: the owner device and the claw's owner account, or
-// the member and their role; then the remote, end-to-end encrypted transport.
-// There is no sign-in here: the loader signed this browser in through OpenClaw ID.
-function remoteEntries(connection: OpenClawIdStatusResult["connection"]): MenuEntry[] {
-  const lines: MenuEntry[] = [];
-  if (connection?.kind === "owner") {
-    lines.push(
-      identityRow(
-        "remote-owner",
-        connection.deviceLabel
-          ? t("openclawId.remoteOwner", { label: connection.deviceLabel })
-          : t("openclawId.remoteOwnerUnnamed"),
-        "key",
-      ),
-    );
-    if (connection.ownerAccountId) {
-      lines.push(
-        infoLine(
-          "owner-account",
-          t("openclawId.remoteOwnerAccount", { account: connection.ownerAccountId }),
-        ),
-      );
-    }
-  } else if (connection?.kind === "member") {
-    const role = t(
-      connection.role === "viewer" ? "openclawId.roleViewer" : "openclawId.roleOperator",
-    );
-    const account = connection.email ?? connection.displayName;
-    lines.push(
-      identityRow(
-        "remote-member",
-        account
-          ? t("openclawId.remoteMember", { account, role })
-          : t("openclawId.remoteMemberUnnamed", { role }),
-        "users",
-      ),
-    );
-  }
-  lines.push(identityRow("remote", t("openclawId.connectedRemotely"), "lock"));
-  return lines;
-}
-
-// Signed-out, signed-in or linked account lines (link-flow mockup steps 2 and 9).
-// Over the tunnel the connection itself says who this is.
-function accountEntries(status: OpenClawIdStatusResult): MenuEntry[] {
-  if (status.channel === "tunnel") {
-    return remoteEntries(status.connection);
-  }
-  const account = openClawIdAccount();
-  if (account) {
-    const name = account.email ?? account.name ?? account.sub;
-    return [
-      renderSidebarMenuAction(ACCOUNT, t("openclawId.signedIn", { account: name }), "key", {
-        disabled: true,
-        className: "sidebar-openclaw-id__account",
-      }),
-    ];
-  }
-  const blocker = signInBlocker(status);
-  return [
-    infoLine("local-operator", t("openclawId.localOperator")),
-    renderSidebarMenuAction(SIGN_IN, t("openclawId.signIn"), "key", {
-      disabled: Boolean(blocker),
-      title: blocker,
-    }),
-    infoLine("stays-local", t("openclawId.staysLocal")),
-  ];
-}
-
-// Owner-key regeneration, offered only on a direct-loopback Control UI of a linked
-// claw (the Gateway refuses it anywhere else), with the alert for a claw frozen by
-// conflicting owner-key changes, which regeneration resolves.
-function ownerKeyEntries(status: OpenClawIdStatusResult): MenuEntry[] {
-  if (status.channel !== "local_operator" || !status.link.linked) {
-    return [];
-  }
-  return [
-    ...(status.link.frozen ? [infoLine("frozen", t("openclawId.frozenAlert"))] : []),
-    renderSidebarMenuAction(REGENERATE, t("openclawId.regenerateOwnerKey"), "key"),
-  ];
-}
-
-// Reachability lines: the linked address and transport, or the Make reachable command.
-function reachabilityEntries(status: OpenClawIdStatusResult): MenuEntry[] {
-  if (status.link.linked && status.link.hostname) {
-    const host = status.link.hostname;
-    return [
-      renderSidebarMenuAction(
-        MAKE_REACHABLE,
-        t("openclawId.isReachable", { name: clawNameFromHostname(host) }),
-        "radio",
-        { disabled: true, className: "sidebar-openclaw-id__reachable" },
-      ),
-      infoLine("address", `https://${host}`),
-      // Over the tunnel the connection line already says it is end-to-end encrypted.
-      ...(status.channel === "tunnel" ? [] : [infoLine("encrypted", t("openclawId.encrypted"))]),
-      ...(status.owner
-        ? [renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "key")]
-        : []),
-      ...ownerKeyEntries(status),
-    ];
-  }
-  if (status.channel === "tunnel") {
-    return [];
-  }
-  const blocker = makeReachableBlocker(status);
-  return [
-    renderSidebarMenuAction(MAKE_REACHABLE, t("openclawId.makeReachable"), "radio", {
-      disabled: Boolean(blocker),
-      title: blocker,
-    }),
-  ];
-}
-
-/**
- * Menu entries for the OpenClaw ID section; empty while the flag is off.
- * Over the tunnel: who this connection is (owner device and the claw's owner
- * account, or member and role) and "Connected remotely · end-to-end encrypted";
- * no sign-in, sign-out or Make reachable.
- * Signed out: local operator, Sign in, "conversations stay on this computer".
- * Signed in: the account. Then Make reachable, or once linked the address and
- * transport and Your devices; People (the openclaw-id-access plugin page), both
- * only for an owner (loopback operator or owner device); on direct loopback,
- * Regenerate owner key (after an alert when conflicting changes froze the claw);
- * Sign out. Unlink is not offered yet (OCF-281 needs a Discovery endpoint).
- */
+/** Status and actions for the single OpenClaw ID section; People lives in Pages. */
 export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
-  if (!status) {
+  if (!status || status.status.state === "off") {
     return [];
   }
-  return [
-    titleLine("title", t("openclawId.menuTitle")),
-    ...accountEntries(status),
-    ...reachabilityEntries(status),
-    // People and Your devices are owner-only (openclawId.people refuses others).
-    ...(status.owner ? [renderSidebarMenuAction(PEOPLE, t("openclawId.people"), "users")] : []),
-    ...(status.channel !== "tunnel" && openClawIdAccount()
-      ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "x")]
-      : []),
+  const entries: MenuEntry[] = [
     {
       kind: "content",
-      id: "openclaw-id-separator",
-      content: <div class="sidebar-customize-menu__separator" role="separator" />,
+      id: "openclaw-id-title",
+      content: <div class="sidebar-customize-menu__title">{t("openclawId.menuTitle")}</div>,
     },
   ];
+  if (status.channel === "tunnel") {
+    const connection = status.connection;
+    const detail =
+      connection?.kind === "owner"
+        ? t("openclawId.thisDevice", {
+            label: connection.deviceLabel || t("openclawId.unnamedDevice"),
+          })
+        : connection?.kind === "member" && connection.invitedBy
+          ? t("openclawId.invitedBy", {
+              owner:
+                connection.invitedBy.name ||
+                connection.invitedBy.email ||
+                t("openclawId.accountFallback"),
+            })
+          : null;
+    entries.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
+  } else if (status.link.linked && status.link.hostname && openClawIdAccount()) {
+    entries.push(
+      statusRow(
+        "reachable",
+        t("openclawId.remoteAccessOn"),
+        "radio",
+        status.link.hostname,
+        status.status.tunnel?.relayOnline === true,
+      ),
+    );
+    if (status.channel === "local_operator") {
+      entries.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
+    }
+  } else if (!openClawIdAccount()) {
+    const blocker =
+      status.channel !== "local_operator"
+        ? t("openclawId.signInLocalOnly")
+        : !status.services.clientId
+          ? t("openclawId.signInUnconfigured")
+          : undefined;
+    entries.push({
+      ...renderSidebarMenuAction(SIGN_IN, t("openclawId.signIn"), "key", {
+        disabled: Boolean(blocker),
+        title: blocker,
+      }),
+      content: (
+        <span class="sidebar-openclaw-id__lines">
+          <span>{t("openclawId.signIn")}</span>
+          <span class="sidebar-openclaw-id__detail">{t("openclawId.signInBody")}</span>
+        </span>
+      ),
+    });
+  } else {
+    const blocker = makeReachableBlocker(status);
+    entries.push(
+      renderSidebarMenuAction(MAKE_REACHABLE, t("openclawId.makeReachable"), "radio", {
+        disabled: Boolean(blocker),
+        title: blocker,
+      }),
+    );
+  }
+  if (status.owner && status.link.linked && (status.channel === "tunnel" || openClawIdAccount())) {
+    entries.push(
+      renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor", {
+        details: <span class="sidebar-openclaw-id__count">{status.ownerDeviceCount ?? 0}</span>,
+      }),
+    );
+  }
+  return entries;
+}
+
+/** Sign-out follows Settings; remote sessions use the loader's actual mechanism. */
+export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
+  if (!status || status.status.state === "off") {
+    return [];
+  }
+  const available =
+    status.channel === "tunnel"
+      ? Boolean(navigator.serviceWorker?.controller)
+      : status.channel === "local_operator" && Boolean(openClawIdAccount());
+  return available
+    ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "arrowRight")]
+    : [];
 }
 
 // Runs a lazily loaded dialog; a failed load or dialog error shows one toast.
@@ -318,32 +261,32 @@ export function selectOpenClawIdMenuValue(
     status: OpenClawIdStatusResult | null;
     client: GatewayBrowserClient | null | undefined;
     basePath: string;
-    onNavigate: (routeId: "plugin", options?: ApplicationNavigationOptions) => void;
   },
 ): boolean {
   if (!value.startsWith(VALUE_PREFIX)) {
     return false;
   }
   const { client, status } = context;
-  if (value === PEOPLE) {
-    context.onNavigate("plugin", pluginTabLocation(OPENCLAW_ID_PEOPLE_PAGE, context.basePath));
-  } else if (value === DEVICES && client) {
+  if (value === DEVICES && client && status?.owner) {
     openDialog(async () =>
       (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
     );
-  } else if (value === REGENERATE && client) {
-    openDialog(async () =>
-      (await import("./regenerate-owner-key-dialog.tsx")).showRegenerateOwnerKeyDialog({
-        client,
-        signedIn: openClawIdAccount(),
+  } else if (value === COPY_LINK && status?.channel === "local_operator" && status.link.hostname) {
+    void copyToClipboard(`https://${status.link.hostname}`).then((copied) =>
+      showToast({
+        message: t(copied ? "openclawId.remoteLinkCopied" : "openclawId.remoteLinkCopyFailed"),
       }),
     );
   } else if (value === SIGN_OUT) {
-    signOutOfOpenClawId();
+    if (status?.channel === "tunnel") {
+      openDialog(signOutOfRemoteOpenClawId);
+    } else {
+      signOutOfOpenClawId();
+    }
   } else if (value === SIGN_IN && client) {
     signInWithOpenClawId({ client, basePath: context.basePath }).then(
       (signedIn) =>
-        offerMakeReachable(client, status, signedIn.email ?? signedIn.name ?? signedIn.sub),
+        offerMakeReachable(client, status, signedIn.email ?? t("openclawId.accountFallback")),
       (error: unknown) =>
         showToast({
           message: t("openclawId.signInFailed", { error: formatUiError(error) }),

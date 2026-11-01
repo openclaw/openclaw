@@ -2,6 +2,7 @@ import "../../styles/secret-reveal.css";
 import { createSignal, For, Match, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
 import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
@@ -27,6 +28,7 @@ import { clawNameFromHostname } from "./claw-name.ts";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
+registerEnglishCatalog(registerOpenClawIdEnglish);
 
 type Step =
   | { kind: "name" }
@@ -114,7 +116,7 @@ export function showMakeReachableDialog(params: {
       };
       // Fills the link code from the signed-in account, then checks the default name.
       const fillCodeFromAccount = async (signedIn: OpenClawIdSignedIn) => {
-        const account = signedIn.email ?? signedIn.name ?? signedIn.sub;
+        const account = signedIn.email ?? t("openclawId.accountFallback");
         try {
           setEnrollmentCode(await requestOpenClawIdLinkCode(params.client, signedIn));
           setCodeFromAccount(true);

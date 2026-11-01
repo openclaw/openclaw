@@ -28,7 +28,9 @@ export type OpenClawIdStatusResult = {
   channel: "local_operator" | "tunnel" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
-  /** Who this connection is; absent on Gateways before OCF-327. */
+  /** Active owner devices, returned only to an owner. */
+  ownerDeviceCount?: number;
+  /** Identity verified by the Gateway for this connection. */
   connection?: OpenClawIdConnection;
   services: {
     issuerUrl: string | null;
@@ -44,15 +46,22 @@ export type OpenClawIdStatusResult = {
  * operator, over the tunnel an owner device or a member, or none of these.
  */
 export type OpenClawIdConnection =
-  | { kind: "local" }
+  | { kind: "local"; accountEmail?: string | null; accountName?: string | null }
   | { kind: "none" }
-  | { kind: "owner"; deviceLabel: string | null; ownerAccountId: string | null }
+  | {
+      kind: "owner";
+      deviceLabel: string | null;
+      ownerAccountId: string | null;
+      accountEmail?: string | null;
+      accountName?: string | null;
+    }
   | {
       kind: "member";
       role: "operator" | "viewer";
       accountId: string;
       email: string | null;
       displayName: string | null;
+      invitedBy?: { name: string | null; email: string | null } | null;
     };
 
 /** Owner-only link state (`openclawId.people` result `link`). */

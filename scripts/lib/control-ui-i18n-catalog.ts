@@ -59,6 +59,8 @@ import { registerModelControlsEnglish } from "../../ui/src/i18n/locales/en-model
 import { registerModelSetupEnglish } from "../../ui/src/i18n/locales/en-model-setup.ts";
 import { registerNativeLinkMenuEnglish } from "../../ui/src/i18n/locales/en-native-link-menu.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../ui/src/i18n/locales/en-openclaw-id-dialogs.ts";
+import { registerOpenClawIdEnglish } from "../../ui/src/i18n/locales/en-openclaw-id.ts";
 import { registerPersonalInstructionsEnglish } from "../../ui/src/i18n/locales/en-personal-instructions.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
@@ -183,6 +185,8 @@ const sourceFiles = [
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
   "en-new-session-setup.ts",
+  "en-openclaw-id.ts",
+  "en-openclaw-id-dialogs.ts",
   "en-plugin-consent.ts",
   "en-plugin-management.ts",
   "en-portals.ts",
@@ -641,6 +645,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSessionMachineEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
+    registerOpenClawIdEnglish.catalog,
+    registerOpenClawIdDialogsEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,
