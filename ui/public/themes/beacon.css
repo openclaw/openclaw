@@ -16,6 +16,7 @@
      disappear on a poor panel, which is exactly this theme's audience. */
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --field-focus-border: var(--accent);
   --github-item-bg: color-mix(in srgb, var(--text) 4%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
   --overlay-border: var(--border-strong);

@@ -13,7 +13,7 @@ import type { AstBlock, AstItem, MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
-import { pickJsonlLine } from "./jsonl/line.js";
+import { keepOnlyLineAddressInSection, pickJsonlLine } from "./jsonl/line.js";
 import type { OcPath, PredicateSpec } from "./oc-path.js";
 import {
   MAX_SUB_SEGMENTS_PER_SLOT,
@@ -159,6 +159,7 @@ function repackSlotSubs(
     }
     runs[runs.length - 1]?.push(value);
   }
+  runs = kind === "jsonl" ? keepOnlyLineAddressInSection(runs) : runs;
   if (kind !== "md") {
     const firstValueRun = kind === "jsonl" ? 1 : 0;
     const valueRuns = runs.slice(firstValueRun);

@@ -6,6 +6,7 @@ import { createWorkerSessionPlacementStore } from "../gateway/worker-environment
 import { loadStatePortDescriptor } from "../infra/database-engine/state-port-descriptor.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { stateEngineSchema } from "./openclaw-state-db-engine.js";
 import { stateTemplateNamesMigration } from "./openclaw-state-db-schema-v36-template-names.js";
 import { stateWorkerResourceReceiptMigration } from "./openclaw-state-db-schema-v37-resource-receipts.js";
@@ -76,6 +77,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
         [
           "session_repository_workspaces",
           "worker_workspace_pending_results",
+          "worker_environments",
           "schema_meta",
           "config_machine_state",
         ],
@@ -87,7 +89,9 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
         },
       );
       const database = openOpenClawStateDatabase(f.options);
-      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 38 });
+      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
         runSqliteReadOperationSync(scope, () =>
           inspectStateDatabaseSchema(scope, {
@@ -97,7 +101,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
             purpose: "runtime",
           }),
         ).schemas.incompatible,
-      ).toMatchObject([{ foundVersion: 38, supportedVersion: 37 }]);
+      ).toMatchObject([{ foundVersion: OPENCLAW_STATE_SCHEMA_VERSION, supportedVersion: 37 }]);
       expect(database.db.prepare("SELECT * FROM worker_workspace_pending_results").get()).toEqual({
         ...f.pending,
         repository_disk_authority_json: null,

@@ -5,7 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { normalizePluginId } from "../plugins/config-state.js";
+import { isExplicitPluginDisableMarker, normalizePluginId } from "../plugins/config-state.js";
 import {
   findUninspectedPluginDiagnostic,
   pluginDiagnosticToConfigWarning,
@@ -527,15 +527,15 @@ export function validatePreparedConfigWithPlugins(
         if (preserveUnavailableConfig(`channels.${trimmed}`)) {
           continue;
         }
-        const issue = { path: `channels.${trimmed}`, message: `unknown channel id: ${trimmed}` };
-        if (hasStalePluginEvidence(trimmed)) {
-          warnings.push({
-            ...issue,
-            message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
-          });
-        } else {
-          issues.push(issue);
-        }
+        const hint = hasStalePluginEvidence(trimmed)
+          ? "stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin"
+          : isExplicitPluginDisableMarker(config.channels[key])
+            ? "disabled channel marker preserved; install the plugin to validate it"
+            : undefined;
+        (hint ? warnings : issues).push({
+          path: `channels.${trimmed}`,
+          message: `unknown channel id: ${trimmed}${hint ? ` (${hint})` : ""}`,
+        });
         continue;
       }
       if (preserveUnavailableConfig(`channels.${trimmed}`)) {

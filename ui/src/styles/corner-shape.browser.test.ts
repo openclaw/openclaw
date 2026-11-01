@@ -9,15 +9,15 @@ function corners(circular: string, superelliptical: string, selectors: string) {
 
 const CORNER_CASES = [
   ...corners("10px", "12.5px", ".btn, .nav-item"),
-  ...corners("16px", "12.5px", ".slash-menu, .chat-reply-context-menu"),
+  ...corners("16px", "20px", ".slash-menu, .chat-reply-context-menu"),
   ...corners(
     "14px",
     "17.5px",
     ".card, .option-card__choice, .exec-approval-card, .settings-group, .agent-chat__search-bar",
   ),
   ...corners("20px", "25px", ".option-card, .agent-chat__input, .agent-chat__input .slash-menu"),
-  // Item radius is panel radius minus 4px, at both scales.
-  ...corners("12px", "8.5px", ".slash-menu-item, .chat-reply-context-menu button"),
+  // Menu rows share --menu-item-radius at both scales.
+  ...corners("10px", "12.5px", ".slash-menu-item, .chat-reply-context-menu button"),
 ];
 
 // Neither siblings nor non-opted descendants may inherit scaled radius tokens.
@@ -66,6 +66,7 @@ const css = readStyles(
   "styles/chat/composer",
   "styles/settings-controls",
   "styles/settings",
+  "components/solid/overlay",
   "pages/activity/run-inspector",
 );
 

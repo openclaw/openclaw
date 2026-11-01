@@ -790,6 +790,52 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   transform: rotate(90deg);
 }
 
+/* In the phone drawer the choice page floats over the list as a card. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__menu {
+  /* Short rosters hug their rows; long ones stop at the drawer's bottom inset. */
+  inset: var(--space-2) var(--space-2) auto;
+  max-height: calc(100% - var(--space-2) * 2);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--overlay-modal-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+}
+
+/* The card covers its trigger, so the trigger's open ring must not show through. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger[aria-expanded="true"] {
+  box-shadow: none;
+}
+
+/* Names keep one line; the full-width label box fades its end instead of wrapping
+   or adding an ellipsis, so names that end before the fade zone stay untouched. */
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__copy {
+  flex: 1 1 auto;
+}
+
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__option .picker-select__label {
+  white-space: nowrap;
+  text-overflow: clip;
+  mask-image: linear-gradient(
+    to right,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
+}
+
+.sidebar-session-owner-filter.picker-select--sheet:dir(rtl)
+  .picker-select__option
+  .picker-select__label {
+  mask-image: linear-gradient(
+    to left,
+    black calc(100% - 48px),
+    rgb(0 0 0 / 45%) calc(100% - 20px),
+    transparent
+  );
+}
+
 .sidebar-session-owner-filter .picker-select__trigger:hover {
   background: var(--bg-hover);
 }

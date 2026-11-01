@@ -13401,6 +13401,7 @@ describe("shared test-source check execution", () => {
     ["src/shared.test-support.ts", "src/shared.test.ts"],
     ["packages/example/src/shared.test-support.ts"],
     ["ui/src/shared.test-support.ts"],
+    ["src/selection.test.ts", "config/test-lines-allocations/selection-proof.txt"],
   ])("keeps full guards and selects compiler consumers for %j", (...changedPaths) => {
     const graphs = ["core", "extensions-test"];
     const manifest = runManifest(changedPaths, graphs);
@@ -13441,6 +13442,8 @@ describe("shared test-source check execution", () => {
     ["src/shared.test-support.ts", "tsconfig.json"],
     ["src/shared.test-support.ts", "src/config/settings.json"],
     ["unknown/shared.test-support.ts"],
+    ["config/test-lines-allocations/ci-example.txt"],
+    ["src/shared.test.ts", "config/unknown.txt"],
   ])("retains full execution for %j", (...changedPaths) => {
     const manifest = runManifest(changedPaths);
     expect(manifest.status, manifest.output).toBe(0);

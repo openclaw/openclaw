@@ -88,6 +88,13 @@
   color: var(--muted);
   font-size: 10px;
   font-weight: 500;
+  overflow: hidden;
+}
+
+.github-publication-mobile__avatar > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .github-publication-mobile__account-row > svg {

@@ -3,6 +3,7 @@
   "version": "2026.10.9",
   "openclaw": {
     "updateAdmissionProtocol": 1,
+    "updatePreflightProtocol": 1,
     "databaseEngines": [
       "sqlite",
       "postgres"
@@ -15,7 +16,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 38,
+      "state": 39,
       "agent": 39
     }
   },
@@ -2081,6 +2082,7 @@
     "qa:code-mode-models": "node --import ./scripts/tsx.mjs scripts/code-mode-model-matrix.ts",
     "qa:prometheus:smoke": "node scripts/run-node.mjs qa suite --provider-mode mock-openai --scenario docker-prometheus-smoke --concurrency 1 --fast",
     "release-metadata:check": "node --import ./scripts/tsx.mjs scripts/check-release-metadata-only.mts",
+    "release:approve": "node --import ./scripts/tsx.mjs scripts/release-approve.mts",
     "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import ./scripts/tsx.mjs scripts/release-beta-smoke.ts",
     "release:backport-companions": "node scripts/release-backport-companions.mjs",

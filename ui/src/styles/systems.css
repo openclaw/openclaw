@@ -77,18 +77,17 @@ openclaw-systems-page {
   width: 17px;
   height: 17px;
 }
-/* Telemetry and backups settle independently. Their shared viewport keeps those
-   arrivals, or a selected worker removing Gateway backups, above a stable desktop. */
+/* Reserve both summaries even for workers without telemetry or Gateway backups.
+   Complete lists live in Details; the overview never acquires a nested scrollbar. */
 .systems-overview {
-  flex: 0 0 225px;
-  max-height: 40%;
-  overflow: auto;
+  flex: 0 0 auto;
+  min-height: 316px;
 }
 .systems-overview--compact {
-  flex-basis: 90px;
+  min-height: 76px;
 }
 .systems-overview__telemetry {
-  min-height: 150px;
+  height: 240px;
 }
 .systems-metrics {
   padding: 12px 18px 8px;
@@ -706,4 +705,76 @@ openclaw-systems-page {
   .systems-workspace > .content-header.hub-page-header.systems-page-header {
     margin-top: 0;
   }
+}
+
+.systems-overview__telemetry .systems-vitals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.systems-volume-summary {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.systems-volume-summary ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.systems-volume-summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  height: 20px;
+  line-height: 20px;
+}
+.systems-volume-summary li > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.systems-volume-summary li > span:last-child {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.systems-summary-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  line-height: 20px;
+  text-decoration: underline;
+}
+.systems-summary-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.systems-backups--summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 20px 20px;
+  gap: 4px 12px;
+  min-height: 76px;
+}
+.systems-backups--summary h2,
+.systems-backups--summary p {
+  margin: 0;
+}
+.systems-backups--summary p {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.systems-backups__summary[data-status="failed"] {
+  color: var(--danger);
+}
+.systems-overview .systems-metrics-caption {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.systems-overview__telemetry .systems-vital {
+  min-height: 90px;
 }
