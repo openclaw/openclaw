@@ -5,10 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
-import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
+import {
+  consumeRootOptionToken as consumeLauncherRootOptionToken,
+  isUpdateCommandArgv,
+} from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
+  UPDATE_SIGNAL_EXIT_GRACE_MS,
   resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
 import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
@@ -72,7 +76,9 @@ export const runRespawnedChild = ({ command, args, env }) => {
     platform: process.platform,
     foreground: isForegroundGatewayRunArgv(process.argv),
   });
-  const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
+  const signalExitGraceMs = isUpdateCommandArgv(process.argv)
+    ? UPDATE_SIGNAL_EXIT_GRACE_MS
+    : launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const child = spawn(command, args, {
     stdio: ["inherit", "inherit", "inherit", "ipc"],

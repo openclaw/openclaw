@@ -2,7 +2,7 @@
 import "./update-command-execution.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createCanaryProcessFixture,
   createCanaryStartupRuntimeFixture,
@@ -14,10 +14,12 @@ import {
   updateRunWarningMessages,
 } from "../../infra/update-run-step.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { registerExecutionPhaseReceiptTests } from "./update-command-execution-phase.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
+import type { updateGitInstall } from "./update-command-git.js";
 import { updateStep } from "./update-command-maintenance-fixtures.test-support.js";
 import * as readiness from "./update-command-readiness.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
@@ -70,19 +72,21 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
 });
 
 registerExecutionPhaseReceiptTests({ executionParams, mocks, successfulUpdate, phaseAdmission });
-it.each([
-  { owner: "dead", changed: false },
-  { owner: "absent", changed: false },
-  { owner: "absent", changed: true },
-])(
-  "admits installed artifacts before Git mutation (owner=$owner, changed=$changed)",
-  async ({ owner, changed }) =>
-    withTestDir({ prefix: "source-artifact-admission-" }, async (root) => {
-      await fs.mkdir(path.join(root, ".git"));
-      await fs.mkdir(path.join(root, "scripts"));
-      await fs.writeFile(
-        path.join(root, "scripts", "stage-bundled-plugin-runtime.mts"),
-        `import fs from "node:fs";
+async function withSourceCheckout(
+  changed: boolean,
+  body: (fixture: {
+    root: string;
+    ownerFile: string;
+    run: NonNullable<Parameters<typeof admitSourceUpdateArtifacts>[1]>;
+    onActivation: () => void;
+  }) => Promise<void>,
+) {
+  await withTestDir({ prefix: "source-artifact-admission-" }, async (root) => {
+    await fs.mkdir(path.join(root, ".git"));
+    await fs.mkdir(path.join(root, "scripts"));
+    await fs.writeFile(
+      path.join(root, "scripts", "stage-bundled-plugin-runtime.mts"),
+      `import fs from "node:fs";
 import path from "node:path";
 export function prepareBundledPluginRuntime({ repoRoot }) {
   const stage = path.join(repoRoot, ".artifacts", "admission-stage");
@@ -94,23 +98,32 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
   };
 }
 `,
-      );
-      const lock = path.join(root, ".artifacts", "dist-artifacts.lock");
-      const ownerFile = path.join(lock, "owner.json");
-      const pid = 0x7fff_ffff;
-      const ownerRecord = JSON.stringify({
-        pid,
-        startedAt: "2026-09-20T01:00:00.000Z",
-        startIdentity: "fixture-build-owner",
-        heartbeatAt: "2026-09-20T01:01:00.000Z",
-      });
-      if (owner !== "absent") {
-        await fs.mkdir(lock, { recursive: true });
-        await fs.writeFile(ownerFile, ownerRecord);
-      }
-      const onActivation = vi.fn();
-      const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    );
+    const lock = path.join(root, ".artifacts", "dist-artifacts.lock");
+    await fs.mkdir(lock, { recursive: true });
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    await body({
+      root,
+      ownerFile: path.join(lock, "owner.json"),
+      run,
+      onActivation: vi.fn<() => void>(),
+    });
+  });
+}
+const ownershipWarnings = (
+  execution: { result: { steps: UpdateStepResult[] } } | null | undefined,
+) =>
+  execution?.result.steps.flatMap((step) =>
+    step.name === "source-artifact-ownership" && step.exitCode === 0 && step.advisory
+      ? [step.advisory.message]
+      : [],
+  );
+
+it.each([{ changed: false }, { changed: true }])(
+  "admits installed artifacts before Git mutation (changed=$changed)",
+  async ({ changed }) =>
+    withSourceCheckout(changed, async ({ root, ownerFile, run, onActivation }) => {
       const execution = await withUpdateCommandTerminalResult(async (registerRun) => {
         registerRun(run);
         const result = await execute({
@@ -119,45 +132,126 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
           opts: { json: true, run },
           onActivation,
         });
-        if (owner === "absent") {
-          await expect(admitSourceUpdateArtifacts(root, run)).rejects.toThrow(
-            `retained by PID ${process.pid}`,
-          );
-        }
+        // The admitted ownership excludes other acquirers until terminal settlement.
+        await expect(
+          admitSourceUpdateArtifacts(root, run, { waitMs: 0, onWarning: vi.fn() }),
+        ).rejects.toThrow(`retained by PID ${process.pid}`);
         return result;
       });
-
-      expect(mocks.serviceStopped).toBe(false);
-      expect(
-        mocks.maybeStopService.mock.calls.every(([params]) => params.phase === "inspect"),
-      ).toBe(true);
-      expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
-      expect(onActivation).not.toHaveBeenCalled();
-      expect(execution?.mutationStarted).toBe(false);
-      if (owner !== "absent") {
-        expect(mocks.runGitUpdate).not.toHaveBeenCalled();
-        expect(execution?.result).toMatchObject({
-          status: "error",
-          reason: "source-artifact-ownership",
-        });
-        expect(execution?.failure?.detail).toContain(lock);
-        expect(execution?.failure?.detail).toContain(`retained by PID ${pid}`);
-        expect(execution?.failure?.detail).toContain("to release and retry");
-        expect(await fs.readFile(ownerFile, "utf8")).toBe(ownerRecord);
-      } else {
-        expect(execution?.result.status, execution?.failure?.detail).toBe("ok");
-        expect(mocks.runGitUpdate).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ sourceRuntimePrepared: !changed }),
-        );
-        await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
-      }
+      expect(execution?.result.status, execution?.failure?.detail).toBe("ok");
+      expect(mocks.runGitUpdate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sourceRuntimePrepared: !changed }),
+      );
+      await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(path.join(root, ".artifacts", "admission-stage"))).rejects.toMatchObject(
-        {
-          code: "ENOENT",
-        },
+        { code: "ENOENT" },
       );
     }),
 );
+
+it("recovers a retained record from a dead owner and reports it", async () =>
+  withSourceCheckout(false, async ({ root, ownerFile, run, onActivation }) => {
+    await fs.writeFile(
+      ownerFile,
+      JSON.stringify({ pid: 0x7fff_ffff, startedAt: new Date().toISOString() }),
+    );
+    const execution = await withUpdateCommandTerminalResult(async (registerRun) => {
+      registerRun(run);
+      return await execute({
+        ...executionParams("git"),
+        root,
+        opts: { json: true, run },
+        onActivation,
+      });
+    });
+    expect(execution?.result.status, execution?.failure?.detail).toBe("ok");
+    expect(ownershipWarnings(execution)).toEqual([
+      expect.stringContaining("dead owner PID 2147483647"),
+    ]);
+    expect(
+      updateRunWarningMessages(
+        execution!.result.steps.flatMap((step) => updateRunStepsFromResultStep(step)),
+      ),
+    ).toEqual([expect.stringContaining("after verifying no surviving writers")]);
+    await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
+  }));
+
+describe("a live artifact holder", () => {
+  const target = { schemaVersions: { state: 15, agent: 24 } } as never;
+  const liveOwner = () => JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+
+  it("continues privately, then owns the checkout once the holder finishes", async () =>
+    withSourceCheckout(true, async ({ root, ownerFile, run, onActivation }) => {
+      await fs.writeFile(ownerFile, liveOwner());
+      let ownedAtMutation = false;
+      mocks.runGitUpdate.mockImplementation(
+        async ({ beforeGitMutation }: Parameters<typeof updateGitInstall>[0]) => {
+          // Candidate preparation runs here without ownership; nothing was taken from the holder.
+          expect(run.sourceArtifactLock).toBeUndefined();
+          await fs.unlink(ownerFile);
+          await beforeGitMutation?.(target);
+          ownedAtMutation = run.sourceArtifactLock !== undefined;
+          return { ...successfulUpdate, mode: "git" };
+        },
+      );
+      const execution = await withUpdateCommandTerminalResult(async (registerRun) => {
+        registerRun(run);
+        return await execute({
+          ...executionParams("git"),
+          root,
+          // The step budget also caps the early wait, so this case does not spend it.
+          updateStepTimeoutMs: 1,
+          opts: { json: true, run },
+          onActivation,
+        });
+      });
+      expect(execution?.result.status, execution?.failure?.detail).toBe("ok");
+      // Deferred runtime completion must not write the checkout without ownership.
+      expect(mocks.runGitUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceRuntimePrepared: true }),
+      );
+      expect(ownedAtMutation).toBe(true);
+      expect(ownershipWarnings(execution)).toEqual([
+        expect.stringContaining("keeps preparing its candidate privately"),
+      ]);
+      await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
+    }));
+
+  it("keeps the current version serving if the holder outlasts the update's budget", async () =>
+    withSourceCheckout(false, async ({ root, ownerFile, run, onActivation }) => {
+      const owner = liveOwner();
+      await fs.writeFile(ownerFile, owner);
+      mocks.runGitUpdate.mockImplementation(
+        async ({ beforeGitMutation }: Parameters<typeof updateGitInstall>[0]) => {
+          await beforeGitMutation?.(target);
+          throw new Error("Activation must not proceed without checkout ownership");
+        },
+      );
+      const execution = await withUpdateCommandTerminalResult(async (registerRun) => {
+        registerRun(run);
+        return await execute({
+          ...executionParams("git"),
+          root,
+          updateStepTimeoutMs: 1,
+          opts: { json: true, run },
+          onActivation,
+        });
+      });
+      expect(execution?.result).toMatchObject({
+        status: "error",
+        reason: "source-artifact-ownership",
+      });
+      const detail = execution?.failure?.detail ?? "";
+      expect(detail).toContain(`retained by PID ${process.pid}`);
+      expect(detail).toContain("keeps serving");
+      expect(detail).not.toMatch(/rm -rf|Remove-Item/u);
+      expect(await fs.readFile(ownerFile, "utf8")).toBe(owner);
+      expect(mocks.serviceStopped).toBe(false);
+      expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+      expect(onActivation).not.toHaveBeenCalled();
+      expect(execution?.mutationStarted).toBe(false);
+    }));
+});
 
 it("continues the update with its recorded readiness warning", async () => {
   const message =

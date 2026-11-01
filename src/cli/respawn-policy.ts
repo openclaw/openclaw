@@ -1,9 +1,16 @@
 // CLI respawn skip policy for help, interactive TTY commands, and foreground Gateway runs.
+import { isUpdateCommandArgv } from "../../cli-root-options.mjs";
+import { UPDATE_SIGNAL_EXIT_GRACE_MS } from "../../gateway-shutdown-budget.mjs";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.js";
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
+
+/** A shorter wrapper deadline would SIGKILL the update group during its accepted drain. */
+export function resolveRespawnSignalExitGraceMs(argv: string[]): number | undefined {
+  return isUpdateCommandArgv(argv) ? UPDATE_SIGNAL_EXIT_GRACE_MS : undefined;
+}
 
 /** Gmail owns a shutdown grace period longer than the generic respawn wrapper allows. */
 export function isForegroundGmailRunArgv(argv: string[]): boolean {

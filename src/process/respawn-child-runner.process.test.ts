@@ -1,7 +1,15 @@
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
+import {
+  acquireDistArtifactOwnership,
+  resolveDistArtifactLockPath,
+} from "../../scripts/lib/dist-artifact-lock.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const moduleArgs = ["--input-type=module", "-e"];
@@ -87,3 +95,114 @@ it.runIf(process.platform !== "win32").each([
     );
   },
 );
+
+describe.runIf(process.platform !== "win32")("update signal drain under a launcher", () => {
+  const fixture = createFixtureLifetime();
+  const ownedPids = new Set<number>();
+  afterEach(async () => {
+    const signal = AbortSignal.timeout(10_000);
+    await Promise.all(
+      [...ownedPids].map(async (pid) => {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already exited; the wait below confirms it.
+        }
+        await waitForDead(pid, signal, "reject");
+      }),
+    );
+    ownedPids.clear();
+    await fixture.cleanup();
+  });
+
+  /**
+   * A real launcher around a child that takes real checkout ownership and, like the
+   * update signal handler, outlasts the generic escalation while joining its work.
+   */
+  async function startLauncher(
+    owner: "entry" | "launcher",
+    command: string,
+    signal: NodeJS.Signals,
+  ) {
+    const root = fs.realpathSync(fixture.createTempDir("openclaw-respawn-drain-"));
+    fs.mkdirSync(path.join(root, ".git"));
+    const childScript = path.join(root, "child.mjs");
+    fs.writeFileSync(
+      childScript,
+      `import { acquireDistArtifactOwnership } from ${moduleUrl("../../scripts/lib/dist-artifact-lock.mts")};
+      const lock = await acquireDistArtifactOwnership(${JSON.stringify(root)});
+      process.on(${JSON.stringify(signal)}, () => setTimeout(async () => {
+        await lock.release();
+        process.exit(${JSON.stringify({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129 }[signal as string])});
+      }, 2_500));
+      console.log(JSON.stringify({ pid: process.pid }));
+      setInterval(() => {}, 1000);`,
+    );
+    const argv = JSON.stringify(["node", "openclaw", "--profile", "e2e", command]);
+    const launch =
+      owner === "entry"
+        ? `import { resolveRespawnSignalExitGraceMs } from ${moduleUrl("../cli/respawn-policy.ts")};
+          import { runRespawnChildWithSignalBridge } from ${moduleUrl("./respawn-child-runner.ts")};
+          process.exitCode = await runRespawnChildWithSignalBridge({
+            command: process.execPath, args: [${JSON.stringify(childScript)}], env: process.env,
+            detachForProcessTree: true, onError: console.error,
+            signalExitGraceMs: resolveRespawnSignalExitGraceMs(${argv}),
+          });`
+        : `import { runRespawnedChild } from ${moduleUrl("../../node-runtime-recovery.mjs")};
+          process.argv = ${argv};
+          await runRespawnedChild({
+            command: process.execPath, args: [${JSON.stringify(childScript)}], env: process.env,
+          });`;
+    const launcher = spawn(
+      resolveTestNodeExecPath(),
+      ["--import", import.meta.resolve("tsx"), ...moduleArgs, launch],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    ownedPids.add(launcher.pid!);
+    const [data] = (await Promise.race([
+      once(launcher.stdout, "data"),
+      once(launcher, "close").then((result) => {
+        throw new Error(`Launcher exited before ownership: ${JSON.stringify(result)}`);
+      }),
+    ])) as [Buffer];
+    ownedPids.add((JSON.parse(data.toString()) as { pid: number }).pid);
+    return {
+      root,
+      launcher,
+      closed: once(launcher, "close") as Promise<[number | null, NodeJS.Signals | null]>,
+      ownerPath: path.join(resolveDistArtifactLockPath(root), "owner.json"),
+    };
+  }
+
+  it.each([
+    { owner: "entry", signal: "SIGTERM", code: 143 },
+    { owner: "entry", signal: "SIGINT", code: 130 },
+    { owner: "entry", signal: "SIGHUP", code: 129 },
+    { owner: "launcher", signal: "SIGTERM", code: 143 },
+  ] as const)(
+    "lets an update finish its $signal drain under the $owner launcher, release and exit $code",
+    { timeout: 20_000 },
+    async ({ owner, signal, code }) => {
+      const run = await startLauncher(owner, "update", signal);
+      expect(fs.existsSync(run.ownerPath)).toBe(true);
+      run.launcher.kill(signal);
+      await expect(run.closed).resolves.toEqual([code, null]);
+      expect(fs.existsSync(run.ownerPath)).toBe(false);
+    },
+  );
+
+  it.each(["entry", "launcher"] as const)(
+    "keeps the %s launcher's backstop for other commands, and the next owner recovers",
+    { timeout: 20_000 },
+    async (owner) => {
+      const run = await startLauncher(owner, "status", "SIGTERM");
+      run.launcher.kill("SIGTERM");
+      // The wrapper escalates to SIGKILL and mirrors that fate: the incident's status 137.
+      await expect(run.closed).resolves.toEqual([null, "SIGKILL"]);
+      expect(fs.existsSync(run.ownerPath)).toBe(true);
+      const lock = await acquireDistArtifactOwnership(run.root);
+      await lock.release();
+      expect(fs.existsSync(run.ownerPath)).toBe(false);
+    },
+  );
+});

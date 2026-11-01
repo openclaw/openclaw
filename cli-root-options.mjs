@@ -189,3 +189,16 @@ function parseCommandArgsWithRootOptions(argv, options, returnTail, returnOption
       ? { rootOptions, commandOptions }
       : positionals;
 }
+
+/** The first command token decides this; bootstrap launchers run before full CLI parsing. */
+export function isUpdateCommandArgv(argv) {
+  const args = argv.slice(2);
+  for (let index = 0; index < args.length;) {
+    const consumed = consumeRootOptionToken(args, index);
+    if (consumed === 0) {
+      return args[index] === "update";
+    }
+    index += consumed;
+  }
+  return false;
+}

@@ -13,3 +13,4 @@ export function resolveLauncherStopTimeoutMs(params: {
   platform: NodeJS.Platform;
   foreground: boolean;
 }): number;
+export const UPDATE_SIGNAL_EXIT_GRACE_MS: number;

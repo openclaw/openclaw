@@ -43,6 +43,11 @@ const RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 export const RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
 const RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 
+// The update signal handler joins its commands, releases checkout ownership and can
+// recover an activation under its own deadlines. A launcher's short escalation would
+// SIGKILL that accepted drain; this budget only caps a process that has hung.
+export const UPDATE_SIGNAL_EXIT_GRACE_MS = 35 * 60_000;
+
 // Every runRespawnedChild call site stamps one of these. The compile-cache
 // marker is also used by a different respawner, but that one refuses foreground
 // Gateway runs on darwin. Keep this list with the launcher deadline it authorizes.

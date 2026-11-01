@@ -627,16 +627,13 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           "next-writer.mts",
           `fs.writeFileSync(${JSON.stringify(artifact)}, 'next generation');`,
         );
-        const denied = await start(root, nextWriter).done;
-        expect(denied.code, denied.output).toBe(1);
-        expect(denied.output).toContain("Could not acquire");
-        expectFile(root, "dist/retained-artifact.txt", "previous generation");
         expectFile(directory, "owner.json", owner);
+        expectFile(root, "dist/retained-artifact.txt", "previous generation");
 
         // Every fixture process has exited; the synthetic failure started no detached compiler.
-        fs.rmSync(directory, { recursive: true });
         const recovered = await start(root, nextWriter).done;
         expect(recovered.code, recovered.output).toBe(0);
+        expect(recovered.output).toContain("Recovered");
         expectFile(root, "dist/retained-artifact.txt", "next generation");
         expectFile(directory, "owner.json", false);
       }, signal);
@@ -777,32 +774,31 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       }, signal);
     },
   );
-  it.for([
-    { owner: "{", unjoined: false },
-    { owner: '{"pid":0}', unjoined: false },
-    { owner: '{"pid":2147483648}', unjoined: false },
-    { owner: JSON.stringify({ pid: process.pid }), unjoined: true },
-  ])(
-    "rejects unverifiable or retained ownership without removing it: $owner/$unjoined",
-    async ({ owner, unjoined }, { signal }) => {
-      await withProcesses(async ({ start }) => {
-        const root = createCheckout();
-        installCompiler(root);
-        const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
-        if (unjoined) {
-          write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
-        }
-        const command = start(root, sourceScript("run-tsgo.mjs"), ["--version"]);
-        const result = await command.done;
-        expect(result.code).toBe(1);
-        expect(result.output).toContain("Could not acquire");
-        expect(result.output.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
-        expect(fs.readFileSync(ownerPath, "utf8")).toBe(owner);
-      }, signal);
-    },
-  );
+  it("recovers an unreadable record through a real check launcher", async ({ signal }) => {
+    await withProcesses(async ({ start }) => {
+      const root = createCheckout();
+      installCompiler(root);
+      const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", "{");
+      const result = await start(root, sourceScript("run-tsgo.mjs"), ["--version"]).done;
+      expect(result.code, result.output).toBe(0);
+      expect(result.output).toContain("Recovered");
+      expect(fs.existsSync(ownerPath)).toBe(false);
+    }, signal);
+  });
 
-  it("acquires after a released owner exits during the liveness probe", async ({ signal }) => {
+  it("waits for a live owner that recorded unverified cleanup", async ({ signal }) => {
+    await withProcesses(async ({ start }) => {
+      const root = createCheckout();
+      installCompiler(root);
+      const owner = JSON.stringify({ pid: process.pid });
+      const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
+      write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
+      await start(root, sourceScript("run-tsgo.mjs"), ["--version"]).waiting;
+      expect(fs.readFileSync(ownerPath, "utf8")).toBe(owner);
+    }, signal);
+  });
+
+  it("acquires as soon as a live owner releases", async ({ signal }) => {
     await withProcesses(async ({ start }) => {
       const root = createCheckout();
       const ownerPath = write(
@@ -810,27 +806,16 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         ".artifacts/dist-artifacts.lock/owner.json",
         JSON.stringify({ pid: process.pid }),
       );
-      const probe = write(
+      const waiter = write(
         root,
-        "handoff.mts",
-        `
-        import assert from 'node:assert/strict';
-        import fs from 'node:fs';
-        import { withDistArtifactOwnership } from ${JSON.stringify(sourceScript("lib/dist-artifact-ownership.mts"))};
-        const kill = process.kill;
-        // Release after fs-safe observes contention, just before the PID probe.
-        process.kill = (pid, signal) => {
-          assert.equal(pid, ${process.pid});
-          assert.equal(signal, 0);
-          fs.unlinkSync(${JSON.stringify(ownerPath)});
-          throw Object.assign(new Error('owner exited after releasing'), { code: 'ESRCH' });
-        };
-        try {
-          await withDistArtifactOwnership(process.cwd(), async () => console.log('successor acquired'));
-        } finally { process.kill = kill; }
-      `,
+        "waiter.mts",
+        `import { withDistArtifactOwnership } from ${JSON.stringify(sourceScript("lib/dist-artifact-ownership.mts"))};
+        await withDistArtifactOwnership(process.cwd(), async () => console.log('successor acquired'));`,
       );
-      const result = await start(root, probe).done;
+      const command = start(root, waiter);
+      await command.waiting;
+      fs.unlinkSync(ownerPath);
+      const result = await command.done;
       expect(result.code, result.output).toBe(0);
       expect(result.output).toContain("successor acquired");
       expectFile(path.dirname(ownerPath), "owner.json", false);
@@ -973,16 +958,19 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
             (await waitEvent("exit-owner")).write("exit");
             expect(await supervisor.done).toMatchObject({ code: 2 });
           }
+          // The surviving compiler keeps ownership: the next build waits instead of writing.
           const build = await blockedBuild(root, "orphan-build-started");
+          await build.waiting;
           expectFile(root, declarationPath, true);
-          if (!nested) {
-            expect(await build.done).toMatchObject({
-              code: 1,
-              output: expect.stringContaining("PID death alone is not sufficient."),
-            });
-            expectFile(root, ".artifacts/dist-artifacts.lock/owner.json", true);
-          }
+          expectFile(root, ".artifacts/dist-artifacts.lock/owner.json", true);
           expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+          compilerGate.write("continue");
+          await waitForDead(compiler.pid, signal, "reject");
+          // Once it has gone, that same build recovers without operator action.
+          (await build.event("orphan-build-started")).write("continue");
+          const recovered = await build.done;
+          expect(recovered.code, recovered.output).toBe(0);
+          expect(recovered.output).toContain("Recovered");
         } finally {
           compilerGate.write("continue");
           await waitForDead(compiler.pid, signal, "reject");

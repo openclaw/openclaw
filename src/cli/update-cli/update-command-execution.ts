@@ -31,7 +31,7 @@ import {
 } from "./update-command-database-context.js";
 import { settleMutableUpdateResult } from "./update-command-execution-settlement.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
+import { createSourceArtifactOwnership } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
@@ -436,11 +436,15 @@ export async function executeMutableUpdate(
   let servicePrepared = false;
   // Activation-window timing the install runners cannot observe.
   const activationSteps: UpdateStepResult[] = [];
+  const sourceArtifacts = createSourceArtifactOwnership(
+    params,
+    activationSteps,
+    updateStepTimeoutMs,
+  );
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     await waitForCurrent();
     familyAdmission.assertAdmitted();
-    if (params.switchToGit && !opts.run?.sourceArtifactLock) {
-      await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
+    if (await sourceArtifacts.admitBeforeActivation()) {
       assertExecutionCurrent();
     }
     const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
@@ -601,8 +605,7 @@ export async function executeMutableUpdate(
           : runPackageInstallUpdate(packageUpdate),
       );
     } else {
-      const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
-      const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
+      const sourceRuntimePrepared = await sourceArtifacts.admitEarly();
       assertExecutionCurrent();
       const gitUpdate: Parameters<typeof updateGitInstall>[0] = {
         ...installOptions,

@@ -238,3 +238,10 @@ it("records status after the respawn child closes", async () => {
   expect(detach).toHaveBeenCalledOnce();
   expect(writeError).not.toHaveBeenCalled();
 });
+
+it("gives only update commands a signal drain longer than the generic wrapper's", () => {
+  const update = requirePlan({ args: ["--profile", "dev", "update", "--channel", "dev", "--yes"] });
+  // Longer than the 30-minute step budget its handler can spend recovering an activation.
+  expect(update.signalExitGraceMs).toBeGreaterThanOrEqual(30 * 60_000);
+  expect(requirePlan({ args: ["status"] }).signalExitGraceMs).toBeUndefined();
+});

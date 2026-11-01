@@ -32,3 +32,4 @@ export function getCommandOptionsWithRootOptions(
   argv: readonly string[],
   options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
 ): { rootOptions: string[]; commandOptions: string[] } | null;
+export function isUpdateCommandArgv(argv: readonly string[]): boolean;
