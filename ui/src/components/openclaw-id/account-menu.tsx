@@ -112,6 +112,34 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
   if (!status || status.status.state === "off") {
     return [];
   }
+  if (status.channel !== "tunnel" && !openClawIdAccount()) {
+    const blocker =
+      status.channel !== "local_operator"
+        ? t("openclawId.signInLocalOnly")
+        : !status.services.clientId
+          ? t("openclawId.signInUnconfigured")
+          : undefined;
+    return [
+      {
+        id: SIGN_IN,
+        label: t("openclawId.signIn"),
+        disabled: Boolean(blocker),
+        // Preserve menu-owned selection and keyboard registration, with native button semantics.
+        render: (attributes) => (
+          <button
+            {...attributes}
+            type="button"
+            role="button"
+            class="btn sidebar-openclaw-id__sign-in"
+            title={blocker}
+            disabled={attributes["aria-disabled"] === "true"}
+          >
+            {t("openclawId.signIn")}
+          </button>
+        ),
+      },
+    ];
+  }
   const entries: MenuEntry[] = [
     {
       kind: "content",
@@ -148,25 +176,6 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
     if (status.channel === "local_operator") {
       entries.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
     }
-  } else if (!openClawIdAccount()) {
-    const blocker =
-      status.channel !== "local_operator"
-        ? t("openclawId.signInLocalOnly")
-        : !status.services.clientId
-          ? t("openclawId.signInUnconfigured")
-          : undefined;
-    entries.push({
-      ...renderSidebarMenuAction(SIGN_IN, t("openclawId.signIn"), "key", {
-        disabled: Boolean(blocker),
-        title: blocker,
-      }),
-      content: (
-        <span class="sidebar-openclaw-id__lines">
-          <span>{t("openclawId.signIn")}</span>
-          <span class="sidebar-openclaw-id__detail">{t("openclawId.signInBody")}</span>
-        </span>
-      ),
-    });
   } else {
     const blocker = makeReachableBlocker(status);
     entries.push(

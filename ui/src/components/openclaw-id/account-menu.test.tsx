@@ -89,14 +89,17 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(status({ status: { state: "off" } })).text.trim()).toBe("");
   });
 
-  it("local signed-out shows one sign-in action, explanation, and the local header", () => {
+  it("local signed-out shows only the sign-in button and keeps the local identity", () => {
     const current = status({ link: linked });
     expect(openClawIdMenuIdentity(current)).toEqual({
       name: "Local access",
       detail: "This computer",
     });
     expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
-    expect(menu(current).text).toContain("Reach this claw from other devices and invite people");
+    const entries = menu(current);
+    expect(entries.text.trim()).toBe("");
+    expect(entries.rows[0]?.icon).toBeUndefined();
+    expect(entries.rows[0]?.render).toBeTypeOf("function");
     expect(menu(current).text).not.toMatch(/People|Make reachable|Regenerate|Unlink/);
   });
 

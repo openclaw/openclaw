@@ -1725,6 +1725,7 @@
 
 .sidebar-openclaw-id__status {
   display: flex;
+  flex-shrink: 0;
   align-items: flex-start;
   gap: 8px;
   padding: 6px 4px;
@@ -1763,4 +1764,10 @@
 
 .sidebar-openclaw-id__pill[data-online="true"] {
   color: var(--ok);
+}
+
+.sidebar-openclaw-id__sign-in {
+  flex: none;
+  width: 100%;
+  margin-block: 4px;
 }
