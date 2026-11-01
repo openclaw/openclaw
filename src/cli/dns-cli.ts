@@ -96,6 +96,43 @@ function isPermissionFailure(error: unknown): boolean {
 }
 
 /**
+ * Read the macOS access policy entries of a file.
+ *
+ * macOS carries per-file ACLs beside the mode, and a replacement inode does
+ * not inherit them. The entries are printed as "0: user:name deny read"; they
+ * are re-applied with chmod +a before the staged file replaces the original.
+ */
+function readMacOsAclEntries(filePath: string): string[] {
+  if (process.platform !== "darwin") {
+    return [];
+  }
+  const listed = spawnSync("ls", ["-lde", filePath], { encoding: "utf-8" });
+  if (listed.status !== 0 || typeof listed.stdout !== "string") {
+    return [];
+  }
+  return listed.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+:\s/.test(line))
+    .map((line) => line.replace(/^\d+:\s*/, ""));
+}
+
+/** Restore the captured access policy on the staged file before it is published. */
+function applyMacOsAclEntries(filePath: string, entries: string[], privileged: boolean): void {
+  for (const entry of entries) {
+    const applied = privileged
+      ? spawnSync("sudo", ["chmod", "+a", entry, filePath], { encoding: "utf-8" })
+      : spawnSync("chmod", ["+a", entry, filePath], { encoding: "utf-8" });
+    if (applied.status !== 0) {
+      const reason = typeof applied.stderr === "string" ? applied.stderr.trim() : "";
+      throw new Error(
+        `failed to restore the configuration access policy (${entry}): ${reason || "chmod failed"}`,
+      );
+    }
+  }
+}
+
+/**
  * Publish an operator-owned CoreDNS file through a same-directory rename.
  *
  * A plain write truncates the destination first, so an interrupted or failed
@@ -104,6 +141,7 @@ function isPermissionFailure(error: unknown): boolean {
 function publishConfigFile(filePath: string, content: string): void {
   const target = resolvePublicationTarget(filePath);
   const existing = fs.statSync(target, { throwIfNoEntry: false });
+  const aclEntries = existing ? readMacOsAclEntries(target) : [];
   replaceFileAtomicSync({
     filePath: target,
     content,
@@ -123,6 +161,8 @@ function publishConfigFile(filePath: string, content: string): void {
         // publication through the privileged path below.
         fs.chownSync(tempPath, existing.uid, existing.gid);
         fs.chmodSync(tempPath, existing.mode & 0o7777);
+        // The mode alone does not carry the operator's access policy.
+        applyMacOsAclEntries(tempPath, aclEntries, false);
         return;
       }
       // A fresh file keeps the umask-sensitive creation contract of the plain
@@ -161,6 +201,7 @@ function flushPrivileged(targetPath: string): void {
 function publishConfigFileWithSudo(filePath: string, content: string): void {
   const target = resolvePublicationTarget(filePath);
   const existing = fs.statSync(target, { throwIfNoEntry: false });
+  const aclEntries = existing ? readMacOsAclEntries(target) : [];
   const tempPath = path.join(
     path.dirname(target),
     `.${path.basename(target)}.openclaw-${process.pid}.tmp`,
@@ -184,6 +225,8 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     } else {
       run("sudo", ["chmod", (0o666 & ~process.umask()).toString(8), tempPath]);
     }
+    // The mode alone does not carry the operator's access policy.
+    applyMacOsAclEntries(tempPath, aclEntries, true);
     // Flush the staged bytes before the rename, matching the ordinary
     // publisher's durability: a crash after the rename must not leave the
     // published name pointing at missing or incomplete content.

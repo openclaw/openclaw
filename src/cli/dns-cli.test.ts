@@ -36,6 +36,11 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => ({}),
 }));
 
+// The access-policy regression needs the real chmod and ls: the mocked
+// child_process module only carries the command-under-test boundary.
+const { spawnSync: actualSpawnSync } =
+  await vi.importActual<typeof import("node:child_process")>("node:child_process");
+
 import { Command } from "commander";
 import { replaceWideAreaZoneFile } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
@@ -97,6 +102,11 @@ describe("dns-cli probe bounds", () => {
       if (isBrewPrefixProbe([cmd, args])) {
         return spawnOk(`${brewPrefix}\n`);
       }
+      // The access policy is read and restored through the real ls and chmod:
+      // the command boundary under test is the publication, not these tools.
+      if (cmd === "ls" || cmd === "chmod") {
+        return actualSpawnSync(cmd, args, { encoding: "utf-8" });
+      }
       // The privileged publish fallback stages and renames through the real
       // filesystem so its staged-rename contract holds in tests; sudo itself
       // is unavailable on CI hosts, so only the file effects are simulated.
@@ -124,6 +134,11 @@ describe("dns-cli probe bounds", () => {
       }
       if (cmd === "sudo" && args[0] === "chmod") {
         const [mode, target] = args.slice(1);
+        // The access-policy restore uses the ACL form of chmod; it has to run
+        // for real so the policy survives the publication.
+        if (mode === "+a") {
+          return actualSpawnSync("chmod", args.slice(1), { encoding: "utf-8" });
+        }
         if (typeof mode === "string" && typeof target === "string") {
           fs.chmodSync(target, Number.parseInt(mode, 8));
         }
@@ -246,6 +261,36 @@ describe("dns-cli probe bounds", () => {
     expect(fs.statSync(corefilePath).mode & 0o777).toBe(0o640);
   });
 
+  // macOS carries per-file ACLs beside the mode; a replacement inode does not
+  // inherit them, so the access policy has to be restored explicitly.
+  it.runIf(process.platform === "darwin")(
+    "keeps the operator's macOS access policy across a publication",
+    async () => {
+      const etcDir = path.join(brewPrefix, "etc", "coredns");
+      const corefilePath = path.join(etcDir, "Corefile");
+      const importGlob = path.join(etcDir, "conf.d", "*.server");
+      fs.mkdirSync(etcDir, { recursive: true });
+      fs.writeFileSync(corefilePath, ".:53 {\n  errors\n}\n");
+      fs.chmodSync(corefilePath, 0o644);
+      // A file-specific deny entry: the access policy is not expressible in
+      // the mode alone, so it can only be lost by replacing the file.
+      const denied = actualSpawnSync("chmod", ["+a", "everyone deny read", corefilePath], {
+        encoding: "utf-8",
+      });
+      expect(denied.status).toBe(0);
+      const policy = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
+      expect(policy.stdout).toContain("deny read");
+
+      await runDnsSetupApply();
+
+      expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
+        `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
+      );
+      const published = actualSpawnSync("ls", ["-lde", corefilePath], { encoding: "utf-8" });
+      expect(published.stdout).toContain("deny read");
+    },
+  );
+
   unix("keeps the operator's Corefile mode across a successful publication", async () => {
     const etcDir = path.join(brewPrefix, "etc", "coredns");
     const corefilePath = path.join(etcDir, "Corefile");
@@ -341,7 +386,7 @@ describe("dns-cli probe bounds", () => {
         .map((call, index) => ({ call, index }))
         .filter(
           ({ call }) =>
-            (call[1] as string[])[0] === "-e" && (call[1] as string[])[1] === process.execPath,
+            (call[1] as string[])[0] === process.execPath && (call[1] as string[])[1] === "-e",
         )
         .map(({ index }) => index);
       const moveIndex = sudoCalls.findIndex((call) => (call[1] as string[])[0] === "mv");
