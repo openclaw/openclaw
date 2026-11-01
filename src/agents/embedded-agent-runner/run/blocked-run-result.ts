@@ -8,7 +8,7 @@ export function buildEmbeddedRunBlockedResult(input: {
   errorMessage: string;
   durationMs: number;
   agentMeta: EmbeddedAgentMeta;
-  attempt?: Pick<EmbeddedRunAttemptResult, "systemPromptReport">;
+  attempt?: Pick<EmbeddedRunAttemptResult, "systemPromptReport" | "agentTerminal" | "terminal">;
   replayInvalid: boolean;
   finalPromptText?: string;
 }): EmbeddedAgentRunResult {
@@ -17,6 +17,11 @@ export function buildEmbeddedRunBlockedResult(input: {
     meta: {
       durationMs: input.durationMs,
       agentMeta: input.agentMeta,
+      ...(input.attempt?.terminal.kind === "failed" &&
+      input.attempt.terminal.source === "prompt" &&
+      !input.replayInvalid
+        ? { agentTerminal: input.attempt.agentTerminal }
+        : {}),
       systemPromptReport: input.attempt?.systemPromptReport,
       finalAssistantVisibleText: input.text,
       finalAssistantRawText: input.text,

@@ -17,6 +17,7 @@ import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixt
 import { transformTransportMessages } from "../../transport-message-transform.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -66,6 +67,39 @@ describe("terminal resolution", () => {
     vi.clearAllMocks();
     resetGeneratedMediaTaskActivityForTests();
   });
+
+  it.each(["failed", "recovered", "cancelled"] as const)(
+    "retains observations only for the selected failed attempt (%s)",
+    async (selection) => {
+      const failed = selection === "failed";
+      const assistant = failed
+        ? emptyAssistant({ stopReason: "error", errorMessage: "synthetic failure" })
+        : textAssistant("Recovered answer");
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: !failed,
+        hasHookError: failed,
+      });
+      const resolved = await resolveTerminal({
+        assistant,
+        finalAssistantRawText: failed ? "" : "Recovered answer",
+        finalAssistantVisibleText: failed ? "" : "Recovered answer",
+        payloadsWithToolMedia: failed ? [] : [{ text: "Recovered answer" }],
+        attemptOverrides: {
+          agentTerminal,
+          terminal: failed
+            ? { kind: "failed", source: "prompt", error: new Error("synthetic failure") }
+            : selection === "cancelled"
+              ? { kind: "aborted", source: "external" }
+              : { kind: "ok" },
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.meta.agentTerminal).toBe(failed ? agentTerminal : undefined);
+    },
+  );
 
   it("acknowledges an already-delivered input without empty-response recovery", async () => {
     const resolved = await resolveTerminal({

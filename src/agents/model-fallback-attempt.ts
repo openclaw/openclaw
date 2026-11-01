@@ -7,6 +7,7 @@ import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
@@ -640,21 +641,24 @@ export function throwFallbackFailureSummary(params: {
     reason: attempt.reason ?? "unknown",
   }));
   const lastAttempt = attempts.at(-1);
-  throw new FailoverError(message, {
-    reason: lastAttempt?.reason ?? "unknown",
-    provider: lastAttempt?.provider,
-    model: lastAttempt?.model,
-    // Recovery must not infer OAuth from the provider after candidate errors collapse here.
-    authMode: lastAttempt?.authMode,
-    status: lastAttempt?.status,
-    rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
-    code: lastAttempt?.code,
-    cause: params.lastError instanceof Error ? params.lastError : undefined,
-    sessionId: params.attribution?.sessionId,
-    lane: params.attribution?.lane,
-    attempts,
-    soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
-  });
+  throw withAgentTerminalSnapshot(
+    new FailoverError(message, {
+      reason: lastAttempt?.reason ?? "unknown",
+      provider: lastAttempt?.provider,
+      model: lastAttempt?.model,
+      // Recovery must not infer OAuth from the provider after candidate errors collapse here.
+      authMode: lastAttempt?.authMode,
+      status: lastAttempt?.status,
+      rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
+      code: lastAttempt?.code,
+      cause: params.lastError instanceof Error ? params.lastError : undefined,
+      sessionId: params.attribution?.sessionId,
+      lane: params.attribution?.lane,
+      attempts,
+      soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+    }),
+    readAgentTerminalSnapshot(params.lastError),
+  );
 }
 
 export async function resolveFallbackSoonestCooldownExpiry(params: {

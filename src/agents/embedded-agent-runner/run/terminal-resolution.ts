@@ -84,23 +84,6 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 
-export function createTerminalToolPresentationTracker() {
-  let latestOrdinal = -1;
-  let nextOrdinal = 0;
-  let value: string | undefined;
-  return {
-    allocateOrdinal: () => nextOrdinal++,
-    observe: (observation: { terminalPresentation?: string; toolCallOrdinal?: number }): void => {
-      const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
-      if (ordinal >= latestOrdinal) {
-        latestOrdinal = ordinal;
-        value = observation.terminalPresentation;
-      }
-    },
-    read: () => value,
-  };
-}
-
 type TerminalResolution =
   | { action: "retry" }
   | { action: "complete"; result: EmbeddedAgentRunResult };
@@ -632,6 +615,12 @@ async function completeEmbeddedRun(
         ? { diagnosticTrace: freezeDiagnosticTraceContext(input.attempt.diagnosticTrace) }
         : {}),
       meta: {
+        ...(error &&
+        !terminalAborted &&
+        !terminalTimedOut &&
+        input.settledTurnFinalizationOutcome !== "answered"
+          ? { agentTerminal: input.attempt.agentTerminal }
+          : {}),
         durationMs: Date.now() - input.startedAtMs,
         agentMeta: input.prepared.agentMeta,
         aborted: terminalAborted,

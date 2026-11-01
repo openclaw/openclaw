@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
@@ -494,6 +495,7 @@ async function runCronIsolatedAgentTurnInTrace(
                   "restart";
                 if (finalized.interruptedByRestart) {
                   finalized.errorClassification = { kind: "aborted" };
+                  finalized.agentTerminal = undefined;
                 }
               }
               const delayMs = consumeCronNextCheckProposal(runId, params.job.id);
@@ -539,6 +541,12 @@ async function runCronIsolatedAgentTurnInTrace(
               return prepared.context.withRunSession({
                 status: "error",
                 error,
+                ...(!isCronLaneTimeout &&
+                !interruptedByRestart &&
+                executionStarted &&
+                !admissionDisposition
+                  ? { agentTerminal: readAgentTerminalSnapshot(err) }
+                  : {}),
                 interruptedByRestart,
                 errorClassification: interruptedByRestart
                   ? { kind: "aborted" }

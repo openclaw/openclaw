@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveTerminalAgentRunFailurePayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
 import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
+import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback as classifyResult,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion as mergeExhaustedResult,
@@ -243,43 +244,62 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   });
 
   it.each([
-    [false, undefined, false],
-    [true, undefined, false],
-    [true, false, false],
-    [true, undefined, true],
+    [false, undefined, false, true],
+    [true, undefined, false, true],
+    [true, false, false, true],
+    [true, undefined, true, true],
+    [true, undefined, false, false],
   ] as const)(
-    "preserves the preferred exhausted summary (richer=%s, suppress=%s, no fallback=%s)",
-    async (richer, suppressErrorNotice, noFallback) => {
+    "preserves the preferred exhausted summary (richer=%s, suppress=%s, no fallback=%s, observed=%s)",
+    async (richer, suppressErrorNotice, noFallback, primaryObserved) => {
+      const fallbackSnapshot: AgentTerminalSnapshot = {
+        version: 1,
+        agentSuccess: "false",
+        lastMessageRole: "other",
+        finalTextState: "not_assistant",
+        errorSource: "agent_hook",
+        lastAssistantStopReason: "not_assistant",
+        mediaObserved: "unknown",
+      };
+      const primarySnapshot: AgentTerminalSnapshot | undefined = primaryObserved
+        ? { ...fallbackSnapshot, lastMessageRole: "tool_result" }
+        : undefined;
       const primary = incompleteResult(
         "Primary terminal summary",
         "Primary incomplete",
-        richer
-          ? {
-              ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
-              agentMeta: agentMeta("primary"),
-              terminalReply: { disposition: "silent" },
-              toolSummary: { calls: 1, tools: ["web_fetch"] },
-            }
-          : {},
+        {
+          agentTerminal: primarySnapshot,
+          ...(richer
+            ? {
+                ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
+                agentMeta: agentMeta("primary"),
+                terminalReply: { disposition: "silent" },
+                toolSummary: { calls: 1, tools: ["web_fetch"] },
+              }
+            : {}),
+        },
         richer ? { terminalPresentation: true } : {},
       );
       const winner = { provider: contract.fallbackProvider, model: contract.fallbackModel };
       const fallback = incompleteResult(
         richer ? "Generic fallback incomplete" : "Fallback terminal summary",
         "Fallback incomplete",
-        richer
-          ? {
-              suppressErrorNotice: true,
-              agentMeta: agentMeta("fallback"),
-              executionTrace: {
-                winnerProvider: winner.provider,
-                winnerModel: winner.model,
-                fallbackUsed: true,
-                runner: "embedded",
-                attempts: [{ ...winner, result: "success" }],
-              },
-            }
-          : {},
+        {
+          agentTerminal: fallbackSnapshot,
+          ...(richer
+            ? {
+                suppressErrorNotice: true,
+                agentMeta: agentMeta("fallback"),
+                executionTrace: {
+                  winnerProvider: winner.provider,
+                  winnerModel: winner.model,
+                  fallbackUsed: true,
+                  runner: "embedded",
+                  attempts: [{ ...winner, result: "success" }],
+                },
+              }
+            : {}),
+        },
       );
       const result = await runCandidates(
         noFallback ? [primary] : [primary, fallback],
@@ -292,6 +312,9 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           : winner),
       });
       expect(result.attempts).toHaveLength(noFallback ? 1 : 2);
+      expect(result.result.meta.agentTerminal).toBe(
+        noFallback || richer ? primarySnapshot : fallbackSnapshot,
+      );
       expect(result.attempts[0]).toMatchObject({
         provider: contract.primaryProvider,
         model: contract.primaryModel,
