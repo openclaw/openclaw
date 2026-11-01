@@ -57,6 +57,10 @@ before escalating termination. Other commands retain their existing stop budgets
 The installed launcher must contain this fix; downloading a newer candidate
 cannot change the signal timer of an already-running older launcher.
 
+Update steps forward cancellation to their child commands and terminate the
+command process tree on timeout or cancellation, so descendants do not continue
+running after the updater settles the step.
+
 Managed systemd Gateway activation also covers packages replaced outside
 `openclaw update`. Before ordinary startup admission, the native service reader
 must identify this process as the running unit's MainPID. Only older database

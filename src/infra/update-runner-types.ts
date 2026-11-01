@@ -95,6 +95,7 @@ export type RunStepOptions = {
   argv: string[];
   cwd: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   input?: string;
   progress?: UpdateStepProgress;
