@@ -36,12 +36,14 @@ function selectCommandFailureMessage(
 ): string {
   const lines = stripAnsi(stderr).split(/[\r\n\u2028\u2029]/u);
   if (argv[0] === "git") {
-    // Forced progress precedes errors and rejected-ref status lines. Retain the
-    // diagnostic suffix for cause extraction without changing captured stderr.
+    // Put the Git outcome before progress while retaining earlier transport
+    // diagnostics for the existing cause extractor. Captured stderr stays intact.
     const diagnostic = lines.findIndex((line) =>
       /^\s*(?:(?:remote:\s*)?(?:fatal|error):|!\s+\[)/u.test(line),
     );
-    return diagnostic >= 0 ? lines.slice(diagnostic).join("\n") : stderr;
+    return diagnostic >= 0
+      ? [lines[diagnostic], ...lines.toSpliced(diagnostic, 1)].join("\n")
+      : stderr;
   }
   const firstLine = lines.find((line) => line.trim())?.trimStart();
   if (!firstLine?.startsWith("$ ")) {

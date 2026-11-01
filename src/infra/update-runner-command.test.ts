@@ -106,13 +106,25 @@ describe("update download progress", () => {
 
 describe("update command failure diagnostics", () => {
   it.each([
-    "error: cannot lock ref 'refs/tags/release/child': 'refs/tags/release' exists; cannot create 'refs/tags/release/child'",
-    "fatal: unable to update local ref",
-    " ! [rejected] release -> release (would clobber existing tag)",
+    {
+      diagnostic:
+        "error: cannot lock ref 'refs/tags/release/child': 'refs/tags/release' exists; cannot create 'refs/tags/release/child'",
+    },
+    { diagnostic: "fatal: unable to update local ref" },
+    { diagnostic: " ! [rejected] release -> release (would clobber existing tag)" },
+    {
+      diagnostic: "fatal: Could not read from remote repository.",
+      before: "fixture@git.example.invalid: Permission denied (publickey).\n",
+      cause: "Permission denied (publickey)",
+    },
   ])(
-    "retains the Git failure below progress in saved history and reports: %s",
-    async (diagnostic) => {
-      const stderr = `remote: Enumerating objects: 4, done.\nReceiving objects: 100% (4/4), done.\r${diagnostic}\n`;
+    "retains Git failure causes in saved history and reports: $diagnostic",
+    async ({
+      diagnostic,
+      before = "remote: Enumerating objects: 4, done.\nReceiving objects: 100% (4/4), done.\r",
+      cause,
+    }) => {
+      const stderr = `${before}${diagnostic}\n`;
       const result = await runStep({
         name: "git fetch",
         argv: ["git", "fetch", "--tags", "--force", "--prune", "origin"],
@@ -122,9 +134,14 @@ describe("update command failure diagnostics", () => {
         runCommand: async () => ({ code: 1, stdout: "", stderr }),
       });
       expect(result.stderrTail).toBe(stderr.trimEnd());
-      expect(result.failureFacts?.[0]?.message).toBe(diagnostic.trim());
+      const expected = cause ?? diagnostic.trim();
+      if (cause) {
+        expect(result.failureFacts?.[0]?.message).toContain(cause);
+      } else {
+        expect(result.failureFacts?.[0]?.message).toBe(expected);
+      }
       const [saved] = updateRunStepsFromResultStep(result);
-      expect(saved?.detail).toContain(diagnostic.trim().slice(0, 60));
+      expect(saved?.detail).toContain(expected.slice(0, 60));
       expect(saved?.failureFacts).toEqual(result.failureFacts);
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({
@@ -135,7 +152,7 @@ describe("update command failure diagnostics", () => {
           durationMs: 0,
         }),
       );
-      expect(report.markdown).toContain(diagnostic.trim());
+      expect(report.markdown).toContain(expected);
       expect(report.markdown).not.toContain("Enumerating objects");
     },
   );
