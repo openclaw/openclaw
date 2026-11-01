@@ -110,7 +110,7 @@
 }
 
 .channels-detail__header-actions .btn {
-  background: color-mix(in srgb, var(--bg) var(--floating-surface-opacity), transparent);
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
   backdrop-filter: blur(4px);
 }
 

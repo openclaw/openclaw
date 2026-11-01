@@ -865,7 +865,7 @@ openclaw-desktop-panel {
     padding: 5px;
     border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
     border-radius: var(--radius-lg);
-    background: color-mix(in srgb, var(--bg) var(--floating-surface-opacity), transparent);
+    background: color-mix(in srgb, var(--bg) 84%, transparent);
     box-shadow: var(--overlay-shadow);
     backdrop-filter: blur(16px);
   }

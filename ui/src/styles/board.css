@@ -491,7 +491,7 @@ openclaw-board-widget-cell {
      in-flow row that BOARD_WIDGET_TOUCH_BAR_PX mirrors. */
   .board-widget__bar {
     backdrop-filter: blur(6px);
-    background: color-mix(in srgb, var(--panel) var(--floating-surface-opacity), transparent);
+    background: color-mix(in srgb, var(--board-surface) 92%, transparent);
     border: 1px solid var(--board-line);
     border-radius: 999px;
     box-shadow: 0 4px 14px rgb(0 0 0 / 18%);

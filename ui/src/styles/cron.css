@@ -734,7 +734,7 @@
   flex-wrap: wrap;
   padding: var(--space-3) 0;
   border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) var(--floating-surface-opacity), transparent);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
 }
 

@@ -28,7 +28,7 @@ openclaw-board-document {
   min-height: 30px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg) var(--floating-surface-opacity), transparent);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(12px);
 }
 

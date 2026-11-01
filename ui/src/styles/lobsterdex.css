@@ -167,7 +167,7 @@
   border-radius: var(--radius-sm);
   place-items: center;
   color: var(--muted);
-  background: color-mix(in srgb, var(--card) var(--floating-surface-opacity), transparent);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
   opacity: 0;
   pointer-events: none;
   cursor: var(--cursor-action);

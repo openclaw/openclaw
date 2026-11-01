@@ -205,7 +205,7 @@
   border-radius: var(--radius-md);
   background: var(
     --shell-chrome-control-background,
-    color-mix(in srgb, var(--panel) var(--floating-surface-opacity), transparent)
+    color-mix(in srgb, var(--panel) 92%, transparent)
   );
   color: var(--muted);
   box-shadow: var(--shell-chrome-control-shadow, var(--shadow-sm));
@@ -213,7 +213,7 @@
 }
 
 .shell-chrome-controls__button:hover:not(:disabled, [aria-disabled="true"]) {
-  background: color-mix(in srgb, var(--bg-hover) var(--floating-surface-opacity), transparent);
+  background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
   color: var(--text);
 }
 
@@ -590,7 +590,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 0 12px;
   min-height: var(--shell-topbar-height);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  background: color-mix(in srgb, var(--bg) var(--floating-surface-opacity), transparent);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(12px) saturate(1.6);
 }
 
