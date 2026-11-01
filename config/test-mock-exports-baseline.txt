@@ -364,7 +364,6 @@
 ["extensions/feishu/src/monitor.dedupe-lifecycle.test.ts","./monitor.transport.js","e76f2e091fe26cb05aafd72c48b2857b73fdb2e37fef40d9e766c098b94dd438",1]
 ["extensions/feishu/src/monitor.dedupe-lifecycle.test.ts","./runtime.js","810cc473f091f79152491c693d2f4c89473ca672814897e0d019da5aa79b531e",1]
 ["extensions/feishu/src/monitor.dedupe-lifecycle.test.ts","./thread-bindings.js","f282e7c31ffb78ba6e4a9517c9111e286d9b14134dbe87f2ebd5afbe4b68beaf",1]
-["extensions/feishu/src/monitor.reaction.test.ts","./client.js","e1c3bcdb50c1de1c35b3e3f070581608ae778cf5a0f9da670043f6fa8618626e",1]
 ["extensions/feishu/src/monitor.reaction.test.ts","./monitor.transport.js","2738866fcb429c1ddf483cf96cf0805895176271816a6bbae0c576fe12e516e1",1]
 ["extensions/feishu/src/monitor.reaction.test.ts","./thread-bindings.js","96b2208302dee8aa2fa66b754f298f71a0363bf8858a8bd34fa0f0885121979f",1]
 ["extensions/feishu/src/monitor.startup.test.ts","./probe.js","5cec988e06fd94efa03b5bf55648728cbd0c652276d7dbd68de017e926846f6f",1]
