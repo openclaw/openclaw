@@ -291,10 +291,12 @@ that wrap a cancellation error.
 ### Provider request failures
 
 Model transport failures emit `Model request failed` at warning level with the
-provider, model, available status, code, type, message, error body, and request
-and response IDs. File logs preserve these error fields before transcript
-redaction and clipping; generated response content and request payloads are not
-included. Treat these local logs as sensitive. Log exports retain their existing
+provider, model, error name, available status, code, type, cause name and code,
+and request and response IDs. The provider's error message and response body are
+not logged, because they can echo prompts, tool results, or masked credentials.
+Use the status, `code`, and `type` to tell an unknown model (for example `404
+model_not_found`) from a bad key (`401 invalid_api_key`). Generated response
+content and request payloads are not included. Log exports retain their existing
 redaction policy.
 
 Embedded attempts also log `Assistant attempt failed`, including the saved error

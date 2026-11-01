@@ -390,6 +390,13 @@ These browser-clock phases sum to `browserSpanMs`, not Node `wallMs`. The report
 keeps wall and driver ratios visible. Missing input/commit boundaries are unranked,
 including navigation/reload and memory scenes.
 
+`--steps sidebar-open,sidebar-close --viewport mobile` measures each activation
+separately with the same 1,000-session fixture. The compound `sidebar-toggle`
+includes the exit animation and driver round trips before the second input;
+compare it only with the same motion contract. The single-action cases still
+wait for the real spring, while their input-to-commit clock excludes CSS-only
+motion after the last DOM mutation.
+
 This is an elapsed DOM-commit proxy, not CPU or input-to-paint latency. The driver
 prefix can include application focus work, and compound actions retain driver gaps
 between successive inputs inside `applicationMs`. Raw first/last-input, focus and
@@ -415,6 +422,11 @@ do not measure a real Gateway's network latency.
 Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
 omits DOM snapshots so snapshot traversal does not dominate attribution.
+
+Mobile `data-logs-scroll` admits touch input with a native tap before jumping the
+log scrollport to each edge. It checks reader anchoring across a live tail and
+return to the newest line, not swipe physics or wheel latency. Desktop uses the
+existing wheel input; both paths retain the same scroll and tail assertions.
 
 Streaming coverage is selectable with `--steps streaming-645-deltas`,
 `streaming-645-deltas-slow`, `streaming-large-transcript`, `streaming-two-panes`,

@@ -83,13 +83,48 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
-  it.each([400, 820, 1280])(
-    "keeps the desktop steady as machine data arrives at %i px",
-    async (width) => {
+  it.each(
+    [400, 820, 1280].flatMap((width) =>
+      [1, 4, 12].flatMap((diskCount) =>
+        [false, true].map((backups) => ({ width, diskCount, backups })),
+      ),
+    ),
+  )(
+    "keeps the overview steady at $width px with $diskCount disks (backups: $backups)",
+    async ({ width, diskCount, backups }) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
         async ({ page }) => {
-          const gateway = await installSystemsGateway(page, 0);
+          const gateway = await installSystemsGateway(page, 0, {
+            "system.info": {
+              ...systemInfo,
+              disks: Array.from({ length: diskCount }, (_, index) => ({
+                path: `/volume-${index}`,
+                totalBytes: 1024 ** 4,
+                availableBytes: (diskCount - index) * 1024 ** 3,
+              })),
+            },
+            "backup.status": {
+              targets: backups
+                ? [
+                    {
+                      kind: "archive",
+                      target: "Synthetic archive",
+                      latest: {
+                        id: "backup",
+                        kind: "archive",
+                        createdAt: 1,
+                        archivePath: "/backup",
+                        status: "failed",
+                        error: "Archive disk disconnected",
+                      },
+                    },
+                  ]
+                : [],
+              schedules: [],
+              locations: [],
+            },
+          });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
           const outletOrigin = () =>
@@ -111,19 +146,94 @@ suite.define(() => {
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
           const initialY = await position();
+          const backupY = await page
+            .locator(".systems-backups")
+            .evaluate((element) => element.getBoundingClientRect().y);
+          await expect
+            .poll(() =>
+              page.evaluate(() =>
+                document
+                  .getAnimations()
+                  .every(
+                    (animation) =>
+                      !Number.isFinite(animation.effect?.getComputedTiming().endTime) ||
+                      animation.playState === "finished",
+                  ),
+              ),
+            )
+            .toBe(true);
+          const shifts = await page.evaluateHandle(() => {
+            let cls = 0;
+            const observer = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                const shift = entry as PerformanceEntry & {
+                  hadRecentInput: boolean;
+                  value: number;
+                };
+                if (!shift.hadRecentInput) {
+                  cls += shift.value;
+                }
+              }
+            });
+            observer.observe({ type: "layout-shift", buffered: false });
+            return { read: () => cls, stop: () => observer.disconnect() };
+          });
 
           await gateway.resolveDeferred("environments.list");
-          await page
-            .locator('.systems-toolbar button[aria-label="Machine details"]:enabled')
-            .waitFor();
+          await page.locator(".systems-volume-summary").waitFor();
           await expect.poll(position).toBe(initialY);
           expect(await body.locator(".systems-state").isVisible()).toBe(true);
           expect(await page.locator(".systems-backups").textContent()).toContain(
             "Loading backups…",
           );
           await gateway.resolveDeferred("backup.status");
-          await page.getByText("No backups recorded —", { exact: false }).waitFor();
+          await page
+            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups recorded —", {
+              exact: false,
+            })
+            .waitFor();
           expect(await position()).toBe(initialY);
+          expect(
+            await page
+              .locator(".systems-backups")
+              .evaluate((element) => element.getBoundingClientRect().y),
+          ).toBe(backupY);
+          expect(await page.locator(".systems-volume-summary li:not([aria-hidden])").count()).toBe(
+            Math.min(3, diskCount),
+          );
+          expect(
+            await page
+              .locator(".systems-overview")
+              .evaluate((element) => element.scrollHeight <= element.clientHeight),
+          ).toBe(true);
+          await page.evaluate(
+            () =>
+              new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+              }),
+          );
+          expect(await shifts.evaluate((probe) => probe.read())).toBe(0);
+          await shifts.evaluate((probe) => probe.stop());
+          await shifts.dispose();
+          const more = page.locator(".systems-volume-summary button");
+          await more.focus();
+          await page.keyboard.press("Enter");
+          await page.locator(".systems-details").waitFor();
+          expect(await page.locator(".systems-details .systems-vital--disk").count()).toBe(
+            diskCount,
+          );
+          expect(
+            await page
+              .locator(".systems-details")
+              .evaluate((element) => element === document.activeElement),
+          ).toBe(true);
+          if (backups) {
+            await page.getByText("Archive disk disconnected", { exact: true }).waitFor();
+          }
+          await page.getByRole("button", { name: "Close details" }).click();
+          await expect
+            .poll(() => more.evaluate((element) => element === document.activeElement))
+            .toBe(true);
 
           // Selecting a worker removes Gateway backups and may have no telemetry.
           const picker = page.locator(".systems-mobile-picker");

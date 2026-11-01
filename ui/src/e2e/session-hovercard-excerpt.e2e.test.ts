@@ -31,6 +31,13 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          historyMessages: [
+            {
+              role: "assistant",
+              timestamp: 1,
+              content: [{ type: "text", text: `Open ${longKey} for the last message.` }],
+            },
+          ],
           methodResponses: {
             "progressCard.get": { card: null },
             "sessions.list": chatSessionListResponse([
@@ -119,6 +126,19 @@ suite.define(() => {
         expect(await focused()).toEqual({ inCard: true, inExcerpt: false });
         await page.keyboard.press("Tab");
         expect(await focused()).toEqual({ inCard: false, inExcerpt: false });
+        const row = page.locator(
+          `.chat-thread a.markdown-session-link[data-session-key="${longKey}"]`,
+        );
+        await row.hover();
+        await excerpt.waitFor({ state: "visible" });
+        await row.focus();
+        await page.setViewportSize({ width: 320, height: 900 });
+        await expect.poll(() => excerpt.textContent()).not.toBe(long.text);
+        const narrow = await measure();
+        expect(narrow.scrollHeight).toBe(narrow.clientHeight);
+        expect(narrow.text.length).toBeLessThan(long.text.length);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await expect.poll(() => excerpt.textContent()).toBe(long.text);
       },
     );
   });

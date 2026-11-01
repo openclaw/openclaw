@@ -41,7 +41,7 @@ import {
   runWorkerPlacementSessionBarrier,
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
 import { createDevicePlacementAuthority } from "./worker-environments/device-placement-eligibility.js";
 import {
   createNodeWorkspaceRetainCoordinator,
@@ -93,6 +93,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
 
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
@@ -251,19 +252,11 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
       }),
       resolveWorkspace,
-      prepareGatewayMove: (identity) =>
-        params.placements.withWorkspaceExclusion(
-          identity.sessionId,
-          async (assertOwned) =>
-            await materializeSessionRepositoryWorkspaceOnGateway({
-              cfg: getRuntimeConfig(),
-              ...identity,
-              assertCurrent: () => {
-                assertOwned();
-                identity.assertCurrent();
-              },
-            }),
-        ),
+      prepareGatewayMove: createRepositoryGatewayMovePreparation({
+        placements: params.placements,
+        environments: params.environments,
+        getConfig: getRuntimeConfig,
+      }),
       workspaceOperations,
       prepareAcceptedWorkspacePublication,
       publishAcceptedWorkspace,

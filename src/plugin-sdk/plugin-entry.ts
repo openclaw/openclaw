@@ -161,6 +161,7 @@ export type {
   WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
+  WorkerResourceReceipt,
   WorkerMachineOption,
   WorkerProfile,
   WorkerProvider,

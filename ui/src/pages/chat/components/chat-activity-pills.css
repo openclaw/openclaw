@@ -223,7 +223,7 @@
   width: 23px;
   height: 23px;
   border: 2px solid var(--activity-surface);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--avatar-bg);
   color: var(--avatar-ink);
   animation: activity-pill-wave 10.6s cubic-bezier(0.77, 0, 0.175, 1) infinite;

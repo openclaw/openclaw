@@ -20,7 +20,7 @@
   gap: 7px;
   min-width: 0;
   padding: 10px 4px 7px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--text);
   text-decoration: none;

@@ -362,17 +362,6 @@ export async function stagePluginSourceSnapshot(params: {
   }
 }
 
-export async function publishPluginSourceSnapshot(
-  params: Parameters<typeof stagePluginSourceSnapshot>[0],
-) {
-  const staged = await stagePluginSourceSnapshot(params);
-  try {
-    return await staged.publish();
-  } finally {
-    await staged.disposeAsync();
-  }
-}
-
 function assertArtifactPath(stateDir: string, artifactPath: string) {
   const parent = fs.realpathSync.native(resolvePluginSourceCapturesDirectory(stateDir));
   if (path.basename(artifactPath).startsWith(PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX)) {

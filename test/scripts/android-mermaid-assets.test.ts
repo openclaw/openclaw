@@ -3,7 +3,18 @@ import { describe, expect, it } from "vitest";
 
 const buildFile = "apps/android/app/build.gradle.kts";
 
-describe("Android Mermaid asset generation", () => {
+describe("Native Mermaid asset generation", () => {
+  it.each(["pele", "dompurify"])(
+    "identifies the pinned %s version in redistributed notices",
+    (name) => {
+      const { dependencies } = JSON.parse(
+        readFileSync("packages/mermaid-renderer/package.json", "utf8"),
+      );
+      const notice = readFileSync("packages/mermaid-renderer/native/NOTICE.txt", "utf8");
+      expect(notice.toLowerCase()).toContain(`${name} ${dependencies[name]} —`);
+    },
+  );
+
   it("builds through the package-local pnpm context", () => {
     const build = readFileSync(buildFile, "utf8");
     const task = build.slice(

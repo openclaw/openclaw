@@ -239,7 +239,7 @@ suite.define(() => {
       await capture("composer");
       const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await picker.locator(".agent-select__trigger").tap();
-      await picker.getByRole("menuitemradio", { name: "Scout", exact: true }).tap();
+      await picker.getByRole("option", { name: "Scout", exact: true }).tap();
       await expect.poll(() => picker.locator(".agent-select__label").textContent()).toBe("Scout");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     });

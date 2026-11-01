@@ -6,10 +6,8 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
-import {
-  isCurrentWorkerWorkspacePendingResultOwner,
-  readWorkerWorkspaceReconciliationFacts,
-} from "./placement-workspace-result.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result-owner.js";
+import { readWorkerWorkspaceReconciliationFacts } from "./placement-workspace-result.js";
 import { assertPreparedEnvironmentAttachment } from "./prepared-environment-store.js";
 import { hasWorkerEnvironmentSessionAttachment } from "./session-attachment-store.js";
 import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
@@ -263,6 +261,7 @@ export function createWorkerEnvironmentTransitionOps(db: EngineConnection, now: 
       assertShape({
         state: to,
         leaseId,
+        resourceReceipt: current.resourceReceipt,
         nodeDeviceId,
         sshEndpoint,
         desktop,

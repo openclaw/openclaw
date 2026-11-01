@@ -3496,6 +3496,26 @@ server.listen(0, "127.0.0.1", () => {
     expect(restore.with?.["node-version"]).toBe("${{ steps.test-node.outputs.version }}");
     expect(restore.with?.["cache-mode"]).toBe("off");
     expect(restore.with?.["install-deps"]).toBe("false");
+    expect(restore.with?.["install-bun"]).toBe("false");
+    for (const [platform, version, expected] of [
+      ["linux", buildVersion, false],
+      ["linux", "26.12.1", true],
+      ["linux", "", true],
+      ["linux", undefined, true],
+      ["linux-hosted", "26.12.1", false],
+    ] as const) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(restore.if, "test runtime restore condition"), {
+          eventName: "schedule",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { platform },
+          env: warmer.env,
+          steps: { "test-node": { outputs: version === undefined ? {} : { version } } },
+        }),
+        `${platform} test runtime ${version ?? "<missing>"}`,
+      ).toBe(expected);
+    }
     const ordered = [
       setup,
       steps.find((step) => step.id === "test-node"),

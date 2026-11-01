@@ -104,7 +104,10 @@ export function PaletteSessionSettingsView(properties: {
         .composedPath()
         .some(
           (node) =>
-            node instanceof Element && node.matches('[role="menu"], [aria-haspopup="menu"]'),
+            node instanceof Element &&
+            node.matches(
+              '[role="menu"], [role="listbox"], [aria-haspopup="menu"], [aria-haspopup="listbox"]',
+            ),
         )
     ) {
       return;
@@ -344,7 +347,8 @@ export function PaletteSessionSettingsView(properties: {
                 place().selectAgentId(id);
                 properties.options.onChange();
               },
-              onOpenChange: properties.options.onAgentPickerOpen,
+              identityTargetsRef: properties.options.identityTargetsRef,
+              onIdentityTargetsChange: properties.options.onIdentityTargetsChange,
             }}
           />
         </div>

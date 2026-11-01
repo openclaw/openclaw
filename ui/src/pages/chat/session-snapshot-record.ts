@@ -23,12 +23,12 @@ import {
 import { trimmedChatHistoryPagination } from "./chat-history-pagination.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
-import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   loadChatHistoryStateValidator,
   prewarmedHistoryStateValidator,
-} from "./session-snapshot-prewarm.ts";
+} from "./chat-snapshot-prewarm.ts";
+import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
+import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);

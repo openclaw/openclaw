@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Show, useContext } from "solid-js";
+import { createMemo, For, Show, useContext } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type {
   ControlUiSessionBranch,
@@ -9,6 +9,7 @@ import type {
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
 import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { sessionOwnerInitials } from "../lib/session-owner.ts";
 import {
   displaySessionPullRequests,
@@ -530,11 +531,10 @@ function PullRequestDetails(props: { snapshot?: ControlUiSessionPullRequestSnaps
 
 function HovercardExcerpt(props: { text: string }) {
   let element!: HTMLDivElement;
-  createEffect(
+  createLayoutMeasurement(
     () => props.text,
-    (text) => {
-      writeHovercardExcerpt(element, text);
-    },
+    (text) => () => writeHovercardExcerpt(element, text!),
+    { targets: () => [element], fonts: true, changeTiming: "sync" },
   );
   return (
     <div
@@ -622,6 +622,7 @@ export function SessionHovercard(props: SessionHovercardInput) {
                 <ProgressCardMarkdown
                   markdown={props.progressCard?.markdown}
                   omitProgress
+                  previewLines={3}
                   registerControls={controls?.registerSource}
                 />
               </div>
