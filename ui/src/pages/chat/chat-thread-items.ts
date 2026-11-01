@@ -97,9 +97,7 @@ export function createChatSearchMatcher(
     if (expansion?.status === "loaded") {
       const markdown =
         role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
-      const recovered = expansion.message
-        ? prepareChatMessageRender(expansion.message)
-        : undefined;
+      const recovered = expansion.message ? prepareChatMessageRender(expansion.message) : undefined;
       return (
         sourceMatches(markdown) ||
         (phrase !== null &&
