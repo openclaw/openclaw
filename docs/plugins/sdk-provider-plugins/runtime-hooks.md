@@ -292,7 +292,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `catalog`                         | Model catalog or base URL defaults                                                          |
 | `applyConfigDefaults`             | Provider-owned global defaults during config materialization                                |
 | `normalizeModelId`                | Legacy/preview model-id alias cleanup before lookup                                         |
-| `normalizeTransport`              | Provider-family `api` / `baseUrl` cleanup before generic model assembly                     |
+| `normalizeTransport`              | Same-origin `api` / `baseUrl` cleanup for its transport family before model assembly        |
 | `normalizeConfig`                 | Normalize `models.providers.<id>` config                                                    |
 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers                                 |
 | `resolveConfigApiKey`             | Provider-owned env-marker auth resolution                                                   |

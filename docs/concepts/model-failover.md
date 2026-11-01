@@ -13,6 +13,12 @@ OpenClaw handles failures in two stages:
 1. **Auth-profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+When an assistant failure explicitly identifies an unknown, missing, or retired
+model, OpenClaw skips other credentials and advances to the configured fallback.
+Without a fallback, it surfaces the error. Account-access and plan restrictions,
+authentication failures, quota errors, and ambiguous not-found responses still
+allow profile rotation.
+
 Turn usage includes completed model candidates even when their answer is discarded
 during fallback. Costs retain each candidate's price; if any completed candidate's
 price is unavailable, the total cost stays unknown. The final selected model and
@@ -357,7 +363,7 @@ A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 
-A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
+A successful authenticated ChatGPT quota check replaces the saved subscription reset with the provider's current reset, including an earlier one. The profile stays blocked until that reset; an unavailable or invalid quota response leaves the saved block intact. A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
 
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">

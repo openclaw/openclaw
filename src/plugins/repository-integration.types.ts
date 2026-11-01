@@ -26,7 +26,7 @@ export type RepositoryOperation = {
   binding: SessionDispatchBinding;
 };
 
-export type RepositoryAuthorization = Readonly<
+type RepositoryAuthorization = Readonly<
   | {
       kind: "connection";
       role: string;

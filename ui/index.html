@@ -535,6 +535,8 @@
         font:
           14px/21px system-ui,
           sans-serif;
+        letter-spacing: normal;
+        -webkit-font-smoothing: auto;
         resize: none;
         outline: none;
       }
@@ -1660,21 +1662,21 @@
           { once: true },
         );
 
-        if (retry) {
-          retry.addEventListener("click", function () {
-            cancelRecovery();
-            window.location.reload();
-          });
-        }
-        if (wait) {
-          wait.addEventListener("click", function () {
-            hideFallback();
-            cancelRecovery();
-            recoveryAttempt = 0;
-            armFallbackTimer();
-          });
-        }
+        retry.addEventListener("click", function () {
+          cancelRecovery();
+          window.location.reload();
+        });
+        wait.addEventListener("click", function () {
+          hideFallback();
+          cancelRecovery();
+          recoveryAttempt = 0;
+          armFallbackTimer();
+        });
       })();
+    </script>
+    <script data-cfasync="false" nomodule>
+      document.body.innerHTML =
+        '<main style="padding:24px;color:#f4f4f5"><h1>This browser is not supported</h1><p>Open the Control UI in an up-to-date browser, or update your system WebView.</p></main>';
     </script>
     <script data-cfasync="false" type="module" src="/src/main.ts"></script>
   </body>

@@ -211,10 +211,10 @@ function SharingPermissions(props: {
   let input: HTMLInputElement | undefined;
   let trigger: HTMLButtonElement | undefined;
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return props.data.rows.filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id].join(" ").toLocaleLowerCase().includes(term),
+        [identity.label, identity.id].join(" ").toLocaleLowerCase().normalize("NFC").includes(term),
       ),
     );
   };

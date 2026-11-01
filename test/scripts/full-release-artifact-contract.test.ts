@@ -340,6 +340,9 @@ globalThis.fetch = async (input, options) => {
   if (url.href === "https://registry.npmjs.org/openclaw") {
     return Response.json({ versions: { "2026.9.8": {} }, "dist-tags": { latest: "2026.9.8", beta: "2026.9.8" } });
   }
+  if (url.href === "https://registry.npmjs.org/openclaw/2026.9.9") {
+    return new Response("{}", { status: 404 });
+  }
   if (url.origin !== "https://api.github.com" || new Headers(options?.headers).get("authorization") !== "Bearer artifact-fixture-token") {
     throw new Error("Unexpected publication fixture transport");
   }

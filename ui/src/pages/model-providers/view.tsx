@@ -183,11 +183,11 @@ function ProviderAccess(props: ModelProvidersViewProps) {
   // values from page revalidation.
   const routeQuery = createMemo(() => props.providerQuery ?? "");
   const [search, setSearch] = createSignal(() => routeQuery());
-  const query = () => search().trim().toLocaleLowerCase();
+  const query = () => search().trim().toLocaleLowerCase().normalize("NFC");
   const matchingCards = createMemo(() =>
     props.cards.filter((card) =>
       [card.id, card.displayName, ...card.credentialProviderIds].some((value) =>
-        value.toLocaleLowerCase().includes(query()),
+        value.toLocaleLowerCase().normalize("NFC").includes(query()),
       ),
     ),
   );

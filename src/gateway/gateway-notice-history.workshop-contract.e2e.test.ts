@@ -38,10 +38,14 @@ it(
     const providerErrors: unknown[] = [];
     const runId = `skill-workshop-review:${randomUUID()}`;
     const marker = {
-      kind: "skill-workshop-change",
-      agentId: "main",
-      runId,
-      skills: [{ name: "saved-receipt", action: "created", summary: "retain verified steps" }],
+      kind: "plugin-notice",
+      pluginId: "skill-workshop",
+      type: "skills-changed",
+      data: {
+        agentId: "main",
+        runId,
+        skills: [{ name: "saved-receipt", action: "created", summary: "retain verified steps" }],
+      },
     };
     const noticeText =
       '💾 Learned: created `saved-receipt` (retain verified steps). Say "undo" to revert this skill change.';

@@ -321,7 +321,10 @@ Instrumented synchronous work lasting at least 250 ms and unattributed event-loo
 gaps longer than one second produce a `main-thread stall` log with a code-owned
 task label where available. Native launches through the process and command
 runners and PTY helper have fixed task labels; these measure
-the synchronous launch, not the child's running time. On Node 26, a bounded CPU flight
+the synchronous launch, not the child's running time. During active event-loop
+sampling on Node, Promise continuations retain their inherited code-owned task
+labels; their synchronous execution is measured without charging time awaiting I/O.
+On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
 stall interval's top inclusive frames, sample count, and truncation status.
 Several stalls can finish before reporting; only the longest interval is profiled.
@@ -330,6 +333,12 @@ stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains
 several listed frames; they are not independent durations.
+The `deepest` stacks preserve the sampled leaf and nearest available OpenClaw
+caller, including across dependency frames. `[...]` marks omitted intermediate
+frames. If a continuation has no recorded OpenClaw frame, its captured task
+appears as `[async task:...]`, distinct from a sampled call frame. Unnamed work
+remains unattributed. Lower-ranked entries are dropped first to keep each report within 2 KiB;
+`reportTruncated=true` identifies this log-size trimming.
 
 The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
 and processes already started with conflicting profiling, tracing, or debugger
@@ -343,6 +352,33 @@ stall interval. It does not prove the entire process stopped or identify the
 blocking operation. For example, Linux libuv blocks the sampling signal on the
 calling thread around `fork()`, including allocator fork hooks. The synchronous
 task labels remain available during such sampling gaps.
+
+On Linux, the recorder also watches a shared main-thread heartbeat from a worker.
+After one second without a heartbeat it asynchronously reads the main thread's
+`/proc/self/task/<pid>` state, wait channel, syscall number, kernel stack (when
+permitted), I/O counters, and scheduler counters. It takes at most three snapshots,
+one second apart, while the stall is still ongoing. The `kernel` field on the
+same profile line contains only snapshots inside the reported stall interval.
+No syscall arguments, memory addresses, or user data are recorded. Unsupported
+platforms do not start this observer; no configuration is needed.
+
+`state=D` with `folio_wait` or `filemap_fault` in `wchan`/`stack` points to page
+or file-backed waits; `compact_zone` or `try_to_compact_pages` points to compaction.
+Writeback/fsync symbols and the architecture-specific `syscall` number distinguish
+write waits; futex symbols identify a lock or `Atomics.wait`. `state=R` means
+runnable, including currently running: compare `sched` (CPU runtime and run-queue
+wait, in nanoseconds) across snapshots before concluding scheduling starvation.
+These observations narrow the cause; they do not prove why a page or lock was needed.
+
+Snapshot `at` is milliseconds from the stall start. Counter arrays follow procfs
+order: `io` is rchar, wchar, syscr, syscw, read_bytes, write_bytes,
+cancelled_write_bytes; `ctxt` is voluntary/nonvoluntary switches from process
+status; `rssKb` is VmRSS. `psi` contains system-wide I/O, memory, and CPU pressure,
+each as some/full cumulative microseconds. Permission errors appear as `?EACCES`
+or `?EPERM`; unavailable counter arrays are empty. Snapshots are best-effort,
+non-atomic reads: delayed observer scheduling or I/O may miss a stall entirely.
+Counter and stack fields may be omitted to keep kernel evidence within 1,400 bytes
+and the complete profile within 2 KiB; state, wait channel, and syscall remain.
 
 ## Uptime monitoring
 

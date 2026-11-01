@@ -191,8 +191,10 @@ function BoardWidgetCellContent(
   const fixedReport = () =>
     props.widget?.heightMode === "fixed" && contribution()?.kind === "session:report";
   const [reportEntered, setReportEntered] = createSignal(false);
-  // Fixed reports already reserve their full height. Build nearby bodies once,
-  // then let the existing core-widget latch retain them across tab switches.
+  const needsGrantNotice = () =>
+    props.widget?.grantState === "pending" || props.widget?.grantState === "rejected";
+  // Fixed reports reserve their full height. Keep their shells ready for scroll,
+  // but admit heavy report content only nearby and retain it across tab switches.
   // Observe the card because the display:contents host has no intersection box.
   createIntersectionObserver(
     () => (fixedReport() && !reportEntered() && widgetRoot() ? [widgetRoot()!] : []),
@@ -258,8 +260,7 @@ function BoardWidgetCellContent(
   }
   const presentationReady = () =>
     !props.widget?.viewTicket ||
-    props.widget.grantState === "pending" ||
-    props.widget.grantState === "rejected" ||
+    needsGrantNotice() ||
     bodyErrored() ||
     (resources()?.frame.presentationReady ?? false);
   cells.set(host, {
@@ -495,9 +496,7 @@ function BoardWidgetCellContent(
           />
         )}
       </Match>
-      <Match
-        when={props.widget?.grantState === "pending" || props.widget?.grantState === "rejected"}
-      >
+      <Match when={needsGrantNotice()}>
         <AccessNotice />
       </Match>
       <Match when={props.widget?.contentKind === "plugin" && !props.widget.frameUrl}>
@@ -529,8 +528,7 @@ function BoardWidgetCellContent(
   const scrollable = () =>
     bodyErrored() ||
     actionFailed() ||
-    props.widget?.grantState === "pending" ||
-    props.widget?.grantState === "rejected" ||
+    needsGrantNotice() ||
     props.widget?.contentKind === "mcp-app" ||
     (props.widget?.contentKind === "plugin" && !props.widget.frameUrl);
   const style = (): SolidJSX.CSSProperties => {
@@ -715,9 +713,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
     methods: {
       focusWidget: (host) => cells.get(host)?.focusWidget(),
       selectMenuItem: (host, value) => cells.get(host)?.selectMenuItem(value),
-      teardown: async (host) => {
-        await cells.get(host)?.teardown();
-      },
+      teardown: async (host) => cells.get(host)?.teardown(),
       restartAfterTeardown: (host) => cells.get(host)?.restartAfterTeardown(),
     },
   },

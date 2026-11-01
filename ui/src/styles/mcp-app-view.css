@@ -37,7 +37,6 @@ mcp-app-view[display-mode="fullscreen"] {
   padding-top: 40px;
   margin: 0;
   border: 0;
-  box-sizing: border-box;
 }
 mcp-app-view .exit-fullscreen {
   position: absolute;

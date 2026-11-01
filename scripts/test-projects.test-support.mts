@@ -5210,7 +5210,7 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   return isControlUiSourcePath(relative);
 }
 
-function createVitestArgs(
+export function createVitestArgs(
   params: Pick<VitestRunPlan, "config" | "forwardedArgs" | "watchMode"> & {
     env?: NodeJS.ProcessEnv;
   },
@@ -6079,7 +6079,7 @@ export function createVitestRunSpecs(
           : baseEnv,
       includeFilePath,
       includePatterns: plan.includePatterns,
-      pnpmArgs: createVitestArgs(plan),
+      pnpmArgs: createVitestArgs({ ...plan, env: baseEnv }),
       preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };

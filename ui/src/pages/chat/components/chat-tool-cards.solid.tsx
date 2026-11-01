@@ -165,7 +165,7 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
           when={verb() && input().path}
           fallback={<span class="chat-tool-msg-summary__label">{display().label}</span>}
         >
-          <span class="chat-tool-row__verb">{verb()}</span>
+          <span class={["chat-tool-row__verb", { "text-shimmer": running() }]}>{verb()}</span>
           <span class="chat-tool-row__target">{pathDisplayName(input().path!)}</span>
           <Show when={stat()}>{(value) => <DiffStatChips stat={value()} />}</Show>
         </Show>

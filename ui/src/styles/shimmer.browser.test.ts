@@ -5,10 +5,10 @@ import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-su
 const fixture = styleFixture("shimmer-", { ignoreCloseErrors: true });
 
 const skeletons = [
-  ["skeleton-line", "1.5s"],
-  ["usage-skeleton-block", "1.35s"],
-  ["memory-import__skeleton", "1.4s"],
-  ["chat-controls__model-trigger-skeleton", "1.45s"],
+  "skeleton-line",
+  "usage-skeleton-block",
+  "memory-import__skeleton",
+  "chat-controls__model-trigger-skeleton",
 ] as const;
 const skeletonFixture = styleDocument(
   readStyles(
@@ -18,7 +18,7 @@ const skeletonFixture = styleDocument(
     "styles/memory-import",
     "styles/usage",
   ),
-  skeletons.map(([name]) => `<div class="skeleton ${name}"></div>`).join(""),
+  skeletons.map((name) => `<div class="skeleton ${name}"></div>`).join(""),
 );
 
 fixture.describe("Control UI shimmer", () => {
@@ -55,7 +55,7 @@ fixture.describe("Control UI shimmer", () => {
     async (reducedMotion) => {
       await withBrowserPage(fixture.page({ reducedMotion }), async (page) => {
         await page.setContent(skeletonFixture);
-        for (const [name, duration] of skeletons) {
+        for (const name of skeletons) {
           const styles = await page.locator("." + name).evaluate((element) => {
             const host = getComputedStyle(element);
             const highlight = getComputedStyle(element, "::after");
@@ -84,7 +84,7 @@ fixture.describe("Control UI shimmer", () => {
             expect(styles).toMatchObject({
               host: ["none", "none", "hidden"],
               highlight: ["shimmer", "infinite"],
-              highlightDuration: duration,
+              highlightDuration: "2s",
               highlightWillChange: "transform",
               animatedProperties: ["transform"],
             });
@@ -98,7 +98,7 @@ fixture.describe("Control UI shimmer", () => {
     await withBrowserPage(fixture.page({ reducedMotion: "no-preference" }), async (page) => {
       for (const count of [1, 2, 5]) {
         await page.setContent(
-          `<style>${readStyles("styles/base", "styles/chat/grouped")}</style><div style="padding:16px;width:360px"><span id="preview">A</span><span class="agent-chat__typing-state agent-chat__typing-text" data-typing>is typing…</span><span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span><div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">${'<span class="agent-chat__typing-person">C</span>'.repeat(count)}</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div><span class="agent-chat__typing-text" data-typing>Several people are typing…</span></div>`,
+          `<style>${readStyles("styles/base", "styles/chat/grouped")}</style><div style="padding:16px;width:360px"><span id="preview">A</span><span class="agent-chat__typing-state agent-chat__typing-text text-shimmer" data-typing>is typing…</span><span id="draft" class="agent-chat__typing-state agent-chat__typing-text">Draft</span><div class="agent-chat__typing-overflow"><span class="agent-chat__typing-identities">${'<span class="agent-chat__typing-person">C</span>'.repeat(count)}</span><span class="agent-chat__typing-summary"><span class="agent-chat__typing-text text-shimmer" data-typing><bdi class="agent-chat__typing-name">Camila</bdi> is typing…</span></span></div><span class="agent-chat__typing-text text-shimmer" data-typing>Several people are typing…</span></div>`,
         );
         const result = await page.evaluate(() => {
           const element = (selector: string) => {
@@ -147,12 +147,71 @@ fixture.describe("Control UI shimmer", () => {
         );
         for (const text of texts) {
           expect(text.animation).toBe("none");
-          if (media.reducedMotion === "reduce") {
-            expect(text.background).toBe("none");
-          }
+          expect(text.background).toBe("none");
           expect(text.fill).not.toBe("rgba(0, 0, 0, 0)");
         }
       }
+    });
+  });
+  it("keeps the gradient on a row whose own styles reset its background", async () => {
+    await withBrowserPage(fixture.page({ reducedMotion: "no-preference" }), async (page) => {
+      await page.setContent(
+        styleDocument(
+          readStyles("styles/base", "styles/chat/tool-cards"),
+          `<code class="chat-tool-row__cmd text-shimmer"><span>pnpm check</span></code>`,
+        ),
+      );
+      const image = await page
+        .locator(".chat-tool-row__cmd")
+        .evaluate((element) => getComputedStyle(element).backgroundImage);
+      expect(image).toContain("linear-gradient");
+    });
+  });
+  it("runs both sweeps on paint or compositor properties and stops them in forced colors", async () => {
+    await withBrowserPage(fixture.page({ reducedMotion: "no-preference" }), async (page) => {
+      await page.setContent(
+        styleDocument(
+          readStyles("styles/base"),
+          `<span id="text" class="text-shimmer">Working</span><div id="block" class="skeleton" style="width:120px;height:12px"></div>`,
+        ),
+      );
+      const read = () =>
+        page.evaluate(() => {
+          const properties = (element: Element) => [
+            ...new Set(
+              element.getAnimations({ subtree: true }).flatMap((animation) =>
+                (animation.effect as KeyframeEffect)
+                  .getKeyframes()
+                  .flatMap(Object.keys)
+                  .filter(
+                    (key) => !["composite", "computedOffset", "easing", "offset"].includes(key),
+                  ),
+              ),
+            ),
+          ];
+          const text = document.querySelector("#text")!;
+          const block = document.querySelector("#block")!;
+          const style = getComputedStyle(text);
+          const highlight = getComputedStyle(block, "::after");
+          return {
+            text: style.animationName,
+            block: highlight.animationName,
+            textProperties: properties(text),
+            blockProperties: properties(block),
+            parkedX: Number.parseFloat(highlight.transform.split(",")[4] ?? "NaN"),
+          };
+        });
+      expect(await read()).toMatchObject({
+        text: "text-shimmer",
+        block: "shimmer",
+        textProperties: ["backgroundPositionX", "backgroundPositionY"],
+        blockProperties: ["transform"],
+      });
+      await page.emulateMedia({ forcedColors: "active" });
+      const forced = await read();
+      expect(forced.text).toBe("none");
+      expect(forced.block).toBe("none");
+      expect(forced.parkedX).toBe(-120);
     });
   });
 });

@@ -39,6 +39,40 @@ async function drainIdle(drain: ReturnType<typeof createChannelIngressDrain<Payl
 }
 
 describe("channel ingress drain lanes", () => {
+  it("preserves priority FIFO without bypassing a retry-delayed lane head", async () => {
+    await withTempState(async (stateDir) => {
+      let currentNow = 10_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => currentNow });
+      const dispatches: string[] = [];
+      for (const id of ["ambient-a", "live-a", "live-b", "ambient-b"]) {
+        await enqueue(queue, id);
+      }
+      const claim = expectDefined(await queue.claim("ambient-a"), "retry head");
+      await queue.release(claim, { lastError: "retry", releasedAt: currentNow });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => currentNow,
+        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+        prioritizePending: (event) => event.id.startsWith("live-"),
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          await lifecycle.onAdopted();
+        },
+      });
+      try {
+        expect(await drain.drainOnce()).toEqual({ started: 0 });
+        currentNow += 60_000;
+        for (let pass = 0; pass < 4; pass++) {
+          await drainIdle(drain);
+        }
+        expect(dispatches).toEqual(["live-a", "live-b", "ambient-a", "ambient-b"]);
+        expect(await queue.listPending()).toEqual([]);
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
+
   it("blocks active, peer-owned, and delayed lanes without ordering their keys", async () => {
     await withTempState(async (stateDir) => {
       const currentNow = 10_000;

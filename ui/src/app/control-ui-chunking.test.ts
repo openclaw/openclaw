@@ -364,13 +364,34 @@ describe("Control UI build chunking", () => {
     const cronView = modulePath("../pages/cron/view.tsx");
     const cronDetail = modulePath("../pages/cron/view-detail.tsx");
     const cronRunLink = modulePath("../../../src/cron/run-link.ts");
+    const cronDomain = modulePath("../lib/cron/index.ts");
+    const cronForm = modulePath("../lib/cron/form.ts");
+    const cronSchedule = modulePath("../lib/cron/form-schedule.ts");
+    const cronModels = modulePath("../lib/cron/model-suggestions.ts");
+    const modelRefs = modulePath(
+      "../../../packages/model-catalog-core/src/configured-model-refs.ts",
+    );
+    const transcriptPages = modulePath("../pages/chat/chat-transcript-pages.ts");
+    const cronStyle = modulePath("../styles/cron.css");
+    const cronPagination = modulePath("../components/cron-jobs-pagination.tsx");
+    const agents = modulePath("../pages/agents/agents-page.tsx");
+    const agentsCron = modulePath("../pages/agents/panel-cron.tsx");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
     const sessions = modulePath("../pages/sessions/sessions-page.tsx");
+    const welcomeCopy = modulePath("../i18n/locales/en-chat-welcome.ts");
+    const peopleCopy = modulePath("../i18n/locales/en-session-people.ts");
     const hubHeader = modulePath("../components/solid/hub-page-header.tsx");
     const hubTabs = modulePath("../components/solid/hub-tabs.tsx");
+    const hubStyle = modulePath("../styles/hub-tabs.css");
+    const inlineHubStyle = `${hubStyle}?inline`;
+    const settingsStyle = modulePath("../styles/settings.css");
+    const styleOnly = modulePath("../pages/about/view.tsx");
     const tabs = modulePath("../components/solid/tabs.tsx");
     const tabState = modulePath("../lib/tabs.ts");
     const pendingFocus = modulePath("../lib/reactive/pending-focus.ts");
     const shadowStyles = modulePath("../lib/reactive/shadow-styles.ts");
+    const tabsStyle = modulePath("../styles/tabs.css");
+    const inlineTabsStyle = `${tabsStyle}?inline`;
     const settingsWorkspace = modulePath("../components/solid/settings-workspace.tsx");
     const settingsUi = modulePath("../components/solid/settings-ui.tsx");
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
@@ -395,15 +416,15 @@ describe("Control UI build chunking", () => {
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const talk = () => import(${JSON.stringify(talk)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const agents = () => import(${JSON.stringify(agents)}); export { validate } from ${JSON.stringify(validator)}; export const talk = () => import(${JSON.stringify(talk)}); export const styleOnly = () => import(${JSON.stringify(styleOnly)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
-        `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+        `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { welcome } from ${JSON.stringify(welcomeCopy)}; export class NewSession { label = label + welcome; }`,
       ],
       [
         runFrame,
@@ -425,7 +446,7 @@ describe("Control UI build chunking", () => {
       [devices, 'export const page = "devices-page";'],
       [
         sessions,
-        `import { header } from ${JSON.stringify(hubHeader)}; import { workspace } from ${JSON.stringify(settingsWorkspace)}; import { select } from ${JSON.stringify(settingsSelect)}; export function render() { return header() + workspace + select; }`,
+        `import { header } from ${JSON.stringify(hubHeader)}; import { workspace } from ${JSON.stringify(settingsWorkspace)}; import { select } from ${JSON.stringify(settingsSelect)}; import { welcome } from ${JSON.stringify(welcomeCopy)}; import { people } from ${JSON.stringify(peopleCopy)}; export function render() { return header() + workspace + select + welcome + people; }`,
       ],
       [
         hubHeader,
@@ -433,19 +454,30 @@ describe("Control UI build chunking", () => {
       ],
       [
         hubTabs,
-        `import { tabs } from ${JSON.stringify(tabs)}; export function hubTabs() { return tabs; }`,
+        `import ${JSON.stringify(hubStyle)}; import css from ${JSON.stringify(inlineHubStyle)}; import { tabs } from ${JSON.stringify(tabs)}; export function hubTabs() { return tabs + css; }`,
       ],
       [
         tabs,
-        `import { tabState } from ${JSON.stringify(tabState)}; import { pendingFocus } from ${JSON.stringify(pendingFocus)}; import { shadowStyles } from ${JSON.stringify(shadowStyles)}; export const tabs = tabState + pendingFocus + shadowStyles;`,
+        `import ${JSON.stringify(tabsStyle)}; import css from ${JSON.stringify(inlineTabsStyle)}; import { tabState } from ${JSON.stringify(tabState)}; import { pendingFocus } from ${JSON.stringify(pendingFocus)}; import { shadowStyles } from ${JSON.stringify(shadowStyles)}; export const tabs = tabState + pendingFocus + shadowStyles + css;`,
       ],
+      [tabsStyle, ".tabs-fixture { color: teal; }"],
+      [inlineTabsStyle, ".tabs-fixture { color: teal; }"],
       [tabState, 'export const tabState = "state";'],
       [pendingFocus, 'export const pendingFocus = "focus";'],
       [shadowStyles, 'export const shadowStyles = "styles";'],
       [settingsUi, 'export const link = "learn-more";'],
-      [settingsWorkspace, 'export const workspace = "workspace";'],
+      [hubStyle, ".hub-fixture { color: green; }"],
+      [inlineHubStyle, ".hub-fixture { color: green; }"],
+      [settingsStyle, ".settings-fixture { color: blue; }"],
+      [styleOnly, `import ${JSON.stringify(settingsStyle)}; export const about = "about";`],
+      [
+        settingsWorkspace,
+        `import ${JSON.stringify(settingsStyle)}; export const workspace = "workspace";`,
+      ],
       [settingsSelect, 'export const select = "select";'],
       [routeSubtitles, 'export const subtitle = "route";'],
+      [welcomeCopy, 'export const welcome = "welcome-copy";'],
+      [peopleCopy, 'export const people = "people-copy";'],
       [cronRunLink, 'export const runLink = "run-link";'],
       [
         cron,
@@ -453,8 +485,31 @@ describe("Control UI build chunking", () => {
       ],
       [
         cronView,
-        `import { runLink } from ${JSON.stringify(cronRunLink)}; export function view() { return "overview" + runLink; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
+        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pages } from ${JSON.stringify(transcriptPages)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pages + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
       ],
+      [
+        cronDomain,
+        `import { form } from ${JSON.stringify(cronForm)}; import { schedule } from ${JSON.stringify(cronSchedule)}; export const state = form + schedule;`,
+      ],
+      [
+        cronForm,
+        `import { validate } from ${JSON.stringify(validator)}; export const form = validate;`,
+      ],
+      [cronSchedule, 'export const schedule = "schedule";'],
+      [
+        cronModels,
+        `import { refs } from ${JSON.stringify(modelRefs)}; export const models = refs;`,
+      ],
+      [modelRefs, 'export const refs = "refs";'],
+      [transcriptPages, 'export const pages = "pages";'],
+      [cronStyle, ".cron-fixture { color: maroon; }"],
+      [cronPagination, 'export const pagination = "pagination";'],
+      [validator, 'export const validate = "validate";'],
+      [
+        agents,
+        `export { state } from ${JSON.stringify(cronDomain)}; export const panel = () => import(${JSON.stringify(agentsCron)});`,
+      ],
+      [agentsCron, `export { pagination } from ${JSON.stringify(cronPagination)};`],
       [cronDetail, 'export const detail = "lazy-editor";'],
       [talk, `export { skeleton } from ${JSON.stringify(skeleton)};`],
       [skeleton, `import css from ${JSON.stringify(skeletonStyle)}; export const skeleton = css;`],
@@ -515,11 +570,15 @@ describe("Control UI build chunking", () => {
     const styles = result.output
       .filter((asset) => asset.type === "asset")
       .filter((asset) => asset.fileName.endsWith(".css"));
-    expect(styles).toHaveLength(2);
+    expect(styles).toHaveLength(5);
     const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".transcript-fixture") });
     expect(sharedStyles?.source).not.toContain(".optional-fixture");
+    expect(sharedStyles?.source).not.toContain(".tabs-fixture");
+    const routeStyles = styles.find((style) => String(style.source).includes(".settings-fixture"));
+    expect(routeStyles?.source).toContain(".hub-fixture");
+    expect(routeStyles?.source).not.toContain(".tabs-fixture");
     const chunks = result.output.filter((asset) => asset.type === "chunk");
     const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
     const newSessionChunk = chunks.find((chunk) => newSession in chunk.modules)!;
@@ -534,6 +593,9 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const sessionsChunk = chunks.find((chunk) => sessions in chunk.modules)!;
+    expect(staticImports(sessionsChunk.fileName)).not.toContain(chatChunk.fileName);
+    expect(staticImports(sessionsChunk.fileName)).not.toContain(newSessionChunk.fileName);
     const runChunk = chunks.find((chunk) => runFrame in chunk.modules)!;
     expect([runStream, sourcePreviews].every((id) => id in runChunk.modules)).toBe(true);
     expect(staticImports(chatChunk.fileName)).toContain(runChunk.fileName);
@@ -556,13 +618,42 @@ describe("Control UI build chunking", () => {
     const cronDetailChunk = chunks.find((chunk) => cronDetail in chunk.modules)!;
     expect(cronView in cronChunk.modules).toBe(true);
     expect(cronRunLink in cronChunk.modules).toBe(true);
+    expect([cronModels, modelRefs, transcriptPages].every((id) => id in cronChunk.modules)).toBe(
+      true,
+    );
+    const domainChunk = chunks.find((chunk) => cronDomain in chunk.modules)!;
+    expect(domainChunk.fileName).toContain("cron-domain");
+    expect([cronForm, cronSchedule].every((id) => id in domainChunk.modules)).toBe(true);
+    expect(staticImports(cronChunk.fileName)).toContain(domainChunk.fileName);
+    expect(staticImports(entryChunk.fileName)).not.toContain(domainChunk.fileName);
+    const agentsChunk = chunks.find((chunk) => agents in chunk.modules)!;
+    expect(staticImports(agentsChunk.fileName)).toContain(domainChunk.fileName);
+    expect(staticImports(agentsChunk.fileName)).not.toContain(cronChunk.fileName);
+    const paginationChunk = chunks.find((chunk) => cronPagination in chunk.modules)!;
+    expect(staticImports(agentsChunk.fileName)).not.toContain(paginationChunk.fileName);
+    expect(staticImports(chunks.find((chunk) => agentsCron in chunk.modules)!.fileName)).toContain(
+      paginationChunk.fileName,
+    );
     expect(cronDetailChunk.fileName).not.toBe(cronChunk.fileName);
     expect(staticImports(cronChunk.fileName)).not.toContain(cronDetailChunk.fileName);
     expect(cronChunk.dynamicImports).toContain(cronDetailChunk.fileName);
     expect(staticImports(entryChunk.fileName)).not.toContain(cronChunk.fileName);
     expect(staticImports(chatChunk.fileName)).not.toContain(cronChunk.fileName);
     const chromeChunk = chunks.find((chunk) => hubHeader in chunk.modules)!;
+    const styleOnlyChunk = chunks.find((chunk) => styleOnly in chunk.modules)!;
+    expect(staticImports(styleOnlyChunk.fileName)).not.toContain(chromeChunk.fileName);
+    expect(staticImports(styleOnlyChunk.fileName)).not.toContain(
+      chunks.find((chunk) => hubTabs in chunk.modules)!.fileName,
+    );
     expect([settingsWorkspace, settingsSelect].every((id) => id in chromeChunk.modules)).toBe(true);
+    const tabsChunk = chunks.find((chunk) => tabs in chunk.modules)!;
+    expect([tabState, shadowStyles, inlineTabsStyle].every((id) => id in tabsChunk.modules)).toBe(
+      true,
+    );
+    expect([hubTabs, pendingFocus].some((id) => id in tabsChunk.modules)).toBe(false);
+    for (const initial of [entryChunk, chatChunk, newSessionChunk]) {
+      expect(staticImports(initial.fileName)).not.toContain(tabsChunk.fileName);
+    }
     for (const route of [sessions, cron]) {
       const routeChunk = chunks.find((chunk) => route in chunk.modules)!;
       expect(staticImports(routeChunk.fileName)).toContain(chromeChunk.fileName);
