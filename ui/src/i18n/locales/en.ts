@@ -258,6 +258,7 @@ type EnglishCatalog = TranslationMap & {
   palette: TranslationMap & {
     placeholder: string;
     attachmentPrompt: string;
+    searchPlaceholder: string;
     composePlaceholder: string;
     modeLabel: string;
     modes: { search: string; compose: string };
@@ -1415,6 +1416,7 @@ const startupEnglish = {
     placeholder: "Search or start a task…",
     modeLabel: "Command palette mode",
     modes: { search: "Search", compose: "Compose" },
+    searchPlaceholder: "Search…",
     composePlaceholder: "Write a message…",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },

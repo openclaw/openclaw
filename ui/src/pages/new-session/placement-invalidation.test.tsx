@@ -232,7 +232,7 @@ it("preserves draft intent through failed defaults refresh and agent replacement
   });
   host.draft.open();
   await waitForSolid(() =>
-    expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+    expect(host.querySelector(".palette-session-settings__trigger")).not.toBeNull(),
   );
   const expectBlocked = async (disabledReason: string) => {
     expect(host.draft).toMatchObject({ canSubmit: false, disabledReason, error: null });

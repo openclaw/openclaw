@@ -14,6 +14,7 @@ const enCommandPalette = {
   },
   palette: {
     placeholder: en.palette.placeholder,
+    searchPlaceholder: en.palette.searchPlaceholder,
     composePlaceholder: en.palette.composePlaceholder,
     modeLabel: en.palette.modeLabel,
     modes: en.palette.modes,

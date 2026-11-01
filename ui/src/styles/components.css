@@ -2596,57 +2596,124 @@ td.data-table-key-col {
 .cmd-palette__modes {
   position: absolute;
   bottom: calc(100% + 12px);
-  left: 50%;
-  transform: translateX(-50%);
+  left: 4px;
   display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+}
+
+.cmd-palette__mode-tabs {
+  display: flex;
+  align-items: center;
   gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--card);
-  box-shadow: var(--shadow-sm);
 }
 
 .cmd-palette__mode {
-  display: inline-flex;
+  display: inline-grid;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
-  min-width: 112px;
-  min-height: 28px;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
   color: var(--muted);
-  font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: var(--control-ui-font-weight-normal);
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.cmd-palette__mode-label,
+.cmd-palette__mode-reserve {
+  grid-area: 1 / 1;
+}
+
+.cmd-palette__mode-reserve {
+  visibility: hidden;
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.cmd-palette__mode:hover:not([aria-selected="true"], :disabled) {
+  background: var(--surface-hover);
+  color: var(--text-strong);
 }
 
 .cmd-palette__mode[aria-selected="true"] {
-  color: var(--text);
-  background: var(--bg-hover);
+  color: var(--text-strong);
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
-/* Both labels keep their width when the shortcut changes sides. */
-.cmd-palette__mode[aria-selected="true"] .cmd-palette__mode-key {
-  visibility: hidden;
+.cmd-palette__mode-key,
+.cmd-palette__hint .shortcut-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: calc(5px * var(--openclaw-corner-radius-scale));
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  box-shadow: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: var(--control-ui-font-weight-semibold);
+  line-height: 1;
 }
 
+/* A phone has no Tab key to teach. */
+@media (max-width: 560px) {
+  .cmd-palette__modes .cmd-palette__mode-key {
+    display: none;
+  }
+}
+
+/* One surface in both modes, the composer's, so switching never changes the card.
+   These values repeat .agent-chat__input for the first open, before its sheet loads. */
 .cmd-palette {
+  --chat-composer-min-height: 0px;
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
   max-height: calc(100dvh - min(20dvh, 160px) - 24px);
   overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text-strong) 9%, transparent);
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: var(--chat-composer-corner-shape);
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
+}
+
+.cmd-palette--prompt {
+  --chat-composer-min-height: 112px;
+  min-height: var(--chat-composer-min-height);
+}
+
+/* Outranks the composer's own shadow: this surface floats above the page. */
+:root[data-theme-mode] .cmd-palette-overlay .cmd-palette {
+  box-shadow: var(--overlay-modal-shadow);
+}
+
+:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 6%),
+    var(--overlay-modal-shadow);
 }
 
 .cmd-palette__entry {
-  --cmd-palette-actions-width: 170px;
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
   padding: 14px 5px 14px 18px;
+}
+
+.cmd-palette--prompt .cmd-palette__entry {
+  padding: 14px 4px 0 14px;
 }
 
 .cmd-palette__input-scroll {
@@ -2663,7 +2730,7 @@ td.data-table-key-col {
   min-height: 24px;
   max-height: 66px;
   margin: 0;
-  padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;
+  padding: 0 13px 0 0;
   resize: none;
   overflow-y: hidden;
   scrollbar-width: thin;
@@ -2676,8 +2743,25 @@ td.data-table-key-col {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  color: var(--text);
+  color: var(--text-strong);
   outline: none;
+}
+
+/* Compose writes at the composer's size; eight lines, then it scrolls. */
+.cmd-palette--prompt .cmd-palette__input {
+  --cmd-palette-compose-size: var(--chat-composer-editor-size, var(--control-ui-text-md));
+  --cmd-palette-compose-line: calc(var(--cmd-palette-compose-size) * 1.5);
+  --control-ui-touch-input-size: var(--cmd-palette-compose-size);
+  height: var(--cmd-palette-compose-line);
+  min-height: var(--cmd-palette-compose-line);
+  max-height: min(calc(var(--cmd-palette-compose-line) * 8), 35dvh);
+  padding-right: 10px;
+  font-size: var(--cmd-palette-compose-size);
+  line-height: var(--cmd-palette-compose-line);
+}
+
+.cmd-palette__input[aria-busy="true"] {
+  color: var(--muted);
 }
 
 .cmd-palette__input::placeholder {
@@ -2705,13 +2789,13 @@ td.data-table-key-col {
   }
 }
 
-/* Fades cover only text, never the native far-right scrollbar or actions. */
+/* Fades cover only text, never the native far-right scrollbar. */
 .cmd-palette__input-scroll::before,
 .cmd-palette__input-scroll::after {
   content: "";
   position: absolute;
   left: 0;
-  right: calc(var(--cmd-palette-actions-width) + 30px);
+  right: 10px;
   z-index: 1;
   height: 10px;
   pointer-events: none;
@@ -2720,27 +2804,17 @@ td.data-table-key-col {
 
 .cmd-palette__input-scroll::before {
   top: 0;
-  background: linear-gradient(to bottom, var(--card), transparent);
+  background: linear-gradient(to bottom, var(--chat-composer-surface), transparent);
 }
 
 .cmd-palette__input-scroll::after {
   bottom: 0;
-  background: linear-gradient(to top, var(--card), transparent);
+  background: linear-gradient(to top, var(--chat-composer-surface), transparent);
 }
 
 .cmd-palette__entry[data-scroll-fade-top] .cmd-palette__input-scroll::before,
 .cmd-palette__entry[data-scroll-fade-bottom] .cmd-palette__input-scroll::after {
   opacity: 1;
-}
-
-.cmd-palette__input-actions {
-  position: absolute;
-  top: 10px;
-  right: 18px;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .cmd-palette__empty {

@@ -376,9 +376,7 @@ it("keeps mobile attachment Return native and starts only from its button", asyn
     expect(palette.isOpen).toBe(true);
   }
   expect(start().querySelector("kbd")).toBeNull();
-  const footer = query<HTMLElement>(".cmd-palette > .cmd-palette__footer")!;
-  expect(footer.querySelector("kbd")?.textContent).toMatch(/^(Enter|⏎)$/);
-  expect(footer.textContent).not.toContain("Start session");
+  expect(query(".cmd-palette > .cmd-palette__footer")).toBeNull();
   start().click();
   await vi.waitFor(() =>
     expectSubmit({

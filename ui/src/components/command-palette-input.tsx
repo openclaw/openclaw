@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
@@ -13,27 +12,31 @@ export function CommandPaletteModes(props: {
   onChange: (mode: CommandPaletteMode) => void;
 }) {
   return (
-    <Tabs
-      class="cmd-palette__modes"
-      ariaLabel={t("palette.modeLabel")}
-      active={props.mode}
-      onSelect={(mode) => props.onChange(mode === "compose" ? "compose" : "search")}
-      items={(["search", "compose"] as const).map((mode) => ({
-        value: mode,
-        id: `cmd-palette-tab-${mode}`,
-        panelId: "cmd-palette-panel",
-        className: "cmd-palette__mode",
-        disabled: props.disabled,
-        label: (
-          <>
-            {t(`palette.modes.${mode}`)}
-            <span class="cmd-palette__mode-key" aria-hidden="true">
-              <Kbd keys="Tab" />
-            </span>
-          </>
-        ),
-      }))}
-    />
+    <div class="cmd-palette__modes">
+      <Tabs
+        class="cmd-palette__mode-tabs"
+        ariaLabel={t("palette.modeLabel")}
+        active={props.mode}
+        onSelect={(mode) => props.onChange(mode === "compose" ? "compose" : "search")}
+        items={(["search", "compose"] as const).map((mode) => ({
+          value: mode,
+          id: `cmd-palette-tab-${mode}`,
+          panelId: "cmd-palette-panel",
+          className: "cmd-palette__mode",
+          disabled: props.disabled,
+          label: (
+            <>
+              <span class="cmd-palette__mode-label">{t(`palette.modes.${mode}`)}</span>
+              {/* The selected weight must not move the neighboring tab. */}
+              <span class="cmd-palette__mode-reserve" aria-hidden="true">
+                {t(`palette.modes.${mode}`)}
+              </span>
+            </>
+          ),
+        }))}
+      />
+      <Kbd class="cmd-palette__mode-key" keys="Tab" ariaHidden />
+    </div>
   );
 }
 
@@ -49,7 +52,8 @@ export function CommandPaletteInput(props: {
   onSelectionChange?: (event: Event) => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
-  actions?: JSX.Element;
+  /** Search stays compact; Compose grows like the composer before it scrolls. */
+  maxLines?: number;
   onPaste?: (event: ClipboardEvent) => void;
   busy?: boolean;
   readOnly?: boolean;
@@ -60,12 +64,13 @@ export function CommandPaletteInput(props: {
   let textarea!: HTMLTextAreaElement;
   let entry!: HTMLDivElement;
   let widthReference!: HTMLDivElement;
-  let actions!: HTMLDivElement;
   let measuredValue: string | undefined;
   let measuredPlaceholder: string | undefined;
+  let measuredMaxLines: number | undefined;
   // Browser composition and selection belong to the live field until its value changes.
   const committedValue = createMemo(() => props.value);
   const committedPlaceholder = createMemo(() => props.placeholder);
+  const maxLines = createMemo(() => props.maxLines ?? 3);
   // The compiler batches native attributes; result/ARIA updates must not rewrite the field.
   const bindValue = createLiveValue(committedValue);
 
@@ -80,10 +85,6 @@ export function CommandPaletteInput(props: {
 
   // Cold and loaded palettes share geometry without pulling in the session draft.
   function updateLayout(editing = false) {
-    entry.style.setProperty(
-      "--cmd-palette-actions-width",
-      `${actions.getBoundingClientRect().width}px`,
-    );
     const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight);
     if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
       return;
@@ -97,7 +98,7 @@ export function CommandPaletteInput(props: {
       textarea.selectionEnd === textarea.value.length;
     textarea.style.overflowY = "hidden";
     textarea.style.height = "0px";
-    textarea.style.height = `${Math.max(lineHeight, Math.min(lineHeight * 3, textarea.scrollHeight))}px`;
+    textarea.style.height = `${Math.max(lineHeight, Math.min(lineHeight * maxLines(), textarea.scrollHeight))}px`;
     const overflowing = textarea.scrollHeight > textarea.clientHeight + 1;
     textarea.style.overflowY = overflowing ? "auto" : "hidden";
     textarea.scrollTop = overflowing ? (followCaret ? textarea.scrollHeight : previousScroll) : 0;
@@ -108,9 +109,12 @@ export function CommandPaletteInput(props: {
     () => {
       const value = committedValue();
       const placeholder = committedPlaceholder();
+      const lines = maxLines();
       // Input events already measured the edit; result navigation needs no layout.
-      return value !== measuredValue || placeholder !== measuredPlaceholder
-        ? [value, placeholder]
+      return value !== measuredValue ||
+        placeholder !== measuredPlaceholder ||
+        lines !== measuredMaxLines
+        ? [value, placeholder, lines]
         : undefined;
     },
     () => {
@@ -118,9 +122,10 @@ export function CommandPaletteInput(props: {
       updateLayout();
       measuredValue = textarea.value;
       measuredPlaceholder = textarea.placeholder;
+      measuredMaxLines = maxLines();
     },
     // The entry height follows the textarea; observe only its available width.
-    { targets: () => [widthReference, actions], fonts: true },
+    { targets: () => [widthReference], fonts: true },
   );
   onSettled(() => {
     props.onInputRef(textarea);
@@ -174,9 +179,6 @@ export function CommandPaletteInput(props: {
             measuredPlaceholder = event.currentTarget.placeholder;
           }}
         />
-      </div>
-      <div ref={(element) => (actions = element)} class="cmd-palette__input-actions">
-        {props.actions}
       </div>
     </div>
   );

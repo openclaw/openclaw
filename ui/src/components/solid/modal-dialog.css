@@ -177,6 +177,9 @@ openclaw-modal-dialog.palette {
 openclaw-modal-dialog.palette > .oc-modal-dialog {
   margin-block-start: min(20dvh, 160px);
   margin-block-end: auto;
+  /* The card itself is the composer surface and carries its own lift. */
+  background: transparent;
+  box-shadow: none;
 }
 
 openclaw-modal-dialog.drawer {

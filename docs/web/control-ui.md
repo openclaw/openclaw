@@ -70,7 +70,7 @@ images or files onto the palette, or paste images into its input, to prepare a
 new background session without changing your current conversation or composer.
 
 The first attachment switches the palette to **Compose**.
-Add optional instructions, adjust the session settings, then choose **New session**
+Add optional instructions, choose the agent, folder, and worktree, then send
 or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a

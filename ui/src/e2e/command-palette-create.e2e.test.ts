@@ -4,8 +4,8 @@ import { expect, it } from "vitest";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import {
+  expectPaletteChipsAligned,
   expectPaletteProjectGrouping,
-  expectPaletteSettingsAlignment,
 } from "./command-palette-settings.test-support.ts";
 import {
   foregroundDraft,
@@ -127,18 +127,11 @@ suite.define(() => {
             expect(frame.width).toBeCloseTo(original.width, 1);
             expect(frame.inputY).toBeCloseTo(inputTop, 1);
           }
-          if (options.reducedMotion === "no-preference") {
+          // The card swaps content in one frame: an in-between height would read as jitter.
+          for (const frame of frames) {
             expect(
-              frames.some(
-                (frame) => frame.searchHeight > 0 && frame.searchHeight < initialHeight - 1,
-              ),
+              frame.searchHeight === 0 || Math.abs(frame.searchHeight - initialHeight) < 1,
             ).toBe(true);
-          } else {
-            expect(
-              await search.evaluate((element) =>
-                Number.parseFloat(getComputedStyle(element).transitionDuration),
-              ),
-            ).toBeLessThanOrEqual(0.00001);
           }
           await captureUiProof(suite, page, "cmdk-modes", `compose-${options.width}.png`);
           expect(await input.inputValue()).toBe("appearance");
@@ -175,7 +168,7 @@ suite.define(() => {
     { mode: "dark", width: 1280 },
     { mode: "light", width: 390 },
   ] as const)(
-    "aligns settings and preserves keyboard focus in $mode at $width",
+    "aligns the chips and preserves keyboard focus in $mode at $width",
     async ({ mode, width }) => {
       await suite.withPage(
         {
@@ -188,46 +181,30 @@ suite.define(() => {
           await installMockGateway(page, scenario());
           const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
           await input.press("Tab");
+          await expectPaletteChipsAligned(palette);
           const popup = palette.locator(".oc-popover.palette-session-settings");
-          await changePicker(popup, "overlay-after-show", () =>
-            palette.getByRole("button", { name: "New session settings", exact: true }).click(),
-          );
-          await expectPaletteSettingsAlignment(popup);
+          const folder = palette.locator(".palette-session-settings__trigger");
+          await changePicker(popup, "overlay-after-show", () => folder.click());
           const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
           expect(await remember.isVisible()).toBe(true);
-          const workspaceButton = popup.locator(".palette-session-settings__workspace");
           const search = popup.getByRole("searchbox", { name: "Search", exact: true });
           const searchToggle = popup.locator(".header-search__toggle");
-          await workspaceButton.click();
           await searchToggle.waitFor({ state: "visible" });
           await expectPaletteProjectGrouping(popup);
-          expect.soft(await remember.count()).toBe(0);
-          // Pointer entry keeps focus inside the nested view without summoning a
-          // text caret (or a touch keyboard). Tab still reaches its search control.
-          await page.keyboard.press("Tab");
-          expect
-            .soft(await searchToggle.evaluate((element) => document.activeElement === element))
-            .toBe(true);
-          await page.keyboard.press("Escape");
-          expect(await remember.isVisible()).toBe(true);
-          expect(
-            await workspaceButton.evaluate((element) => document.activeElement === element),
-          ).toBe(true);
-          await workspaceButton.press("Enter");
-          await searchToggle.waitFor({ state: "visible" });
-          expect(await searchToggle.evaluate((element) => document.activeElement === element)).toBe(
-            true,
-          );
-          await page.keyboard.type("no-such-workspace");
+          await changePicker(popup, "overlay-after-hide", () => page.keyboard.press("Escape"));
+          expect(await folder.evaluate((element) => document.activeElement === element)).toBe(true);
+          await changePicker(popup, "overlay-after-show", () => folder.press("Enter"));
+          await searchToggle.focus();
+          await searchToggle.press("Enter");
           await search.waitFor({ state: "visible" });
+          await page.keyboard.type("no-such-workspace");
           expect(await search.evaluate((element) => document.activeElement === element)).toBe(true);
           expect(await popup.locator("[data-machine]").count()).toBe(0);
-          await popup.getByRole("button", { name: "Back", exact: true }).click();
-          expect(await remember.isVisible()).toBe(true);
-          await workspaceButton.press("Enter");
-          expect(await search.count()).toBe(0);
-          await popup.locator('[data-machine="local"][data-project=""]').click();
-          expect(await remember.isVisible()).toBe(true);
+          await search.fill("");
+          await changePicker(popup, "overlay-after-hide", () =>
+            popup.locator('[data-machine="local"][data-project=""]').click(),
+          );
+          expect(await folder.evaluate((element) => document.activeElement === element)).toBe(true);
         },
       );
     },
@@ -298,9 +275,6 @@ suite.define(() => {
           ).toEqual([]);
 
           const settings = palette.locator(".oc-popover.palette-session-settings");
-          await changePicker(settings, "overlay-after-show", () =>
-            palette.getByRole("button", { name: "New session settings", exact: true }).click(),
-          );
           const agent = palette.locator("openclaw-agent-select");
           await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
             agent.getByRole("button", { name: /^Agent:/ }).click(),
@@ -324,34 +298,34 @@ suite.define(() => {
           expect(page.url()).toBe(url);
 
           if (destination === "local") {
-            const worktree = settings.getByRole("switch", { name: "New worktree", exact: true });
+            const worktree = palette.getByRole("switch", { name: "New worktree", exact: true });
             if ((await worktree.getAttribute("aria-checked")) !== "true") {
               await worktree.click();
             }
           }
           if (destination === "device") {
             await gateway.waitForRequest("environments.list");
-            const workspaceChoice = settings.locator(".palette-session-settings__workspace");
-            await workspaceChoice.click();
+            const workspaceChoice = palette.locator(".palette-session-settings__trigger");
+            await changePicker(settings, "overlay-after-show", () => workspaceChoice.click());
             await settings.locator(".header-search__toggle").click();
             const search = settings.getByRole("searchbox");
             await search.fill("Palette runner");
             await search.press("Escape");
-            await page.keyboard.press("Escape");
-            await workspaceChoice.waitFor({ state: "visible" });
+            await changePicker(settings, "overlay-after-hide", () => page.keyboard.press("Escape"));
             expect(await input.isVisible()).toBe(true);
-            await workspaceChoice.press("Enter");
+            await changePicker(settings, "overlay-after-show", () =>
+              workspaceChoice.press("Enter"),
+            );
             const runner = settings.locator(
               '[data-machine="device:palette-runner"][data-project=""]',
             );
             await runner.waitFor();
             await runner.focus();
             await runner.press("Enter");
-            await expect.poll(() => workspaceChoice.textContent()).toContain("Palette runner");
+            await expect
+              .poll(() => workspaceChoice.getAttribute("aria-label"))
+              .toContain("Palette runner");
           }
-          await changePicker(settings, "overlay-after-hide", () =>
-            settings.locator(".palette-session-settings__workspace").press("Escape"),
-          );
           const start = palette.getByRole("button", {
             name: "Start new session in background",
             exact: true,

@@ -38,7 +38,7 @@ function anchors(palette: Locator) {
       ".cmd-palette",
       ".cmd-palette__input",
       ".cmd-palette__create",
-      'button[aria-label="New session settings"]',
+      ".palette-session-settings__trigger",
     ].map((selector) => {
       const node = element.querySelector(selector);
       if (!node) {
@@ -52,7 +52,7 @@ function anchors(palette: Locator) {
 
 suite.define(() => {
   it.each([1280, 390])(
-    "keeps the input and actions anchored through paste and removal at %s px",
+    "keeps the card anchored through paste and restores it after removal at %s px",
     async (width) => {
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
@@ -88,10 +88,11 @@ suite.define(() => {
             const initial = await anchors(palette);
             await pasteImages(input, 2);
             await expect.poll(() => images.count()).toBe(2);
-            expect(await anchors(palette)).toEqual(initial);
+            // The strip docks above the text, as in the composer; only the card's top is fixed.
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             await pasteImages(input, 10);
             await expect.poll(() => images.count()).toBe(12);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             expect(
               await palette
                 .locator(".chat-attachments-preview")
@@ -99,7 +100,7 @@ suite.define(() => {
             ).toBe(true);
             await remove.first().click();
             await expect.poll(() => images.count()).toBe(11);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             // The first pointer removal covers interaction; clear the unchecked tail together.
             await remove.evaluateAll((buttons) => {
               for (const button of buttons) {
@@ -132,6 +133,8 @@ suite.define(() => {
               .poll(() => palette.getByRole("alert").textContent())
               .toContain("Could not create session");
             expect(await images.count()).toBe(2);
+            // Leave the attachment hover target before testing the palette's Escape shortcut.
+            await page.mouse.move(0, 0);
             await input.press("Escape");
             await input.waitFor({ state: "hidden" });
             await page.keyboard.press("ControlOrMeta+K");

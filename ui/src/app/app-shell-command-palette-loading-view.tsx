@@ -1,4 +1,4 @@
-import { createMemo, lazy } from "solid-js";
+import { createMemo, lazy, Show } from "solid-js";
 import { COMMAND_PALETTE_DIALOG_STYLE } from "../components/command-palette-contract.ts";
 import { CommandPaletteInput, CommandPaletteModes } from "../components/command-palette-input.tsx";
 import { t } from "../lib/reactive/i18n.ts";
@@ -37,7 +37,7 @@ export function CommandPaletteLoading(props: {
           id="cmd-palette-panel"
           role="tabpanel"
           aria-labelledby={`cmd-palette-tab-${props.state.mode()}`}
-          class="cmd-palette"
+          class={["cmd-palette", { "cmd-palette--prompt": props.state.mode() === "compose" }]}
           aria-busy="true"
           onCompositionStart={() => props.state.handleCompositionStart()}
           onCompositionEnd={() => props.state.handleCompositionEnd()}
@@ -55,16 +55,19 @@ export function CommandPaletteLoading(props: {
                 ? props.state.hasAttachments()
                   ? "palette.attachmentPrompt"
                   : "palette.composePlaceholder"
-                : "palette.placeholder",
+                : "palette.searchPlaceholder",
             )}
+            maxLines={props.state.mode() === "compose" ? 8 : 3}
             onInputRef={(element, previous) => props.state.inputRef(element, previous)}
             onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
             onPaste={(event) => props.state.handlePaste(event)}
             readOnly={props.state.submitRequested()}
           />
-          <div class="cmd-palette__empty" role="status">
-            {t("common.loading")}
-          </div>
+          <Show when={props.state.mode() === "search"}>
+            <div class="cmd-palette__empty" role="status">
+              {t("common.loading")}
+            </div>
+          </Show>
         </div>
       </ModalDialog>
     </ShellComponentBoundary>
