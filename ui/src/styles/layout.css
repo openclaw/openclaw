@@ -1459,6 +1459,21 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   flex: 1 1 0;
 }
 
+/* A resting group title ends in an ellipsis. Hovering still scrolls the full title. */
+.sidebar-session-group-toggle
+  > .sidebar-recent-sessions__label-text.hover-marquee:not(.hover-marquee--scrolling),
+.sidebar-session-group-person
+  > .sidebar-recent-sessions__label-text.hover-marquee:not(.hover-marquee--scrolling) {
+  mask-image: none;
+
+  & > .hover-marquee__text {
+    display: block;
+    overflow: hidden;
+    width: auto;
+    text-overflow: ellipsis;
+  }
+}
+
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
