@@ -152,6 +152,26 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
+  it("keeps truncated failed-run details surrogate-safe", () => {
+    // 239 ASCII units + one astral emoji (2 UTF-16 units) = length 241.
+    // A naive slice(0, 240) would end on the lone high surrogate.
+    const lastRunError = `${"a".repeat(239)}\u{1F600}`;
+    expect(lastRunError.length).toBe(241);
+    const container = mountCard({
+      placement: "details",
+      sessionStatus: "failed",
+      ...runWindow,
+      hasActiveRun: false,
+      terminalOutcome: "failed",
+      runtime: { known: true, connected: true, hasActiveSubagentRun: false, lastRunError },
+    });
+    const detail = query(container, ".session-progress-card__runtime-detail")?.textContent ?? "";
+    expect(detail.length).toBeLessThanOrEqual(240);
+    expect(detail.isWellFormed()).toBe(true);
+    expect(detail.endsWith("\u{1F600}")).toBe(false);
+    expect(detail).toBe("a".repeat(239));
+  });
+
   it("refreshes relative time while connected and stops after disconnect", () => {
     const container = createContainer();
     const part = render({ card: { ...progressCard, updatedAt: NOW_MS - 10_000 } }, container);
