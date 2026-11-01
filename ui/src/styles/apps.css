@@ -1,6 +1,6 @@
 /* Discovery must not push the platform cards away after the page appears. */
 openclaw-apps-page openclaw-mcp-app-catalog:not([surface]):not(:empty) {
-  display: block;
+  display: flow-root;
   block-size: clamp(18rem, 45dvh, 28rem);
   margin-bottom: 16px;
 }

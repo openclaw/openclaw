@@ -208,7 +208,11 @@ export function createWorkboardColumnWindow(input: {
       let element: HTMLDivElement;
       onSettled(() => {
         viewport = element;
-        captureAnchor(element.scrollTop);
+        const layout = input.layout();
+        const gap = Number.parseFloat(getComputedStyle(element).rowGap) || 0;
+        measuredLayout = layout;
+        publishViewport(element.scrollTop, element.clientHeight, element.clientWidth, gap);
+        captureAnchor(element.scrollTop, describePositions(layout, gap));
         observeViewport = () => {
           if (observer) {
             return;
@@ -278,6 +282,14 @@ export function createWorkboardColumnWindow(input: {
     rowRef() {
       let element: HTMLDivElement;
       onSettled(() => {
+        const id = element.dataset.cardId;
+        const height = element.getBoundingClientRect().height;
+        if (active() && id && height > 0) {
+          const layout = input.layout();
+          measuredLayout ??= layout;
+          measured.set(id, { layout, height });
+          setMeasureRevision((value) => value + 1);
+        }
         observer?.observe(element);
         return () => observer?.unobserve(element);
       });
