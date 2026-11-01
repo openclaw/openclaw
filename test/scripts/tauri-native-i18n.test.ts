@@ -145,7 +145,7 @@ describe("Tauri native i18n inventory", () => {
     };
 
     const packaged = load("tauri://localhost/quickchat.html");
-    expect(packaged.__OPENCLAW_TAURI_CATALOG__?.messages["quickChat.messageAgent"]?.ptPT).toBe(
+    expect(packaged["__OPENCLAW_TAURI_CATALOG__"]?.messages["quickChat.messageAgent"]?.ptPT).toBe(
       "Mensagem para {name}",
     );
     expect(
@@ -157,7 +157,7 @@ describe("Tauri native i18n inventory", () => {
       ["tauri://localhost/quickchat.html", false],
       ["https://example.com/quickchat.html", true],
     ] as const) {
-      expect(load(href, topFrame).__OPENCLAW_TAURI_CATALOG__).toBeUndefined();
+      expect(load(href, topFrame)["__OPENCLAW_TAURI_CATALOG__"]).toBeUndefined();
     }
   });
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { compareAscii } from "./lib/canonical-json.mjs";
 import {
   parseNativeI18nInventory,
@@ -36,10 +37,6 @@ type NativeLocaleArtifact = {
   translations: Record<string, string>;
   version: 2;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function placeholderNames(value: string): string[] {
   const matches = [...value.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu)];

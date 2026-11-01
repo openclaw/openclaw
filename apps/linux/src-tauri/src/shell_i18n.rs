@@ -25,14 +25,12 @@ fn parse_catalog_asset(bytes: Option<&[u8]>) -> std::io::Result<Option<Value>> {
     let Some(bytes) = bytes else {
         return Ok(None);
     };
-    let catalog: Value = serde_json::from_slice(bytes)
-        .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
+    let catalog: Value =
+        serde_json::from_slice(bytes).map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
     let valid_hash = catalog
         .get("sourceInventorySha256")
         .and_then(Value::as_str)
-        .is_some_and(|hash| {
-            hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-        });
+        .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
     let Some(catalog_messages) = catalog.get("messages").and_then(Value::as_object) else {
         return Err(Error::new(
             ErrorKind::InvalidData,
@@ -46,8 +44,14 @@ fn parse_catalog_asset(bytes: Option<&[u8]>) -> std::io::Result<Option<Value>> {
         ));
     }
     for (key, entry) in catalog_messages {
-        let valid_entry = entry.get("en").and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty())
-            && entry.get("ptPT").and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty())
+        let valid_entry = entry
+            .get("en")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+            && entry
+                .get("ptPT")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
             && entry
                 .get("args")
                 .and_then(Value::as_array)
@@ -304,7 +308,10 @@ fn format_for_catalog(
 fn test_catalog() -> Value {
     let translations = [
         ("setup.connecting", "A ligar ao OpenClaw"),
-        ("tray.runtimeNoInstalledService", "Sem serviço do Gateway instalado"),
+        (
+            "tray.runtimeNoInstalledService",
+            "Sem serviço do Gateway instalado",
+        ),
         ("nativeMenu.about", "Acerca de"),
         ("nativeMenu.aboutNamed", "Acerca de {appName}"),
         ("nativeMenu.closeWindow", "Fechar janela"),
@@ -529,8 +536,8 @@ mod tests {
         default_submenu_label_for, format_for, format_for_catalog, menu_text_for,
         parse_catalog_asset, render, select_locale, test_catalog, CATALOG_ASSET_PATH,
     };
-    use std::borrow::Cow;
     use serde_json::Value;
+    use std::borrow::Cow;
 
     #[test]
     fn only_explicit_portuguese_portugal_tags_select_portuguese() {
@@ -617,8 +624,7 @@ mod tests {
         );
 
         let mut stale_args = catalog;
-        stale_args["messages"]["nativeMenu.aboutNamed"]["args"] =
-            serde_json::json!(["oldName"]);
+        stale_args["messages"]["nativeMenu.aboutNamed"]["args"] = serde_json::json!(["oldName"]);
         assert_eq!(
             format_for_catalog(
                 "pt-PT",
@@ -648,8 +654,11 @@ mod tests {
             "A ligar ao OpenClaw"
         );
         assert!(catalog_asset_bytes(
-            [(Cow::Borrowed("i18n/catalog.json"), Cow::Borrowed(bytes.as_slice()))]
-                .into_iter()
+            [(
+                Cow::Borrowed("i18n/catalog.json"),
+                Cow::Borrowed(bytes.as_slice())
+            )]
+            .into_iter()
         )
         .is_none());
     }
@@ -763,14 +772,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                default_app_menu_text(
-                    "pt-PT",
-                    bare_key,
-                    named_key,
-                    prefix,
-                    prefix,
-                    Some(&catalog),
-                ),
+                default_app_menu_text("pt-PT", bare_key, named_key, prefix, prefix, Some(&catalog),),
                 Some(expected_bare.to_owned())
             );
             assert_eq!(
@@ -786,14 +788,7 @@ mod tests {
             );
             let english = format!("{prefix} File & {{name}}");
             assert_eq!(
-                default_app_menu_text(
-                    "en",
-                    bare_key,
-                    named_key,
-                    prefix,
-                    &english,
-                    Some(&catalog),
-                ),
+                default_app_menu_text("en", bare_key, named_key, prefix, &english, Some(&catalog),),
                 Some(english)
             );
         }
