@@ -2676,6 +2676,7 @@ src/config/sessions/session-work-start.ts
 src/config/sessions/session-worker-receipt.ts
 src/config/sessions/transcript-event-media.ts
 src/config/sessions/transcript-message-equality.ts
+src/config/sessions/transcript-payload-ownership.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
