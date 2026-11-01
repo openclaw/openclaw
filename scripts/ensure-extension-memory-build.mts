@@ -1,31 +1,20 @@
 #!/usr/bin/env node
 
 // Ensures memory extension runtime entries are built before checks.
-import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolvePluginRootPublicSurfaceLocation } from "../src/plugins/public-surface-runtime.js";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../src/shared/non-packaged-plugin-dirs.js";
+import { runCliStartupBuild, type StartupBuildParams } from "./ensure-cli-startup-build.mts";
 import { collectBundledPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
-type ExtensionMemoryBuildParams = {
-  env?: NodeJS.ProcessEnv;
-  killSignal?: NodeJS.Signals;
-  nodeExecPath?: string;
+type ExtensionMemoryBuildParams = Omit<StartupBuildParams, "existsSync"> & {
   requiredExtensionIds?: string[];
-  rootDir?: string;
-  spawnSync?: (
-    command: string,
-    args: string[],
-    options: Record<string, unknown>,
-  ) => { error?: Error; signal?: NodeJS.Signals | null; status: number | null };
-  stdio?: "inherit" | "pipe";
-  timeoutMs?: number;
 };
 
 function resolveExtensionMemoryBuildTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
@@ -105,28 +94,14 @@ export function ensureExtensionMemoryBuild(params: ExtensionMemoryBuildParams = 
     return { built: false };
   }
 
-  const nodeExecPath = params.nodeExecPath ?? process.execPath;
-  const spawn = params.spawnSync ?? spawnSync;
-  const buildScript = path.join(rootDir, "scripts", "build-all.mts");
-
   console.error(
     "[extension-memory-build] required built plugin entries missing; running cliStartup build profile",
   );
-  const result = spawn(nodeExecPath, ["--import", "tsx", buildScript, "cliStartup"], {
-    cwd: rootDir,
-    env: params.env ?? process.env,
-    killSignal: params.killSignal ?? "SIGKILL",
-    stdio: params.stdio ?? "inherit",
-    timeout: params.timeoutMs ?? resolveExtensionMemoryBuildTimeoutMs(params.env ?? process.env),
+  return runCliStartupBuild({
+    ...params,
+    rootDir,
+    timeoutMs: params.timeoutMs ?? resolveExtensionMemoryBuildTimeoutMs(params.env ?? process.env),
   });
-  if (result.error) {
-    throw result.error;
-  }
-  const status = result.status ?? (result.signal ? 1 : 0);
-  if (status !== 0) {
-    throw new Error(`cliStartup build profile failed with exit code ${status}`);
-  }
-  return { built: true };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

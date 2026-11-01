@@ -345,8 +345,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__ring {
   position: absolute;
   inset: -2px;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 20%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask-avatar);
   border-radius: var(--radius-full);
   pointer-events: none;
 }
@@ -355,6 +356,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
    slot used to draw; a full-size empty circle reads as a missing icon. */
 .session-glyph--bare .session-glyph__ring {
   inset: 4px;
+  mask: var(--spinner-mask);
 }
 
 /* Two identities share one run: the arc traces the union outline of the owner
@@ -372,19 +374,20 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .session-glyph__trace path {
   fill: none;
-  stroke-width: 1.5;
+  stroke-width: var(--spinner-trace-stroke);
 }
 
 .session-glyph__trace-track {
-  stroke: color-mix(in srgb, var(--accent) 20%, transparent);
+  stroke: var(--accent);
+  opacity: 0.2;
 }
 
-/* The arc covers the same share of its outline as the ring's quarter turn and
-   moves at the ring's linear speed (~45px/s). */
+/* The arc covers the same share of its outline as the ring's arc and moves at the
+   ring's linear speed (~45px/s). */
 .session-glyph__trace-run {
   stroke: var(--accent);
   stroke-linecap: round;
-  stroke-dasharray: 25 75;
+  stroke-dasharray: var(--spinner-trace-dash);
   animation: session-run-trace 2s linear infinite;
 }
 
@@ -526,8 +529,8 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
-  border-top-color: currentColor;
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
   animation: btn-spinner-spin 0.7s linear infinite;
 }
@@ -3071,8 +3074,9 @@ td.data-table-key-col {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: var(--radius-full);
 }
 
@@ -3097,6 +3101,35 @@ td.data-table-key-col {
   animation-duration: 3.2s;
 }
 
+/* Forced colors would repaint the background these masks show through. */
+@media (forced-colors: active) {
+  .session-run-spinner,
+  .session-glyph__ring,
+  .btn__spinner,
+  .activity-pill__spinner,
+  .chat-details-processes__spinner,
+  .chat-details-subagents__spinner,
+  .chat-processes__spinner::before,
+  .subagents-desktop__spinner::before,
+  .session-worker-stop__spinner,
+  .approval-page__spinner,
+  .config-loading__spinner,
+  .custodian__history-spinner,
+  .device-pair-setup__spinner,
+  .desktop-spinner,
+  .wizard-sign-in__ring,
+  .wizard-step__spinner {
+    forced-color-adjust: none;
+    color: CanvasText !important;
+  }
+
+  .session-glyph__trace-track,
+  .session-glyph__trace-run {
+    forced-color-adjust: none;
+    stroke: CanvasText;
+  }
+}
+
 @keyframes session-run-trace {
   to {
     stroke-dashoffset: -100;
@@ -3107,7 +3140,6 @@ td.data-table-key-col {
   .session-run-spinner,
   .session-glyph__ring {
     animation: none;
-    border-color: var(--accent);
   }
 
   .session-glyph__trace-run {
@@ -3115,7 +3147,7 @@ td.data-table-key-col {
   }
 
   .session-glyph__trace-track {
-    stroke: var(--accent);
+    opacity: 1;
   }
 }
 

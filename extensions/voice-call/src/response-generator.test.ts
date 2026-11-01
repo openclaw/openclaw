@@ -372,13 +372,15 @@ describe("generateVoiceResponse", () => {
     expect(onEarlyText).toHaveBeenCalledWith("Accepted retry response.");
     expect(result).toEqual({ text: "Accepted retry response.", deliveredEarly: true });
   });
-
   it.each([
     ['```json\n{"spoken":"Fenced JSON works."}\n```', "Fenced JSON works."],
     ['prefix "spoken": "Hello\\nthere" tail', "Hello there"],
     ['prefix "spoken": "" tail', null],
-    ['prefix "spoken": "bad\\q" tail', 'prefix "spoken": "bad\\q" tail'],
+    ['{"spoken":"\\\\q \\z"}{"spoken":"T"}', "\\q z T"],
     ['{"spoken":""}', null],
+    ['{"spoken":"One."}{"spoken":"Two."}', "One. Two."],
+    ['{"spoken":"First.\n\nSecond."}{"spoken":"Third."}', "First. Second. Third."],
+    ['{"spoken":"A\\\nB"}{"spoken":"Tail."}', '{"spoken":"A\\ B"}{"spoken":"Tail."}'],
     [
       "The user responded with short text. I should keep the response concise.\n\nSounds good.",
       "Sounds good.",
@@ -387,12 +389,10 @@ describe("generateVoiceResponse", () => {
     "recovers spoken JSON while preserving plain-text fallback: %j",
     async (text, expected) => {
       const { result } = await runGenerateVoiceResponse([{ text }]);
-
       expect(result.text).toBe(expected);
       expect(result.error).toBeUndefined();
     },
   );
-
   it("inherits the call agent model ahead of the global default", async () => {
     const { args } = await generated({
       coreConfig: {

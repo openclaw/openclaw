@@ -46,9 +46,11 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
   "scripts/perf/auth-file-watch-events-measure.ts!",
+  "scripts/perf/native-pr-bootstrap-measure.mjs!",
   "scripts/perf/backup-verify-fixture.mjs!",
   "scripts/perf/backup-verify-measure.mjs!",
   "scripts/perf/board-read-admission-measure.ts!",
+  "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
@@ -1214,6 +1216,8 @@ const config = {
         "open",
         "openclaw",
         "sleep",
+        // usage-refresh-stats-measure.ts inspects benchmark fixtures with the host SQLite CLI.
+        "sqlite3",
         "swiftlint",
         "uptime",
         "xcrun",

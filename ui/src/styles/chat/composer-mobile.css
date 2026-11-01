@@ -205,10 +205,15 @@
   padding-inline: 0;
 }
 
-/* Keep typed drafts and their hint on the same font as desktop. */
+/* Keep typed drafts and their hint on the same font as desktop. Typing grows the
+   draft to three lines, then scrolls: declared on the editor itself, the cap
+   outranks the short-pane line cap an open keyboard would otherwise apply, and
+   the measured pane limit still lowers it when space runs out. */
 .agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-combobox
   > :is(textarea, .agent-chat__composer-placeholder) {
+  --chat-composer-editor-max-lines: 3;
+
   font-family: var(--font-body);
 }
 
