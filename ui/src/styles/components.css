@@ -2592,15 +2592,22 @@ td.data-table-key-col {
   display: none;
 }
 
-/* Outside the card so switching content never moves the palette's top anchor. */
+/* Outside the card so switching content never moves the palette's top anchor.
+   A small sheet of the panel's own surface keeps the labels legible over any page. */
 .cmd-palette__modes {
   position: absolute;
-  bottom: calc(100% + 12px);
-  left: 4px;
+  bottom: calc(100% + 8px);
+  left: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--text-strong) 9%, transparent);
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  corner-shape: var(--chat-composer-corner-shape);
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
 }
 
 .cmd-palette__mode-tabs {
@@ -2614,7 +2621,9 @@ td.data-table-key-col {
   align-items: center;
   height: 28px;
   padding: 0 10px;
-  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  /* Concentric with the sheet: its radius minus the border and padding. */
+  border-radius: max(0px, calc(16px * var(--openclaw-corner-radius-scale) - 5px));
+  corner-shape: var(--chat-composer-corner-shape);
   color: var(--muted);
   font-size: 13px;
   font-weight: var(--control-ui-font-weight-normal);
@@ -2628,6 +2637,13 @@ td.data-table-key-col {
   grid-area: 1 / 1;
 }
 
+/* Only the reserve sizes the tab: a regular label can run a fraction wider than the bold one. */
+.cmd-palette__mode-label {
+  width: 0;
+  min-width: 100%;
+  white-space: nowrap;
+}
+
 .cmd-palette__mode-reserve {
   visibility: hidden;
   font-weight: var(--control-ui-font-weight-semibold);
@@ -2639,6 +2655,7 @@ td.data-table-key-col {
 }
 
 .cmd-palette__mode[aria-selected="true"] {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text-strong);
   font-weight: var(--control-ui-font-weight-semibold);
 }
@@ -2661,6 +2678,10 @@ td.data-table-key-col {
   font-size: 11px;
   font-weight: var(--control-ui-font-weight-semibold);
   line-height: 1;
+}
+
+.cmd-palette__modes .cmd-palette__mode-key {
+  margin-inline-end: 6px;
 }
 
 /* A phone has no Tab key to teach. */
@@ -2694,11 +2715,13 @@ td.data-table-key-col {
 }
 
 /* Outranks the composer's own shadow: this surface floats above the page. */
-:root[data-theme-mode] .cmd-palette-overlay .cmd-palette {
+:root[data-theme-mode] .cmd-palette-overlay .cmd-palette,
+:root[data-theme-mode] .cmd-palette-overlay .cmd-palette__modes {
   box-shadow: var(--overlay-modal-shadow);
 }
 
-:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette {
+:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette,
+:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette__modes {
   border-color: transparent;
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 6%),
