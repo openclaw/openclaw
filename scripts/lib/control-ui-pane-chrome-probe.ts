@@ -8,6 +8,7 @@ export function installPaneChromeProbe() {
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
     breadcrumb: ".chat-pane__parent-session",
+    ownFooter: ".chat-group.user .chat-group-footer__meta",
     composerState: ".agent-chat__disabled-banner, .agent-chat__input",
   };
   type Region = keyof typeof selectors;

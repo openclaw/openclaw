@@ -432,6 +432,10 @@ div.chat-thread:where(.chat-thread--annotations) {
   gap: 0;
 }
 
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions--versions {
+  min-width: calc(2 * var(--chat-pane-header-icon-size));
+}
+
 .chat-pane__header:not(.chat-pane__header--mobile)
   :is(
     .chat-icon-btn,
