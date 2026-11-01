@@ -16,8 +16,10 @@ import {
   noteActiveCronJobRemoval,
   requestActiveCronJobCancellation,
 } from "../cron/active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../cron/run-history.test-support.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { createCronCompletionDeliveryFence } from "../cron/service/delivery-attempt-fence.js";
+import { finishCronRun } from "../cron/service/run-history.js";
 import { markServiceCronJobActive } from "../cron/service/run-receipts.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
@@ -228,6 +230,17 @@ async function createCompletionFixture(
     assertText,
     assertNoResults: () => assertMessages(),
     finalize,
+    async recordHistory(result: Awaited<ReturnType<typeof finalize>>) {
+      await finishCronRun(service, {
+        job,
+        event: { ...result, jobId: job.id, action: "finished", status: "ok", runAtMs: 1000 },
+      });
+      return readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(cronStorePath),
+        jobId: job.id,
+        limit: 1,
+      }).entries[0];
+    },
     async loadReleasedRows() {
       const jobJson = JSON.stringify(releasedJob);
       runOpenClawStateWriteTransaction(({ db }) => {
@@ -407,6 +420,12 @@ describe("completion announcement", () => {
 
         const result = await fixture.finalize();
         if (failure === "none") {
+          expect(await fixture.recordHistory(result)).toMatchObject({
+            delivered: true,
+            delivery: {
+              receipts: [{ channel: "telegram", to: "123", messageId: "notification-message" }],
+            },
+          });
           await expect(fixture.finalize()).resolves.toMatchObject(confirmed);
         }
 

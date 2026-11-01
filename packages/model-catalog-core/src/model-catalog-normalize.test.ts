@@ -546,3 +546,32 @@ it("preserves canonical task facts on v3 and keeps chat references chat-only", (
   expect(() => parseV3({ ...bundle, models: [invalid] })).toThrow();
   expect(() => parseV3({ ...bundle, schemaVersion: 4 })).toThrow();
 });
+
+it("reads v3 fields added by newer publishers without dropping rows", () => {
+  const known = { ...modelV2("future"), inference: { chat: true } };
+  const newer = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    futureEnvelope: 1,
+    providers: { first: { futureProvider: true } },
+    models: [
+      {
+        ...known,
+        futureRow: { unit: "image" },
+        pricing: { status: "unknown", futureRate: 1 },
+        inference: { chat: true, music: { input: ["text"] } },
+      },
+    ],
+  };
+  // The publisher still rejects them, so a typo cannot reach the hosted feed.
+  expect(() => parseV3(newer)).toThrow();
+  const warn = vi.fn();
+  expect(sanitizeV3(newer, warn)).toEqual({
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: {} },
+    models: [known],
+  });
+  expect(warn).not.toHaveBeenCalled();
+  expect(newer.models[0]).toHaveProperty("futureRow");
+});

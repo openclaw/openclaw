@@ -397,7 +397,11 @@ it("asks speed policy about the implicit OpenClaw runtime a row will use", async
     [1, false],
   ] as const) {
     const row = models.find((candidate) => candidate.id === ids[index]);
-    expect(row?.agentRuntime).toBeUndefined();
+    expect(row?.agentRuntime).toMatchObject({
+      id: "openclaw",
+      source: "implicit",
+      cloudPlacementExecutionMode: "worker-turn",
+    });
     expect(row?.supportsFastMode).toBe(supportsFastMode);
   }
 });

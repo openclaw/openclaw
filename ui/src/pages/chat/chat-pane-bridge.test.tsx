@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { adoptBootComposer, retireBootComposer } from "../../app/boot-composer.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -167,6 +168,16 @@ it.each(["ready", "unavailable"] as const)(
   "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
   async (outcome) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const bootComposer = document.createElement("textarea");
+    bootComposer.id = "openclaw-boot-composer";
+    bootComposer.value = "Keep the pending draft";
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(bootComposer);
+    adoptBootComposer(true);
+    onTestFinished(() => {
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+    });
     const fixture = mountedFixture("snapshot-admission");
     const gateway = fixture.context.gateway;
     gateway.snapshot.phase = "connecting";
@@ -191,11 +202,28 @@ it.each(["ready", "unavailable"] as const)(
       vi.useRealTimers();
     });
     const prepared = prewarmChatSnapshot(key);
-    const view = fixture.render({ active: true, sessionSnapshotStore: new SessionSnapshotStore() });
+    const view = fixture.render({
+      active: true,
+      ownsRouteComposer: true,
+      presentationId: "snapshot-active",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
+    const inactive = fixture.render({
+      paneId: "inactive",
+      active: false,
+      ownsRouteComposer: false,
+      presentationId: "snapshot-inactive",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
     flush();
     await vi.advanceTimersByTimeAsync(99);
     flush();
     expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+    expect(view.pane.querySelector(".lazy-view-state--route")).not.toBeNull();
+    expect(inactive.pane.querySelector("textarea")).toBeNull();
+    expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
+    expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+    expect(bootComposer.value).toBe("Keep the pending draft");
     if (outcome === "ready") {
       read.resolve({
         projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
@@ -217,6 +245,7 @@ it.each(["ready", "unavailable"] as const)(
       await vi.advanceTimersByTimeAsync(0);
       flush();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
       expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
         "Stored parent",
       );
@@ -227,6 +256,10 @@ it.each(["ready", "unavailable"] as const)(
       await vi.advanceTimersByTimeAsync(1);
       flush();
       expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
+      const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);
+      expect(composer?.value).toBe("Keep the pending draft");
+      expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
       read.resolve(undefined);
       await prepared;
     }

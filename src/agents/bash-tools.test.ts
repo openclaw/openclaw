@@ -22,6 +22,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
@@ -315,6 +316,33 @@ describe("background completion notifications", () => {
     );
     clearRuntimeConfigSnapshot();
     await state.cleanup();
+  });
+
+  it("delivers an assembled exec completion to the conversation's auto-thread", async () => {
+    const exec = expectDefined(
+      createOpenClawCodingTools({
+        sessionKey,
+        messageProvider: "discord",
+        currentChannelId: "channel:111",
+        currentMessagingTarget: "channel:222",
+        exec: { ...fullGatewayExec, bypassHostApprovalFloors: true, scopeKey },
+      }).find((tool) => tool.name === "exec"),
+      "assembled exec tool",
+    );
+    const result = await exec.execute("auto-thread", {
+      command: shellEcho("thread-result"),
+      background: true,
+    });
+    expect(result.details).toMatchObject({ status: "running" });
+    await waitForExecScope(scopeKey);
+    const receipt = expectDefined(receipts[0], "completion receipt");
+    await expect(receipt.accepted).resolves.toEqual({ ok: true });
+    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+      expect.objectContaining({
+        id: receipt.id,
+        deliveryContext: expect.objectContaining({ channel: "discord", to: "channel:222" }),
+      }),
+    );
   });
 
   it.each([

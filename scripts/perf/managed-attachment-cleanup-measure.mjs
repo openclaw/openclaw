@@ -1,6 +1,6 @@
 // Synthetic managed-media maintenance; run only inside an owned performance sandbox.
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 
 const { values } = parseArgs({
   options: {
@@ -57,10 +57,7 @@ mkdirSync(process.env.TMPDIR, { recursive: true });
 const traceLog = values["trace-log"] && path.resolve(values["trace-log"]);
 const markGc = (phase) => {
   if (traceLog) {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath: output })}\n`,
-    );
+    writeGatewayGcTraceMarker(phase, output);
   }
 };
 if (traceLog) {

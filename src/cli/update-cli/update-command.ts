@@ -44,11 +44,7 @@ import {
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
-import {
-  resolveServiceRefreshEnv,
-  withOwnedManagedUpdateEnv,
-  withUpdateInProgressEnv,
-} from "./update-command-service-env.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -201,21 +197,16 @@ async function updateCommandInternal(
   const admissionStepTimeoutMs =
     prepared.timeoutMs ?? admittedRun.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  let target = initialization?.target;
-  const selectTarget = () =>
-    resolveUpdateCommandTarget(
+  const target =
+    initialization?.target ??
+    (await resolveUpdateCommandTarget(
       opts,
       recoveryState,
       invocationCwd,
       prepared,
       executor,
       admissionStepTimeoutMs,
-    );
-  if (!target) {
-    target = initialization
-      ? await withOwnedManagedUpdateEnv(initialization.env, selectTarget)
-      : await selectTarget();
-  }
+    ));
   if (!target) {
     return;
   }

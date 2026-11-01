@@ -24,6 +24,7 @@ export type PlacementRecoveryDeps = {
     | "destroy"
     | "reclaim"
     | "fenceWorkerTurnForRecovery"
+    | "ensureRetainedRunning"
     | "startTunnel"
     | "stopTunnel"
     | "reconcileEnvironment"
@@ -44,6 +45,7 @@ export type PlacementRecoveryDeps = {
     params: WorkerSessionPlacementIdentity & {
       assertCurrent: () => void;
       quiescence?: WorkerWorkspaceQuiescence;
+      diskResult?: WorkerSessionTurnClaim;
     },
   ) => Promise<void>;
 };

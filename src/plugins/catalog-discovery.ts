@@ -172,7 +172,8 @@ export function joinClawHubPluginCatalog(params: {
   const publishedPackages = new Set(
     params.remote.map((plugin) => normalizedAlias(plugin.packageName)),
   );
-  const query = normalizedAlias(params.query);
+  // Normalize search comparisons only; catalog identities and display text retain their bytes.
+  const query = normalizedAlias(params.query)?.normalize("NFC");
   const localOnly = params.local.plugins
     .filter(
       (plugin) =>
@@ -197,7 +198,7 @@ export function joinClawHubPluginCatalog(params: {
         return true;
       }
       return [plugin.id, plugin.packageName, plugin.name, plugin.description, ...categories]
-        .flatMap((value) => (value ? [value.toLowerCase()] : []))
+        .flatMap((value) => (value ? [value.toLowerCase().normalize("NFC")] : []))
         .some((value) => value.includes(query));
     })
     .toSorted((left, right) => left.name.localeCompare(right.name))

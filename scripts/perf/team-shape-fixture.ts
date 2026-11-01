@@ -159,7 +159,8 @@ export function parseTeamShapeOptions(argv: string[]) {
 }
 
 export async function generateTeamShapeFixture(
-  options: ReturnType<typeof parseTeamShapeOptions> & Pick<TeamShapeSessionsOptions, "sessionKeys">,
+  options: ReturnType<typeof parseTeamShapeOptions> &
+    Pick<TeamShapeSessionsOptions, "sessionKeys" | "agentId">,
 ) {
   const startedAt = performance.now();
   const { stateDir } = options;
@@ -241,7 +242,7 @@ export async function generateTeamShapeFixture(
         import("../../src/state/openclaw-agent-db.js"),
         import("../../src/state/openclaw-state-db.js"),
       ]);
-    const agent = agentDb.openOpenClawAgentDatabase({ agentId: "main" });
+    const agent = agentDb.openOpenClawAgentDatabase({ agentId: options.agentId ?? "main" });
     const state = stateDb.openOpenClawStateDatabase();
     let summary;
     try {

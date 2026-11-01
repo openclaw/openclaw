@@ -8,6 +8,25 @@ import { resolveDeepSeekModelKeyFallback } from "./model-credential.js";
 const CREDENTIAL_PATH = "plugins.entries.deepseek.config.webSearch.apiKey";
 const loadRuntime = createLazyRuntimeModule(() => import("./web-search-provider.runtime.js"));
 
+const DeepSeekSearchSchema = {
+  type: "object",
+  required: ["query"],
+  properties: {
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      description: "Search query, including any search operators.",
+    },
+    count: {
+      type: "integer",
+      minimum: 1,
+      maximum: 10,
+      description: "Number of results (1-10; default 5).",
+    },
+  },
+};
+
 export function createDeepSeekWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "deepseek",
@@ -31,24 +50,7 @@ export function createDeepSeekWebSearchProvider(): WebSearchProviderPlugin {
     createTool: (ctx) => ({
       description:
         "Search the web using DeepSeek. Returns titles, URLs, and model-oriented summaries. Queries support site:, -site:, lang:, after:, before:, and quoted phrases; maximum 128 Unicode characters.",
-      parameters: {
-        type: "object",
-        required: ["query"],
-        properties: {
-          query: {
-            type: "string",
-            minLength: 1,
-            maxLength: 128,
-            description: "Search query, including any search operators.",
-          },
-          count: {
-            type: "integer",
-            minimum: 1,
-            maximum: 10,
-            description: "Number of results (1-10; default 5).",
-          },
-        },
-      },
+      parameters: DeepSeekSearchSchema,
       execute: async (args, context) => {
         context?.signal?.throwIfAborted();
         const { executeDeepSeekSearch } = await loadRuntime();
