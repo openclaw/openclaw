@@ -39,7 +39,7 @@ import {
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
-import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { prepareSessionWorkerPlacementMutationCheckAsync } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -348,10 +348,15 @@ it.each(["worker-turn", "remote-exec"] as const)(
   },
 );
 
-it("derives inference without rewriting its bound snapshot", async () => {
+it("derives inference from an environment with a recorded resource receipt", async () => {
   const sessionId = "snapshot-worker";
   const environmentId = "environment-" + sessionId;
   const profileSnapshot = { settings: { device: "paired-node", inference: "worker" } };
+  const resourceReceipt = {
+    version: 1 as const,
+    leaseId: `lease:${environmentId}`,
+    identity: { resourceId: "resource-1" },
+  };
   writePlacementEnvironmentFixture(database, {
     environmentId,
     state: "attached",
@@ -361,6 +366,7 @@ it("derives inference without rewriting its bound snapshot", async () => {
     profileId: "named-device",
     nodeDeviceId: "paired-node",
     profileSnapshot,
+    resourceReceipt,
   });
   const { store, placement } = await activePlacement(sessionId);
   const snapshot = await store.readProjection([sessionId]);
@@ -562,7 +568,7 @@ it.each([false, true])(
       "journal-stale",
       "result-reclaimed",
     ].map((sessionId) => {
-      const pending: WorkerWorkspacePendingResult = {
+      const pending: Omit<WorkerWorkspacePendingResult, "repositoryDiskAuthority"> = {
         sessionId,
         environmentId: `env-${sessionId}`,
         ownerEpoch: sessionId === "journal-stale" ? 8 : 7,

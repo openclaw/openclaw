@@ -2,8 +2,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
+import { projectAgentHistoryActivity } from "../../infra/agent-activity-events.js";
+import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
+import {
+  createNestedToolActivity,
+  readNestedToolActivity,
+} from "../../sessions/nested-tool-activity.js";
+import {
+  captureSessionControllerStop,
+  stopSession,
+} from "../../sessions/session-controller.stop.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as codeModeState from "../code-mode-state.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "../code-mode.js";
 import {
   createCodeModeHarness,
@@ -28,6 +39,7 @@ const registryEvents = vi.hoisted(() => ({
   subscribe: vi.fn<(listener: () => void) => () => void>(),
 }));
 
+// mock-isolation: Collector persistence is external I/O; the real controller owns recovery.
 vi.mock("../subagents/registry/subagent-registry.js", () => ({
   prepareSubagentRunsByRunIds: registryEvents.read,
 }));
@@ -51,7 +63,9 @@ import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-
 import {
   collectorRun,
   createMainSessionWaitTool,
+  observe,
   preparedRuns,
+  startParentWait,
   selectRuns,
   waitAtBoundary,
 } from "./agents-wait-tool.test-support.js";
@@ -151,13 +165,6 @@ function publishChanges(count = 1) {
       listener();
     }
   }
-}
-
-function observe<T>(promise: Promise<T>) {
-  return promise.then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
 }
 
 function notOwner(runId: string) {
@@ -341,6 +348,8 @@ describe("agents_wait", () => {
     });
     failed.execution = {
       status: "terminal",
+      startedAt: 100,
+      endedAt: 175,
       outcome: { status: "error", error: "provider failed after tool output" },
     };
     failed.completion = { required: false, resultText: null, capturedAt: 10 };
@@ -356,11 +365,44 @@ describe("agents_wait", () => {
           structured: { partial: true },
           error: "provider failed after tool output",
           sessionKey: failed.childSessionKey,
+          groupId: "group",
+          runtimeMs: 75,
         },
       ],
       pending: ["pending"],
     });
     expect(isToolResultError(result)).toBe(false);
+    const activity = createNestedToolActivity({
+      runId: "owning-parent-run",
+      scopeId: "code-mode-scope",
+      afterEntryId: null,
+      startOrder: 0,
+      toolCallId: "wait-call",
+      toolName: "agents_wait",
+      input: { ids: ["failed", "pending"] },
+      result,
+      isError: false,
+      startedAt: 1,
+      timestamp: 2,
+    });
+    records.clear();
+    const persisted = JSON.stringify(activity);
+    const history = projectAgentHistoryActivity([
+      { messageId: "persisted-wait", message: JSON.parse(persisted) },
+    ]);
+    expect(history[0]?.items[0]).toMatchObject({ name: "agents_wait", status: "completed" });
+    expect(readNestedToolActivity(JSON.parse(persisted))?.details.result.details).toMatchObject({
+      completed: [
+        {
+          runId: "failed",
+          sessionKey: "agent:worker:subagent:failed",
+          runtimeMs: 75,
+          status: "failed",
+          error: "provider failed after tool output",
+        },
+      ],
+      pending: ["pending"],
+    });
   });
 
   it.each([-60_000, 60_000])(
@@ -754,17 +796,19 @@ describe("agents_wait", () => {
     });
   });
 
-  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
-    const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
-
-    expect(result.details).toEqual({
-      completed: [],
-      pending: [],
-      errors: [{ runId: "missing", error: "not_found" }],
-      success: false,
-    });
+  it("fails missing batches and guides announcing-only waits without dropping results", async () => {
+    const child = { collect: undefined, expectsCompletionMessage: true };
+    records.set("announcing", { ...collectorRun("announcing", MAIN), ...child });
+    records.set("quiet", { ...collectorRun("quiet", MAIN), collect: undefined });
+    records.set("plain", { ...collectorRun("plain", "agent:other:main"), ...child });
+    addRun("done", { status: "done" });
+    await expect(executeWait(["announcing"])).rejects.toThrow("report back to this session");
+    const notFound = (ids: string[]) => ids.map((runId) => ({ runId, error: "not_found" }));
+    const mix = (await executeWait(["done", "announcing"])).details;
+    expect(mix).toMatchObject({ completed: [{ runId: "done" }], errors: notFound(["announcing"]) });
+    const result = await executeWait(["missing", "plain", "quiet"]);
+    const errors = notFound(["missing", "plain", "quiet"]);
+    expect(result.details).toEqual({ completed: [], pending: [], errors, success: false });
     expect(isToolResultError(result)).toBe(true);
   });
 
@@ -798,6 +842,19 @@ describe("agents_wait", () => {
       const first = addRun("first-required", { status: "done" });
       const second = addRun("second-required");
       const read = observeRead();
+      const parked = createDeferred();
+      const settle = codeModeState.waitForPendingBridgeSettlement;
+      const settlement = vi
+        .spyOn(codeModeState, "waitForPendingBridgeSettlement")
+        .mockImplementation((...args) => {
+          if (
+            args[0].some((entry) => entry.method === "callValue" && entry.args[0] === "agents_wait")
+          ) {
+            parked.resolve();
+          }
+          return settle(...args);
+        });
+      onTestFinished(() => settlement.mockRestore());
       const h = createCodeModeHarness();
       applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createMainSessionWaitTool()] });
       const result = expectDefined(h.tools[0], "exec").execute("required-child-results", {
@@ -811,6 +868,11 @@ describe("agents_wait", () => {
       };
       try {
         await read;
+        // Registry I/O starts before the worker returns its checkpoint. Advance
+        // the fake clock only after its watchdog clears and off-VM waiting begins.
+        expect(
+          await Promise.race([parked.promise.then(() => "parked"), result.then(() => "finished")]),
+        ).toBe("parked");
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         await vi.advanceTimersByTimeAsync(60_000);
         const pending = Symbol("pending");
@@ -819,7 +881,8 @@ describe("agents_wait", () => {
         second.completion = { required: false, resultText: "child failure evidence" };
         complete();
         vi.useRealTimers();
-        expect((await result).details).toMatchObject({
+        const details = (await result).details;
+        expect(details, JSON.stringify(details)).toMatchObject({
           status: "completed",
           value: {
             pending: [],
@@ -864,4 +927,88 @@ describe("agents_wait", () => {
       tool.execute("ambiguous-wait", { ids: [entry.runId], awaitResults: true, timeoutSeconds: 1 }),
     ).rejects.toThrow("cannot also specify");
   });
+
+  it.each([
+    { outcome: "done", codeMode: true },
+    { outcome: "failed", codeMode: false },
+    { outcome: "stopped", codeMode: false },
+  ] as const)(
+    "keeps a long collector wait alive until $outcome (Code Mode: $codeMode)",
+    async ({ outcome, codeMode }) => {
+      const parent = await startParentWait({ records, read: registryEvents.read, codeMode });
+      await parent.read;
+      parent.advancePastQuietToolDeadline();
+      await expect(
+        recoverStuckDiagnosticSession({
+          operation: parent.operation,
+          sessionId: parent.operation.sessionId,
+          sessionKey: parent.operation.key,
+          ageMs: 16 * 60_000,
+          queueDepth: 0,
+          allowActiveAbort: true,
+        }),
+      ).resolves.toMatchObject({ status: "skipped", reason: "active_reply_work" });
+      expect(parent.abort).not.toHaveBeenCalled();
+      expect(registryEvents.read).toHaveBeenCalledOnce();
+
+      if (outcome === "stopped") {
+        const stopped = stopSession({
+          capture: captureSessionControllerStop({ operations: [parent.operation] }),
+          source: "client-run",
+        });
+        expect(stopped.aborted).toBe(true);
+        await expect(parent.result).rejects.toThrow("agents_wait aborted");
+        expect(parent.abort).toHaveBeenCalledOnce();
+      } else {
+        parent.entry.collectorCompletion = { status: outcome };
+        parent.entry.completion = { required: false, resultText: "collected result" };
+        publishChanges();
+        const completed = {
+          completed: [{ runId: parent.entry.runId, status: outcome, result: "collected result" }],
+          pending: [],
+        };
+        await expect(parent.result).resolves.toMatchObject({
+          details: codeMode ? { status: "completed", value: completed } : completed,
+        });
+      }
+      expect(parent.operation.watchdog.snapshot().waits).toEqual([]);
+      expect(registryEvents.listeners.size).toBe(0);
+    },
+  );
+
+  it.each(["execution deadline", "revoked authority", "stalled reread"] as const)(
+    "does not protect a collector after %s",
+    async (cause) => {
+      const parent = await startParentWait({ records, read: registryEvents.read });
+      await parent.read;
+      parent.advancePastQuietToolDeadline();
+      expect(await parent.operation.watchdog.tick()).toEqual({
+        action: "observe",
+        reason: "runtime_owned",
+      });
+      const reread = createDeferred<PreparedSubagentRunsRead>();
+      try {
+        if (cause === "execution deadline") {
+          parent.attempt.setExecutionDeadline(Date.now());
+        } else if (cause === "revoked authority") {
+          parent.admission.close();
+        } else {
+          registryEvents.read.mockImplementation(() => reread.promise);
+          publishChanges();
+        }
+        expect(parent.operation.watchdog.decide()).toMatchObject({
+          action: "stop",
+          reason: cause === "execution deadline" ? "execution_deadline" : "semantic_stall",
+        });
+        await parent.operation.watchdog.tick();
+        expect(parent.abort).toHaveBeenCalledOnce();
+        expect(parent.operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+      } finally {
+        reread.resolve(preparedRuns(() => selectRuns(records, [parent.entry.runId])));
+      }
+      await expect(parent.result).rejects.toThrow("agents_wait aborted");
+      expect(parent.operation.watchdog.snapshot().waits).toEqual([]);
+      expect(registryEvents.listeners.size).toBe(0);
+    },
+  );
 });

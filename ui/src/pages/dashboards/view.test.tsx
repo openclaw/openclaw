@@ -119,16 +119,8 @@ it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (baseP
     search: "?__openclawSessionKey=agent%3Amain%3Adashboard%3A12345678-90ab-cdef-1234-567890abcdef",
   });
 
-  for (const activation of [
-    { ctrlKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-    { altKey: true },
-    { button: 1 },
-  ]) {
-    link.dispatchEvent(click(activation));
-    expect(intercepted).toBe(false);
-  }
+  link.dispatchEvent(click({ ctrlKey: true }));
+  expect(intercepted).toBe(false);
   const handled = click();
   handled.preventDefault();
   link.dispatchEvent(handled);

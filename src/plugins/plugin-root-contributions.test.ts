@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { iteratePluginRootContributions } from "./plugin-root-contributions.js";
 
 function plugin(id: string, overrides: Partial<PluginManifestRecord> = {}): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    channels: [],
-    providers: [],
-    cliBackends: [],
     skills: ["./skills"],
     hooks: ["./hooks"],
     origin: "global",
@@ -15,7 +13,7 @@ function plugin(id: string, overrides: Partial<PluginManifestRecord> = {}): Plug
     source: `/plugins/${id}/index.js`,
     manifestPath: `/plugins/${id}/openclaw.plugin.json`,
     ...overrides,
-  };
+  });
 }
 
 function metadata(plugins: PluginManifestRecord[]) {

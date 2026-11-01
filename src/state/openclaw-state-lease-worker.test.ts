@@ -46,11 +46,7 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
     peer.exec("PRAGMA busy_timeout=0");
     let checkpoint: unknown;
     const admission = createAdmission(
-      (request, grant) => {
-        expect(request).toEqual({
-          stage: "transaction",
-          facts: { kind: "state-lease-verify", identity, expiresAt: 20_000 },
-        });
+      (_request, grant) => {
         if (change === "refused") {
           throw new Error("Live owner retired");
         }

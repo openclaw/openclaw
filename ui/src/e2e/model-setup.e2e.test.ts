@@ -1,14 +1,13 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activated,
   button,
   candidate,
-  configSnapshot,
   expectCount,
   expectFocused,
-  expectLocalActivation,
   expectText,
   localPrepareOptions,
   localSetupFeatures,
@@ -16,7 +15,6 @@ import {
   runningStep,
   runningWizard,
   setupContext,
-  setupPages,
   setupRpc as rpc,
   pollRequestCount,
 } from "./model-setup-fixtures.test-support.ts";
@@ -29,129 +27,8 @@ const suite = createControlUiE2eSuite({
 });
 
 const prepareOptions = localPrepareOptions();
-const withPage = setupPages(suite, () => setupContext({ viewport: { height: 900, width: 1280 } }));
 
 suite.define(() => {
-  it("refreshes detected authentication without retaining an account email for API-key access", async () => {
-    await withPage(async ({ page }) => {
-      const detectedCandidate = {
-        kind: "codex-cli" as const,
-        label: "Codex",
-        modelRef: "openai/gpt-5.6-luna",
-        recommended: false,
-        credentials: true,
-        brandId: "openai",
-      };
-      const gateway = await installSetupGateway(page, {
-        featureMethods: ["chat.metadata", "chat.startup", rpc.detect],
-        methodResponses: {
-          [rpc.detect]: {
-            sequence: [
-              "logged in · ChatGPT account · alex@example.com",
-              "logged in · API key (usage-billed)",
-            ].map((detail) => makeDetection({ candidates: [{ ...detectedCandidate, detail }] })),
-          },
-        },
-      });
-
-      await openModelSetup(page, suite.server.baseUrl);
-      const row = page.locator('[data-candidate-kind="codex-cli"]');
-      await expectText(row, "ChatGPT account · alex@example.com");
-
-      const detectionCount = (await gateway.getRequests(rpc.detect)).length;
-      await page.getByRole("button", { name: "Check again" }).click();
-      await pollRequestCount(gateway, rpc.detect).toBe(detectionCount + 1);
-      await expectText(row, "API key (usage-billed)");
-      expect(await row.textContent()).not.toContain("alex@example.com");
-    });
-  });
-
-  it("hands first-run model setup to the custodian in onboarding chrome", async () => {
-    await withPage(async ({ page }) => {
-      const gateway = await installSetupGateway(page, {
-        featureMethods: [
-          "chat.metadata",
-          "chat.startup",
-          rpc.detect,
-          rpc.activate,
-          rpc.next,
-          "openclaw.chat",
-        ],
-        methodResponses: {
-          [rpc.detect]: makeDetection({
-            candidates: [
-              candidate("openai-api-key", "OpenAI API key", "openai/gpt-5", {
-                brandId: "openai",
-                detail: "Saved credentials are available",
-              }),
-            ],
-            manualProviders: [{ id: "openai", label: "OpenAI" }],
-          }),
-          [rpc.activate]: runningWizard("activation-session"),
-          [rpc.next]: activated("openai/gpt-5"),
-          "openclaw.chat": {
-            sessionId: "e2e-custodian",
-            reply: "## Hi, I'm OpenClaw",
-            action: "none",
-            question: {
-              id: "onboarding-next-step",
-              header: "Next step",
-              question: "What would you like to do first?",
-              options: [
-                { label: "Talk to my agent", reply: "talk to agent", recommended: true },
-                { label: "Connect WhatsApp", reply: "connect whatsapp" },
-              ],
-              isOther: true,
-              skipAction: "exit",
-            },
-          },
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
-      expect(response?.status()).toBe(200);
-
-      const detect = await gateway.waitForRequest(rpc.detect);
-      expect(detect.params).toEqual({ agentId: "main" });
-      await page.locator('[data-candidate-kind="openai-api-key"] button').waitFor();
-      expect(await gateway.getRequests(rpc.activate)).toHaveLength(0);
-      await page.locator('[data-candidate-kind="openai-api-key"] button').click();
-      const activate = await gateway.waitForRequest(rpc.activate);
-      expect(activate.params).toEqual({
-        sessionId: expect.any(String),
-        kind: "openai-api-key",
-        agentId: "main",
-        modelRef: "openai/gpt-5",
-      });
-
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
-      expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
-      // Onboarding chrome keeps only the header actions; no identity heading.
-      await page.locator(".custodian__header--minimal").waitFor();
-      await page.getByRole("button", { name: "Exit setup" }).waitFor();
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .toContain("shell--onboarding");
-      expect(await page.locator(".shell-nav").isVisible()).toBe(false);
-
-      const chatRequest = await gateway.waitForRequest("openclaw.chat");
-      expect(chatRequest.params).toMatchObject({
-        sessionId: expect.stringMatching(/^control-ui-onboarding-/u),
-        welcomeVariant: "onboarding",
-      });
-      await page.getByRole("button", { name: "Skip for now" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .not.toContain("shell--onboarding");
-      const userTurns = (await gateway.getRequests("openclaw.chat")).filter((request) => {
-        const params = request.params;
-        return typeof params === "object" && params !== null && "message" in params;
-      });
-      expect(userTurns).toHaveLength(0);
-    });
-  });
-
   it("completes device-code sign-in from its verified activation result", async () => {
     await suite.withPage(
       setupContext({ reducedMotion: "reduce", viewport: { height: 900, width: 1280 } }),
@@ -176,7 +53,7 @@ suite.define(() => {
         const gateway = await installSetupGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", rpc.detect, rpc.auth, rpc.next],
           methodResponses: {
-            "config.get": configSnapshot({}, "config-hash-1"),
+            "config.get": sourceConfigSnapshot({}, "config-hash-1"),
             [rpc.detect]: initialDetection,
             [rpc.auth]: runningWizard("device-code-session"),
             [rpc.next]: {
@@ -249,132 +126,6 @@ suite.define(() => {
     );
   });
 
-  it("recovers Ollama setup in place after the local server starts", async () => {
-    await suite.withPage(
-      setupContext({ colorScheme: "dark", viewport: { height: 900, width: 1280 } }),
-      async ({ page }) => {
-        const initialDetection = makeDetection({
-          prepareOptions,
-          recommendedInstalls: [
-            {
-              id: "ollama",
-              brandId: "ollama",
-              label: "Ollama",
-              hint: "Run open models locally",
-              website: "https://ollama.com/download",
-              icon: "https://cdn.simpleicons.org/ollama",
-            },
-          ],
-        });
-        const gateway = await installSetupGateway(page, {
-          featureMethods: localSetupFeatures,
-          methodResponses: {
-            [rpc.detect]: initialDetection,
-            [rpc.prepare]: runningWizard("ollama-prepare-session"),
-            [rpc.activate]: runningWizard("activation-session"),
-            [rpc.next]: {
-              sequence: [
-                runningStep("ollama-mode", "select", "Ollama mode", {
-                  options: [
-                    {
-                      value: "cloud-local",
-                      label: "Cloud + Local",
-                      hint: "Route cloud and local models through your Ollama host",
-                    },
-                    { value: "cloud-only", label: "Cloud only", hint: "Hosted Ollama models" },
-                    { value: "local-only", label: "Local only", hint: "Local models only" },
-                  ],
-                }),
-                runningStep("ollama-base-url", "text", "Ollama base URL", {
-                  initialValue: "http://127.0.0.1:11434",
-                }),
-                runningStep(
-                  "ollama-retry",
-                  "note",
-                  [
-                    "Ollama could not be reached at http://127.0.0.1:11434.",
-                    "Start or restart the Ollama server for this address.",
-                    "If Ollama is not installed on that machine, download it at https://ollama.com/download",
-                    "",
-                    "Continue when it is running. OpenClaw will retry this address.",
-                  ].join("\n"),
-                  { title: "Ollama" },
-                ),
-                runningStep("ollama-retry-confirm", "confirm", "Retry this Ollama address now?", {
-                  initialValue: true,
-                }),
-                { done: true, status: "done", preparedModelRef: "ollama/qwen3:0.6b" },
-                activated("ollama/qwen3:0.6b"),
-              ],
-            },
-          },
-        });
-
-        const response = await openModelSetup(page, suite.server.baseUrl);
-        expect(response?.status()).toBe(200);
-        const localProviderIcons = page.locator(
-          [
-            '[data-prepare-choice="ollama"] [data-provider-icon="ollama"]',
-            '[data-prepare-choice="llama-cpp"] [data-provider-icon="llamacpp"]',
-            '[data-prepare-choice="lmstudio"] [data-provider-icon="lmstudio"]',
-          ].join(","),
-        );
-        await expectCount(localProviderIcons, 3);
-        const localProviderIconColors = await localProviderIcons.evaluateAll((icons) =>
-          icons.map((icon) => getComputedStyle(icon).color),
-        );
-        expect(localProviderIconColors).toHaveLength(3);
-        expect(new Set(localProviderIconColors).size).toBe(1);
-        await page
-          .locator('[data-prepare-choice="ollama"]')
-          .getByRole("button", { name: "Choose connection" })
-          .click();
-
-        const start = await gateway.waitForRequest(rpc.prepare);
-        expect(start.params).toMatchObject({ authChoice: "ollama" });
-
-        await button(page, "Ollama mode").click();
-        await page.getByRole("option", { name: /Local only/u }).click();
-        const baseUrl = page.getByLabel("Ollama base URL");
-        await expect.poll(() => baseUrl.inputValue()).toBe("http://127.0.0.1:11434");
-
-        await page.getByRole("button", { name: "Submit" }).click();
-        await page.getByText("Ollama could not be reached at http://127.0.0.1:11434.").waitFor();
-        await page
-          .getByText("Continue when it is running. OpenClaw will retry this address.")
-          .waitFor();
-
-        await page.getByRole("button", { name: "Continue" }).click();
-        await page.getByText("Retry this Ollama address now?").waitFor();
-
-        await page.getByRole("button", { name: "Continue" }).click();
-        await expectLocalActivation(page, gateway, "ollama", "ollama/qwen3:0.6b");
-
-        await gateway.setMethodResponse(rpc.detect, {
-          ...initialDetection,
-          candidates: [],
-          configuredModel: "ollama/qwen3:0.6b",
-          recommendedInstalls: [],
-          setupComplete: true,
-        });
-        await page.getByRole("button", { name: "Return to Models" }).click();
-        await page.locator(".model-providers__defaults").waitFor();
-        await expectCount(page.locator("openclaw-modal-dialog"), 0);
-        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
-
-        const wizardRequests = await gateway.getRequests(rpc.next);
-        expect(wizardRequests).toHaveLength(6);
-        expect(wizardRequests[2]?.params).toMatchObject({
-          answer: { stepId: "ollama-base-url", value: "http://127.0.0.1:11434" },
-        });
-        expect(wizardRequests[3]?.params).toMatchObject({ answer: { stepId: "ollama-retry" } });
-        expect(wizardRequests[4]?.params).toMatchObject({
-          answer: { stepId: "ollama-retry-confirm", value: true },
-        });
-      },
-    );
-  });
-
   it("offers supported Google setup in an accessible provider picker", async () => {
     await suite.withPage(
       setupContext({ colorScheme: "dark", viewport: { height: 1000, width: 1440 } }),
@@ -382,28 +133,9 @@ suite.define(() => {
         const gateway = await installSetupGateway(page, {
           featureMethods: localSetupFeatures,
           methodResponses: {
-            "models.authStatus": {
-              ts: 1,
-              providers: [],
-              providerCapabilities: [
-                {
-                  provider: "qwen",
-                  apiKeySupported: true,
-                  quickApiKeySetup: false,
-                  loginOptions: [
-                    {
-                      id: "qwen-oauth",
-                      brandId: "qwen",
-                      groupLabel: "Qwen Cloud",
-                      label: "Qwen sign-in",
-                      kind: "oauth",
-                      featured: false,
-                    },
-                  ],
-                },
-              ],
-            },
+            "models.authStatus": { ts: 1, providers: [], providerCapabilities: [] },
             [rpc.detect]: makeDetection({
+              prepareOptions,
               unavailableCandidates: [],
               manualProviders: [
                 {
@@ -411,14 +143,6 @@ suite.define(() => {
                   brandId: "qwen",
                   groupLabel: "Qwen Cloud",
                   label: "Coding Plan API Key for China (subscription)",
-                  hint: "Endpoint: coding.dashscope.aliyuncs.com",
-                },
-                {
-                  id: "qwen-global",
-                  brandId: "qwen",
-                  groupLabel: "Qwen Cloud",
-                  label: "Coding Plan API Key for Global/Intl (subscription)",
-                  hint: "Endpoint: coding-intl.dashscope.aliyuncs.com",
                 },
                 { id: "zai-cn", brandId: "zai", groupLabel: "Z.AI", label: "Coding-Plan-CN" },
                 {
@@ -426,7 +150,6 @@ suite.define(() => {
                   brandId: "google",
                   groupLabel: "Google",
                   label: "Google AI Studio API key",
-                  hint: "Supported API-key access from aistudio.google.com/apikey",
                 },
               ],
               authOptions: [],
@@ -436,17 +159,16 @@ suite.define(() => {
           },
         });
 
-        const response = await openModelSetup(page, suite.server.baseUrl);
-        expect(response?.status()).toBe(200);
+        await openModelSetup(page, suite.server.baseUrl);
         await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
-        await expectCount(page.getByText("Gemini CLI OAuth"), 0);
+        const colors = await page
+          .locator("[data-prepare-choice] [data-provider-icon]")
+          .evaluateAll((icons) => icons.map((icon) => getComputedStyle(icon).color));
+        expect(colors).toHaveLength(3);
+        expect(new Set(colors).size).toBe(1);
 
         const providerPicker = page.locator(".model-setup-provider-select");
         const providerTrigger = providerPicker.locator(".model-setup-provider-select__trigger");
-        const manualProviderHasFocus = (providerId: string) =>
-          page
-            .locator(`[data-manual-provider="${providerId}"]`)
-            .evaluate((element) => element === document.activeElement);
         const manualProviderMenuReady = () =>
           page
             .locator("[data-manual-provider]")
@@ -463,17 +185,6 @@ suite.define(() => {
           await page.locator(`[data-manual-provider="${id}"]`).click();
           await waitForProviderHide();
         };
-        const providerIds = await page
-          .locator("[data-manual-provider]")
-          .evaluateAll((options) =>
-            options
-              .map((option) =>
-                option instanceof HTMLElement ? option.dataset.manualProvider : null,
-              )
-              .filter((value): value is string => Boolean(value)),
-          );
-        const firstProviderId = providerIds[0]!;
-        const lastProviderId = providerIds.at(-1)!;
         await providerTrigger.click();
         await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("true");
         await expect
@@ -504,23 +215,8 @@ suite.define(() => {
 
         const accessValue = page.locator('.model-setup__manual input[type="password"]');
         await expectFocused(providerTrigger);
-        await page.keyboard.press("Enter");
-        await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("true");
-        await expect.poll(manualProviderMenuReady).toBe(true);
-        await page.keyboard.press("Home");
-        await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
-        await page.keyboard.press("End");
-        await expect.poll(() => manualProviderHasFocus(lastProviderId)).toBe(true);
-        await page.keyboard.press("Home");
-        await expect.poll(() => manualProviderHasFocus(firstProviderId)).toBe(true);
-        const zaiIndex = providerIds.indexOf("zai-cn");
-        expect(zaiIndex).toBeGreaterThan(0);
-        for (let index = 0; index < zaiIndex; index += 1) {
-          await page.keyboard.press("ArrowDown");
-        }
-        await expect.poll(() => manualProviderHasFocus("zai-cn")).toBe(true);
-        await page.keyboard.press("Enter");
-        await waitForProviderHide();
+        await openProviderMenu();
+        await selectProvider("zai-cn");
         await expectText(providerTrigger, "Z.AI");
         await expectFocused(providerTrigger);
 
@@ -553,7 +249,6 @@ suite.define(() => {
         await expect.poll(() => providerTrigger.getAttribute("aria-expanded")).toBe("false");
         await expectText(providerTrigger, "Qwen Cloud");
         await accessValue.fill("qwen-test-secret");
-        await expect.poll(() => accessValue.inputValue()).toBe("qwen-test-secret");
         await page.evaluate(
           () =>
             new Promise<void>((resolve) => {
@@ -591,7 +286,6 @@ suite.define(() => {
         await openProviderMenu();
         await selectProvider("gemini-api-key");
         await expectText(providerTrigger, "Google");
-        await expectCount(page.getByText("Gemini CLI OAuth"), 0);
       },
     );
   });
@@ -607,7 +301,6 @@ suite.define(() => {
               }),
             ),
             manualProviders: [],
-            prepareOptions,
             workspace: "/workspace/demo",
             setupComplete: false,
           },

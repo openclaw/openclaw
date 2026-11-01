@@ -16,6 +16,7 @@ import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
 } from "../plugins/provider-thinking-catalog.js";
+import { mergeConfiguredThinkingLevelMap } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
@@ -103,6 +104,8 @@ function logicalIdentity(
     name: name ?? id,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    // Family names the model's developer, so it survives a route projection with the identity.
+    ...(lifecycleEntry.family ? { family: lifecycleEntry.family } : {}),
     ...(lifecycleEntry.providerOrder !== undefined
       ? { providerOrder: lifecycleEntry.providerOrder }
       : {}),
@@ -117,7 +120,11 @@ function applyLogicalOverrides(
   entry: ModelCatalogEntry,
   overrides: ModelCatalogLogicalOverrides | undefined,
 ): ModelCatalogEntry {
-  return overrides ? { ...entry, ...overrides } : entry;
+  if (!overrides) {
+    return entry;
+  }
+  const thinkingLevelMap = mergeConfiguredThinkingLevelMap(entry, overrides);
+  return { ...entry, ...overrides, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) };
 }
 
 /**

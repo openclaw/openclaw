@@ -139,6 +139,10 @@ Discovers the hook locally, then writes
 preserved. Exact hook names take precedence over matching keys. Ambiguous key
 matches fail without writing.
 
+Enable and disable confirmations neutralize terminal controls in hook names and
+custom emoji. Embedded line breaks and tabs appear as visible escapes; stored
+hook keys and metadata retain their original values.
+
 Enable fails for a missing hook, a plugin-managed hook, or unmet runtime
 requirements. It can enable a currently disabled workspace hook. This does not
 prove a valid module export or event subscription. Inspect `info` and the

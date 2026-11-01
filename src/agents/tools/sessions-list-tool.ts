@@ -338,6 +338,7 @@ export function createSessionsListTool(opts?: {
                 : undefined,
             spawnedBy: readStringValue(entry.spawnedBy),
             parentSessionKey: readStringValue(entry.parentSessionKey),
+            childOwnerSessionKeys: entry.childOwnerSessionKeys,
           });
           const kind = classifySessionListKind(entry);
           if (

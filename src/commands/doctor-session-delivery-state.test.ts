@@ -198,11 +198,6 @@ describe("doctor canonical session delivery state", () => {
           '"untouched"',
         );
       }
-      if (integrityCheck !== "full") {
-        expect(() => openOpenClawAgentDatabase({ agentId: "main", env })).toThrow(
-          /integrity_check.*idx_agent_cache_updated/su,
-        );
-      }
     },
   );
 

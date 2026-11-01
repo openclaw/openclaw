@@ -102,6 +102,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
           accountSid: config.twilio?.accountSid,
           authToken: resolveTwilioAuthToken(config),
           region: config.twilio?.region,
+          record: config.twilio?.record,
         },
         {
           allowNgrokFreeTierLoopbackBypass,
@@ -338,6 +339,8 @@ export async function createVoiceCallRuntime(params: {
             return fastContext.result;
           }
           const { provider: agentProvider, model } = resolveVoiceResponseModel({
+            cfg,
+            agentId,
             voiceConfig: effectiveConfig,
             agentRuntime,
           });

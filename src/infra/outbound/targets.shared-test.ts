@@ -5,7 +5,6 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { resolveOutboundTarget } from "./targets.js";
 import {
   createForumTargetTestPlugin,
-  createGenericTargetTestPlugin,
   createTargetsTestRegistry,
   createTestChannelPlugin,
 } from "./targets.test-helpers.js";
@@ -13,13 +12,7 @@ import {
 /** Installs target-resolution plugin registry fixtures around shared tests. */
 export function installResolveOutboundTargetPluginRegistryHooks(): void {
   beforeEach(() => {
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        createGenericTargetTestPlugin("alpha", "Alpha"),
-        createGenericTargetTestPlugin("beta", "Beta"),
-        createForumTargetTestPlugin(),
-      ]),
-    );
+    setActivePluginRegistry(createTargetsTestRegistry());
   });
 
   afterEach(() => {

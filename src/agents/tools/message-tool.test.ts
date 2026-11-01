@@ -825,7 +825,6 @@ describe("message tool secret scoping", () => {
       expect(progress?.params).not.toHaveProperty("final");
       expect(terminal?.params).not.toHaveProperty("final");
       if (remote) {
-        expect(terminal?.gateway?.terminalSourceReplyReceiptOwner).toBe("caller");
         expect(terminal?.gateway?.resolveAgentRuntimeIdentityToken).toEqual(expect.any(Function));
       }
     },

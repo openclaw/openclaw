@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
@@ -101,14 +102,15 @@ function formatGenericProbeLines(probe: unknown): ChannelCapabilitiesDisplayLine
 }
 
 function renderDisplayLine(line: ChannelCapabilitiesDisplayLine) {
+  const text = sanitizeTerminalText(line.text);
   switch (line.tone) {
     case "muted":
     case "success":
     case "warn":
     case "error":
-      return theme[line.tone](line.text);
+      return theme[line.tone](text);
     default:
-      return line.text;
+      return text;
   }
 }
 

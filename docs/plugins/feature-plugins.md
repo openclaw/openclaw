@@ -34,36 +34,48 @@ backend operations remain available.
 
 ## Enable custom plugin UI
 
-In the Control UI, open **Settings → Labs → Custom plugin UI**. The setting
-defaults to off and controls native browser code from user-installed plugins,
-including local development plugins. The equivalent config is:
+Native browser UI is available by default for enabled plugins, including
+user-installed and local development plugins. There is no Custom plugin UI
+Labs switch. Install and enable only plugins you trust: their browser code runs
+inside the Control UI with each signed-in viewer's Gateway permissions.
+Installed plugin details and existing enable reviews disclose a native UI entry
+when the inspected manifest declares one. Catalog install surfaces explain that
+plugin code may include native UI when that metadata is not available yet.
+
+The existing config key remains an advanced opt-out. To disable native browser
+code from user-installed plugins, set:
 
 ```json5
 {
   gateway: {
     controlUi: {
-      experimental: { customPlugins: true },
+      experimental: { customPlugins: false },
     },
   },
 }
 ```
 
+The historical `experimental` path is retained for configuration compatibility,
+not as a Labs requirement. On upgrade, an existing explicit `false` stays off;
+`true` and an omitted key allow native UI. No migration or config rewrite is
+required. Remove the explicit `false` or set `true` to restore the default.
+
 Changes apply without restarting the Gateway, and connected Control UI pages
-refresh their plugin views automatically. Disabling it prevents custom native UI
-from loading and removes its views. Reload browser tabs to clear plugin
-JavaScript that already ran. This does not uninstall plugins or disable their
-backend operations, tools, or services.
-Ordinary plugin APIs, sandboxed dashboard widgets, and MCP Apps are unaffected.
+refresh their plugin views automatically. Disabling native UI prevents new
+loading and removes its views. Reload browser tabs to clear JavaScript that
+already ran. This does not uninstall plugins or disable their backend
+operations, tools, or services. Ordinary plugin APIs, sandboxed dashboard
+widgets, and MCP Apps are unaffected.
 
 Native UI shipped with OpenClaw remains available for enabled bundled plugins,
-including Workboard. OpenClaw determines bundled status from the loaded
-plugin's origin, not its name or a manifest claim. A separately installed copy
-uses the custom-plugin setting.
+including Workboard, even with the advanced opt-out. OpenClaw determines bundled
+status from the loaded plugin's origin, not its name or a manifest claim. A
+separately installed copy follows the user-installed plugin policy.
 
 ## Create a feature plugin
 
-Enable the [Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui) before opening the
-generated plugin's browser views.
+The generated plugin’s native browser views are available once it is installed
+and enabled; no Labs opt-in is needed.
 
 ```bash
 openclaw plugins init draft-review --name "Draft Review" --type feature
@@ -119,6 +131,27 @@ const report = await feature.invoke("analyze", { text: "A draft to inspect" });
 context.signal.throwIfAborted();
 output.textContent = `${report.words} words`;
 ```
+
+For a large contract, keep schemas out of the browser bundle with a small
+descriptor checked against `FeatureClientContract<typeof contract>`. Import the
+canonical contract as a type, include its `pluginId` and every operation's
+`kind`, and pass the canonical type explicitly:
+
+```typescript
+import type { FeatureClientContract } from "openclaw/plugin-sdk/feature-contract";
+import type { contract } from "./contract.js";
+
+const browserContract = {
+  pluginId: "writing",
+  operations: { analyze: { kind: "query" } },
+} satisfies FeatureClientContract<typeof contract>;
+
+const feature = createFeatureClient<typeof contract>(browserContract, context.host);
+```
+
+The canonical contract still supplies input, output, and event types. The
+backend continues validating schemas and authorizing operations; the browser
+descriptor only supplies routing and query-watch metadata.
 
 Backend inputs, outputs, and events are validated as bounded JSON. Define
 meaningful limits in the schemas as well. Use the plugin's existing runtime
@@ -704,8 +737,10 @@ Approved application uses those retained bytes through the managed plugin
 installer. Changing the source file while approval is pending cannot change
 what is installed. Existing install policy and capability checks still apply.
 
-Artifact approval does not enable the Custom plugin UI lab. The installed
-backend can run with that setting off; its native browser UI remains gated.
+Artifact approval includes trusted backend code and native UI. Browser views
+are available by default after the plugin is enabled, unless the Gateway’s
+advanced native UI opt-out is explicitly false. Backend activation and observed
+browser activation remain separate outcomes.
 
 Pending imports expire after one hour. OpenClaw keeps at most eight pending
 archives of up to 32 MiB each and prunes expired or oldest imports when another

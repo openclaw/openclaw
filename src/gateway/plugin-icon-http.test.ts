@@ -7,6 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -129,13 +130,7 @@ beforeAll(async () => {
       })
       .catch(() => finishFailedGatewayHttpResponse(res));
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      port = (server.address() as AddressInfo).port;
-      resolve();
-    });
-  });
+  port = Number(new URL(await listenLoopback(server)).port);
 });
 
 afterAll(async () => {

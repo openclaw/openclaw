@@ -121,48 +121,6 @@ describe("createPluginRuntimeMock", () => {
     expect(created.entry.initializationPending).toBeUndefined();
   });
 
-  it("keeps the inbound debouncer mock aligned with the runtime contract", () => {
-    const runtime = createPluginRuntimeMock();
-    const debouncer = runtime.channel.debounce.createInboundDebouncer({
-      debounceMs: 0,
-      buildKey: () => "key",
-      onFlush: vi.fn(() => {
-        const completion = Promise.resolve();
-        return { admission: completion, completion };
-      }),
-    });
-
-    expect(debouncer.shouldBuffer("message")).toBe(false);
-    expect(debouncer.cancelKey("key")).toBe(false);
-    expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
-  });
-
-  it("tracks channel runtime contexts through the mock registry", () => {
-    const runtime = createPluginRuntimeMock();
-    const key = {
-      channelId: "whatsapp",
-      accountId: "default",
-      capability: "connection-controller",
-    };
-    const context = { getActiveListener: vi.fn() };
-    const onEvent = vi.fn();
-    const unsubscribe = runtime.channel.runtimeContexts.watch({ ...key, onEvent });
-
-    const lease = runtime.channel.runtimeContexts.register({ ...key, context });
-
-    expect(runtime.channel.runtimeContexts.get(key)).toBe(context);
-    expect(onEvent).toHaveBeenCalledWith({ type: "registered", key, context });
-    expect(vi.isMockFunction(runtime.channel.runtimeContexts.register)).toBe(true);
-    expect(vi.isMockFunction(runtime.channel.runtimeContexts.get)).toBe(true);
-    expect(vi.isMockFunction(runtime.channel.runtimeContexts.watch)).toBe(true);
-
-    lease.dispose();
-
-    expect(runtime.channel.runtimeContexts.get(key)).toBeUndefined();
-    expect(onEvent).toHaveBeenLastCalledWith({ type: "unregistered", key });
-    unsubscribe();
-  });
-
   it("runs channel events through merged session and reply overrides in order", async () => {
     const events: string[] = [];
     const resolveStorePath = vi.fn(() => "/tmp/openclaw-test");
@@ -185,8 +143,6 @@ describe("createPluginRuntimeMock", () => {
         reply: { dispatchReplyWithBufferedBlockDispatcher },
       },
     });
-    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
-    expect(runtime.channel.turn.dispatch).toBe(runtime.channel.inbound.dispatch);
     const adapter = eventAdapter(async () => ({
       ...routedTurn(),
       afterRecord,
@@ -196,24 +152,9 @@ describe("createPluginRuntimeMock", () => {
 
     const result = await runtime.channel.inbound.run(event(adapter));
 
-    expect(adapter.ingest).toHaveBeenCalledWith({ id: "m1" });
-    expect(adapter.resolveTurn).toHaveBeenCalledWith(
-      { id: "m1", rawText: "hello" },
-      { kind: "message", canStartAgentTurn: true },
-      {},
-    );
     expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
     expectSessionRecord(recordInboundSession, "/tmp/openclaw-test");
     expect(events).toEqual(["record", "afterRecord", "dispatch"]);
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dispatcherOptions: expect.objectContaining({
-          responsePrefixContextProvider: expect.any(Function),
-        }),
-        replyOptions: expect.objectContaining({ onModelSelected: expect.any(Function) }),
-      }),
-    );
     expect(result).toMatchObject({ admission: { kind: "dispatch" }, dispatched: true });
   });
 

@@ -139,6 +139,11 @@ function buildFacadeActivationCheckParams(
   };
 }
 
+/** Checks the selected owner's surface without loading it or borrowing another owner's artifact. */
+export function hasBundledPluginPublicSurface(params: BundledPluginPublicSurfaceParams): boolean {
+  return resolveFacadeModuleLocation(params) !== null;
+}
+
 /** Load a bundled or registry-backed plugin public surface, tracking activation ownership. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(

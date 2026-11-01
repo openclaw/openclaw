@@ -5,7 +5,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createSidebarNarration } from "../../components/app-sidebar-session-narration.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
-import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
+import { resolveToolDisplayIdentity } from "../../lib/chat/tool-display-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -617,7 +617,7 @@ export class SubagentsPanelData {
           session.activeRunIds?.includes(session.observerDigest.runId)
             ? session.observerDigest.headline.trim() || undefined
             : undefined),
-        toolDisplayName: tool ? resolveToolDisplay({ name: tool.name }).label : undefined,
+        toolDisplayName: tool ? resolveToolDisplayIdentity(tool.name).label : undefined,
         canStop: active && session.activeRunIds?.length === 1 && stopAccess.allowed,
         stopping: this.stopping.has(session.key),
         stopAccess,

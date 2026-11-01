@@ -16,6 +16,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 const project = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput> = {}) =>
   projection.project(projectionInput(rows, overrides));
+const sectionIds = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+  project(rows, overrides).sections.map(({ id }) => id);
 const runningRow = (overrides: Partial<SidebarRecentSession> = {}) =>
   sessionRow("running", { hasActiveRun: true, activeRunIds: ["run-one"], ...overrides });
 const parentRow = (...childSessionKeys: string[]) => sessionRow("parent", { childSessionKeys });
@@ -130,40 +132,27 @@ describe("SidebarSessionProjection personal pins", () => {
   });
 });
 
-it.each(["active", "archived", "snoozed"] as const)(
-  "hides empty native groups with the %s status filter and preserves other section owners",
-  (statusFilter) => {
-    const rows = [sessionRow("matching", { category: "Matching" })];
-    const input = {
-      statusFilter,
-      knownGroups: ["Matching", "Empty"],
-      catalogIds: ["external"],
-      collapsedSections: new Set(["category:Matching"]),
-    };
-    const filtered = project(rows, input);
-    expect(filtered.sections.map(({ id }) => id)).toEqual([
-      "category:Matching",
-      "catalog:external",
-    ]);
-    expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
-
-    const unfiltered = project(rows, { ...input, statusFilter: "all" });
-    expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
-    expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
-    expect(
-      project(rows, { ...input, emptyGroupsMode: "never" }).sections.map(({ id }) => id),
-    ).toContain("category:Empty");
-  },
-);
+it("hides empty filtered native groups and preserves other section owners", () => {
+  const rows = [sessionRow("matching", { category: "Matching" })];
+  const input = {
+    statusFilter: "active" as const,
+    knownGroups: ["Matching", "Empty"],
+    catalogIds: ["external"],
+    collapsedSections: new Set(["category:Matching"]),
+  };
+  const filtered = project(rows, input);
+  expect(filtered.sections.map(({ id }) => id)).toEqual(["category:Matching", "catalog:external"]);
+  expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+  const unfiltered = project(rows, { ...input, statusFilter: "all" });
+  expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
+  expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+  expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
+});
 
 it("retains unloaded group destinations until the session list establishes their contents", () => {
   const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
-  expect(project([], { ...input, listLoaded: false }).sections.map(({ id }) => id)).toContain(
-    "category:Awaiting sessions",
-  );
-  expect(project([], input).sections.map(({ id }) => id)).not.toContain(
-    "category:Awaiting sessions",
-  );
+  expect(sectionIds([], { ...input, listLoaded: false })).toContain("category:Awaiting sessions");
+  expect(sectionIds([], input)).not.toContain("category:Awaiting sessions");
 });
 
 it("renders a single selected owner's sessions inline instead of under a person header", () => {

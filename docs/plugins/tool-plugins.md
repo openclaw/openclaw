@@ -20,7 +20,7 @@ or [Provider Plugins](/plugins/sdk-provider-plugins) instead.
 
 ## Requirements
 
-- Node 24.16+ or Node 26.1+.
+- Node 24.22.1+ or Node 26.12.1+.
 - TypeScript ESM package output.
 - `typebox` in `dependencies` (not just `devDependencies` - the generated
   plugin imports it at runtime).
@@ -256,6 +256,12 @@ in the captured lineage changes incarnation or lifecycle.
 plugin lifetime. Use a version 2 tool context when the tool depends on these live
 authority checks.
 
+`toolContext.browser?.allowLocalLoopback` records that the host prepared
+unrestricted execution on the Gateway machine for this turn. It is a capability
+fact, not authority: the Browser plugin combines it with `assertInvocationCurrent`,
+operator policy, and live ownership of local Chrome. Do not derive it from model
+arguments or apply it to remote browser transports.
+
 `toolContext.approvalReviewerDeviceIds` contains the host-selected devices for
 an approval initiated by this tool. Pass it to `plugin.approval.request` when
 using the trusted in-process Gateway runtime. It only routes review to those
@@ -270,8 +276,9 @@ the run whose `exec` call started the command. Compare it with the `runId` the
 factory saw on that earlier turn in the same session to recognize the
 completion of work that turn started. Both fields are facts for plugin-owned
 policy, not authority: a wake is never an owner turn (`senderIsOwner` is not
-`true`), restart-recovered "Exec lost" notices carry no `runId`, and the
-Gateway `agent` method accepts exec provenance only from backend callers.
+`true`), and the Gateway `agent` method accepts exec provenance only from backend
+callers. Restart uses the root session’s standard resume input rather than an
+"Exec lost" notification.
 
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete

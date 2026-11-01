@@ -2,14 +2,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as recovery from "../app/stale-chunk-reload.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 function failedSidebarView(error: Error) {
   let failure: Error | undefined = error;

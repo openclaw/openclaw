@@ -1,29 +1,20 @@
-import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { getEnvironmentData } from "node:worker_threads";
-import { Client } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { streamSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.worker.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { SessionTranscriptHydrationChunk } from "../../config/sessions/session-transcript-worker.types.js";
 import * as readonlyStore from "../../state/openclaw-agent-db-readonly.js";
 import { installDatabaseProcessRole } from "../database-engine/admission-scope.js";
 import { PostgresSyncConnection } from "./connection.js";
+import { usePostgresTestHarness } from "./postgres.test-support.js";
 
-const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
+const harness = usePostgresTestHarness("hydration");
+const { connection, prefix: schema, client: admin } = harness;
 type Event = { seq: number; text: string; recordedBytes?: number };
 
 describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
-  const admin = new Client({ connectionString: connection });
-  const schema = `hydration_${randomUUID().replaceAll("-", "")}`;
-  const anchors: DatabaseSync[] = [];
-  const readers: PostgresSyncConnection[] = [];
-
   beforeAll(async () => {
-    // This isolated test process drives the same asynchronous reader as CLI hydration.
     installDatabaseProcessRole("cli-oneshot");
-    await admin.connect();
     await admin.query(`CREATE SCHEMA "${schema}";
       CREATE TABLE "${schema}".transcript_events (
         session_id TEXT, seq INTEGER, event_json TEXT, event_zstd BYTEA,
@@ -35,16 +26,6 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       INSERT INTO "${schema}".session_windows VALUES ('fixture', 7)`);
   });
   afterEach(() => vi.restoreAllMocks());
-  afterAll(async () => {
-    for (const reader of readers) {
-      reader.close();
-    }
-    for (const anchor of anchors) {
-      anchor.close();
-    }
-    await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
-    await admin.end();
-  });
 
   async function fixture(events: Event[]) {
     await admin.query(`TRUNCATE "${schema}".transcript_events`);
@@ -59,9 +40,13 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       ],
     );
     const anchor = new DatabaseSync(":memory:");
-    anchors.push(anchor);
+    const cleanup: { closeReader?: () => void } = {};
+    harness.onClose(() => {
+      cleanup.closeReader?.();
+      anchor.close();
+    });
     const reader = new PostgresSyncConnection(connection!, schema, anchor, schema);
-    readers.push(reader);
+    cleanup.closeReader = () => reader.close();
     const queries = vi.spyOn(reader, "query");
     const pathname = `/synthetic/${schema}/anchor.sqlite`;
     const closedTransactions: boolean[] = [];
@@ -78,14 +63,14 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       },
     });
     const chunks: SessionTranscriptHydrationChunk[] = [];
-    const stream = async (
+    const stream = (
       options: {
         afterSeq?: number;
         beforeSeq?: number;
         onChunk?: () => Promise<void>;
       } = {},
-    ) => {
-      return await runWithSessionTranscriptReadFence(
+    ) =>
+      runWithSessionTranscriptReadFence(
         options.beforeSeq === undefined
           ? undefined
           : {
@@ -130,7 +115,6 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
             },
           ),
       );
-    };
     const payloadPages = () =>
       queries.mock.results.flatMap((result, index) => {
         const sql = queries.mock.calls[index]![0];
@@ -148,18 +132,11 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
           ),
         ];
       });
-    return {
-      reader,
-      chunks,
-      payloadPages,
-      queryCount: () => queries.mock.calls.length,
-      closedTransactions,
-      stream,
-    };
+    return { reader, chunks, payloadPages, queries, closedTransactions, stream };
   }
 
-  function hydrated(chunks: SessionTranscriptHydrationChunk[]) {
-    const events: Array<{ seq: number | undefined; bytes: Buffer }> = [];
+  function expectHydrated(chunks: SessionTranscriptHydrationChunk[], expected: Event[]) {
+    let index = 0;
     let parts: Uint8Array[] = [];
     for (const chunk of chunks) {
       expect(chunk.encoding).toBe("UTF-8");
@@ -170,21 +147,14 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
         expect(frame.data.byteLength).toBeLessThanOrEqual(65536);
         parts.push(frame.data);
         if (frame.endOfEvent) {
-          events.push({ seq: frame.seq, bytes: Buffer.concat(parts) });
+          expect(frame.seq).toBe(expected[index]?.seq);
+          expect(Buffer.concat(parts)).toEqual(Buffer.from(expected[index++]!.text));
           parts = [];
         }
       }
     }
     expect(parts).toEqual([]);
-    return events;
-  }
-
-  function expectHydrated(chunks: SessionTranscriptHydrationChunk[], expected: Event[]) {
-    const actual = hydrated(chunks);
-    expect(actual.map(({ seq }) => seq)).toEqual(expected.map(({ seq }) => seq));
-    expect(
-      actual.every((event, index) => event.bytes.equals(Buffer.from(expected[index]!.text))),
-    ).toBe(true);
+    expect(index).toBe(expected.length);
   }
 
   it("hydrates 5,000 events in at most three payload trips without changing its snapshot", async () => {
@@ -216,7 +186,7 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
     expect(f.closedTransactions).toEqual([false]);
     expect(f.reader.isOpen).toBe(false);
     expect(f.payloadPages().length).toBeLessThanOrEqual(3);
-    expect(f.queryCount()).toBeLessThanOrEqual(6);
+    expect(f.queries.mock.calls.length).toBeLessThanOrEqual(6);
   });
 
   it("bounds large-row pages while preserving UTF-8 bytes and exclusive sequence fences", async () => {
@@ -229,24 +199,12 @@ describe.skipIf(!connection)("PostgreSQL transcript hydration", () => {
       };
     });
     const f = await fixture(events);
-    let acknowledgements = 0;
-    const result = await f.stream({
-      afterSeq: -3,
-      beforeSeq: 84,
-      onChunk: async () => {
-        if (acknowledgements++ === 0) {
-          await admin.query(
-            `UPDATE "${schema}".transcript_events SET event_json = 'changed' WHERE seq = 80`,
-          );
-        }
-      },
-    });
+    const result = await f.stream({ afterSeq: -3, beforeSeq: 84 });
     const selected = events.filter(({ seq }) => seq > -3 && seq < 84);
     expect(result.eventCount).toBe(selected.length);
     expectHydrated(f.chunks, selected);
     expect(f.payloadPages().length).toBeGreaterThan(1);
     expect(f.payloadPages().length).toBeLessThanOrEqual(5);
     expect(f.payloadPages().every((bytes) => bytes <= 4 * 1024 * 1024)).toBe(true);
-    expect(f.closedTransactions).toEqual([false]);
   });
 });

@@ -8,6 +8,8 @@
 # build layer is not invalidated by unrelated source changes.
 #
 # Build stages use full trixie; the runtime image is always trixie-slim.
+ARG OPENCLAW_RUNTIME_ASSETS=runtime-assets
+ARG OPENCLAW_INSTALLED_RUNTIME_INPUT=installed-runtime-directory-input
 ARG OPENCLAW_EXTENSIONS=""
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
@@ -18,7 +20,7 @@ ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="docker.io/library/node:24.22.1-trixie-slim@
 ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea"
 # Keep in sync with .github/actions/setup-node-env/action.yml and seed-bun-from-image.mjs.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598"
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these reviewed base snapshots; runtime stages apply
@@ -68,6 +70,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
+COPY node-sqlite-capabilities.mjs ./
+COPY runtime-process-bootstrap.generated.mjs ./
+COPY runtime-process-scripts.generated.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
 COPY cli-parent-lifetime.mjs ./
@@ -86,6 +91,8 @@ COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 COPY scripts/lib/javascript-statements.mjs ./scripts/lib/javascript-statements.mjs
 COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
 COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
+COPY scripts/lib/fs-safe-npm-cli-preload.generated.mjs ./scripts/lib/fs-safe-npm-cli-preload.generated.mjs
+COPY scripts/lib/fs-safe-npm-cli-protocol.mjs ./scripts/lib/fs-safe-npm-cli-protocol.mjs
 COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
@@ -156,14 +163,6 @@ RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do 
       fi; \
     done
 
-# A2UI bundle may fail under QEMU cross-compilation (e.g. building amd64
-# on Apple Silicon). CI builds natively per-arch so this is a no-op there.
-# Stub it so local cross-arch builds still succeed.
-RUN pnpm_config_verify_deps_before_run=false pnpm canvas:a2ui:bundle || \
-    (echo "A2UI bundle: creating stub (non-fatal)" && \
-     mkdir -p extensions/canvas/src/host/a2ui && \
-     echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
-     rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 # Correction-release sources keep the base package version; official images
@@ -227,7 +226,34 @@ RUN node scripts/postinstall-bundled-plugins.mjs && \
     fi && \
     node --input-type=module -e 'await import("grammy")' && \
     node scripts/check-package-dist-imports.mjs /app && \
-    node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap
+    node scripts/docker/copy-bootstrap-scripts.mjs /app/.runtime-bootstrap && \
+    mkdir -p /app/.runtime-bootstrap/scripts/docker && \
+    cp scripts/docker/verify-fs-safe-native.mjs /app/.runtime-bootstrap/scripts/docker/ && \
+    cp scripts/lib/guard-inventory-utils.mjs /app/.runtime-bootstrap/scripts/lib/
+
+# Only installed assets and pinned helpers feed this route, never source builds.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-directory-input
+WORKDIR /app
+COPY --from=openclaw_installed_runtime /app/ /app/
+
+# Archive recipes admit the exact artifact here, after Docker snapshots the context.
+FROM ${OPENCLAW_NODE_TRIXIE_IMAGE} AS installed-runtime-archive-input
+ARG OPENCLAW_INSTALLED_RUNTIME_SHA256
+WORKDIR /app
+COPY --from=openclaw_installed_runtime /installed-runtime.tgz /tmp/installed-runtime.tgz
+RUN --network=none test "${#OPENCLAW_INSTALLED_RUNTIME_SHA256}" -eq 64 && \
+    case "$OPENCLAW_INSTALLED_RUNTIME_SHA256" in *[!0-9a-f]*) exit 1;; esac && \
+    printf "%s  /tmp/installed-runtime.tgz\n" "$OPENCLAW_INSTALLED_RUNTIME_SHA256" | sha256sum -c - && \
+    tar -xzf /tmp/installed-runtime.tgz -C / && rm /tmp/installed-runtime.tgz
+
+FROM ${OPENCLAW_INSTALLED_RUNTIME_INPUT} AS installed-runtime-assets
+ARG OPENCLAW_EXTENSIONS
+COPY pnpm-lock.yaml docker-entrypoint.mjs /app/
+RUN --network=none cp -R .runtime-bootstrap/scripts/. scripts/ && \
+    mkdir -p qa && \
+    node .runtime-bootstrap/scripts/finalize-installed-runtime.mjs /app
+
+FROM ${OPENCLAW_RUNTIME_ASSETS} AS selected-runtime-assets
 
 # ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_TRIXIE_SLIM_IMAGE} AS base-runtime
@@ -236,7 +262,7 @@ LABEL org.opencontainers.image.base.name="docker.io/library/node:24.22.1-trixie-
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_TRIXIE_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────
-FROM base-runtime
+FROM base-runtime AS openclaw-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
 # OCI base-image metadata for downstream image consumers.
@@ -282,32 +308,33 @@ RUN npm install --global npm@latest && \
 
 RUN chown node:node /app
 
-COPY --from=runtime-assets --chown=node:node /app/dist ./dist
-COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
-COPY --from=runtime-assets --chown=node:node /app/package.json .
-COPY --from=runtime-assets --chown=node:node /app/pnpm-lock.yaml .
-COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
-COPY --from=runtime-assets --chown=node:node /app/patches ./patches
-COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
-COPY --from=runtime-assets --chown=node:node /app/cli-parent-lifetime.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-runtime-env.mjs .
-COPY --from=runtime-assets --chown=node:node /app/cli-invocation.mjs .
-COPY --from=runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
-COPY --from=runtime-assets --chown=node:node /app/node-host-launcher.mjs .
-COPY --from=runtime-assets --chown=node:node /app/node-compile-cache.mjs .
-COPY --from=runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
-COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-COPY --from=runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts
-COPY --from=runtime-assets --chown=node:node /app/scripts/lib/guard-inventory-utils.mjs ./scripts/lib/
-COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=runtime-assets --chown=node:node /app/skills ./skills
-COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-COPY --from=runtime-assets --chown=node:node /app/qa ./qa
-RUN --mount=from=dependency-inputs,source=/app/scripts/docker/verify-fs-safe-native.mjs,target=/tmp/verify-fs-safe-native.mjs \
-    node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require
+COPY --from=selected-runtime-assets --chown=node:node /app/dist ./dist
+COPY --from=selected-runtime-assets --chown=node:node /app/node_modules ./node_modules
+COPY --from=selected-runtime-assets --chown=node:node /app/package.json .
+COPY --from=selected-runtime-assets --chown=node:node /app/pnpm-lock.yaml .
+COPY --from=selected-runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
+COPY --from=selected-runtime-assets --chown=node:node /app/patches ./patches
+COPY --from=selected-runtime-assets --chown=node:node /app/node-version.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-sqlite.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-sqlite-capabilities.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/runtime-process-bootstrap.generated.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/runtime-process-scripts.generated.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-update.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-parent-lifetime.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-runtime-env.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-invocation.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/cli-root-options.mjs /app/gateway-run-argv.mjs /app/gateway-shutdown-budget.mjs ./
+COPY --from=selected-runtime-assets --chown=node:node /app/node-host-launcher.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/node-compile-cache.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/docker-entrypoint.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=selected-runtime-assets --chown=node:node /app/.runtime-bootstrap/scripts ./scripts
+COPY --from=selected-runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=selected-runtime-assets --chown=node:node /app/skills ./skills
+COPY --from=selected-runtime-assets --chown=node:node /app/docs ./docs
+COPY --from=selected-runtime-assets --chown=node:node /app/qa ./qa
+RUN node /app/scripts/docker/verify-fs-safe-native.mjs --package-root /app --mode require
 
 # Validate the three version surfaces in every release-built runtime variant.
 ARG OPENCLAW_DOCKER_BUILD_VERSION
@@ -365,22 +392,27 @@ RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharin
       python3 -m pip install --no-cache-dir --break-system-packages $OPENCLAW_IMAGE_PIP_PACKAGES; \
     fi
 
-# Optionally install Chromium and Xvfb for browser automation.
-# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
-# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
+# Optionally install Chromium distributions for browser automation.
+# Legacy 1 keeps full Chromium and headless shell; explicit chromium or
+# headless-shell installs only that distribution; managed shell use requires an
+# explicit executablePath on a separate headless browser profile.
 # Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN --mount=type=cache,id=openclaw-trixie-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-trixie-apt-lists,target=/var/lib/apt,sharing=locked \
-    if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
-      mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
-      node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"; \
-    fi
+    set -eu; \
+    case "$OPENCLAW_INSTALL_BROWSER" in \
+      ""|0) exit 0 ;; \
+      1) set -- ;; \
+      chromium) set -- --no-shell ;; \
+      headless-shell) set -- --only-shell ;; \
+      *) echo 'OPENCLAW_INSTALL_BROWSER must be empty, 0, 1, chromium, or headless-shell' >&2; exit 1 ;; \
+    esac; \
+    install -d -m 0755 -o node -g node "$(dirname "$PLAYWRIGHT_BROWSERS_PATH")" && \
+    mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && \
+    node /app/node_modules/playwright-core/cli.js install --with-deps "$@" chromium && \
+    chown -R node:node "$PLAYWRIGHT_BROWSERS_PATH"
 
 # Optionally install Docker CLI for sandbox container management.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...

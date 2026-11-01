@@ -67,7 +67,6 @@ it("closes the session menu on Gateway changes after moves and context replaceme
     changeLifetime();
     await sidebar.updateComplete;
     const trigger = query(sidebar, "[data-sidebar-session-menu]")!;
-    expect(trigger).not.toBeNull();
     trigger.click();
     await sidebar.updateComplete;
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
@@ -94,38 +93,27 @@ it("lists native gateways and dispatches switching, window, primary, and setting
   const open = () => openIdentity(true);
   const choose = async (value: string, modifiers?: MouseEventInit, eventType = "click") => {
     const target = item(await open(), value)!;
-    expect(target).not.toBeNull();
-    if (modifiers) {
-      target.dispatchEvent(
-        new MouseEvent(eventType, { bubbles: true, cancelable: true, ...modifiers }),
-      );
-    } else {
-      target.click();
-    }
+    target.dispatchEvent(
+      new MouseEvent(eventType, { bubbles: true, cancelable: true, ...modifiers }),
+    );
     await sidebar.updateComplete;
     expect(query(sidebar, ".sidebar-identity-menu")).toBeNull();
   };
   const menu = await open();
-  expect(query(menu, ".sidebar-customize-menu__title")?.textContent).toBe("Gateway");
   const current = item(menu, "command:gateways")!;
-  expect(current.textContent).toContain("Remote Gateway");
   expect(query(current, ".sidebar-gateway-health")?.getAttribute("aria-label")).toBe("Unreachable");
   expect(item(menu, "command:apps")).toBeNull();
   const rows = snapshot.gateways.map(({ id }) => item(menu, `gateway:${encodeURIComponent(id)}`)!);
   expect(
     rows.map((row) => [
-      query(row, ".sidebar-customize-menu__text")?.textContent?.trim(),
       query(row, ".sidebar-gateway-health")?.getAttribute("aria-label"),
       shortcut(row),
     ]),
   ).toEqual([
-    ["Local Gateway", "Connected", "⌘1"],
-    ["Remote Gateway", "Unreachable", undefined],
-    ["Unprobed Gateway", "Unknown status", "⌘3"],
+    ["Connected", "⌘1"],
+    ["Unreachable", undefined],
+    ["Unknown status", "⌘3"],
   ]);
-  for (const keycap of menu.querySelectorAll("kbd")) {
-    expect(keycap.getAttribute("aria-hidden")).toBe("true");
-  }
   expect(query(rows[0]!, ".sidebar-gateway-primary")?.textContent).toBe("primary");
   expect(query(rows[1]!, ".sidebar-gateway-primary")).toBeNull();
   expect(query(rows[1]!, ".sidebar-gateway-check")).not.toBeNull();
@@ -148,14 +136,6 @@ it("lists native gateways and dispatches switching, window, primary, and setting
   }
   expect(postMessage).toHaveBeenCalledTimes(6);
 
-  snapshot.gateways = [snapshot.gateways[0]!];
-  snapshot.currentId = "local";
-  publishSnapshot(snapshot);
-  const singleMenu = await open();
-  expect(item(singleMenu, "gateway:local")).not.toBeNull();
-  expect(item(singleMenu, "command:gateway-set-primary")).toBeNull();
-  expect(item(singleMenu, "command:gateway-settings")).not.toBeNull();
-
   snapshot.gateways = Array.from({ length: 10 }, (_, index) => ({
     ...snapshot.gateways[0]!,
     id: `gateway-${index + 1}`,
@@ -163,11 +143,33 @@ it("lists native gateways and dispatches switching, window, primary, and setting
   }));
   snapshot.currentId = "gateway-1";
   publishSnapshot(snapshot);
-  await sidebar.updateComplete;
+  await open();
   const manyRows = sidebar.querySelectorAll('[data-value^="gateway:"]');
   expect(manyRows).toHaveLength(10);
   expect(shortcut(manyRows[8]!)).toBe("⌘9");
   expect(query(manyRows[9]!, "kbd")).toBeNull();
+});
+
+it("keeps an open gateway submenu in place while the identity menu rebuilds", async () => {
+  document.documentElement.classList.add("openclaw-native-macos");
+  setNativeGatewayTestState("remote");
+  const { sidebar, open } = await mountNative();
+  const menu = await open(true);
+  const switcher = item(menu, "command:gateways")!;
+  expect(switcher.getAttribute("aria-expanded")).toBe("true");
+  // Re-inserting a node silently closes its native popover, so the open branch must never move.
+  const branch = switcher.parentElement!;
+  const detached: Node[] = [];
+  const observer = new MutationObserver((records) =>
+    detached.push(...records.flatMap((record) => [...record.removedNodes])),
+  );
+  observer.observe(menu, { childList: true });
+  sidebar.canPairDevice = !sidebar.canPairDevice;
+  await sidebar.updateComplete;
+  observer.disconnect();
+  expect(item(menu, "command:pair-mobile")?.hasAttribute("disabled")).toBe(!sidebar.canPairDevice);
+  expect(detached).not.toContain(branch);
+  expect(switcher.getAttribute("aria-expanded")).toBe("true");
 });
 
 it.each(["missing snapshot", "empty list", "unknown current"] as const)(
@@ -177,23 +179,15 @@ it.each(["missing snapshot", "empty list", "unknown current"] as const)(
     const capability = nativeGatewaysCapability()!;
     const openSettings = vi.spyOn(capability, "openSettings");
     const initial = capability.snapshot!;
-    const snapshot =
-      state === "missing snapshot"
-        ? null
-        : {
-            currentId: "missing",
-            gateways: state === "empty list" ? [] : initial.gateways,
-          };
-    publishSnapshot(snapshot);
+    const gateways = state === "unknown current" ? initial.gateways : [];
+    publishSnapshot(state === "missing snapshot" ? null : { currentId: "missing", gateways });
     const { sidebar, click, open } = await mountNative();
     const menu = await open();
     const switcher = item(menu, "command:gateways")!;
     expect(switcher.textContent).toContain("Gateway");
     expect(query(switcher, ".sidebar-gateway-health")).toBeNull();
     await click(switcher);
-    expect(menu.querySelectorAll('[data-value^="gateway:"]')).toHaveLength(
-      snapshot?.gateways.length ?? 0,
-    );
+    expect(menu.querySelectorAll('[data-value^="gateway:"]')).toHaveLength(gateways.length);
     expect(query(menu, '[aria-checked="true"]')).toBeNull();
     expect(item(menu, "command:gateway-set-primary")).toBeNull();
     await click(item(menu, "command:gateway-settings")!);

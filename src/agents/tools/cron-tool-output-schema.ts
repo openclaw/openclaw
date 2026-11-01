@@ -1,4 +1,5 @@
 import { Type, type TProperties } from "typebox";
+import { AutomationResultSchema } from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import {
   CronAddJobResultSchema,
   CronAddResultSchema,
@@ -56,6 +57,9 @@ const CompactCronJobSchema = closedObject({
   lastRunStatus: Type.Union([...job.lastRunStatus.anyOf, Type.Null()]),
   lastRunError: nullableString,
   runningAtMs: job.state.properties.runningAtMs,
+  lastDurationMs: job.state.properties.lastDurationMs,
+  lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
+  lastMeaningfulResult: job.state.properties.lastMeaningfulResult,
   autoDisabled: job.state.properties.autoDisabled,
   lastDelivered: job.lastDelivered,
   lastDeliveryStatus: job.lastDeliveryStatus,
@@ -210,17 +214,11 @@ export const CronToolOutputSchema = defineToolOutputSchema({
     }),
     scratch_get: CronScratchGetResultSchema,
     scratch_set: CronScratchSetResultSchema,
-    record_result: closedObject({
-      ok: Type.Literal(true),
-      outcome: Type.Union([
-        Type.Literal("no_change"),
-        Type.Literal("progress"),
-        Type.Literal("done"),
-        Type.Literal("blocked"),
-        Type.Literal("needs_attention"),
-      ]),
-      summary: Type.String({ minLength: 1, maxLength: 2000 }),
-    }),
+    record_result: Type.Union(
+      AutomationResultSchema.anyOf.map((schema) =>
+        closedObject({ ok: Type.Literal(true), ...schema.properties }),
+      ),
+    ),
     wake: Type.Union([
       closedObject({ ok: Type.Literal(true) }),
       closedObject({

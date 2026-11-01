@@ -2,6 +2,7 @@ import type { SqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import type { SessionActorVersion } from "./session-actor-state.types.js";
+import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
@@ -159,4 +160,6 @@ export type SessionSharingCommitReceipt = {
     "category.prepare"
   >]["output"];
   publication: SqliteCommitReceipt<readonly SessionCollaborationFact[]>;
+  /** Private producer postimages; never included in session row notifications. */
+  entryMetadata?: readonly SessionEntryMetadataReceipt[];
 };

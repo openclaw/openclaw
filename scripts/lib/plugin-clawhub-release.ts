@@ -44,7 +44,7 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
   publication: ClawHubPublicationState;
   alreadyPublished: boolean;
   artifactName: string;
-  family: "" | "bundle-plugin";
+  family: "" | "code-plugin";
 };
 
 type PluginReleasePlan = {
@@ -247,8 +247,6 @@ function formatClawHubPackageArtifactName(
     .replace(/^-+|-+$/gu, "");
   return `clawhub-package-${safeName}-${plugin.version}`;
 }
-
-export { resolveOpenClawClawHubPackageFamily };
 
 export function collectClawHubPublishablePluginPackages(
   rootDir = resolve("."),

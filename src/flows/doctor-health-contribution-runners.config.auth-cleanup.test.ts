@@ -66,13 +66,10 @@ vi.mock("../commands/onboard-helpers.js", async (importOriginal) => ({
 let ctx: DoctorHealthFlowContext;
 beforeEach(() => {
   mocks.applyWizardMetadata.mockReset().mockImplementation((cfg) => cfg);
-  const cfg = { gateway: { mode: "local" } } satisfies OpenClawConfig;
   ctx = createDoctorHealthFlowContext({
     prompter: {} as DoctorHealthFlowContext["prompter"],
-    configResult: {
-      retiredAuthProfileCleanupPlans: [cleanupPlan],
-    },
-    cfg,
+    configResult: { retiredAuthProfileCleanupPlans: [cleanupPlan] },
+    cfg: { gateway: { mode: "local" } },
     cfgForPersistence: {},
   });
   mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
@@ -132,7 +129,6 @@ function expectReceipt(context: DoctorHealthFlowContext, hash: string | null) {
 
 function expectWrite(context: DoctorHealthFlowContext, call: number, baseHash: string) {
   expect(mocks.replaceConfigFile.mock.calls[call - 1]?.[0]).toMatchObject({
-    nextConfig: context.cfg,
     baseHash,
     writeOptions: expect.objectContaining({ expectedConfigPath: context.configPath }),
   });

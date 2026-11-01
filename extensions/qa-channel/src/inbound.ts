@@ -5,8 +5,10 @@ import {
   createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
   toInboundMediaFactsWithMetadata,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
@@ -14,6 +16,7 @@ import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
@@ -128,6 +131,8 @@ export async function handleQaInbound(params: {
   message: QaBusMessage;
   buildContext?: typeof buildChannelInboundEventContext;
   channelRuntime?: PluginRuntime["channel"];
+  turnAdoptionLifecycle?: ChannelInboundTurnPlan["turnAdoptionLifecycle"];
+  onFollowupQueued?: () => void;
 }) {
   const channelRuntime = params.channelRuntime ?? getQaChannelRuntime().channel;
   const inbound = params.message;
@@ -422,7 +427,25 @@ export async function handleQaInbound(params: {
       console.warn(`[qa-channel] failed to clear reply preview: ${formatQaErrorForLog(error)}`);
     });
 
+  const queuedDelivery = createDeferred<boolean>();
+  let queueDisposition:
+    | Parameters<NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>>[0]
+    | undefined;
+  const turnAdoptionLifecycle = params.turnAdoptionLifecycle;
   const dispatch = channelRuntime.inbound.dispatch({
+    turnAdoptionLifecycle: turnAdoptionLifecycle
+      ? {
+          ...turnAdoptionLifecycle,
+          onAbandoned: () => {
+            // Queue policy publishes its terminal disposition before abandonment.
+            // Preserve genuine admission failures for retry, not intentional drops.
+            if (!queueDisposition) {
+              return turnAdoptionLifecycle.onAbandoned?.();
+            }
+            return undefined;
+          },
+        }
+      : undefined,
     cfg: params.config,
     channel: params.channelId,
     accountId: params.account.accountId,
@@ -450,6 +473,20 @@ export async function handleQaInbound(params: {
       },
     },
     replyOptions: {
+      onFollowupQueueDisposition: (disposition) => {
+        queueDisposition = disposition;
+      },
+      queuedDeliveryCorrelations: [
+        {
+          begin: () => (settlement) => {
+            if (settlement !== undefined) {
+              queuedDelivery.resolve(
+                settlement.completed === true && !settlement.failed && !settlement.transportPending,
+              );
+            }
+          },
+        },
+      ],
       allowToolLifecycleWhenProgressHidden: true,
       onPartialReply: async (payload) => {
         await preview.update(payload.text ?? "");
@@ -478,9 +515,61 @@ export async function handleQaInbound(params: {
       },
     },
   });
+  let dispatchFailed = false;
   try {
-    await dispatch;
+    const result = await dispatch;
+    if (!result.dispatched) {
+      return;
+    }
+    const { dispatchResult } = result;
+    // Followup admission returns before delivery. Keep preview and completion
+    // ownership until the queue reports its terminal delivery, including retries.
+    if (dispatchResult.deferredToActiveRun === "followup") {
+      // Intake may continue only after core confirms followup admission, not
+      // its earlier onDeferred notification. Delivery still owns this handler.
+      params.onFollowupQueued?.();
+      const delivered = await queuedDelivery.promise;
+      if (!delivered && !queueDisposition) {
+        throw new Error("QA queued reply did not complete delivery");
+      }
+    }
+    if (queueDisposition) {
+      // A terminal policy drop consumes transport custody after queued cleanup,
+      // even when its status notice failed. It must never execute after restart.
+      await turnAdoptionLifecycle?.onAdopted();
+    } else if (dispatchResult.deferredToActiveRun === "followup") {
+      return;
+    }
+    const receipt = dispatchResult.settledReceipt;
+    if (receipt) {
+      const { final, block, tool } = receipt.counts;
+      const failedFinal = final.failedBeforeSend + final.failedAfterSend > 0;
+      const failedProgress =
+        block.failedBeforeSend +
+          block.failedAfterSend +
+          tool.failedBeforeSend +
+          tool.failedAfterSend >
+        0;
+      // A recovered final owns success; early onError callbacks do not. Failed
+      // progress can recover through a final, while unresolved delivery stays incomplete.
+      if (
+        receipt.hasPendingDelivery ||
+        (failedFinal &&
+          !(final.delivered > 0 && dispatchResult.noVisibleReplyFallbackDelivered === true)) ||
+        (failedProgress && final.delivered === 0)
+      ) {
+        throw new Error("QA reply did not complete delivery");
+      }
+    }
+  } catch (error) {
+    dispatchFailed = true;
+    throw error;
   } finally {
-    await clearPreview();
+    // Completion requires cleanup; a prior dispatch rejection still owns failure.
+    if (dispatchFailed) {
+      await clearPreview();
+    } else {
+      await preview.clear();
+    }
   }
 }

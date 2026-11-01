@@ -405,7 +405,7 @@ export async function fetchMcpAppView(params: {
     view.expiryTimer = setTimeout(() => {
       deleteView(view.viewId, view);
     }, MCP_APP_VIEW_TTL_MS);
-    view.expiryTimer.unref?.();
+    view.expiryTimer.unref();
     getViewStore().set(viewId, view);
     return {
       viewId,

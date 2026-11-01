@@ -45,6 +45,7 @@ suite.define(() => {
       const foreign = sharedSession("agent:main:shared-notes", "Shared notes");
       const otherAgentSession = sharedSession("agent:research:other-work", "Research notes");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         operatorScopes: ["operator.sessions.write"],
         agentModel: "openai/model-a",
         models,
@@ -212,6 +213,8 @@ suite.define(() => {
             sessionKey: key,
             message: "Help me plan my own work.",
           });
+          await expect.poll(() => initialMessage.locator(".chat-send-status").count()).toBe(0);
+          await initialMessage.locator("time.chat-group-timestamp").waitFor();
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
           return;
         }
@@ -226,6 +229,10 @@ suite.define(() => {
         await model.click();
         await gateway.deferNext("sessions.patch", { key, model: "openai/model-b" });
         await selectChatModelOption(pane, "openai/model-b");
+        await page
+          .getByRole("dialog", { name: "Switch to Model B?", exact: true })
+          .getByRole("button", { name: "Switch model", exact: true })
+          .click();
         await gateway.waitForRequest("sessions.patch", { match: { key, model: "openai/model-b" } });
         const effort = pane.locator("[data-chat-thinking-select]");
         await expect.poll(() => effort.getAttribute("aria-disabled")).toBe("true");
@@ -269,17 +276,26 @@ suite.define(() => {
         const researchListCount = (
           await gateway.getRequests("sessions.list", { agentId: "research" })
         ).length;
+        const stopDescribeCount = (await gateway.getRequests("sessions.describe", { key })).length;
         await gateway.setOnline(false);
         await expect.poll(() => stop.isEnabled()).toBe(true);
         await stop.click();
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         await navigate(otherAgentSession);
+        await gateway.deferNext("sessions.describe", { key });
         await gateway.setOnline(true);
         await gateway.waitForRequest("sessions.list", {
           after: researchListCount,
           match: { agentId: "research" },
         });
         await expect.poll(() => composer.isDisabled()).toBe(true);
+        const stopDescribe = await gateway.waitForRequest("sessions.describe", {
+          after: stopDescribeCount,
+          match: { key },
+        });
+        expect(requireRecord(stopDescribe.params)).toMatchObject({ key });
+        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.describe");
         expect(requireRecord((await gateway.waitForRequest("chat.abort")).params)).toMatchObject({
           sessionKey: key,
           runId,

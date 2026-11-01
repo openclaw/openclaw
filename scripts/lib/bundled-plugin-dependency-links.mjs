@@ -2,6 +2,23 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** Link one installed package identity without copying or replacing its bytes. */
+export function linkInstalledPackageDirectory(source, target) {
+  const canonical = fs.realpathSync(source);
+  const destination = path.resolve(target);
+  const relative = path.relative(canonical, destination);
+  if (relative.split(path.sep)[0] !== ".." && !path.isAbsolute(relative)) {
+    return false;
+  }
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.symlinkSync(
+    process.platform === "win32" ? canonical : path.relative(path.dirname(destination), canonical),
+    destination,
+    "junction",
+  );
+  return true;
+}
+
 /**
  * Link plugin-owned packages under `<pluginDir>/node_modules` into `distNodeModules`
  * so packaged plugins resolve dependencies without linking checkout ancestors.
@@ -49,16 +66,6 @@ export function linkSourcePluginDependencies(pluginDir, distNodeModules) {
       name === "openclaw" && source === checkoutRoot && fs.existsSync(hostAlias)
         ? fs.realpathSync(hostAlias)
         : source;
-    const relative = path.relative(canonical, path.resolve(distNodeModules));
-    if (relative.split(path.sep)[0] !== ".." && !path.isAbsolute(relative)) {
-      continue;
-    }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    // POSIX release checkouts relocate as a unit; Windows junctions require absolute targets.
-    fs.symlinkSync(
-      process.platform === "win32" ? canonical : path.relative(path.dirname(target), canonical),
-      target,
-      "junction",
-    );
+    linkInstalledPackageDirectory(canonical, target);
   }
 }

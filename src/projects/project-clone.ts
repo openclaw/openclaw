@@ -17,6 +17,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
 import {
   cloneProjectCheckout,
+  configureProjectCheckoutMaintenance,
   ensureProjectCheckoutCommit,
   ProjectCloneError,
   refreshProjectCheckout,
@@ -102,6 +103,16 @@ export async function materializeProjectClone(
             checkoutLease.assertOwned();
             if (current?.repoRoot !== candidate.repoRoot) {
               return undefined;
+            }
+            if (current.source === "cloned") {
+              await configureProjectCheckoutMaintenance(current.repoRoot, {
+                env,
+                signal: checkoutLease.signal,
+                assertCurrent: () => {
+                  assertCloneCurrent();
+                  checkoutLease.assertOwned();
+                },
+              });
             }
             if (requiredCommit) {
               await ensureProjectCheckoutCommit(
@@ -246,6 +257,11 @@ export async function refreshProjectClone(
           "Saved project repository is invalid; select the repository and retry.",
         );
       }
+      await configureProjectCheckoutMaintenance(current.repoRoot, {
+        env,
+        signal: lease.signal,
+        assertCurrent: assertRefreshCurrent,
+      });
       // The registry owns source identity; origin can be changed inside the shared checkout.
       await refreshProjectCheckout(
         { target: current.repoRoot, url: originUrl },

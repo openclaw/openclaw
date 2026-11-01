@@ -1,8 +1,8 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeWindowsPathForComparison } from "@openclaw/fs-safe/path";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type SqliteReaderOwner = {
@@ -25,6 +25,9 @@ type ActiveReader = Omit<SqliteReaderDiagnostic, "ageMs" | "idleMs"> & {
 };
 
 type ReaderLease = { progress(): void; release(): void };
+export type SqliteOperationHoldContext = Readonly<
+  Record<string, string | number | boolean | null | undefined>
+>;
 type Connection = {
   id: number;
   path?: string;
@@ -54,20 +57,17 @@ export type SqliteReaderDiagnostics = {
   activeReaders: SqliteReaderDiagnostic[];
 };
 
-const readerOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteReaderOwners"),
-  () =>
-    new AsyncLocalStorage<
-      SqliteReaderOwner & {
-        timing: {
-          preparedAtMs: number;
-          hostAdmissionWaitMs: number;
-          databaseAdmissionWaitMs: number;
-          transactions: { count: number };
-        };
-      }
-    >(),
-);
+const readerOwners = new AsyncContext<
+  SqliteReaderOwner & {
+    timing: {
+      preparedAtMs: number;
+      hostAdmissionWaitMs: number;
+      databaseAdmissionWaitMs: number;
+      transactions: { count: number };
+      holdContext?: SqliteOperationHoldContext;
+    };
+  }
+>(Symbol.for("openclaw.sqliteReaderOwners"));
 
 const connections = resolveGlobalSingleton(Symbol.for("openclaw.sqliteReaderConnections"), () => ({
   nextId: 0,
@@ -87,7 +87,11 @@ function boundedOperation(operation: string): string {
   return (normalized || "sqlite reader").slice(0, 120);
 }
 
-export function withSqliteReaderOwner<T>(owner: SqliteReaderOwner, operation: () => T): T {
+export function withSqliteReaderOwner<T>(
+  owner: SqliteReaderOwner,
+  operation: () => T,
+  holdContext?: SqliteOperationHoldContext,
+): T {
   return readerOwners.run(
     {
       ...owner,
@@ -97,6 +101,7 @@ export function withSqliteReaderOwner<T>(owner: SqliteReaderOwner, operation: ()
         hostAdmissionWaitMs: 0,
         databaseAdmissionWaitMs: 0,
         transactions: readerOwners.getStore()?.timing.transactions ?? { count: 0 },
+        holdContext,
       },
     },
     operation,

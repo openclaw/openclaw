@@ -3,19 +3,13 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
-  readStoredChatOutbox,
   type StoredChatOutbox,
 } from "../../lib/chat/outbox-store-projection.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
-import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-} from "../../lib/sessions/session-key.ts";
-import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
+import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   captureChatCommandTarget,
   confirmConversationResetForCurrentSession,
@@ -30,6 +24,7 @@ import {
   scheduleChatOutboxRetry,
   settleChatOutboxRetry,
 } from "./chat-outbox-retry.ts";
+import { collectChatOutboxes, readChatOutboxLane } from "./chat-outbox-scopes.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { PendingComposerSnapshot } from "./chat-send-composer.ts";
@@ -37,7 +32,6 @@ import type { ChatHost } from "./chat-send-contract.ts";
 import {
   chatSendHoldReason,
   OFFLINE_QUEUE_STORAGE_ERROR,
-  UNCONFIRMED_CHAT_SEND_ERROR,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
@@ -111,8 +105,6 @@ async function reconcileStoredChatOutboxHead(
   outbox: StoredChatOutbox,
   item: ChatQueueItem,
   dependencies: ChatOutboxDrainDependencies,
-  accepted: Set<string>,
-  retryUnconfirmed = false,
   reconcileActiveRun = false,
 ): Promise<"blocked" | "continue" | "send"> {
   const client = host.client;
@@ -122,9 +114,9 @@ async function reconcileStoredChatOutboxHead(
   }
   const isCurrent = () =>
     host.connected && host.client === client && host.connectionEpoch === connectionEpoch;
-  let recovery: typeof import("./chat-outbox-receipts.ts");
+  let recovery: typeof import("./chat-outbox-readiness.ts");
   try {
-    recovery = await import("./chat-outbox-receipts.ts");
+    recovery = await import("./chat-outbox-readiness.ts");
   } catch (error) {
     if (isCurrent()) {
       surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
@@ -141,8 +133,6 @@ async function reconcileStoredChatOutboxHead(
     client,
     connectionEpoch,
     (delayMs: number) => scheduleStoredChatOutboxRetry(host, outbox, delayMs, dependencies),
-    accepted,
-    retryUnconfirmed,
     reconcileActiveRun,
   );
 }
@@ -152,7 +142,6 @@ async function drainStoredChatOutbox(
   scope: StoredChatOutboxScope,
   dependencies: ChatOutboxDrainDependencies,
 ): Promise<void> {
-  const accepted = new Set<string>();
   while (true) {
     const host = lane.host;
     if (chatProviderReviewRow(host, scope.sessionKey, scope.agentId)?.providerReview) {
@@ -167,7 +156,7 @@ async function drainStoredChatOutbox(
     ) {
       return;
     }
-    const outbox = readStoredChatOutbox(host, scope);
+    const outbox = readChatOutboxLane(host, scope);
     if (!outbox) {
       return;
     }
@@ -182,10 +171,9 @@ async function drainStoredChatOutbox(
       freshActiveRunItem ??
       outbox.queue.find(
         (entry) =>
-          !accepted.has(entry.id) &&
-          (lane.freshAdmissions.has(entry.id) ||
-            entry.sendState !== "failed" ||
-            entry.localCommandName),
+          lane.freshAdmissions.has(entry.id) ||
+          entry.sendState !== "failed" ||
+          entry.localCommandName,
       );
     if (!storedItem) {
       return;
@@ -202,7 +190,7 @@ async function drainStoredChatOutbox(
       // admission may deliver this version; passive wakes must not drop its fence.
       (!freshItem && chatOutboxOwner(host).hasPendingSubmission(outbox, storedItem)) ||
       item.sendState === "held" ||
-      (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
+      item.sendState === "executing-command" ||
       (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
       // An open edit owns this row: sending the superseded text would deliver a
       // message the operator is visibly rewriting. The queue behind it waits,
@@ -220,8 +208,8 @@ async function drainStoredChatOutbox(
           sendError,
           sendState,
         }));
-      // Local commands bypass server FIFO, so accepted inputs still fence them.
-      if (accepted.size > 0 || !visible || isChatBusy(host)) {
+      // Local commands bypass server FIFO, so live accepted work still fences them.
+      if (!visible || isChatBusy(host)) {
         lane.waitingForVisibleOwner = !visible;
         lane.freshAdmissions.delete(item.id);
         lane.pendingOptions.delete(item.id);
@@ -229,10 +217,6 @@ async function drainStoredChatOutbox(
       }
       chatOutboxOwner(host).syncHost(host);
       if (item.localCommandName === "reset") {
-        if ((item.sendAttempts ?? 0) > 0 || item.sendRequestStartedAtMs !== undefined) {
-          setCommandState("unconfirmed", UNCONFIRMED_CHAT_SEND_ERROR);
-          return;
-        }
         const resetTarget = captureChatCommandTarget(host);
         if (!resetTarget) {
           setCommandState("failed", "The Gateway connection changed. Retry the command.");
@@ -285,13 +269,7 @@ async function drainStoredChatOutbox(
       const freshAdmission = lane.freshAdmissions.delete(item.id);
       lane.pendingOptions.delete(item.id);
       if (!freshAdmission) {
-        const reconciled = await reconcileStoredChatOutboxHead(
-          host,
-          outbox,
-          item,
-          dependencies,
-          accepted,
-        );
+        const reconciled = await reconcileStoredChatOutboxHead(host, outbox, item, dependencies);
         if (reconciled === "blocked") {
           return;
         }
@@ -349,7 +327,7 @@ async function drainStoredChatOutbox(
           return failCommand(error, !commandStillCurrent && paneHidden);
         }
         if (dispatchResult === "uncertain") {
-          const currentOutbox = readStoredChatOutbox(host, outbox);
+          const currentOutbox = readChatOutboxLane(host, outbox);
           const currentIndex =
             currentOutbox?.queue.findIndex((entry) => entry.id === item.id) ?? -1;
           const successor = currentIndex >= 0 ? currentOutbox?.queue[currentIndex + 1] : undefined;
@@ -358,7 +336,7 @@ async function drainStoredChatOutbox(
             !updateQueuedMessage(host, successor.id, (entry) => ({
               ...entry,
               sendError: UNCERTAIN_CLEAR_SUCCESSOR_ERROR,
-              sendState: "unconfirmed",
+              sendState: "held",
             }))
           ) {
             setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
@@ -376,7 +354,7 @@ async function drainStoredChatOutbox(
           return;
         }
         if (dispatchResult === "uncertain") {
-          // The unconfirmed successor is the FIFO lane's durable review barrier.
+          // /clear is not chat.send; its successor still requires explicit review.
           return;
         }
         if (commandScopeIsCurrent()) {
@@ -392,11 +370,10 @@ async function drainStoredChatOutbox(
       lane.pendingOptions.delete(item.id);
       return;
     }
-    // Consume provenance before await; restored/deferred rows reconcile history.
+    // Consume provenance before await; only never-attempted rows need idle readiness.
     const freshAdmission = lane.freshAdmissions.delete(item.id);
     const pendingOptions = lane.pendingOptions.get(item.id);
-    const retryUnconfirmed = freshAdmission && item.sendState === "unconfirmed";
-    if (!freshAdmission || retryUnconfirmed || !visible) {
+    if (!freshAdmission || !visible) {
       // Consume before await so passive reruns stay cheap and a new foreground
       // request arriving during reconciliation retains its own wake.
       const reconcileActiveRun = lane.reconcileActiveRun;
@@ -407,8 +384,6 @@ async function drainStoredChatOutbox(
         outbox,
         storedItem,
         dependencies,
-        accepted,
-        retryUnconfirmed,
         reconcileActiveRun,
       );
       if (reconciled === "blocked") {
@@ -418,7 +393,7 @@ async function drainStoredChatOutbox(
         continue;
       }
     }
-    const currentOutbox = readStoredChatOutbox(host, scope);
+    const currentOutbox = readChatOutboxLane(host, scope);
     const currentItem = freshAdmission
       ? readQueuedMessageById(host, item.id)
       : currentOutbox?.queue.find((entry) => entry.id === item.id);
@@ -430,18 +405,26 @@ async function drainStoredChatOutbox(
     const result = await dependencies.sendQueuedChatMessage(
       host,
       item.id,
-      visible ? pendingOptions : { ...pendingOptions, routingSessionKey: undefined },
+      {
+        ...pendingOptions,
+        ...(!visible ? { routingSessionKey: undefined } : {}),
+        ...(chatOutboxOwner(host).hasVolatile(host, item.id) ? { storageMode: "memory" } : {}),
+      },
       outbox.sessionKey,
     );
     lane.outcomes.set(item.id, result);
     lane.pendingOptions.delete(item.id);
     if (result === "pending") {
-      const current = readStoredChatOutbox(host, scope)?.queue.find(
-        (entry) => entry.id === item.id,
-      );
-      if (!current || current.orderKey !== item.orderKey) {
-        // A removal or move during preparation invalidates this selection.
-        // Reselect immediately so the newly ordered head does not lose its wakeup.
+      const current = readChatOutboxLane(host, scope)?.queue.find((entry) => entry.id === item.id);
+      if (
+        !current ||
+        current.orderKey !== item.orderKey ||
+        (current.attachmentPayload?.key !== item.attachmentPayload?.key &&
+          (current.sendAttempts ?? 0) === (item.sendAttempts ?? 0) &&
+          !consumeChatOutboxRetry(host, storedChatOutboxScopeKey(scope), visible))
+      ) {
+        // Reselect after removal, reordering, or concurrent Blob adoption, while
+        // preserving transport attempts and Gateway retry delays.
         continue;
       }
       // A later submission still owns its wakeup if this row became stale while waiting.
@@ -544,20 +527,7 @@ export async function resumeStoredChatOutboxes(
   if (!host.connected || !client) {
     return;
   }
-  // Refresh credential ownership; callers own frame-coalesced rendering.
-  chatOutboxOwner(host).syncHost(host, { notify: false });
-  const eventScope = event ? readSessionChangedEvent(event.payload) : undefined;
-  if (event && !eventScope) {
-    return;
-  }
-  const outboxes = listStoredChatOutboxes(host).filter(
-    (outbox) =>
-      !eventScope ||
-      (areUiSessionKeysEquivalent(outbox.sessionKey, eventScope.key) &&
-        (!isUiGlobalSessionKey(outbox.sessionKey) ||
-          (eventScope.agentId !== null &&
-            outbox.agentId === normalizeAgentId(eventScope.agentId)))),
-  );
+  const outboxes = collectChatOutboxes(host, event);
   const observed = observedOutboxEvents.get(client) ?? new WeakSet<GatewayEventFrame>();
   observedOutboxEvents.set(client, observed);
   const changed = event ? !observed.has(event) : undefined;

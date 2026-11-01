@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { observeTranscriptHydrations } from "../../../test/helpers/transcript-hydration-observer.js";
@@ -8,6 +8,7 @@ import type * as ConfigRuntime from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -699,8 +700,7 @@ describe("direct compactor through the context-engine delegate", () => {
         await import("../../config/sessions/session-transcript-worker-resources.js");
       const { withSessionTranscriptWriteAssertion } =
         await import("../../config/sessions/transcript-write-context.js");
-      const received = createDeferred();
-      const release = createDeferred();
+      const hydrationGate = createEnteredGate();
       const controller = new AbortController();
       let current = true;
       const reason = new Error("compaction preparation no longer current");
@@ -714,8 +714,7 @@ describe("direct compactor through the context-engine delegate", () => {
         }, options).then(async (snapshot) => {
           if (hydration) {
             read.mockRestore();
-            received.resolve();
-            await release.promise;
+            await hydrationGate.wait();
           }
           return snapshot;
         });
@@ -734,18 +733,17 @@ describe("direct compactor through the context-engine delegate", () => {
           }),
       );
       try {
-        await Promise.race([
-          received.promise,
-          pending.then(() => {
-            throw new Error("Compaction completed before the native hydration reply");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(
+          hydrationGate.entered,
+          pending,
+          "Compaction completed before the native hydration reply",
+        );
         if (transition === "abort") {
           controller.abort(reason);
         } else {
           current = false;
         }
-        release.resolve();
+        hydrationGate.release();
         expect(await pending).toMatchObject({ ok: false, compacted: false });
         expect(fixture.stream).not.toHaveBeenCalled();
         expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
@@ -757,7 +755,7 @@ describe("direct compactor through the context-engine delegate", () => {
           fixture.originalEntries,
         );
       } finally {
-        release.resolve();
+        hydrationGate.release();
         read.mockRestore();
         await pending.catch(() => undefined);
       }
@@ -875,8 +873,7 @@ describe("direct compactor through the context-engine delegate", () => {
       if (!expectedSession) {
         throw new Error("expected the queued compaction's persisted session");
       }
-      const hookEntered = createDeferred();
-      const releaseHook = createDeferred();
+      const hookGate = createEnteredGate();
       const expectCommittedTranscript = () => {
         const manager = sessions.SessionManager.open(fixture.target);
         if (operation === "summary") {
@@ -897,8 +894,7 @@ describe("direct compactor through the context-engine delegate", () => {
       };
       hookRunner.runAfterCompaction.mockImplementationOnce(async () => {
         expectCommittedTranscript();
-        hookEntered.resolve();
-        await releaseHook.promise;
+        await hookGate.wait();
       });
       const controller = new AbortController();
       const work = new AsyncWorkScope();
@@ -910,7 +906,7 @@ describe("direct compactor through the context-engine delegate", () => {
       );
       try {
         await Promise.race([
-          hookEntered.promise,
+          hookGate.entered,
           pending.then((result) => {
             throw new Error(
               `Queued compaction returned before its post-commit hook: ${JSON.stringify(result)}`,
@@ -920,7 +916,7 @@ describe("direct compactor through the context-engine delegate", () => {
         controller.abort(new Error("caller stopped after compaction committed"));
         // Host-owned hooks are awaited rather than cancelled. Finish the hook
         // after abort so the committed result can settle through either owner.
-        releaseHook.resolve();
+        hookGate.release();
         const result = await pending;
         expect.soft(result).toMatchObject({
           ok: true,
@@ -948,7 +944,7 @@ describe("direct compactor through the context-engine delegate", () => {
           { role: "user", content: "Unrelated store history", timestamp: 1 },
         ]);
       } finally {
-        releaseHook.resolve();
+        hookGate.release();
         await pending.catch(() => undefined);
         await work.drain();
       }

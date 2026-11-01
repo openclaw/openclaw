@@ -2,14 +2,14 @@ import { runInNewContext } from "node:vm";
 import { createSignal, createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
-  createBrowserPanelTestMetrics,
-  createBrowserPanelTestTab,
+  createBrowserPanelTestMetrics as metrics,
+  createBrowserPanelTestTab as makeTab,
   createInspectedNode,
   createPointer,
   createView,
@@ -17,34 +17,82 @@ import {
   openBrowserActions,
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
-  TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
 
+const initialUrl = "https://example.test/initial";
+const destinationUrl = "https://example.test/destination";
+const activeUrl = "https://example.test/active";
+const fallbackUrl = "https://example.test/fallback";
+const selectedUrl = "https://example.test/selected";
+const backgroundUrl = "https://example.test/background";
+
+function scenario(
+  targetId: string,
+  url: string | undefined,
+  routes: Record<string, (request: BrowserRequestEnvelope) => unknown>,
+  hasView = true,
+) {
+  const gateway = createBrowserClient(async (request) => {
+    const route = routes[`${request.method} ${request.path}`] ?? routes[request.path];
+    if (!route) {
+      throw new Error(`Unexpected browser route: ${request.method} ${request.path}`);
+    }
+    return await route(request);
+  });
+  const controller = createBrowserPanelTestController(gateway.client, targetId, url);
+  if (!hasView) {
+    controller.view = null;
+  }
+  const calls = (path: string) =>
+    gateway.request.mock.calls
+      .map(([, envelope]) => envelope as BrowserRequestEnvelope)
+      .filter((envelope) => envelope.path === path);
+  return { ...gateway, controller, calls };
+}
+
+function remoteTab(id: string, targetId: string, title: string, url: string) {
+  return { kind: "remote" as const, id, targetId, title, url };
+}
+
+function captureRoutes(
+  read: (request: BrowserRequestEnvelope) => ReturnType<typeof makeTab>,
+  path: (request: BrowserRequestEnvelope) => string = () => "/fresh.png",
+) {
+  return {
+    "/screenshot": (request: BrowserRequestEnvelope) => {
+      const { targetId, url } = read(request);
+      return { path: path(request), targetId, url };
+    },
+    "/act": (request: BrowserRequestEnvelope) => {
+      const { url, title } = read(request);
+      return metrics(url, title);
+    },
+  };
+}
+
+function expectRequest(
+  request: ReturnType<typeof createBrowserClient>["request"],
+  envelope: Partial<BrowserRequestEnvelope>,
+) {
+  expect(request).toHaveBeenCalledWith("browser.request", expect.objectContaining(envelope));
+}
+
 describe("BrowserPanel capture and input ownership", () => {
   it("restores the prior selected screenshot when tab focus is rejected", async () => {
     const previousCapture = createDeferred<unknown>();
     const focus = createDeferred<unknown>();
-    const initialUrl = "https://example.test/initial";
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs") {
-        return {
-          running: true,
-          tabs: [{ tabId: "active-tab", targetId: "raw-active", title: "Page", url: initialUrl }],
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        return await previousCapture.promise;
-      }
-      if (envelope.path === "/tabs/focus") {
-        return await focus.promise;
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    const { controller } = scenario("active-tab", initialUrl, {
+      "/tabs": () => ({
+        running: true,
+        tabs: [makeTab("active-tab", initialUrl, "Page")],
+      }),
+      "/screenshot": () => previousCapture.promise,
+      "/tabs/focus": () => focus.promise,
     });
-    const controller = createBrowserPanelTestController(client, "active-tab", initialUrl);
     const previousView = controller.view;
     const pendingCapture = controller.refreshAll();
     await flushBrowserResponses();
@@ -66,33 +114,13 @@ describe("BrowserPanel capture and input ownership", () => {
     async (first) => {
       const navigation = createDeferred<{ ok: boolean }>();
       const focus = createDeferred<{ ok: boolean }>();
-      const initialUrl = "https://example.test/initial";
-      const destinationUrl = "https://example.test/destination";
-      const { client, request } = createBrowserClient(async (envelope) => {
-        if (envelope.path === "/navigate") {
-          return await navigation.promise;
-        }
-        if (envelope.path === "/tabs/focus") {
-          return await focus.promise;
-        }
-        throw new Error(`Unexpected browser route: ${envelope.path}`);
+      const { controller, calls } = scenario("tab-a", initialUrl, {
+        "/navigate": () => navigation.promise,
+        "/tabs/focus": () => focus.promise,
       });
-      const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
       controller.tabs = [
-        {
-          kind: "remote" as const,
-          id: "tab-a",
-          targetId: "raw-a",
-          title: "Initial",
-          url: initialUrl,
-        },
-        {
-          kind: "remote" as const,
-          id: "tab-b",
-          targetId: "raw-b",
-          title: "Selected",
-          url: "https://example.test/selected",
-        },
+        remoteTab("tab-a", "raw-a", "Initial", initialUrl),
+        remoteTab("tab-b", "raw-b", "Selected", "https://example.test/selected"),
       ];
 
       const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
@@ -114,54 +142,42 @@ describe("BrowserPanel capture and input ownership", () => {
       expect(controller.view).toBeNull();
       expect(controller.urlDraft).toBe("");
       expect(controller.errorText).toBe("Browser request failed: Tab focus rejected");
-      expect(
-        request.mock.calls.filter(([, envelope]) => {
-          return (envelope as BrowserRequestEnvelope).path === "/tabs";
-        }),
-      ).toEqual([]);
+      expect(calls("/tabs")).toEqual([]);
     },
   );
 
   it("retains a newly opened tab after its original active tab closes", async () => {
     stubScreenshotMedia();
     const newUrl = "https://example.test/new";
-    const activeUrl = "https://example.test/active";
-    const fallbackUrl = "https://example.test/fallback";
-    const openedTab = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
+    const openedTab = createDeferred<ReturnType<typeof makeTab>>();
     let visibleTabs = [
-      createBrowserPanelTestTab("active-tab", activeUrl, "Active"),
-      createBrowserPanelTestTab("fallback-tab", fallbackUrl, "Fallback"),
+      makeTab("active-tab", activeUrl, "Active"),
+      makeTab("fallback-tab", fallbackUrl, "Fallback"),
     ];
     let screenshotCount = 0;
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs/open") {
+    const { controller } = scenario("active-tab", activeUrl, {
+      "/tabs/open": async () => {
         const tab = await openedTab.promise;
         visibleTabs.push(tab);
         return tab;
-      }
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/active-tab") {
+      },
+      "DELETE /tabs/active-tab": () => {
         visibleTabs = visibleTabs.filter((tab) => tab.tabId !== "active-tab");
         return { ok: true };
-      }
-      if (envelope.path === "/tabs") {
-        return { running: true, tabs: [...visibleTabs] };
-      }
-      if (envelope.path === "/screenshot") {
+      },
+      "/tabs": () => ({ running: true, tabs: [...visibleTabs] }),
+      "/screenshot": () => {
         screenshotCount += 1;
         return { path: "/fresh.png", targetId: "raw-fallback", url: fallbackUrl };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(fallbackUrl, "Fallback");
-      }
-      throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
+      },
+      "/act": () => metrics(fallbackUrl, "Fallback"),
     });
-    const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
 
     const opening = controller.openUrl(newUrl, { newTab: true });
     await flushBrowserResponses();
     await controller.closeTab("active-tab");
     const fallbackView = controller.view;
-    openedTab.resolve(createBrowserPanelTestTab("new-tab", newUrl, "New"));
+    openedTab.resolve(makeTab("new-tab", newUrl, "New"));
     await opening;
 
     expect(controller.tabs.map((tab) => tab.id)).toEqual(["fallback-tab", "new-tab"]);
@@ -174,49 +190,21 @@ describe("BrowserPanel capture and input ownership", () => {
   it("reconciles a background tab closed while it becomes selected", async () => {
     stubScreenshotMedia();
     const closing = createDeferred<{ ok: boolean }>();
-    const activeUrl = "https://example.test/active";
+    const activeTab = makeTab("active-tab", activeUrl, "Active");
+    const backgroundTab = makeTab("background-tab", backgroundUrl, "Background");
     let closed = false;
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/background-tab") {
+    const { controller } = scenario("active-tab", activeUrl, {
+      "DELETE /tabs/background-tab": async () => {
         const result = await closing.promise;
         closed = true;
         return result;
-      }
-      if (envelope.path === "/tabs/focus") {
-        return { ok: true };
-      }
-      if (envelope.path === "/tabs") {
-        const tabs = [
-          { tabId: "active-tab", targetId: "raw-active", title: "Active", url: activeUrl },
-        ];
-        if (!closed) {
-          tabs.push({
-            tabId: "background-tab",
-            targetId: "raw-background",
-            title: "Background",
-            url: "https://example.test/background",
-          });
-        }
-        return { running: true, tabs };
-      }
-      if (envelope.path === "/screenshot") {
-        const background = envelope.body?.targetId === "background-tab";
-        return {
-          path: "/fresh.png",
-          targetId: background ? "raw-background" : "raw-active",
-          url: background ? "https://example.test/background" : activeUrl,
-        };
-      }
-      if (envelope.path === "/act") {
-        const background = envelope.body?.targetId === "background-tab";
-        return createBrowserPanelTestMetrics(
-          background ? "https://example.test/background" : activeUrl,
-          background ? "Background" : "Active",
-        );
-      }
-      throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
+      },
+      "/tabs/focus": () => ({ ok: true }),
+      "/tabs": () => ({ running: true, tabs: closed ? [activeTab] : [activeTab, backgroundTab] }),
+      ...captureRoutes((request) =>
+        request.body?.targetId === "background-tab" ? backgroundTab : activeTab,
+      ),
     });
-    const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
 
     const pendingClose = controller.closeTab("background-tab");
     await flushBrowserResponses();
@@ -234,261 +222,167 @@ describe("BrowserPanel capture and input ownership", () => {
   it("captures a successfully navigated document when its tab snapshot fails", async () => {
     stubScreenshotMedia();
     const navigation = createDeferred<{ ok: boolean }>();
-    const initialUrl = "https://example.test/initial";
-    const destinationUrl = "https://example.test/destination";
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/navigate") {
-        return await navigation.promise;
-      }
-      if (envelope.path === "/tabs") {
+    const { controller, request } = scenario("stable-tab", initialUrl, {
+      "/navigate": () => navigation.promise,
+      "/tabs": () => {
         throw new Error("Temporary tab-list failure");
-      }
-      if (envelope.path === "/screenshot") {
-        return { path: "/fresh.png", targetId: "raw-stable", url: destinationUrl };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(destinationUrl);
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+      },
+      ...captureRoutes(() => makeTab("stable-tab", destinationUrl, "Page")),
     });
-    const controller = createBrowserPanelTestController(client, "stable-tab", initialUrl);
 
     const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
     await flushBrowserResponses();
     navigation.resolve({ ok: true });
     await pendingNavigation;
 
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/screenshot",
-        body: expect.objectContaining({ targetId: "stable-tab" }),
-      }),
-    );
+    expectRequest(request, {
+      method: "POST",
+      path: "/screenshot",
+      body: expect.objectContaining({ targetId: "stable-tab" }),
+    });
     expect(controller.activeTargetId).toBe("stable-tab");
     expect(controller.view?.url).toBe(destinationUrl);
     expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
     expect(controller.loading).toBe(false);
   });
 
-  it("settles loading when a non-active close supersedes a full refresh", async () => {
-    const previousSnapshot = createDeferred<unknown>();
-    const activeUrl = "https://example.test/active";
-    const activeTab = {
-      tabId: "active-tab",
-      targetId: "raw-active",
-      title: "Active",
-      url: activeUrl,
-    };
-    let snapshotCount = 0;
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/background-tab") {
-        return { ok: true };
+  it.each(["snapshot", "capture"] as const)(
+    "settles only unowned loading when closing a background tab during %s",
+    async (phase) => {
+      const capturing = phase === "capture";
+      if (capturing) {
+        stubScreenshotMedia();
       }
-      if (envelope.path === "/tabs") {
-        snapshotCount += 1;
-        if (snapshotCount === 1) {
-          return await previousSnapshot.promise;
-        }
-        return { running: true, tabs: [activeTab] };
+      const pending = createDeferred<unknown>();
+      const activeTab = makeTab("active-tab", activeUrl, "Active");
+      let snapshots = 0;
+      const { controller, request } = scenario("active-tab", activeUrl, {
+        "DELETE /tabs/background-tab": () => ({ ok: true }),
+        "/tabs": () => {
+          snapshots += 1;
+          if (snapshots === 1 && !capturing) {
+            return pending.promise;
+          }
+          return {
+            running: true,
+            tabs:
+              snapshots === 1
+                ? [activeTab, makeTab("background-tab", backgroundUrl, "Background")]
+                : [activeTab],
+          };
+        },
+        ...(capturing
+          ? {
+              "/screenshot": () => pending.promise,
+              "/act": () => metrics(activeUrl, "Active"),
+            }
+          : {}),
+      });
+      const activeView = controller.view;
+      if (!capturing) {
+        controller.tabs = [
+          remoteTab("active-tab", "raw-active", "Active", activeUrl),
+          remoteTab("background-tab", "raw-background", "Background", backgroundUrl),
+        ];
       }
-      throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
-    });
-    const controller = new TestBrowserPanelHost(client).createPanel();
-    controller.activeTargetId = "active-tab";
-    const activeView = createView("active-tab", activeUrl);
-    controller.view = activeView;
-    controller.tabs = [
-      {
-        kind: "remote" as const,
-        id: "active-tab",
-        targetId: "raw-active",
-        title: "Active",
-        url: activeUrl,
-      },
-      {
-        kind: "remote" as const,
-        id: "background-tab",
-        targetId: "raw-background",
-        title: "Background",
-        url: "https://example.test/background",
-      },
-    ];
-
-    const pendingRefresh = controller.refreshAll();
-    await flushBrowserResponses();
-    expect(controller.loading).toBe(true);
-    await controller.closeTab("background-tab");
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({ method: "DELETE", path: "/tabs/background-tab" }),
-    );
-    expect(controller.activeTargetId).toBe("active-tab");
-    expect(controller.tabs.map((tab) => tab.id)).toEqual(["active-tab"]);
-    expect(controller.view).toBe(activeView);
-    expect(controller.loading).toBe(false);
-
-    previousSnapshot.resolve({ running: true, tabs: [activeTab] });
-    await pendingRefresh;
-    expect(controller.loading).toBe(false);
-    expect(controller.view).toBe(activeView);
-  });
-
-  it("keeps loading while closing a background tab during an owned capture", async () => {
-    stubScreenshotMedia();
-    const pendingCapture = createDeferred<{
-      path: string;
-      targetId: string;
-      url: string;
-    }>();
-    const activeUrl = "https://example.test/active";
-    const activeTab = {
-      tabId: "active-tab",
-      targetId: "raw-active",
-      title: "Active",
-      url: activeUrl,
-    };
-    let snapshotCount = 0;
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/background-tab") {
-        return { ok: true };
+      const refresh = controller.refreshAll();
+      await flushBrowserResponses();
+      expect(controller.loading).toBe(true);
+      await controller.closeTab("background-tab");
+      expect(controller.loading).toBe(capturing);
+      if (!capturing) {
+        expectRequest(request, { method: "DELETE", path: "/tabs/background-tab" });
+        expect(controller.activeTargetId).toBe("active-tab");
+        expect(controller.tabs.map((tab) => tab.id)).toEqual(["active-tab"]);
+        expect(controller.view).toBe(activeView);
       }
-      if (envelope.path === "/tabs") {
-        snapshotCount += 1;
-        const tabs =
-          snapshotCount === 1
-            ? [
-                activeTab,
-                {
-                  tabId: "background-tab",
-                  targetId: "raw-background",
-                  title: "Background",
-                  url: "https://example.test/background",
-                },
-              ]
-            : [activeTab];
-        return { running: true, tabs };
+      pending.resolve(
+        capturing
+          ? { path: "/fresh.png", targetId: "raw-active", url: activeUrl }
+          : { running: true, tabs: [activeTab] },
+      );
+      await refresh;
+      expect(controller.loading).toBe(false);
+      if (capturing) {
+        expect(controller.view?.url).toBe(activeUrl);
+        expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
+      } else {
+        expect(controller.view).toBe(activeView);
       }
-      if (envelope.path === "/screenshot") {
-        return await pendingCapture.promise;
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(activeUrl, "Active");
-      }
-      throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
+    },
+  );
 
-    const capture = controller.refreshAll();
-    await flushBrowserResponses();
-    expect(controller.loading).toBe(true);
+  it.each([false, true])(
+    "finishes navigation after a passive refresh (new tab: %s)",
+    async (newTab) => {
+      stubScreenshotMedia();
+      const navigation = createDeferred<unknown>();
+      const initialTab = makeTab(
+        newTab ? "initial-tab" : "stable-tab",
+        initialUrl,
+        newTab ? "Initial" : "Page",
+      );
+      const destinationTab = makeTab(
+        newTab ? "destination-tab" : "stable-tab",
+        destinationUrl,
+        newTab ? "Destination" : "Page",
+      );
+      let visibleTabs = [initialTab];
+      let screenshotCount = 0;
+      const path = newTab ? "/tabs/open" : "/navigate";
+      const { controller, request } = scenario(initialTab.tabId, initialUrl, {
+        [path]: async () => {
+          const result = await navigation.promise;
+          visibleTabs = newTab ? [initialTab, destinationTab] : [destinationTab];
+          return result;
+        },
+        "/tabs": () => ({ running: true, tabs: [...visibleTabs] }),
+        ...captureRoutes(
+          (envelope) => visibleTabs.find((tab) => tab.tabId === envelope.body?.targetId)!,
+          () => {
+            screenshotCount += 1;
+            return visibleTabs.includes(destinationTab) ? "/fresh.png" : "/old.png";
+          },
+        ),
+      });
+      const pendingNavigation = controller.openUrl(destinationUrl, { newTab });
+      await flushBrowserResponses();
+      await controller.refreshAll();
+      navigation.resolve(newTab ? destinationTab : { ok: true });
+      await pendingNavigation;
 
-    await controller.closeTab("background-tab");
-    expect(controller.loading).toBe(true);
-
-    pendingCapture.resolve({ path: "/fresh.png", targetId: "raw-active", url: activeUrl });
-    await capture;
-
-    expect(controller.view?.url).toBe(activeUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(controller.loading).toBe(false);
-  });
-
-  it("finishes same-tab navigation after a passive refresh overtakes it", async () => {
-    stubScreenshotMedia();
-    const navigation = createDeferred<{ ok: boolean }>();
-    const initialUrl = "https://example.test/initial";
-    const destinationUrl = "https://example.test/destination";
-    let documentUrl = initialUrl;
-    let screenshotCount = 0;
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/navigate") {
-        const result = await navigation.promise;
-        documentUrl = destinationUrl;
-        return result;
-      }
-      if (envelope.path === "/tabs") {
-        return {
-          running: true,
-          tabs: [{ tabId: "stable-tab", targetId: "raw-stable", title: "Page", url: documentUrl }],
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        screenshotCount += 1;
-        return {
-          path: documentUrl === destinationUrl ? "/fresh.png" : "/old.png",
-          targetId: "raw-stable",
-          url: documentUrl,
-        };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(documentUrl);
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "stable-tab", initialUrl);
-
-    const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
-    await flushBrowserResponses();
-    await controller.refreshAll();
-    navigation.resolve({ ok: true });
-    await pendingNavigation;
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
+      expectRequest(request, {
         method: "POST",
-        path: "/navigate",
-        body: { targetId: "stable-tab", url: destinationUrl },
-      }),
-    );
-    expect(controller.activeTargetId).toBe("stable-tab");
-    expect(controller.tabs[0]?.url).toBe(destinationUrl);
-    expect(controller.view?.url).toBe(destinationUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(screenshotCount).toBe(2);
-    expect(controller.loading).toBe(false);
-  });
+        path,
+        body: newTab ? { url: destinationUrl } : { targetId: "stable-tab", url: destinationUrl },
+      });
+      expect(controller.activeTargetId).toBe(destinationTab.tabId);
+      if (newTab) {
+        expect(controller.tabs.map((tab) => tab.id)).toEqual(["initial-tab", "destination-tab"]);
+      } else {
+        expect(controller.tabs[0]?.url).toBe(destinationUrl);
+      }
+      expect(controller.view?.url).toBe(destinationUrl);
+      expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
+      expect(screenshotCount).toBe(2);
+      expect(controller.loading).toBe(false);
+    },
+  );
 
   it("does not poll tab metadata after a committed background navigation", async () => {
     stubScreenshotMedia();
     const navigation = createDeferred<{ ok: boolean }>();
-    const initialUrl = "https://example.test/initial";
-    const destinationUrl = "https://example.test/destination";
-    const selectedUrl = "https://example.test/selected";
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/navigate") {
-        return await navigation.promise;
-      }
-      if (envelope.path === "/tabs/focus") {
-        return { ok: true };
-      }
-      if (envelope.path === "/screenshot") {
-        return { path: "/selected.png", targetId: "raw-b", url: selectedUrl };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(selectedUrl, "Selected");
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    const { controller, calls } = scenario("tab-a", initialUrl, {
+      "/navigate": () => navigation.promise,
+      "/tabs/focus": () => ({ ok: true }),
+      ...captureRoutes(
+        () => ({ ...makeTab("tab-b", selectedUrl, "Selected"), targetId: "raw-b" }),
+        () => "/selected.png",
+      ),
     });
-    const controller = createBrowserPanelTestController(client, "tab-a", initialUrl);
     controller.tabs = [
-      {
-        kind: "remote" as const,
-        id: "tab-a",
-        targetId: "raw-a",
-        title: "Initial",
-        url: initialUrl,
-      },
-      {
-        kind: "remote" as const,
-        id: "tab-b",
-        targetId: "raw-b",
-        title: "Selected",
-        url: selectedUrl,
-      },
+      remoteTab("tab-a", "raw-a", "Initial", initialUrl),
+      remoteTab("tab-b", "raw-b", "Selected", selectedUrl),
     ];
 
     const pendingNavigation = controller.openUrl(destinationUrl, { newTab: false });
@@ -504,82 +398,10 @@ describe("BrowserPanel capture and input ownership", () => {
       title: "Initial",
       url: initialUrl,
     });
-    expect(
-      request.mock.calls.filter(([, envelope]) => {
-        return (envelope as BrowserRequestEnvelope).path === "/tabs";
-      }),
-    ).toEqual([]);
-    expect(
-      request.mock.calls.filter(([, envelope]) => {
-        const browserRequest = envelope as BrowserRequestEnvelope;
-        return browserRequest.path === "/screenshot" && browserRequest.body?.targetId === "tab-a";
-      }),
-    ).toEqual([]);
-  });
-
-  it("selects a new tab after a passive refresh overtakes its creation", async () => {
-    stubScreenshotMedia();
-    const initialUrl = "https://example.test/initial";
-    const destinationUrl = "https://example.test/destination";
-    const openedTab = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
-    const visibleTabs = [
-      { tabId: "initial-tab", targetId: "raw-initial", title: "Initial", url: initialUrl },
-    ];
-    let screenshotCount = 0;
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs/open") {
-        const tab = await openedTab.promise;
-        visibleTabs.push(tab);
-        return tab;
-      }
-      if (envelope.path === "/tabs") {
-        return { running: true, tabs: [...visibleTabs] };
-      }
-      if (envelope.path === "/screenshot") {
-        screenshotCount += 1;
-        const latest = envelope.body?.targetId === "destination-tab";
-        return {
-          path: latest ? "/fresh.png" : "/old.png",
-          targetId: latest ? "raw-destination" : "raw-initial",
-          url: latest ? destinationUrl : initialUrl,
-        };
-      }
-      if (envelope.path === "/act") {
-        const latest = envelope.body?.targetId === "destination-tab";
-        return createBrowserPanelTestMetrics(
-          latest ? destinationUrl : initialUrl,
-          latest ? "Destination" : "Initial",
-        );
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "initial-tab", initialUrl);
-
-    const pendingNavigation = controller.openUrl(destinationUrl, { newTab: true });
-    await flushBrowserResponses();
-    await controller.refreshAll();
-    openedTab.resolve({
-      tabId: "destination-tab",
-      targetId: "raw-destination",
-      title: "Destination",
-      url: destinationUrl,
-    });
-    await pendingNavigation;
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/tabs/open",
-        body: { url: destinationUrl },
-      }),
+    expect(calls("/tabs")).toEqual([]);
+    expect(calls("/screenshot").filter((request) => request.body?.targetId === "tab-a")).toEqual(
+      [],
     );
-    expect(controller.activeTargetId).toBe("destination-tab");
-    expect(controller.tabs.map((tab) => tab.id)).toEqual(["initial-tab", "destination-tab"]);
-    expect(controller.view?.url).toBe(destinationUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(screenshotCount).toBe(2);
-    expect(controller.loading).toBe(false);
   });
 
   it("clears stale inspected elements and owned errors across a failed inspection retry", async () => {
@@ -694,17 +516,16 @@ describe("BrowserPanel capture and input ownership", () => {
     const first = createDeferred<unknown>();
     const second = createDeferred<unknown>();
     const evaluations = [first, second];
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act" && envelope.body?.kind === "evaluate") {
+    const { controller, request } = scenario("tab-a", undefined, {
+      "/act": async (envelope) => {
+        expect(envelope.body?.kind).toBe("evaluate");
         const evaluation = evaluations.shift();
         if (!evaluation) {
           throw new Error("Unexpected browser inspection");
         }
         return await evaluation.promise;
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+      },
     });
-    const controller = createBrowserPanelTestController(client, "tab-a");
     controller.setMode("inspect");
 
     controller.handleOverlayPointerMove(createPointer(10, 20));
@@ -729,18 +550,19 @@ describe("BrowserPanel capture and input ownership", () => {
     const latestInspection = createDeferred<unknown>();
     let inspectionCount = 0;
     const elementFromPoint = vi.fn(() => null);
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act" && envelope.body?.kind === "evaluate") {
+    const { controller, request } = scenario("tab-a", undefined, {
+      "/act": async (envelope) => {
+        if (envelope.body?.kind !== "evaluate") {
+          throw new Error("Unexpected browser inspection");
+        }
         runInNewContext(`(${String(envelope.body.fn)})()`, { document: { elementFromPoint } });
         inspectionCount += 1;
         if (inspectionCount === 1) {
           return { result: createInspectedNode("initial") };
         }
         return await latestInspection.promise;
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+      },
     });
-    const controller = createBrowserPanelTestController(client, "tab-a");
     controller.setMode("inspect");
 
     controller.handleOverlayPointerMove(createPointer(10, 20));
@@ -772,102 +594,53 @@ describe("BrowserPanel capture and input ownership", () => {
     expect(controller.inspectPointer).toEqual({ x: 0.7, y: 0.8 });
   });
 
-  it("drops a pending inspection after the user selects and inspects another tab", async () => {
-    vi.useFakeTimers({ now: 1_000 });
-    const previousInspection = createDeferred<unknown>();
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act") {
-        return await previousInspection.promise;
+  it.each(["in-flight", "throttled"] as const)(
+    "invalidates an old tab's %s inspection after a tab switch",
+    async (phase) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const inspection = createDeferred<unknown>();
+      const { controller, calls } = scenario("tab-a", undefined, {
+        "/act": () => inspection.promise,
+        "/tabs/focus": () => ({ ok: true }),
+        "/screenshot": () => new Promise<never>(() => {}),
+      });
+      controller.setMode("inspect");
+      controller.handleOverlayPointerMove(createPointer(10, 20));
+      if (phase === "throttled") {
+        controller.handleOverlayPointerMove(createPointer(30, 40));
       }
-      if (envelope.path === "/tabs/focus") {
-        return { ok: true };
+      void controller.selectTab("tab-b");
+      controller.view = createView("tab-b");
+      controller.setMode("inspect");
+      if (phase === "in-flight") {
+        inspection.resolve({ result: createInspectedNode("foreign-tab") });
+        await flushBrowserResponses();
+        expect(controller.activeTargetId).toBe("tab-b");
+        expect(controller.inspected).toBeNull();
+      } else {
+        await vi.advanceTimersByTimeAsync(120);
+        const inspections = calls("/act").filter((request) => request.body?.kind === "evaluate");
+        expect(inspections).toHaveLength(1);
+        expect(inspections[0]).toMatchObject({ body: { targetId: "tab-a" } });
       }
-      if (envelope.path === "/screenshot") {
-        return await new Promise<never>(() => {});
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-    controller.setMode("inspect");
-
-    controller.handleOverlayPointerMove(createPointer(10, 20));
-    void controller.selectTab("tab-b");
-    controller.view = createView("tab-b");
-    controller.setMode("inspect");
-    previousInspection.resolve({ result: createInspectedNode("foreign-tab") });
-    await flushBrowserResponses();
-
-    expect(controller.activeTargetId).toBe("tab-b");
-    expect(controller.inspected).toBeNull();
-  });
-
-  it("cancels an old tab's throttled inspection after a tab switch", async () => {
-    vi.useFakeTimers({ now: 1_000 });
-    const inFlightInspection = createDeferred<unknown>();
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act") {
-        return await inFlightInspection.promise;
-      }
-      if (envelope.path === "/tabs/focus") {
-        return { ok: true };
-      }
-      if (envelope.path === "/screenshot") {
-        return await new Promise<never>(() => {});
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-    controller.setMode("inspect");
-
-    controller.handleOverlayPointerMove(createPointer(10, 20));
-    controller.handleOverlayPointerMove(createPointer(30, 40));
-    void controller.selectTab("tab-b");
-    controller.view = createView("tab-b");
-    controller.setMode("inspect");
-    await vi.advanceTimersByTimeAsync(120);
-
-    const inspections = request.mock.calls.filter(([, envelope]) => {
-      const browserRequest = envelope as BrowserRequestEnvelope;
-      return browserRequest.path === "/act" && browserRequest.body?.kind === "evaluate";
-    });
-    expect(inspections).toHaveLength(1);
-    expect(inspections[0]?.[1]).toMatchObject({ body: { targetId: "tab-a" } });
-  });
+    },
+  );
 
   it("reconciles selected tab metadata from the captured history document", async () => {
     vi.useFakeTimers();
     stubScreenshotMedia();
     const currentUrl = "https://example.test/current";
     const previousUrl = "https://example.test/previous";
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act") {
+    const { controller, calls } = scenario("tab-a", currentUrl, {
+      "/act": (envelope) => {
         const fn = typeof envelope.body?.fn === "string" ? envelope.body.fn : "";
-        return fn.includes("history.go")
-          ? { result: true }
-          : createBrowserPanelTestMetrics(previousUrl, "Previous");
-      }
-      if (envelope.path === "/screenshot") {
-        return { path: "/fresh.png", targetId: "raw-a", url: previousUrl };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+        return fn.includes("history.go") ? { result: true } : metrics(previousUrl, "Previous");
+      },
+      "/screenshot": () => ({ path: "/fresh.png", targetId: "raw-a", url: previousUrl }),
     });
-    const controller = createBrowserPanelTestController(client, "tab-a", currentUrl);
-    controller.tabs = [
-      {
-        kind: "remote" as const,
-        id: "tab-a",
-        targetId: "raw-a",
-        title: "Current",
-        url: currentUrl,
-      },
-      {
-        kind: "remote" as const,
-        id: "tab-b",
-        targetId: "raw-b",
-        title: "Background",
-        url: "https://example.test/background",
-      },
-    ];
+    const background = remoteTab("tab-b", "raw-b", "Background", backgroundUrl);
+    const expectedBackground = { ...background };
+    controller.tabs = [remoteTab("tab-a", "raw-a", "Current", currentUrl), background];
 
     controller.goHistory(-1);
     await flushBrowserResponses();
@@ -877,35 +650,19 @@ describe("BrowserPanel capture and input ownership", () => {
     await flushBrowserResponses();
 
     expect(controller.tabs).toEqual([
-      {
-        kind: "remote" as const,
-        id: "tab-a",
-        targetId: "raw-a",
-        title: "Previous",
-        url: previousUrl,
-      },
-      {
-        kind: "remote" as const,
-        id: "tab-b",
-        targetId: "raw-b",
-        title: "Background",
-        url: "https://example.test/background",
-      },
+      remoteTab("tab-a", "raw-a", "Previous", previousUrl),
+      expectedBackground,
     ]);
     expect(controller.urlDraft).toBe(previousUrl);
-    expect(
-      request.mock.calls.filter(([, envelope]) => {
-        return (envelope as BrowserRequestEnvelope).path === "/tabs";
-      }),
-    ).toEqual([]);
+    expect(calls("/tabs")).toEqual([]);
   });
 
   it("scrolls at the remote point under the wheel pointer", async () => {
     vi.useFakeTimers();
     const scroll = vi.fn();
     const hitTest = vi.fn(() => null);
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act") {
+    const { controller, calls } = scenario("tab-a", undefined, {
+      "/act": (envelope) => {
         const fn = envelope.body?.fn;
         if (typeof fn !== "string") {
           throw new Error("Expected a browser evaluate script");
@@ -916,10 +673,8 @@ describe("BrowserPanel capture and input ownership", () => {
             window: { scrollBy: scroll },
           }),
         };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+      },
     });
-    const controller = createBrowserPanelTestController(client, "tab-a");
 
     controller.input.handleWheel(
       new WheelEvent("wheel", { deltaY: 60, clientX: 30, clientY: 40, cancelable: true }),
@@ -929,38 +684,24 @@ describe("BrowserPanel capture and input ownership", () => {
     );
     await vi.advanceTimersByTimeAsync(150);
 
-    const actions = request.mock.calls
-      .map(([, envelope]) => envelope as BrowserRequestEnvelope)
-      .filter((envelope) => envelope.path === "/act");
-    expect(actions).toHaveLength(1);
+    expect(calls("/act")).toHaveLength(1);
     expect(hitTest).toHaveBeenCalledExactlyOnceWith(32, 44);
     expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 100);
   });
 
   it("never forwards a queued wheel action to a newly selected tab", async () => {
     vi.useFakeTimers();
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs/focus") {
-        return { ok: true };
-      }
-      if (envelope.path === "/screenshot") {
-        return await new Promise<never>(() => {});
-      }
-      if (envelope.path === "/act") {
-        return { result: true };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    const { controller, calls } = scenario("tab-a", undefined, {
+      "/tabs/focus": () => ({ ok: true }),
+      "/screenshot": () => new Promise<never>(() => {}),
+      "/act": () => ({ result: true }),
     });
-    const controller = createBrowserPanelTestController(client, "tab-a");
 
     controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
     void controller.selectTab("tab-b");
     await vi.advanceTimersByTimeAsync(150);
 
-    const actions = request.mock.calls.filter(([, envelope]) => {
-      return (envelope as BrowserRequestEnvelope).path === "/act";
-    });
-    expect(actions).toEqual([]);
+    expect(calls("/act")).toEqual([]);
   });
 
   it("keeps the latest screenshot when same-tab captures finish out of order", async () => {
@@ -971,39 +712,32 @@ describe("BrowserPanel capture and input ownership", () => {
     const oldStarted = createDeferred();
     const freshStarted = createDeferred();
     const url = "https://example.test/page";
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs") {
-        return {
+    const { controller, calls } = scenario(
+      "tab-a",
+      url,
+      {
+        "/tabs": () => ({
           running: true,
           tabs: [{ tabId: "tab-a", targetId: "raw-a", title: "Page", url }],
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        const capture = captures.shift();
-        if (!capture) {
-          throw new Error("Unexpected screenshot capture");
-        }
-        (capture === oldCapture ? oldStarted : freshStarted).resolve();
-        return await capture.promise;
-      }
-      if (envelope.path === "/act") {
-        return { result: { cssWidth: 100, cssHeight: 100, title: "Page", url } };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const host = new TestBrowserPanelHost(client);
-    const controller = host.createPanel();
-    controller.activeTargetId = "tab-a";
+        }),
+        "/screenshot": async () => {
+          const capture = captures.shift();
+          if (!capture) {
+            throw new Error("Unexpected screenshot capture");
+          }
+          (capture === oldCapture ? oldStarted : freshStarted).resolve();
+          return await capture.promise;
+        },
+        "/act": () => metrics(url),
+      },
+      false,
+    );
 
     const oldRefresh = controller.refreshAll();
     await oldStarted.promise;
     const freshRefresh = controller.refreshAll();
     await freshStarted.promise;
-    expect(
-      request.mock.calls.filter(([, envelope]) => {
-        return (envelope as BrowserRequestEnvelope).path === "/screenshot";
-      }),
-    ).toHaveLength(2);
+    expect(calls("/screenshot")).toHaveLength(2);
 
     freshCapture.resolve({ path: "/fresh.png", targetId: "raw-a", url });
     await freshRefresh;
@@ -1020,31 +754,21 @@ describe("BrowserPanel capture and input ownership", () => {
     stubScreenshotMedia();
     const capturedUrl = "https://example.test/captured";
     const navigatedUrl = "https://example.test/navigated";
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs") {
-        return {
+    const { controller } = scenario(
+      "tab-a",
+      capturedUrl,
+      {
+        "/tabs": () => ({
           running: true,
           tabs: [{ tabId: "tab-a", targetId: "raw-a", title: "Captured", url: capturedUrl }],
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        return { path: "/fresh.png", targetId: "raw-a", url: capturedUrl };
-      }
-      if (envelope.path === "/act") {
-        return {
-          result: {
-            cssWidth: 200,
-            cssHeight: 300,
-            title: "Different document",
-            url: navigatedUrl,
-          },
-        };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const host = new TestBrowserPanelHost(client);
-    const controller = host.createPanel();
-    controller.activeTargetId = "tab-a";
+        }),
+        "/screenshot": () => ({ path: "/fresh.png", targetId: "raw-a", url: capturedUrl }),
+        "/act": () => ({
+          result: { cssWidth: 200, cssHeight: 300, title: "Different document", url: navigatedUrl },
+        }),
+      },
+      false,
+    );
 
     await controller.refreshAll();
 

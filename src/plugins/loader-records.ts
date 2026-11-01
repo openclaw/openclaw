@@ -34,6 +34,7 @@ import type { PluginLogger } from "./types.js";
 /** Builds the registry record shape shared by plugin loading, status, and diagnostics. */
 export function createPluginRecord(params: {
   id: string;
+  generationOverlap?: boolean;
   nativeSessionCatalog?: PluginRecord["nativeSessionCatalog"];
   name?: string;
   description?: string;
@@ -56,6 +57,8 @@ export function createPluginRecord(params: {
   syntheticAuthRefs?: string[];
   channelIds?: readonly string[];
   providerIds?: readonly string[];
+  declaredContextEngineIds?: readonly string[];
+  turnHandover?: boolean;
   configSchema: boolean;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
@@ -65,6 +68,7 @@ export function createPluginRecord(params: {
 }): PluginRecord {
   return {
     id: params.id,
+    generationOverlap: params.generationOverlap,
     nativeSessionCatalog: params.nativeSessionCatalog,
     name: params.name ?? params.id,
     description: params.description,
@@ -97,6 +101,8 @@ export function createPluginRecord(params: {
     providerIds: [...(params.providerIds ?? [])],
     ...createManifestProviderIdLists(params.contracts),
     contextEngineIds: [],
+    declaredContextEngineIds: params.declaredContextEngineIds,
+    ...(params.turnHandover ? { turnHandover: true } : {}),
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

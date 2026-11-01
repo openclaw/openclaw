@@ -145,16 +145,12 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
       if (!active || signal.aborted) {
         return;
       }
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      clearTimeout(timeoutId);
       scheduleTimeout();
     },
     cleanup: () => {
       active = false;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      clearTimeout(timeoutId);
     },
   };
 }

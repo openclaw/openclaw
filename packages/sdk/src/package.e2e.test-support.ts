@@ -21,6 +21,7 @@ type PackageManifest = {
 };
 
 type PackedPackage = { manifest: PackageManifest; tarball: string };
+type WorkspacePackage = { root: string; manifest: PackageManifest };
 type CommandOptions = { cwd: string; timeoutMs?: number } & Pick<
   SpawnOptionsWithoutStdio,
   "env" | "shell" | "windowsVerbatimArguments"
@@ -126,62 +127,51 @@ function runPackageCommand(
   });
 }
 
-function resolveWorkspacePackageRoot(repoRoot: string, packageName: string): string {
-  const prefix = "@openclaw/";
-  if (!packageName.startsWith(prefix)) {
-    throw new Error(`unsupported workspace package name: ${packageName}`);
-  }
-  return path.join(repoRoot, "packages", packageName.slice(prefix.length));
-}
-
-async function readPackageManifest(packageRoot: string): Promise<PackageManifest> {
-  return JSON.parse(
-    await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-  ) as PackageManifest;
-}
-
-async function collectWorkspacePackageRoots(repoRoot: string): Promise<string[]> {
-  const orderedRoots: string[] = [];
+async function collectWorkspacePackages(repoRoot: string): Promise<WorkspacePackage[]> {
+  const packages: WorkspacePackage[] = [];
   const visitedNames = new Set<string>();
 
-  async function visit(packageRoot: string, expectedName?: string): Promise<void> {
-    const manifest = await readPackageManifest(packageRoot);
-    if (expectedName && manifest.name !== expectedName) {
+  async function visit(expectedName: string): Promise<PackageManifest> {
+    if (!expectedName.startsWith("@openclaw/")) {
+      throw new Error(`unsupported workspace package name: ${expectedName}`);
+    }
+    const packageRoot = path.join(repoRoot, "packages", expectedName.slice("@openclaw/".length));
+    const manifest: PackageManifest = JSON.parse(
+      await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+    );
+    if (manifest.name !== expectedName) {
       throw new Error(
         `workspace dependency ${expectedName} resolved to unexpected package ${manifest.name}`,
       );
     }
     if (visitedNames.has(manifest.name)) {
-      return;
+      return manifest;
     }
     visitedNames.add(manifest.name);
-    const workspaceDependencies = Object.entries(manifest.dependencies ?? {})
+    const dependencies = manifest.dependencies ?? {};
+    const workspaceDependencies = Object.entries(dependencies)
       .filter(([, spec]) => spec.startsWith("workspace:"))
       .map(([name]) => name)
       .toSorted();
     for (const dependencyName of workspaceDependencies) {
-      await visit(resolveWorkspacePackageRoot(repoRoot, dependencyName), dependencyName);
+      dependencies[dependencyName] = (await visit(dependencyName)).version;
     }
-    orderedRoots.push(packageRoot);
+    packages.push({ root: packageRoot, manifest });
+    return manifest;
   }
 
-  await visit(path.join(repoRoot, "packages", "sdk"));
-  return orderedRoots;
+  await visit("@openclaw/sdk");
+  return packages;
 }
 
 function writeJson(root: string, file: string, value: unknown): Promise<void> {
   return fs.writeFile(path.join(root, file), JSON.stringify(value, null, 2));
 }
 
-async function packPackage(packageRoot: string, destinationRoot: string): Promise<PackedPackage> {
-  const manifest = await readPackageManifest(packageRoot);
-  const dependencies = manifest.dependencies ?? {};
-  for (const [name, spec] of Object.entries(dependencies)) {
-    if (name.startsWith("@openclaw/") && spec.startsWith("workspace:")) {
-      const root = resolveWorkspacePackageRoot(path.resolve(packageRoot, "..", ".."), name);
-      dependencies[name] = (await readPackageManifest(root)).version;
-    }
-  }
+async function packPackage(
+  { root: packageRoot, manifest }: WorkspacePackage,
+  destinationRoot: string,
+): Promise<PackedPackage> {
   const packageSlug = manifest.name.replace(/^@/, "").replace("/", "-");
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
   await fs.mkdir(stagingRoot, { recursive: true });
@@ -246,7 +236,7 @@ async function startOpenClawRegistry(packages: PackedPackage[]) {
 
 export async function createPackedSdkConsumer() {
   const repoRoot = process.cwd();
-  const packageRoots = await collectWorkspacePackageRoots(repoRoot);
+  const packages = await collectWorkspacePackages(repoRoot);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-consumer-"));
   try {
     const packedPackages: PackedPackage[] = [];
@@ -254,8 +244,7 @@ export async function createPackedSdkConsumer() {
     await fs.mkdir(path.dirname(buildLockTarget), { recursive: true });
     // Builds clean shared dist directories: lock through packing and validation.
     await withFileLock(buildLockTarget, SDK_PACKAGE_BUILD_LOCK_OPTIONS, async () => {
-      for (const packageRoot of packageRoots) {
-        const manifest = await readPackageManifest(packageRoot);
+      for (const { manifest } of packages) {
         await runPackageCommand(
           "pnpm",
           ["--filter", manifest.name, manifest.scripts?.prepack ? "prepack" : "build"],
@@ -263,8 +252,8 @@ export async function createPackedSdkConsumer() {
           180_000,
         );
       }
-      for (const packageRoot of packageRoots) {
-        packedPackages.push(await packPackage(packageRoot, root));
+      for (const pkg of packages) {
+        packedPackages.push(await packPackage(pkg, root));
       }
     });
     const sdkTarball =

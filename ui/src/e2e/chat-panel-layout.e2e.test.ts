@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
@@ -65,17 +66,12 @@ function boardResponse(sizeH: number) {
     revision: 1,
     tabs: [{ tabId: "main", title: "Main", position: 0 }],
     widgets: [
-      {
+      createBoardWidget({
         name: "continuity",
-        tabId: "main",
         title: "Dashboard",
-        contentKind: "html",
         sizeW: 12,
         sizeH,
         heightMode: "fixed",
-        position: 0,
-        grantState: "none",
-        revision: 1,
         instanceId: "continuity-instance",
         frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/continuity/index.html?bt=ticket`,
         viewTicket: "ticket",
@@ -83,7 +79,7 @@ function boardResponse(sizeH: number) {
         viewGeneration: "0123456789abcdef0123456789abcdef",
         sandboxUrl: buildBoardWidgetSandboxPath({ grantState: "none" }),
         sandboxPort,
-      },
+      }),
     ],
   };
 }
@@ -110,6 +106,27 @@ async function waitForPanelGeometry(page: Page): Promise<void> {
       );
     await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)));
   });
+}
+
+async function expectSideConversationFits(page: Page) {
+  const chat = page.locator('.sidebar-region__primary[data-region="side"]');
+  await expect
+    .poll(() =>
+      chat.evaluate((element) => {
+        const panel = element.getBoundingClientRect();
+        return [".chat-main__conversation", ".chat-thread", ".agent-chat__composer-shell"].every(
+          (selector) => {
+            const content = element.querySelector(selector)!.getBoundingClientRect();
+            return (
+              content.width > 0 &&
+              content.left >= panel.left - 1 &&
+              content.right <= panel.right + 1
+            );
+          },
+        );
+      }),
+    )
+    .toBe(true);
 }
 
 async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bottom") {
@@ -234,8 +251,7 @@ suite.define(() => {
         // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });
         const mobileHeader = page.locator(".agent-chat__header--mobile");
-        await mobileHeader.locator(".chat-header-session-menu__trigger").click();
-        await page.getByRole("menuitem", { name: "Session dashboard", exact: true }).click();
+        await mobileHeader.getByRole("button", { name: "Session dashboard", exact: true }).click();
         const host = page.locator(".chat-mobile-host");
         await input.waitFor();
         expect(await composer.isVisible()).toBe(true);
@@ -441,12 +457,14 @@ suite.define(() => {
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
         await expect.poll(() => regionSize(chat)).toBeCloseTo(width, 0);
+        await expectSideConversationFits(page);
         // Layout settles before the frame-batched geometry event is delivered.
         await expect.poll(() => chat.getAttribute("data-swap-width-invalidated")).toBe("true");
         await expectPaneHeaderGeometry(page, "right");
         for (const dock of ["left", "bottom", "right"] as const) {
           await dockChatSidePanel(page, dock);
           await expectPaneHeaderGeometry(page, dock);
+          await expectSideConversationFits(page);
           if (dock !== "bottom") {
             expect(await regionSize(chat)).toBeCloseTo(width, 0);
           }
@@ -470,6 +488,7 @@ suite.define(() => {
         await expect.poll(() => regionSize(chat)).toBeGreaterThan(width);
         await waitForPanelGeometry(page);
         const resizedWidth = await regionSize(chat);
+        await expectSideConversationFits(page);
         await layoutAndWait(paneHeader, "Minimize side panel", dashboard, chat);
         await expectContinuity();
         await layoutAndWait(paneHeader, /^(Side panel|Minimize side panel)$/, chat);
@@ -483,6 +502,7 @@ suite.define(() => {
         await expect.poll(() => regionSize(chat)).toBeCloseTo(resizedWidth, 0);
         await input.waitFor();
         await expectPaneHeaderGeometry(page, "left");
+        await expectSideConversationFits(page);
         await openChatSidePanelType(page, "Terminal");
         const terminal = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
         await terminal.locator(".tp-session.is-current").click();

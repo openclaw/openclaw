@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/ast";
+import { bundledModuleRegions } from "./bundled-module-regions.mjs";
 import type { NativeTypeScriptParser } from "./native-typescript.mts";
 import { isUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
 
@@ -31,6 +32,22 @@ function namedBinding(node: ts.BindingName): string[] {
   );
 }
 
+/** Only real top-level comments can establish bundled declaration provenance. */
+export function moduleSourceRegions(sourceFile: ts.SourceFile) {
+  const regions: Array<{ index: number; owner: string | undefined }> = [];
+  for (const statement of sourceFile.statements) {
+    for (const comment of ts.getLeadingCommentRanges(sourceFile.text, statement.pos) ?? []) {
+      if (comment.kind !== ts.SyntaxKind.SingleLineCommentTrivia) {
+        continue;
+      }
+      for (const marker of bundledModuleRegions(sourceFile.text.slice(comment.pos, comment.end))) {
+        regions.push({ index: comment.pos + marker.index, owner: marker[1] });
+      }
+    }
+  }
+  return regions;
+}
+
 function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: string): ModuleInfo {
   const info: ModuleInfo = {
     imports: new Map(),
@@ -51,7 +68,7 @@ function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: s
     const resolvedFile = target(specifier);
     return resolvedFile ? { file: resolvedFile, symbol } : { external: specifier, symbol };
   };
-  const regions = [...sourceFile.text.matchAll(/^\/\/#region (.+)$/gm)];
+  const regions = moduleSourceRegions(sourceFile);
   let regionIndex = 0;
   let regionOwner: string | undefined;
   for (const statement of sourceFile.statements) {
@@ -117,7 +134,7 @@ function inspectModule(file: string, sourceFile: ts.SourceFile, sourceModule?: s
       if (!region || region.index >= statement.getStart()) {
         break;
       }
-      regionOwner = region[1];
+      regionOwner = region.owner;
       regionIndex += 1;
     }
     const owner = sourceModule ?? regionOwner;

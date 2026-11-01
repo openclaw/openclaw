@@ -35,8 +35,8 @@ function createPublisher(
     ...options,
   });
   publisher.start();
-  const frame = (index: number) => publishEphemeral.mock.calls[index]?.[0].payload;
-  return { publisher, publishEphemeral, frame };
+  const frames = () => publishEphemeral.mock.calls.map(([call]) => call.payload);
+  return { publisher, publishEphemeral, frames };
 }
 
 function blockedTransport() {
@@ -49,9 +49,36 @@ function blockedTransport() {
 describe("ClickClack native agent progress", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("serializes turn, item, completion, and clear frames", async () => {
-    const { publisher, publishEphemeral, frame } = createPublisher({ agentLabel: "Blackbird" });
-    const tool = { itemId: "tool_1", kind: "tool", name: "search" };
+  it("uses the formatter's prepared text without trimming it again", async () => {
+    const { publisher, frames } = createPublisher();
+    const renderedText = "Read: prepared-progress-sentinel";
+    let renderedTrims = 0;
+    const spy = vi.spyOn(String.prototype, "trim");
+    try {
+      publisher.onItemEvent({
+        itemId: "tool_1",
+        kind: "tool",
+        name: "read",
+        progressText: "  prepared-progress-sentinel  ",
+      });
+      renderedTrims = spy.mock.contexts.filter((value) => value === renderedText).length;
+    } finally {
+      spy.mockRestore();
+      await publisher.finalize();
+    }
+    expect(frames()[1]).toMatchObject({ line: { text: renderedText } });
+    expect(renderedTrims).toBe(0);
+  });
+
+  it("serializes turn, private-command completion, and clear frames", async () => {
+    const { publisher, publishEphemeral, frames } = createPublisher({ agentLabel: "Blackbird" });
+    const tool = {
+      itemId: "tool_1",
+      kind: "tool",
+      name: "server.exec",
+      meta: "echo private-sentinel",
+      commandBearing: true,
+    };
     publisher.onItemEvent({ ...tool, progressText: "Searching", status: "running" });
     publisher.onItemEvent({
       ...tool,
@@ -62,45 +89,32 @@ describe("ClickClack native agent progress", () => {
     });
     await publisher.finalize();
 
-    expect(publishEphemeral.mock.calls.map(([call]) => call.payload?.seq)).toEqual([1, 2, 3]);
+    expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
     expect(publishEphemeral.mock.calls[0]?.[0]).toMatchObject({
       workspaceId: "ws_1",
       channelId: "chn_1",
       type: "agent.progress",
-      payload: {
+    });
+    expect(frames()).toMatchObject([
+      {
+        seq: 1,
         turn_id: "msg_1",
         op: "append",
         line: { id: "turn", text: "Blackbird is responding", status: "running" },
       },
-    });
-    expect(frame(1)).toMatchObject({
-      op: "finalize",
-      line: {
-        id: "item:tool_1",
-        kind: "tool",
-        tool_name: "search",
-        text: "Search: Done",
-        status: "completed",
+      {
+        seq: 2,
+        op: "finalize",
+        line: {
+          id: "item:tool_1",
+          kind: "tool",
+          tool_name: "server.exec",
+          text: "Server.exec",
+          status: "completed",
+        },
       },
-    });
-    expect(frame(2)).toMatchObject({ turn_id: "msg_1", op: "clear" });
-  });
-
-  it("hides command metadata from item-only native progress", async () => {
-    const { publisher, publishEphemeral, frame } = createPublisher();
-    publisher.onItemEvent({
-      itemId: "tool_1",
-      kind: "tool",
-      name: "server.exec",
-      meta: "echo private-sentinel",
-      commandBearing: true,
-      phase: "end",
-      status: "completed",
-    });
-    await publisher.finalize();
-
-    expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
-    expect(frame(1)).toMatchObject({ line: { text: "Server.exec" } });
+      { seq: 3, turn_id: "msg_1", op: "clear" },
+    ]);
   });
 
   it("does not let a progress transport failure interrupt finalization", async () => {
@@ -117,7 +131,7 @@ describe("ClickClack native agent progress", () => {
   });
 
   it("coalesces queued line updates while the transport is in flight", async () => {
-    const { request, publishEphemeral, publisher, frame } = blockedTransport();
+    const { request, publishEphemeral, publisher, frames } = blockedTransport();
     publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "first" });
     publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "latest" });
     const finalized = publisher.finalize();
@@ -126,25 +140,16 @@ describe("ClickClack native agent progress", () => {
     request.resolve();
     await finalized;
 
-    expect(publishEphemeral).toHaveBeenCalledTimes(3);
-    expect(frame(1)).toMatchObject({
-      op: "append",
-      line: { id: "item:tool_1", text: expect.stringContaining("latest") },
-    });
-    expect(frame(2)).toMatchObject({ op: "clear" });
+    expect(frames()).toMatchObject([
+      {},
+      { op: "append", line: { id: "item:tool_1", text: expect.stringContaining("latest") } },
+      { op: "clear" },
+    ]);
   });
 
   it("retains a newer completion when an older line drains before its next flush", async () => {
     vi.useFakeTimers();
-    let releaseFirstRequest!: () => void;
-    const firstRequest = new Promise<void>((resolve) => {
-      releaseFirstRequest = resolve;
-    });
-    const publishEphemeral = vi
-      .fn()
-      .mockImplementationOnce(() => firstRequest)
-      .mockResolvedValue(undefined);
-    const { publisher } = createPublisher({}, publishEphemeral);
+    const { request, publisher, frames } = blockedTransport();
     try {
       publisher.onItemEvent({ itemId: "tool_1", kind: "tool", title: "Searching" });
       await vi.advanceTimersByTimeAsync(100);
@@ -155,18 +160,17 @@ describe("ClickClack native agent progress", () => {
         phase: "end",
         status: "completed",
       });
-      releaseFirstRequest();
+      request.resolve();
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(publishEphemeral.mock.calls.map(([call]) => call.payload)).toMatchObject([
+      expect(frames()).toMatchObject([
         { seq: 1, op: "append", line: { id: "turn" } },
         { seq: 2, op: "append", line: { id: "item:tool_1", text: "Searching" } },
         { seq: 3, op: "finalize", line: { id: "item:tool_1", text: "Done", status: "completed" } },
       ]);
     } finally {
-      releaseFirstRequest();
+      request.resolve();
       await publisher.finalize();
-      vi.useRealTimers();
     }
   });
 
@@ -174,7 +178,7 @@ describe("ClickClack native agent progress", () => {
     "retracts $name without a placeholder (already published: $published)",
     async ({ initial, end, published }) => {
       vi.useFakeTimers();
-      const { publisher, publishEphemeral, frame } = createPublisher();
+      const { publisher, frames } = createPublisher();
       await vi.advanceTimersByTimeAsync(0);
       publisher.onItemEvent(initial);
       if (published) {
@@ -187,26 +191,20 @@ describe("ClickClack native agent progress", () => {
       await publisher.finalize();
 
       if (published) {
-        expect(frame(1)).toMatchObject({
-          op: "append",
-          line: { id: `item:${initial.itemId}`, text: initial.progressText },
-        });
-        expect(frame(2)).toMatchObject({
-          op: "update",
-          line: { id: `item:${initial.itemId}`, text: "" },
-        });
-        expect(frame(3)).toMatchObject({ op: "clear" });
+        expect(frames().slice(1)).toMatchObject([
+          { op: "append", line: { id: `item:${initial.itemId}`, text: initial.progressText } },
+          { op: "update", line: { id: `item:${initial.itemId}`, text: "" } },
+          { op: "clear" },
+        ]);
       } else {
-        expect(publishEphemeral).toHaveBeenCalledTimes(2);
-        expect(frame(0)).toMatchObject({ op: "append", line: { id: "turn" } });
-        expect(frame(1)).toMatchObject({ op: "clear" });
+        expect(frames()).toMatchObject([{ op: "append", line: { id: "turn" } }, { op: "clear" }]);
       }
     },
   );
 
   it("does not let a stalled transport hold turn finalization", async () => {
     vi.useFakeTimers();
-    const { request, publishEphemeral, publisher, frame } = blockedTransport();
+    const { request, publishEphemeral, publisher, frames } = blockedTransport();
     try {
       publisher.onItemEvent({ itemId: "tool_1", kind: "tool", progressText: "pending" });
       const finalized = publisher.finalize();
@@ -223,7 +221,7 @@ describe("ClickClack native agent progress", () => {
       request.resolve();
       await vi.advanceTimersByTimeAsync(0);
       expect(publishEphemeral).toHaveBeenCalledTimes(2);
-      expect(frame(1)).toMatchObject({ op: "clear" });
+      expect(frames()[1]).toMatchObject({ op: "clear" });
     } finally {
       request.resolve();
       await vi.runAllTimersAsync();

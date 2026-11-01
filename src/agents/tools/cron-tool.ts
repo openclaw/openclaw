@@ -19,7 +19,7 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
@@ -28,9 +28,8 @@ import {
 } from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { withToolEffectBoundary } from "../tool-effect-receipt.js";
-import { bindAgentToolReplaySafety } from "../tool-replay-safety.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
-import { AUTOMATIONS_TOOL_NAME, CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
+import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -41,6 +40,7 @@ import {
 import { createCronAutomationActions } from "./cron-tool-automation.js";
 import {
   isEmptyRecoveredCronPatch,
+  prepareCronToolArguments,
   readCronToolJob,
   stripCronCreateNullClears,
 } from "./cron-tool-canonicalize.js";
@@ -50,6 +50,7 @@ import {
   stripExistingContext,
 } from "./cron-tool-context.js";
 import {
+  applyCronToolDefaults,
   assertInheritedCronToolCaptureReady,
   capCronJobToolsAllowOnCreate,
   cronCreateRequiresCreatorAuthority,
@@ -139,7 +140,6 @@ function isOlderGatewayRejectingParam(error: unknown, method: string, param: str
 
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const config = opts?.config ?? getRuntimeConfigSnapshot() ?? undefined;
-  const readOnly = opts?.readOnly === true;
   const assertStreamConfigCurrent = captureCronStreamPolicyConfigCurrentness(opts);
   const managementAuthority = bindCronManagementGrant(opts?.runId, config);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
@@ -148,15 +148,17 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
-  const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
+  // Conversation continuations keep their catalog; the execution guard still scopes each call.
+  const selfRemoveOnly =
+    Boolean(readCronSelfRemoveOnlyJobId(opts)) &&
+    (!opts?.agentSessionKey?.trim() || isCronSessionKey(opts.agentSessionKey));
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
-    displaySummary: readOnly ? "Inspect recorded automation state." : CRON_TOOL_DISPLAY_SUMMARY,
+    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: buildCronToolDescription({
       triggersEnabled,
       callerScoped: !isCronModelManagementAllowed(config),
-      readOnly,
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
@@ -165,7 +167,6 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
-      readOnly,
       allowCommandJobs,
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
@@ -174,6 +175,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       nextCheckEnabled,
       management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
     }),
+    prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       assertCurrentRun?.();
@@ -194,17 +196,12 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         );
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
-      if (readOnly && !CRON_SCOPED_READ_ACTIONS.includes(action)) {
-        throw new Error(
-          "The automation tool is read-only during recovery; only caller-scoped inspections are available. It cannot create, change, remove, run, or wake work. This restriction does not establish the outcome of an earlier action.",
-        );
-      }
       if (
         managementAuthority?.managementOnly &&
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
       ) {
         throw new Error(
-          "This turn can only list, get, update, run, or remove automations. Use the Automations page for other actions.",
+          "This turn can only list, get, update, run, remove, or bind automations. Use the Automations page for other actions.",
         );
       }
       assertCronSelfRemoveScope(opts, action, params);
@@ -405,7 +402,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               );
             }
             case "get":
-            case "runs": {
+            case "runs":
+            case "bind": {
               const id = requireCronJobIdParam(params);
               const runId = action === "runs" ? readToolStringParam(params, "runId") : undefined;
               return jsonResult(
@@ -444,6 +442,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               ) {
                 delete job.enabled;
               }
+              applyCronToolDefaults(job, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               const requiresCreatorAuthority = cronCreateRequiresCreatorAuthority(
                 job,
                 opts?.creatorToolAllowlist,
@@ -568,6 +567,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 throw new Error("displayName must be a non-empty string or null");
               }
               const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+              applyCronToolDefaults(patch, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
                 throw new Error("job required");
               }
@@ -717,8 +717,5 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         : executeAction());
     },
   };
-  if (readOnly) {
-    bindAgentToolReplaySafety(tool, "bounded-read");
-  }
   return setToolTerminalPresentation(tool, formatCronTerminalPresentation);
 }

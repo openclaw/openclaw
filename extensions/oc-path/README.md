@@ -23,6 +23,10 @@ child bullets, sibling fields, and the file's line endings.
 
 Markdown paths returned by `find` can be reused with `resolve` and `set`, including quoted field names and empty section or item slugs. Quoted selector-like names are literals; unquoted selectors such as `$last` keep their usual meaning.
 
+For JSON/JSONC, JSONL, and YAML arrays, a quoted numeric index such as `"0"`
+works in both `resolve` and `find`, including before a wildcard. Paths returned
+by `find` preserve the quoted index spelling.
+
 This is a file-editing interface; it does not replace higher-level configuration
 or memory management.
 

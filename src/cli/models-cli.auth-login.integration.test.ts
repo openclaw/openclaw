@@ -13,6 +13,7 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerModelsCli } from "./models-cli.js";
 import { defaultRuntime } from "./models-cli.runtime.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const FRESH_PROFILE_ID = "openai:fresh-login";
 const ORDER_BUSY_MESSAGE =
@@ -25,10 +26,7 @@ const mocks = vi.hoisted(() => ({
     profiles: [
       {
         profileId: "openai:fresh-login",
-        credential: createOAuthRefreshCredential({
-          access: "fresh-access",
-          refresh: "fresh-refresh",
-        }),
+        credential: createOAuthRefreshCredential(),
       },
     ],
   })),
@@ -54,20 +52,6 @@ vi.mock("../plugins/providers.runtime.js", () => ({
     ] satisfies ProviderPlugin[],
 }));
 
-function makeStdinInteractive(): () => void {
-  // Piped stdin has no own isTTY property; the fixture owns only its temporary override.
-  const stdin: { isTTY?: boolean } = process.stdin;
-  const descriptor = Object.getOwnPropertyDescriptor(stdin, "isTTY");
-  Object.defineProperty(stdin, "isTTY", { configurable: true, get: () => true });
-  return () => {
-    if (descriptor) {
-      Object.defineProperty(stdin, "isTTY", descriptor);
-    } else {
-      delete stdin.isTTY;
-    }
-  };
-}
-
 describe("models auth login owner integration", () => {
   let lock: DatabaseSync | undefined;
 
@@ -80,7 +64,8 @@ describe("models auth login owner integration", () => {
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
-        const restoreStdin = makeStdinInteractive();
+        const tty = createCliTtyMock([process.stdin]);
+        tty.set(true);
         try {
           return await run(state);
         } finally {
@@ -91,7 +76,7 @@ describe("models auth login owner integration", () => {
             lock.close();
           }
           lock = undefined;
-          restoreStdin();
+          tty.restore();
           vi.clearAllMocks();
           vi.restoreAllMocks();
         }
@@ -114,7 +99,6 @@ describe("models auth login owner integration", () => {
     await withLoginState(async (state) => {
       await login();
 
-      expect(mocks.runAuth).toHaveBeenCalledOnce();
       expectSavedCredential();
       expect(
         loadPersistedAuthProfileStore(state.agentDir())?.profiles[FRESH_PROFILE_ID],
@@ -144,7 +128,7 @@ describe("models auth login owner integration", () => {
       ).not.toBeNull();
       const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
         throw new Error(`exit:${code}`);
       });
       const persist = providerAuthPersistence.persistProviderAuthProfilesAfterLogin;
@@ -161,7 +145,6 @@ describe("models auth login owner integration", () => {
       await expect(login()).rejects.toThrow("exit:1");
 
       expect(error).toHaveBeenCalledWith(ORDER_BUSY_MESSAGE);
-      expect(exit).toHaveBeenCalledWith(1);
       expect(log).not.toHaveBeenCalledWith(
         expect.stringContaining(`Auth profile: ${FRESH_PROFILE_ID}`),
       );

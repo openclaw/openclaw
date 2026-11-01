@@ -159,14 +159,21 @@ export function createRuntimeAuthProfileSnapshotSelection(
       const workerProfiles = buildPersistedAuthProfileSecretsStore(store).profiles;
       const publishedProfiles = buildPersistedAuthProfileSecretsStore(published).profiles;
       let usageStats: AuthProfileStore["usageStats"];
-      for (const [profileId, credential] of Object.entries(workerProfiles)) {
-        if (!isDeepStrictEqual(credential, publishedProfiles[profileId])) {
+      const profileIds = new Set([
+        ...Object.keys(workerProfiles),
+        ...Object.keys(store.usageStats ?? {}).filter((id) => id.startsWith("inline-api-key:")),
+        ...Object.keys(published.usageStats ?? {}).filter((id) => id.startsWith("inline-api-key:")),
+      ]);
+      for (const profileId of profileIds) {
+        if (!isDeepStrictEqual(workerProfiles[profileId], publishedProfiles[profileId])) {
           continue;
         }
         // A cleared local profile must not inherit a different owner's same-id block.
         const usageOwner =
           published.profiles[profileId] === requested?.profiles[profileId] ? requested : inherited;
-        const usage = usageOwner?.usageStats?.[profileId];
+        const usage = profileId.startsWith("inline-api-key:")
+          ? published.usageStats?.[profileId]
+          : usageOwner?.usageStats?.[profileId];
         if (isDeepStrictEqual(store.usageStats?.[profileId], usage)) {
           continue;
         }

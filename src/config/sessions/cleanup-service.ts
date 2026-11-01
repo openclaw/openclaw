@@ -48,7 +48,6 @@ export {
   isSessionsCleanupPartialResult,
   serializeSessionCleanupResult,
   SessionsCleanupFailureError,
-  type SessionCleanupSummary,
   type SessionsCleanupResult,
 } from "./cleanup-result.js";
 export { resolveSessionCleanupAction } from "./cleanup-action.js";
@@ -522,7 +521,6 @@ export async function purgeAgentSessionStoreEntries(
   cfg: OpenClawConfig,
   agentId: string,
   options: {
-    env?: NodeJS.ProcessEnv;
     runDatabaseCleanup?: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
     onFailure?: (failure: { path: string; reason: string }) => void;
   } = {},
@@ -534,12 +532,10 @@ export async function purgeAgentSessionStoreEntries(
   try {
     storePath = resolveSessionStorePathCore(cfg.session?.store, {
       agentId: normalizedAgentId,
-      env: options.env,
     });
     const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: normalizedAgentId,
       defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
-      env: options.env,
     });
     failurePath = sqliteTarget.path;
     if (!fs.existsSync(sqliteTarget.path)) {
@@ -553,7 +549,6 @@ export async function purgeAgentSessionStoreEntries(
         agentId: normalizedAgentId,
         storeAgentId,
         storePath,
-        env: options.env,
       });
       step = "close session-store cleanup";
     };

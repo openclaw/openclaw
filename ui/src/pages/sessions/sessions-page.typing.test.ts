@@ -16,6 +16,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   createLiveSessionContext,
   createContext,
@@ -57,7 +58,7 @@ function listRequest<P>(list: (params?: P) => unknown, methods: Record<string, (
   return mockSessionRequests({ "sessions.list": list, ...methods });
 }
 const subscribed = () => ({ subscribed: true });
-function escape(input: HTMLInputElement) {
+function escape(input: HTMLElement) {
   const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   input.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(true);
@@ -86,19 +87,28 @@ function editInput(input: HTMLInputElement, value: string, event = "input") {
   input.dispatchEvent(new Event(event, { bubbles: true }));
 }
 
-const searchInput = (page: ParentNode) =>
-  page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+const searchInput = (page: ParentNode) => {
+  const find = () => page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input");
+  if (!find()) {
+    page.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
+    flush();
+  }
+  return find()!;
+};
 
-async function mountTypingPage(initialResult = result("agent:main:initial")) {
+async function mountTypingPage(
+  initialResult = result("agent:main:initial"),
+  deepLink: string | null = null,
+) {
   const pending: Array<ReturnType<typeof createDeferred<SessionsListResult>>> = [];
   const requests: unknown[] = [];
   const request = listRequest(
-    (params?: { includeUnknown?: boolean }) => {
-      if (params?.includeUnknown !== false) {
+    (params?: { includeUnknown?: boolean; search?: string }) => {
+      if (params?.includeUnknown !== false && !(deepLink && params?.search)) {
         return result("agent:main:sidebar");
       }
       requests.push(params);
-      if (requests.length === 1) {
+      if (requests.length === 1 || (deepLink && params?.search === deepLink)) {
         return initialResult;
       }
       const task = createDeferred<SessionsListResult>();
@@ -110,7 +120,7 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
   const client = { request } as unknown as GatewayBrowserClient;
   const { connection, sessions, context } = createLiveSessionContext(client);
   const { changeScope: setScope } = withNotifyingAgentSelection(context, "main");
-  const page = await createRenderedPage(context, initialResult);
+  const page = await createRenderedPage(context, initialResult, "active", deepLink);
   const input = () => searchInput(page);
   cleanups.push(async () => {
     page.remove();
@@ -180,46 +190,26 @@ afterEach(async () => {
 
 describe("sessions page managed roster", () => {
   it("replaces a deep link with managed search and surfaces query errors", async () => {
+    vi.useFakeTimers();
     const deepLink = "agent:main:initial";
-    const pending = new Map<string, ReturnType<typeof createDeferred<SessionsListResult>>>();
-    const request = listRequest(
-      (params?: { search?: string }) => {
-        if (!params?.search || params.search === deepLink) {
-          return result("agent:main:initial");
-        }
-        const task = createDeferred<SessionsListResult>();
-        pending.set(params.search, task);
-        return task.promise;
-      },
-      { "sessions.subscribe": subscribed, "agent.identity.get": () => ({ name: "Assistant" }) },
-    );
-    const { page } = await mountPage(
-      { request } as unknown as GatewayBrowserClient,
-      result(deepLink),
-      deepLink,
-    );
-    cleanups.push(() => {
-      for (const task of pending.values()) {
-        task.resolve(result("cleanup"));
-      }
-    });
-    const search = (value: string) => editSearch(page, value);
+    const { page, edit, pending } = await mountTypingPage(result(deepLink), deepLink);
     page.selectedSessions = new Map([[deepLink, { key: deepLink }]]);
-    await search("older");
-    await vi.waitFor(() => expect(pending.has("older")).toBe(true));
+    await edit("older");
+    await advance(200);
     expect([page.result, page.selectedSessions.size]).toEqual([null, 0]);
     expect(page.textContent).not.toContain("No sessions match your filters.");
-    await search("latest");
-    pending.get("older")!.resolve(result("agent:main:older"));
-    await vi.waitFor(() => expect(pending.has("latest")).toBe(true));
+    await edit("latest");
+    await resolveResult(pending[0]!, "agent:main:older");
+    await advance(200);
     expect(page.result).toBeNull();
-    pending.get("latest")!.resolve(result("agent:main:latest"));
-    await vi.waitFor(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:latest"));
+    await resolveResult(pending[1]!, "agent:main:latest");
+    expect(page.result?.sessions[0]?.key).toBe("agent:main:latest");
+    await edit("failed");
+    await advance(200);
+    pending[2]!.reject(new Error("synthetic query failure"));
+    await advance();
     await page.updateComplete;
-    await search("failed");
-    await vi.waitFor(() => expect(pending.has("failed")).toBe(true));
-    pending.get("failed")!.reject(new Error("synthetic query failure"));
-    await vi.waitFor(() => expect(page.textContent).toContain("synthetic query failure"));
+    expect(page.textContent).toContain("synthetic query failure");
     expect(page.textContent).not.toContain("No sessions match your filters.");
     expect(page.result).toBeNull();
   });
@@ -297,8 +287,8 @@ describe("Sessions page typing and detail ownership", () => {
         escape(input());
       }
       await page.updateComplete;
-      expect(document.activeElement).toBe(input());
-      expect(clear).toMatchObject({ hidden: true, disabled: true });
+      expect(document.activeElement).toBe(clear);
+      expect(page.querySelector(".sessions-filter-popover__search input")).toBeNull();
       expect([input().value, page.selectedSessions.size, page.result]).toEqual(["", 0, null]);
       const count = requests.length;
       await advance(200);
@@ -318,6 +308,8 @@ describe("Sessions page typing and detail ownership", () => {
         true,
       ]);
       escape(input());
+      flush();
+      escape(clear);
       expect(page.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(false);
       expect(requests).toHaveLength(count + 1);
     },
@@ -426,11 +418,13 @@ describe("Sessions page typing and detail ownership", () => {
       sessions: [{ ...before.sessions[0]!, label: "After rename", updatedAt: 2 }],
     };
     const patch = createDeferred<SessionPatchResult>();
+    const patchRequested = createDeferred();
     const older = createDeferred<SessionsListResult>();
     let pageRequests = 0;
     let mutationRefreshes = 0;
     const request = vi.fn(async (method: string, params?: { includeUnknown?: boolean }) => {
       if (method === "sessions.patch") {
+        patchRequested.resolve();
         return patch.promise;
       }
       expect(method).toBe("sessions.list");
@@ -460,7 +454,7 @@ describe("Sessions page typing and detail ownership", () => {
     const label = findInput(page, ".session-overrides-grid input");
     expect(label.disabled).toBe(false);
     editInput(label, "After rename", "change");
-    await advance();
+    await patchRequested.promise;
     expect(request).toHaveBeenCalledWith(
       "sessions.patch",
       expect.objectContaining({ key, label: "After rename" }),

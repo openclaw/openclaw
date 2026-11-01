@@ -28,7 +28,11 @@ import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
 } from "./session-transcript-fts.js";
-import { createPostgresProjectionFlusher } from "./session-transcript-index-postgres.js";
+import {
+  createPostgresProjectionFlusher,
+  type TranscriptWindowPostimage,
+  type TranscriptWindowUpdate,
+} from "./session-transcript-index-postgres.js";
 import {
   prepareSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionState,
@@ -305,7 +309,10 @@ export function createTranscriptIndexAppenderInTransaction(
 ): {
   append: (params: TranscriptIndexAppend) => boolean;
   flushRows: () => void;
-  flush: () => void;
+  flush: (windowUpdate?: TranscriptWindowUpdate) => TranscriptWindowPostimage | undefined;
+  readPostimage: () =>
+    | { state: Readonly<SessionTranscriptProjectionState>; flushed: boolean }
+    | undefined;
 } {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   const initial = prepared ? prepared.state : readSessionTranscriptProjectionState(db, sessionId);
@@ -408,15 +415,16 @@ export function createTranscriptIndexAppenderInTransaction(
   return {
     append: appendEvent,
     flushRows,
-    flush() {
+    flush(windowUpdate) {
       if (flushPostgres) {
         const next =
           pendingUpdatedAt !== undefined && watermark
             ? { ...watermark, updatedAt: pendingUpdatedAt }
             : undefined;
-        flushPostgres(
+        const postimage = flushPostgres(
           { activeRows: pendingActiveRows, ftsRows: pendingFtsRows, watermark: next },
           persisted,
+          windowUpdate,
         );
         pendingActiveRows.length = 0;
         pendingFtsRows.length = 0;
@@ -424,11 +432,11 @@ export function createTranscriptIndexAppenderInTransaction(
           persisted = true;
           pendingUpdatedAt = undefined;
         }
-        return;
+        return postimage;
       }
       flushRows();
       if (pendingUpdatedAt === undefined || !watermark) {
-        return;
+        return undefined;
       }
       const write = persisted
         ? (updateWatermark ??= createWatermarkWriter(db, sessionId, true))
@@ -436,6 +444,16 @@ export function createTranscriptIndexAppenderInTransaction(
       write({ ...watermark, updatedAt: pendingUpdatedAt });
       persisted = true;
       pendingUpdatedAt = undefined;
+      return undefined;
+    },
+    readPostimage() {
+      if (!watermark || watermark.needsRebuild || hasUnclassifiedEvents) {
+        return undefined;
+      }
+      return {
+        state: watermark,
+        flushed: persisted && pendingUpdatedAt === undefined && pendingActiveRows.length === 0,
+      };
     },
   };
 }

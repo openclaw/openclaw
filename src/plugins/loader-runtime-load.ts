@@ -72,6 +72,7 @@ export function resolveRuntimePluginRegistry(
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
+    acquirePluginRegistryForInspection,
     resolveRuntimePluginRegistry,
     isPluginRegistryLoadInFlight,
   }),
@@ -298,7 +299,8 @@ async function acquireRegistryResources(
   try {
     inheritPluginNativeAdmissions(getPluginCache(), cache);
     const registry = await withPluginCache(cache, () => load(resources));
-    return { registry, release: () => resources.release() };
+    // An inline closure shares the retirement callback's context, including the cache.
+    return { registry, release: resources.release.bind(resources) };
   } catch (error) {
     try {
       await resources.release();

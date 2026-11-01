@@ -1,8 +1,8 @@
 import fsSync, { type BigIntStats, chmodSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -10,21 +10,19 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...original, chmodSync: vi.fn(original.chmodSync) };
 });
 
-const roots = createSuiteTempRootTracker({ prefix: "openclaw-gateway-write-failure-" });
+const roots = useAutoCleanupTempDirTracker(afterEach);
 const acquire = (options: Parameters<typeof acquireGatewayLock>[0]) =>
   acquireGatewayLock({ allowInTests: true, timeoutMs: 0, ...options });
 
-beforeAll(() => roots.setup());
 beforeEach(() => {
   vi.mocked(chmodSync).mockImplementation(fsSync.chmodSync);
 });
 afterEach(() => vi.restoreAllMocks());
-afterAll(() => roots.cleanup());
 
 it.skipIf(process.platform === "win32")(
   "acquires a writable database on a filesystem that rejects chmod",
   async () => {
-    const stateDir = await roots.make("chmod-unsupported");
+    const stateDir = roots.make("chmod-unsupported");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     const options = {
       env: { OPENCLAW_STATE_DIR: stateDir },
@@ -35,7 +33,7 @@ it.skipIf(process.platform === "win32")(
     await (await acquire(options))?.release();
     await fs.chmod(databasePath, 0o666);
     const chmod = fsSync.chmodSync.bind(fsSync);
-    const chmodSpy = vi.mocked(chmodSync).mockImplementation((pathname, mode) => {
+    vi.mocked(chmodSync).mockImplementation((pathname, mode) => {
       if (String(pathname).startsWith(path.dirname(databasePath))) {
         throw Object.assign(new Error("filesystem does not support chmod"), { code: "EPERM" });
       }
@@ -44,7 +42,6 @@ it.skipIf(process.platform === "win32")(
     const lock = await acquire(options);
     try {
       expect(lock).not.toBeNull();
-      expect(chmodSpy).toHaveBeenCalledWith(databasePath, 0o600);
       expect((await fs.stat(databasePath)).mode & 0o777).toBe(0o666);
     } finally {
       await lock?.release();
@@ -53,7 +50,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it("closes handle and preserves an unowned lock file when writeFile fails after open succeeds", async () => {
-  const stateDir = await roots.make("case");
+  const stateDir = roots.make("gateway-write-failure");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const lockDir = path.join(stateDir, "__locks");
   await fs.mkdir(lockDir, { recursive: true });

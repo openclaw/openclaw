@@ -1,6 +1,10 @@
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import {
+  readMcpFixtureMessage,
+  replyMcpFixtureResult,
+} from "./agent-bundle-mcp-lifecycle.test-support.js";
 import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
 import { buildBundleMcpToolsFromCatalog } from "./agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
@@ -17,24 +21,11 @@ async function startInstructionsMcpServer(params: { toolNames: string[]; instruc
       response.writeHead(405).end();
       return;
     }
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      const message = JSON.parse(body) as {
-        id: string | number;
-        method: string;
-        params?: { protocolVersion?: string };
-      };
-      const reply = (result: unknown) => {
-        response.setHeader("content-type", "application/json");
-        response.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
-      };
+    void (async () => {
+      const message = await readMcpFixtureMessage(request);
       if (message.method === "initialize") {
         response.setHeader("mcp-session-id", "instructions-prompt-session");
-        reply({
+        replyMcpFixtureResult(response, message, {
           protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
           capabilities: { tools: {} },
           serverInfo: { name: "instructions-prompt-fixture", version: "1.0.0" },
@@ -48,13 +39,13 @@ async function startInstructionsMcpServer(params: { toolNames: string[]; instruc
       }
       const rawSessionId = request.headers["mcp-session-id"];
       response.setHeader("mcp-session-id", typeof rawSessionId === "string" ? rawSessionId : "");
-      reply({
+      replyMcpFixtureResult(response, message, {
         tools: params.toolNames.map((name) => ({
           name,
           inputSchema: { type: "object", properties: {} },
         })),
       });
-    });
+    })();
   });
   const portClaim = await acquireTestPortBlock({ offsets: [0] });
   await new Promise<void>((resolve, reject) => {

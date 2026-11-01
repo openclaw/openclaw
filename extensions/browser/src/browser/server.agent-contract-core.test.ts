@@ -614,6 +614,24 @@ describe("browser control server", () => {
     expect(pw(mock)).not.toHaveBeenCalled();
   });
 
+  it.runIf(process.platform !== "win32").each([
+    ["/download", "downloadViaPlaywright", DEFAULT_DOWNLOAD_DIR],
+    ["/wait/download", "waitForDownloadViaPlaywright", DEFAULT_DOWNLOAD_DIR],
+    ["/trace/stop", "traceStopViaPlaywright", DEFAULT_TRACE_DIR],
+  ] as const)("%s preserves a literal path beside a directory", async (route, mock, root) => {
+    await startServerAndBase();
+    await fs.mkdir(root, { recursive: true });
+    const neighbor = path.join(root, "literal-output");
+    await fs.mkdir(neighbor);
+    try {
+      const result = await post<{ ok?: boolean }>(route, { ref: "e12", path: " literal-output " });
+      expect(result.ok).toBe(true);
+      expectBrowserCallFields(pw(mock), { path: path.join(root, " literal-output ") });
+    } finally {
+      await fs.rmdir(neighbor);
+    }
+  });
+
   it("agent contract: stop endpoint", async () => {
     const base = await startServerAndBase();
 

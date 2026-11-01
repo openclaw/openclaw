@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-plugin-credentials.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -44,6 +45,7 @@ export type PluginCredentialDescriptor = Static<typeof PluginCredentialDescripto
 export type PluginCredentialInspection = Static<typeof PluginCredentialInspectionSchema>;
 export type PluginsCredentialsInspectParams = Static<typeof PluginsCredentialsInspectParamsSchema>;
 export type PluginsCredentialsInspectResult = Static<typeof PluginsCredentialsInspectResultSchema>;
-export const validatePluginsCredentialsInspectParams = lazyCompile(
+export const validatePluginsCredentialsInspectParams = createProtocolValidator(
   PluginsCredentialsInspectParamsSchema,
+  Checks.isPluginsCredentialsInspectParams,
 );

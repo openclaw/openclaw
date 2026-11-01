@@ -134,6 +134,7 @@ export function SessionMenu(props: {
                 fallback={<div class="tp-session-empty">{t("terminal.noSessions")}</div>}
               >
                 <PanelEmptyState
+                  presentation="mobile"
                   heading={t("terminal.noSessions")}
                   description={t("chat.sidePanel.terminalEmpty")}
                   icon={<Icon name="terminal" />}

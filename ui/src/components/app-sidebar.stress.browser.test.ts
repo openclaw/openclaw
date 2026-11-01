@@ -1,9 +1,14 @@
 import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, describe, expect, it } from "vitest";
 import { cdp, page } from "vitest/browser";
-import "../test-helpers/load-styles.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import "../test-helpers/load-styles.ts";
 import { owner, other, key, mount, settled, geometry } from "../test-helpers/sidebar-stress.ts";
+import {
+  setSessionsGrouping,
+  setSessionsShowPreview,
+  setSessionsStatusFilter,
+} from "./session-organizer-menu.runtime.ts";
 setupSidebarTest();
 afterEach(async () => {
   document.documentElement.removeAttribute("data-theme-mode");
@@ -69,8 +74,8 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
       const { sidebar, gateway, fixtureKeys, context } = await mount(width);
       context.theme.setMode(theme === "dark" ? "dark" : "light");
       await expect.poll(() => document.documentElement.dataset.themeMode).toBe(theme);
-      sidebar.sessionOrganizer.setSessionsGrouping(grouping);
-      sidebar.sessionOrganizer.setSessionsShowPreview(preview);
+      setSessionsGrouping(sidebar.sessionOrganizer, grouping);
+      setSessionsShowPreview(sidebar.sessionOrganizer, preview);
       sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set());
       await settled(sidebar);
       await showAll(sidebar);
@@ -96,9 +101,9 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
         .map((missing) => "Missing fixture row: " + missing);
       for (const row of before) {
         const glyphs = [
-          ...row.rings.map(({ rect, bare }) => ({ rect, width: bare ? 12 : 25, height: null })),
+          ...row.rings.map(({ rect, bare }) => ({ rect, width: bare ? 12 : 24, height: null })),
           ...row.traces.map((rect) => ({ rect, width: 32, height: 22 })),
-          ...row.stacks.map((rect) => ({ rect, width: 28, height: 20 })),
+          ...row.stacks.map((rect) => ({ rect, width: 26, height: 20 })),
         ];
         for (const { rect, width: expectedWidth, height } of glyphs) {
           expect(Math.abs(rect.width - expectedWidth), row.key).toBeLessThanOrEqual(0.1);
@@ -139,7 +144,9 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
           previous &&
           row.title &&
           previous.title &&
-          Math.abs(row.title.x - previous.title.x) > 0.1
+          Math.abs(
+            rtl ? row.title.right - previous.title.right : row.title.left - previous.title.left,
+          ) > 0.1
         ) {
           issues.push(row.key + " title shifted with presence");
         }
@@ -229,7 +236,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     expect(rows.length).toBeGreaterThanOrEqual(6);
     for (const row of rows) {
       for (const ring of row.rings) {
-        expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
+        expect(ring.rect.width).toBe(ring.bare ? 12 : 24);
         if (row.title) {
           expect(ring.rect.right).toBeLessThanOrEqual(row.title.left + 0.5);
         }
@@ -249,8 +256,8 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
   it("keeps archive attribution and row actions in person grouping", async () => {
     await page.viewport(1000, 1100);
     const { sidebar } = await mount(220);
-    sidebar.sessionOrganizer.setSessionsGrouping("person");
-    sidebar.sessionOrganizer.setSessionsStatusFilter("all");
+    setSessionsGrouping(sidebar.sessionOrganizer, "person");
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "all");
     await settled(sidebar);
     await showAll(sidebar);
     const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
@@ -258,7 +265,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     expect(row!.querySelector(".sidebar-session__archive-glyph")).not.toBeNull();
     for (const entry of geometry(sidebar)) {
       for (const ring of entry.rings) {
-        expect(ring.rect.width).toBe(ring.bare ? 12 : 25);
+        expect(ring.rect.width).toBe(ring.bare ? 12 : 24);
       }
     }
     const target = sidebar.querySelector<HTMLAnchorElement>(
@@ -271,7 +278,7 @@ describe.runIf("__vitest_browser__" in globalThis)("catalog and archive row stre
     );
     await settled(sidebar);
     expect(sidebar.querySelector(".sidebar-recent-session--selected")).not.toBeNull();
-    sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
+    setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
     await settled(sidebar);
     const archived = sidebar.querySelector<HTMLElement>(`[data-session-key="${key("archived")}"]`);
     expect(archived?.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toContain(

@@ -9,18 +9,15 @@ import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questio
 import { redactToolDetail } from "../../lib/browser-redact.ts";
 import type { ChatQueueItem, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
-import {
-  reconcileSessionRunTerminal,
-  scopedAgentParamsForSession,
-  type SessionCapability,
-  type SessionRunTerminal,
-} from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionRunTerminal } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   normalizeDefaultMainSessionAliasForUi,
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { reconcileSessionRunTerminal } from "../../lib/sessions/session-run-terminal.ts";
 import {
   chatAbortTargetSession,
   currentChatAbortIntent,

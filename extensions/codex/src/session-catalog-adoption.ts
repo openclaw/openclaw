@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -36,6 +37,9 @@ import {
 } from "./session-upstream-marker.js";
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
+const loadSessionHistoryImport = createLazyRuntimeModule(
+  () => import("./app-server/session-history-import.js"),
+);
 type ContinuedCodexSession = {
   sessionKey: string;
   disposition: CodexSessionDisposition;
@@ -122,17 +126,21 @@ export async function listAdoptedSessionEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<Map<string, AdoptedSessionEntry>> {
-  function* candidates() {
+  const revision = params.sessionEntries?.revision;
+  const cached = revision ? adoptionCandidatesByRevision.get(revision) : undefined;
+  let prepared: AdoptionCandidate[];
+  if (cached && cached.config === params.config && cached.agentId === params.agentId) {
+    prepared = cached.candidates;
+  } else {
+    prepared = [];
     for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
       ...(params.agentId ? { agentId: params.agentId } : {}),
       config: params.config ?? {},
       runtime: params.runtime,
       sessionEntries: params.sessionEntries,
     })) {
-      const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
       const marker = readCodexSupervisionMarker(entry);
       if (
-        !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX) ||
         !marker ||
         entry.initializationPending === true ||
         entry.agentHarnessId !== "codex" ||
@@ -141,26 +149,19 @@ export async function listAdoptedSessionEntries(params: {
         continue;
       }
       const sessionId = entry.sessionId?.trim();
-      if (!sessionId) {
+      const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
+      if (!sessionId || !sessionKeyRest.startsWith(CODEX_SUPERVISION_SESSION_KEY_PREFIX)) {
         continue;
       }
-      yield {
+      prepared.push({
         agentId,
         sessionKey,
         sessionKeyRest,
         sessionId,
         marker,
         identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-      };
+      });
     }
-  }
-  const revision = params.sessionEntries?.revision;
-  const cached = revision ? adoptionCandidatesByRevision.get(revision) : undefined;
-  let prepared: AdoptionCandidate[];
-  if (cached && cached.config === params.config && cached.agentId === params.agentId) {
-    prepared = cached.candidates;
-  } else {
-    prepared = [...candidates()];
     if (revision) {
       adoptionCandidatesByRevision.set(revision, {
         config: params.config,
@@ -302,7 +303,7 @@ async function continueLocalCodexSessionInner(
         sourceThreadId: sourceThread.id,
         ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
       };
-      const { createImportedCodexSession } = await import("./app-server/session-history-import.js");
+      const { createImportedCodexSession } = await loadSessionHistoryImport();
       const created = await createImportedCodexSession({
         runtime: params.api.runtime,
         bindingStore: params.bindingStore,

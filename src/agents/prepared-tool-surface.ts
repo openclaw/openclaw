@@ -50,7 +50,7 @@ export function prepareCoreToolPolicy(
       patch?.enabled !== false &&
       isApplyPatchAllowedForModel(options, patch?.allowModels),
     applyPatchWorkspaceOnly:
-      workspaceOnly || (sessionPolicy?.applyPatchWorkspaceOnly ?? patch?.workspaceOnly !== false),
+      workspaceOnly || (sessionPolicy?.applyPatchWorkspaceOnly ?? patch?.workspaceOnly === true),
     applyPatchContainmentSource,
     imageSanitization: resolveImageSanitizationLimits(options.config),
     modelContextWindowTokens: options.modelContextWindowTokens,

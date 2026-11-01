@@ -10,6 +10,7 @@ import type {
   SessionsResolveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../../agents/agent-scope-config.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../../agent-list.js";
 import type { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
@@ -28,6 +29,10 @@ export async function publishConnectModelCatalog(
     !requestedScope
   ) {
     return;
+  }
+  // Hello can precede catalog preparation; this one-shot publication must not lose its request.
+  if (handler.startupMethodsReady) {
+    await racePromiseWithAbortSignal(handler.startupMethodsReady, client.connectionSignal);
   }
   let scope: ModelCatalogScope;
   if ("shortId" in requestedScope) {

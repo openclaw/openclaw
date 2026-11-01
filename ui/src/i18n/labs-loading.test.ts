@@ -11,7 +11,9 @@ it("keeps shared copy eager and loads feature fallback copy at the Labs boundary
   const { titleForRoute } = await import("../app-navigation.ts");
   expect(titleForRoute("labs")).toBe("Labs");
   expect(manager.t("labsPage.restartRequired")).toBe("Gateway restart required.");
-  expect(manager.t("labsPage.swarm.progress", { complete: "1", total: "2" })).toBe("1 of 2");
+  expect(manager.t("labsPage.swarm.progress", { complete: "1", total: "2" })).toBe(
+    "labsPage.swarm.progress",
+  );
   expect(manager.t("labsPage.codeMode.description")).toBe("labsPage.codeMode.description");
 
   await manager.setLocale("de");
@@ -24,6 +26,7 @@ it("keeps shared copy eager and loads feature fallback copy at the Labs boundary
   for (const [key, value] of flattenTranslations(registerLabsEnglish.catalog)) {
     expect(manager.t(key)).toBe(value);
   }
+  expect(manager.t("labsPage.swarm.progress", { complete: "1", total: "2" })).toBe("1 of 2");
   for (const feature of LAB_FEATURES) {
     expect(feature.title()).toBe(manager.t(`labsPage.${feature.id}.title`));
     expect(feature.description()).toBe(manager.t(`labsPage.${feature.id}.description`));

@@ -11,6 +11,18 @@ export function isGatewayExternallySupervised(env: NodeJS.ProcessEnv = process.e
   return env[GATEWAY_SUPERVISOR_MODE_ENV]?.trim().toLowerCase() === "external";
 }
 
+/** A declared external supervisor or Kubernetes owns stop and replacement decisions. */
+export function resolveGatewayPlatformSupervisor(
+  env: NodeJS.ProcessEnv = process.env,
+): "external" | "kubernetes" | undefined {
+  if (isGatewayExternallySupervised(env)) {
+    return "external";
+  }
+  return env.KUBERNETES_SERVICE_HOST?.trim() && env.KUBERNETES_SERVICE_PORT?.trim()
+    ? "kubernetes"
+    : undefined;
+}
+
 export function formatExternalSupervisorActionRequired(action: string): string {
   return [
     `OpenClaw gateway lifecycle is managed by an external supervisor (${GATEWAY_SUPERVISOR_MODE_ENV}=external).`,

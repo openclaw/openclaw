@@ -35,10 +35,6 @@ import {
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../src/infra/runtime-worker-url.js";
 import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
 import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
 import {
@@ -47,7 +43,6 @@ import {
 } from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { toolingNativeRuntimeEntrypoints } from "./tooling-native-runtime.test-support.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -433,40 +428,20 @@ it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitte
   expect(projectViewer({ ...viewerFailure, ...absent })).toMatchObject(absent);
 });
 
-it("retains the last eight node closes from a 1 MiB JSON file logger output", async () => {
+it("retains the last eight node closes from a 1 MiB structured log", async () => {
   const file = fixtureFile("desktop-node-log-", "node.log");
-  const loggerUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.logger);
-  const subsystemUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.subsystemLogger);
-  execFileSync(
-    process.execPath,
+  const record = (streamKind: string, closeCode: number) =>
+    JSON.stringify({
+      "0": '{"subsystem":"node-host/stream"}',
+      "1": { streamKind, trigger: "target-close", closeCode, privateDetail: "private-node-data" },
+      "2": "node stream closed",
+    });
+  await writeFile(
+    file,
     [
-      ...resolveRuntimeWorkerArgv(loggerUrl, process.execPath).slice(0, -1),
-      "--input-type=module",
-      "--eval",
-      `
-          import { flushLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl.href)};
-          import { createSubsystemLogger } from ${JSON.stringify(subsystemUrl.href)};
-          setLoggerOverride({ file: process.argv[1], level: "info", consoleLevel: "silent" });
-          const log = createSubsystemLogger("node-host/stream");
-          log.info("node stream closed", {
-            streamKind: "portal", trigger: "target-close", closeCode: 1000,
-          });
-          for (let index = 0; index < 10; index++) {
-            log.info("node stream closed", {
-              streamKind: "desktop", trigger: "target-close", closeCode: 1000 + index,
-              privateDetail: "private-node-data",
-            });
-          }
-          await flushLogger();
-        `,
-      file,
-    ],
-    {
-      cwd: path.resolve(import.meta.dirname, "../.."),
-      env: { ...process.env, OPENCLAW_TEST_FILE_LOG: "1" },
-      timeout: 15_000,
-      stdio: "pipe",
-    },
+      record("portal", 1000),
+      ...Array.from({ length: 10 }, (_, index) => record("desktop", 1000 + index)),
+    ].join("\n"),
   );
   await appendFile(file, Buffer.alloc(1024 * 1024 - (await stat(file)).size, 32));
   const closes = await readDesktopProofNodeStreamCloses(file);

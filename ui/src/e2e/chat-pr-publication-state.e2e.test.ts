@@ -1,7 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import {
@@ -68,6 +70,118 @@ function emitPrs(
 }
 
 suite.define(() => {
+  it.each(["link", "actions"] as const)(
+    "keeps accepted publication pending and enriches the confirmed %s in place",
+    async (focus) => {
+      await suite.withPage(publicationContextOptions(), async ({ page }) => {
+        const branch = "feature/publication-feedback";
+        const receipt = {
+          requestId: "2fead998-d749-42b6-baa2-bef4e07c13df",
+          publisher: publicationOptions.shared,
+          status: "requested",
+          message: "The publication was accepted.",
+        };
+        const published = {
+          ...receipt,
+          status: "published",
+          repository: "synthetic/publication-demo",
+          branch,
+          headCommit: "a".repeat(40),
+          url: "https://github.com/synthetic/publication-demo/pull/44",
+        };
+        const gateway = await installPublicationGateway(page, {
+          methodResponses: { "sessions.github.publish": receipt },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await showPublicationBranch(gateway, branch);
+        const environment = await openChatPublication(page);
+        await page.keyboard.press("Escape");
+        const trigger = environment.locator(".chat-pr__publication-actions > .chat-pr__create");
+        await trigger.getByText("Create PR", { exact: true }).waitFor();
+        await trigger.click();
+        await gateway.waitForRequest("sessions.github.publish");
+        await environment
+          .locator('.chat-pr__publication-outcome[data-state="requested"]')
+          .waitFor({ state: "attached" });
+        expect.soft(await trigger.textContent()).toContain("Creating");
+        expect.soft(await trigger.locator(".btn__spinner").count()).toBe(1);
+        expect.soft(await trigger.locator(".chat-pr__publication-warning").count()).toBe(0);
+        const target = (await gateway.waitForRequest(githubOptions)).params;
+        if (!target || typeof target !== "object" || Array.isArray(target)) {
+          throw new Error("Expected publication request parameters");
+        }
+        await gateway.setMethodResponse("sessions.github.status", {
+          result: published,
+          confirmation: null,
+        });
+        await gateway.setMethodResponse(githubOptions, sharedOptions(published));
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...target,
+          reason: "github-publication",
+        });
+        const group = await openDetailsPullRequests(page);
+        const link = group.locator(`a[href="${published.url}"]`).first();
+        await link.waitFor();
+        const row = group
+          .locator("article")
+          .filter({ has: page.locator(`a[href="${published.url}"]`) });
+        const originalRow = await row.elementHandle();
+        const focused = focus === "link" ? link : row.getByRole("button").first();
+        let originalFocus = await focused.elementHandle();
+        const before = await row.boundingBox();
+        await focused.focus();
+        const key = await waitForWatchedSessionKey(gateway);
+        const unrelated = pullRequest(41, "feature/earlier-work", "Earlier pull request", "open");
+        await emitPrs(gateway, key, { repository, pullRequests: [unrelated] });
+        await group.getByText("Earlier pull request", { exact: true }).waitFor();
+        expect.soft(await link.count()).toBe(1);
+        if (focus === "actions") {
+          expect(
+            await originalFocus!.evaluate((element) => element === document.activeElement),
+          ).toBe(true);
+          await focused.press("Enter");
+          const hide = row.getByRole("menuitem", { name: "Hide", exact: true });
+          await hide.focus();
+          originalFocus = await hide.elementHandle();
+          expect(
+            await row.locator("openclaw-chat-ci-details, openclaw-chat-ci-automation").count(),
+          ).toBe(0);
+          expect(
+            await row
+              .getByRole("menuitem", { name: "Open on GitHub", exact: true })
+              .getAttribute("href"),
+          ).toBe(published.url);
+        }
+        await emitPrs(gateway, key, {
+          repository,
+          pullRequests: [
+            unrelated,
+            pullRequest(44, branch, "Keep publication feedback consistent", "open"),
+          ],
+        });
+        await group.getByText("Keep publication feedback consistent", { exact: true }).waitFor();
+        expect.soft(await originalRow!.evaluate((element) => element.isConnected)).toBe(true);
+        expect
+          .soft(await originalFocus!.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        expect.soft((await row.boundingBox())!.height).toBe(before!.height);
+        expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(1);
+        expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.github.status")).toHaveLength(1);
+        if (focus === "actions") {
+          await page.keyboard.press("Escape");
+        }
+        const reads = (await gateway.getRequests(githubOptions)).length;
+        const oldRow = group.locator("article").filter({ hasText: "Earlier pull request" });
+        await oldRow.locator(".chat-pr__actions-trigger").click();
+        await oldRow.getByRole("menuitem", { name: "Hide", exact: true }).click();
+        await oldRow.waitFor({ state: "hidden" });
+        expect(await link.count()).toBe(1);
+        expect(await gateway.getRequests(githubOptions)).toHaveLength(reads);
+      });
+    },
+  );
+
   it("keeps a merged transcript PR separate from an idle publication workspace", async () => {
     await suite.withPage(publicationContextOptions(), async ({ page }) => {
       const href = "https://github.com/synthetic/publication-demo/pull/42";
@@ -366,14 +480,14 @@ suite.define(() => {
       await gateway.setMethodResponse(githubOptions, sharedOptions(published));
       await gateway.resolveDeferred("sessions.github.status", completed);
       const publishedGroup = await openDetailsPullRequests(page);
-      await publishedGroup.getByRole("link", { name: "Open PR", exact: true }).waitFor();
+      await publishedGroup.getByRole("link", { name: /^Open PR:/ }).waitFor();
       const environment = page.locator(".chat-environment__branch");
       expect(
         await environment.locator(".chat-pr__diff, .chat-pr__publication-actions").count(),
       ).toBe(0);
       expect(await page.locator(".chat-pr__publication-outcome").count()).toBe(0);
       await expect.poll(async () => (await gateway.getRequests(githubOptions)).length).toBe(2);
-      expect(await publishedGroup.locator("a.chat-pr__create").getAttribute("href")).toBe(
+      expect(await publishedGroup.locator("a.chat-pr__link").getAttribute("href")).toBe(
         published.url,
       );
       const beforeReconnect = (await gateway.getRequests(githubOptions)).length;
@@ -387,7 +501,7 @@ suite.define(() => {
       await showBranch();
       await openDetailsPullRequests(page);
       await gateway.waitForRequest(githubOptions, { after: beforeReconnect });
-      await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
+      await page.getByRole("link", { name: /^Open PR:/ }).waitFor();
       await emitPrs(gateway, key, {
         repository,
         pullRequests: [pullRequest(44, branch, "Shared publication")],

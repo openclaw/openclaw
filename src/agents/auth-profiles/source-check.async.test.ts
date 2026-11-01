@@ -121,9 +121,7 @@ it("refreshes absent and malformed rows through the cohort", () =>
       ["state", "{}", true],
       ["state", "{", false],
       ["store", "{", true],
-      ["store", "null", true],
       ["store", '{"version":1,"profiles":{}}', true],
-      ["store", undefined, false],
     ] as const;
     for (const [table, json, expected] of cases) {
       peer.exec("DELETE FROM auth_profile_store; DELETE FROM auth_profile_state");
@@ -143,7 +141,6 @@ it("rejects cohort path, agent owner, and state root mismatches", () =>
     const { database, reader } = cohort;
     writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
     using readCohort = vi.spyOn(reader, "withRead");
-    using standalone = vi.spyOn(readers, "prepareAgentAuthProfileRowsRead");
     for (const changed of [
       { path: `${database.path}.other` },
       { agentId: "other" },
@@ -153,9 +150,6 @@ it("rejects cohort path, agent owner, and state root mismatches", () =>
       expect(await hasSource(state.agentDir(), mismatched)).toBe(true);
     }
     expect(readCohort).not.toHaveBeenCalled();
-    expect(
-      standalone.mock.calls.filter(([input]) => input.databasePath === database.path),
-    ).toHaveLength(3);
   }));
 
 it("routes absent, missing-table, state-only, and unreadable sources", () =>

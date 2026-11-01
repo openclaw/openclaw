@@ -14,6 +14,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { persistenceRuntimeEntrypoint } from "./persistence-runtime.test-support.js";
 
@@ -233,7 +234,8 @@ export async function assertPersistenceBundle(
 
 export async function assertPersistenceFiles(directory: string, version: "old" | "new" | "orphan") {
   const files = persistenceFiles(version);
-  const actualFiles = (await fs.readdir(directory, { recursive: true, withFileTypes: true }))
+  const actualFiles = (await listDirectoryTreeStrict(directory))
+    .map((walkEntry) => walkEntry.dirent)
     .filter((entry) => !entry.isDirectory())
     .map((entry) =>
       path.relative(directory, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"),
@@ -256,16 +258,15 @@ export function assertPersistenceSelection(
   pins: SkillLibrarySelection[],
 ) {
   assert.equal(reply.kind, "selected", "Expected reopened selection");
-  const files = persistenceFiles("old")
-    .toSorted(byPath)
-    .map((file) => ({
+  const artifacts = (files: SkillLibraryFile[]) =>
+    files.map((file) => ({
       path: file.path,
-      content: bytesOf(file).toString("base64"),
-      encoding: "base64",
+      bytes: bytesOf(file),
       executable: file.executable === true,
     }));
+  const files = artifacts(persistenceFiles("old").toSorted(byPath));
   assert.deepEqual(
-    [reply.pins, reply.catalog, reply.files],
+    [reply.pins, reply.catalog, reply.files.map(artifacts)],
     [
       pins,
       pins.map((pin) => ({ name: pin.name, baseDir: persistenceRevisionDir(root, pin) })),

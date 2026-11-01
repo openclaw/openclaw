@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
 import { queryObjects } from "node:v8";
@@ -6,8 +5,12 @@ import { emitModelTransportError } from "@openclaw/ai/diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -24,6 +27,7 @@ import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-acces
 import { getSessionColdStorageStatus } from "../config/sessions/session-cold-storage-status.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
@@ -37,12 +41,14 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  mergeCanonicalUserProfiles,
+} from "../state/user-profile-writes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
-import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
@@ -52,6 +58,8 @@ import {
   createActivityRecapSessionFixture,
   messages,
   preparedActivityRecapModel as prepared,
+  recapRpc as rpc,
+  seedRecapConversation as seedConversation,
   scope,
   target,
   terminal,
@@ -130,27 +138,12 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     };
   };
 
-  const seedConversation = async (
-    session: typeof scope,
-    content: string,
-    entry: Partial<SessionEntry> = {},
-    eventId = `event-${session.sessionKey}`,
-  ) => {
-    await upsertSessionEntryCore(session, { sessionId: session.sessionId, updatedAt: 1, ...entry });
-    await persistSessionTranscriptTurn(session, {
-      messages: [{ eventId, message: { role: "user", content } }],
-      touchSessionEntry: false,
-    });
-  };
-
   const transcript = (
     turns: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
     session = scope,
   ) => persistSessionTranscriptTurn(session, { messages: turns, touchSessionEntry: false });
   const currentStore = () =>
     resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId });
-  const notifyTranscript = () =>
-    service.handleTranscript({ target: scope, lifecycleRevision: "lifecycle-1" });
   const summary = (coveredMessages: number, text = completedText) => ({ text, coveredMessages });
   const observeReads = () => {
     const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
@@ -175,28 +168,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       opts: { includeActivitySummary: true },
       ...extra,
     });
-  const rpc = (
-    method: "sessions.describe" | "sessions.activitySummary.ensure",
-    context: ReturnType<typeof createDirectChatContext>,
-  ) => {
-    const respond = vi.fn();
-    const handler =
-      method === "sessions.describe"
-        ? sessionByKeyReadHandlers[method]!
-        : sessionActivitySummaryHandlers[method]!;
-    return {
-      respond,
-      invoke: (params: Record<string, unknown>) =>
-        handler({
-          req: { type: "req", id: "recap", method, params },
-          params,
-          context,
-          client: null,
-          respond,
-          isWebchatConnect: () => false,
-        }),
-    };
-  };
 
   const publication = (ready = () => view()?.state === "current") => {
     const published = createDeferred();
@@ -229,6 +200,35 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   const expectProgress = (state: string, calls: number) =>
     expect({ state: view()?.state, calls: complete.mock.calls.length }).toEqual({ state, calls });
 
+  const operatorRecaps = async (allow: string[]) => {
+    const profile = await ensureCanonicalUserProfileForEmail("recap-owner@example.test");
+    cfg = {
+      ...cfg,
+      gateway: {
+        roles: {
+          default: "member",
+          definitions: {
+            member: {
+              agents: "*",
+              sessions: { others: "none" },
+              scopes: ["operator.read", "operator.write"],
+              modelPolicy: { allow },
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    prepare.mockResolvedValue({ ...prepared, useUtilityModel: true });
+    const provider = vi
+      .fn<NonNullable<Parameters<typeof utilityCompletion.runUtilityCompletion>[1]>>()
+      .mockImplementation(async () => result(completedText));
+    complete.mockImplementation((request) =>
+      utilityCompletion.runUtilityCompletion(request, provider),
+    );
+    return { profile, provider };
+  };
+
   beforeEach(async ({ signal }) => {
     releasePending.length = settlePending.length = 0;
     testSignal = signal;
@@ -236,6 +236,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     testState = await createActivityRecapSessionFixture(cfg);
     complete.mockReset().mockImplementation(async () => result(completedText));
     prepare.mockReset().mockImplementation(async () => prepared);
+    vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
     vi.spyOn(observerModel, "defaultPrepareModel").mockImplementation(prepare);
     vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
     changed.mockReset();
@@ -259,6 +260,84 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await testState.cleanup();
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
+  });
+
+  it("stops an operator recap revoked during preparation and retains its cached result", async () => {
+    const { profile, provider } = await operatorRecaps(["test/utility"]);
+    const alias = await ensureCanonicalUserProfileForEmail("recap-alias@example.test");
+    await assignSessionOwnerInWorker(scope, {
+      expectedSessionId: scope.sessionId,
+      owner: { type: "human", id: alias.id },
+      assignedBy: { type: "system", id: "gateway" },
+    });
+    await mergeCanonicalUserProfiles(alias.id, profile.id);
+    expect(read()?.owner?.actor.id).toBe(alias.id);
+    await messages(2);
+    const allowed = new AsyncWorkScope();
+    await allowed.track(() => ensureRecap(target));
+    await allowed.drain();
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(read()?.activitySummary).toMatchObject(summary(2));
+    const cached = read()?.activitySummary;
+
+    await messages(2, 2);
+    const preparation = createDeferred<typeof prepared>();
+    const started = createDeferred();
+    releasePending.push(() => preparation.resolve(prepared));
+    prepare.mockImplementationOnce(async () => {
+      started.resolve();
+      await withinTest(preparation.promise, testSignal);
+      return { ...prepared, useUtilityModel: true };
+    });
+    const revoked = new AsyncWorkScope();
+    await revoked.track(() => ensureRecap(target));
+    await withinTest(started.promise, testSignal);
+    cfg.gateway!.roles!.definitions.member!.modelPolicy = { allow: [] };
+    setRuntimeConfigSnapshot(cfg);
+    preparation.resolve(prepared);
+    await revoked.drain();
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(read()?.activitySummary).toEqual(cached);
+    expect(view()).toMatchObject({ state: "unavailable", text: completedText });
+    const retainedAssertion = complete.mock.calls[0]?.[0].operatorAuthority?.assertCurrent;
+    expect(retainedAssertion).toBeDefined();
+    expect(() => retainedAssertion?.()).toThrow();
+  });
+
+  it("denies profile-created recaps after a nonhuman assignment while service recaps complete", async () => {
+    const { profile, provider } = await operatorRecaps([]);
+    const createdActor = { type: "human" as const, source: "profile" as const, id: profile.id };
+    const operatorSession = makeConversation("agent:main:operator-recap", "operator-recap-session");
+    await seedConversation(operatorSession.scope, "Completed the requested review.", {
+      createdActor,
+    });
+    expect(read(operatorSession.scope)?.createdActor).toEqual(createdActor);
+    await assignSessionOwnerInWorker(operatorSession.scope, {
+      expectedSessionId: operatorSession.scope.sessionId,
+      owner: { type: "agent", id: "main" },
+      assignedBy: { type: "human", id: profile.id },
+    });
+    // A nonhuman assignee cannot erase the creator's operator model restriction.
+    expect(read(operatorSession.scope)?.owner?.actor.type).toBe("agent");
+    const serviceSession = makeConversation("agent:main:service-recap", "service-recap-session");
+    await seedConversation(serviceSession.scope, "Completed scheduled maintenance.", {
+      createdActor: { type: "system" },
+    });
+    await assignSessionOwnerInWorker(serviceSession.scope, {
+      expectedSessionId: serviceSession.scope.sessionId,
+      owner: { type: "system", id: "gateway" },
+      assignedBy: { type: "system", id: "gateway" },
+    });
+    const work = new AsyncWorkScope();
+    await work.track(() =>
+      Promise.all([ensureRecap(operatorSession.target), ensureRecap(serviceSession.target)]),
+    );
+    await work.drain();
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(provider.mock.calls[0]?.[0].sessionKey).toBe(serviceSession.target.key);
+    expect(read(operatorSession.scope)?.activitySummary).toBeUndefined();
+    expect(view(operatorSession.scope)?.state).toBe("unavailable");
+    expect(read(serviceSession.scope)?.activitySummary).toMatchObject(summary(1));
   });
 
   it("does not enqueue recaps for excluded sessions or disabled utility routing", async () => {
@@ -414,8 +493,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await messages(1, 1);
     const latestWatermark = readSessionTranscriptWatermark(scope);
     expect(latestWatermark.maxSeq).not.toBe(previousWatermark.maxSeq);
-    notifyTranscript();
-    await describeSession("updating", "Only the request is recorded.");
+    await describeSession("stale", "Only the request is recorded.");
 
     terminal(service);
     await withinTest(started.promise, testSignal);
@@ -460,7 +538,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(read()?.activitySummary).toMatchObject(summary(2));
   });
 
-  it("uses committed resident facts for recap notifications and current-authority checks", async () => {
+  it("uses committed resident facts for recap authority checks", async () => {
     await messages(2);
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
     await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
@@ -472,7 +550,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const queries = observeReads();
     const parse = observeParsing();
     for (let index = 0; index < 50; index += 1) {
-      notifyTranscript();
       complete.mock.calls[0]![0].assertCurrent?.();
     }
     expect(queries.queries).toHaveLength(0);
@@ -499,8 +576,10 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i;
     expect(settlementReads.queries.some((sql) => transcriptSql.test(sql))).toBe(false);
     settlementReads.restore();
-    expect(view()?.state).toBe("updating");
-    await awaitPublication(() => terminal(service));
+    expect(view()?.state).toBe("current");
+    const currentRefresh = new AsyncWorkScope();
+    await currentRefresh.track(() => terminal(service));
+    await currentRefresh.drain();
     expect(read()).toMatchObject({
       sessionId: before.sessionId,
       lifecycleRevision: before.lifecycleRevision,
@@ -512,16 +591,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   });
 
   it("refreshes new work, catches up after archiving, and makes no calls for idle metadata changes", async () => {
-    class CompletedTurnContext {
-      readonly target = { ...scope };
-    }
-    const caller = new AsyncLocalStorage<CompletedTurnContext>();
-    const notifyTranscriptFromTurn = () => {
-      const context = new CompletedTurnContext();
-      caller.run(context, () =>
-        service.handleTranscript({ target: context.target, lifecycleRevision: "lifecycle-1" }),
-      );
-    };
     await messages(2);
     const initialWork = new AsyncWorkScope();
     await initialWork.track(() => ensureRecap(target));
@@ -540,14 +609,11 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(changed).not.toHaveBeenCalled();
     expectProgress("current", 1);
     await messages(2, 2);
-    notifyTranscriptFromTurn();
-    expect(queryObjects(CompletedTurnContext)).toBe(0);
-    expectProgress("updating", 1);
+    expectProgress("stale", 1);
     await awaitPublication(() => terminal(service));
     expect(read()?.activitySummary?.coveredMessages).toBe(4);
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read()?.archivedAt).toBeDefined();
-    expect(queryObjects(CompletedTurnContext)).toBe(0);
   });
 
   it.each(["reset", "delete"] as const)(
@@ -849,7 +915,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await seedConversation(aliasScope, "Prepare deployment", {}, "alias-request");
     const { completion, start } = holdCompletion();
     const aliasEvent = { sessionKey: "main", agentId: "main", sessionId: aliasScope.sessionId };
-    service.handleTranscript(aliasEvent);
     await start(aliasTarget);
     expect(complete).toHaveBeenCalledTimes(1);
     const row = await list({ main: read(aliasScope)! }, { fixtureAgentId: "main" });
@@ -872,11 +937,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       ],
       aliasScope,
     );
-    const before = changed.mock.calls.length;
-    for (let index = 0; index < 10; index += 1) {
-      service.handleTranscript(aliasEvent);
-    }
-    expect(changed.mock.calls.length - before).toBe(1);
     registerAgentRunContext("recap-context-run", aliasEvent);
     service.handleEvent({
       runId: "recap-context-run",

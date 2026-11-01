@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { AgentActivityItemSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionParticipantSchema } from "./session-participant.js";
@@ -45,6 +46,8 @@ export const SessionCatalogDescriptorSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   capabilities: SessionCatalogCapabilitiesSchema,
+  /** Never retain previous rows while source authorization is pending or unavailable. */
+  requiresFreshList: Type.Optional(Type.Literal(true)),
 });
 
 export const SessionCatalogPullRequestSummarySchema = closedObject({
@@ -86,7 +89,7 @@ export const SessionCatalogHostSchema = closedObject({
   label: NonEmptyString,
   kind: stringLiteralUnion(["gateway", "node"]),
   connected: Type.Boolean(),
-  /** First snapshot is still loading; retain prior rows until the host publication arrives. */
+  /** First snapshot is loading; retain prior rows only when the catalog permits stale lists. */
   pending: Type.Optional(Type.Boolean()),
   nodeId: Type.Optional(NonEmptyString),
   canStartTerminal: Type.Optional(Type.Boolean()),
@@ -151,6 +154,15 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
   model: Type.Optional(Type.String()),
   /** Source-supplied attribution, independent of the viewer and session adopter. */
   sender: Type.Optional(SessionParticipantSchema),
+  phase: Type.Optional(stringLiteralUnion(["commentary", "final_answer", "partial_answer"])),
+  activity: Type.Optional(AgentActivityItemSchema),
+  toolDetails: Type.Optional(PluginJsonValueSchema),
+  toolName: Type.Optional(Type.String()),
+  toolCallId: Type.Optional(Type.String()),
+  toolInput: Type.Optional(PluginJsonValueSchema),
+  toolInputOmitted: Type.Optional(Type.Boolean()),
+  isError: Type.Optional(Type.Boolean()),
+  exitCode: Type.Optional(Type.Integer()),
   truncated: Type.Optional(Type.Boolean()),
   raw: Type.Optional(PluginJsonValueSchema),
 });

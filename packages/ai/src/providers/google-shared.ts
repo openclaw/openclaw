@@ -24,7 +24,6 @@ import type {
   Context,
   Model,
   SimpleStreamOptions,
-  ThinkingBudgets,
   ThinkingLevel as AgentThinkingLevel,
   StreamOptions,
 } from "../types.js";
@@ -272,10 +271,23 @@ function buildGoogleThinking(
     };
   }
 
-  return {
-    enabled: true,
-    budgetTokens: getGoogleBudget(model, effort, options.thinkingBudgets),
-  };
+  const customBudgets = options.thinkingBudgets;
+  let budgetTokens: number | undefined;
+  if (customBudgets?.[effort] !== undefined) {
+    budgetTokens = customBudgets[effort];
+  } else {
+    const isPro = model.id.includes("2.5-pro");
+    if (isPro || model.id.includes("2.5-flash")) {
+      const budgets: Record<ClampedGoogleThinkingLevel, number> = {
+        minimal: !isPro && model.id.includes("2.5-flash-lite") ? 512 : 128,
+        low: 2048,
+        medium: 8192,
+        high: isPro ? 32768 : 24576,
+      };
+      budgetTokens = budgets[effort];
+    }
+  }
+  return { enabled: true, budgetTokens };
 }
 
 export function buildGoogleSimpleThinking(
@@ -343,27 +355,4 @@ function getGoogleThinkingLevel(
       return ThinkingLevel.HIGH;
   }
   return ThinkingLevel.HIGH;
-}
-
-function getGoogleBudget(
-  model: Model,
-  effort: ClampedGoogleThinkingLevel,
-  customBudgets?: ThinkingBudgets,
-): number | undefined {
-  if (customBudgets?.[effort] !== undefined) {
-    return customBudgets[effort];
-  }
-
-  const isPro = model.id.includes("2.5-pro");
-  if (isPro || model.id.includes("2.5-flash")) {
-    const budgets: Record<ClampedGoogleThinkingLevel, number> = {
-      minimal: !isPro && model.id.includes("2.5-flash-lite") ? 512 : 128,
-      low: 2048,
-      medium: 8192,
-      high: isPro ? 32768 : 24576,
-    };
-    return budgets[effort];
-  }
-
-  return undefined;
 }

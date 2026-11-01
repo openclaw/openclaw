@@ -124,6 +124,7 @@ suite.define(() => {
         .toContain("notebooks");
       const fileTab = page.getByRole("tab", { name: "inventory.csv", exact: true });
       expect(await fileTab.getAttribute("aria-selected")).toBe("true");
+      await page.getByRole("button", { name: "Toggle file tree", exact: true }).click();
       await rail.getByRole("button", { name: "reports", exact: true }).click();
       await gateway.resolveDeferred(
         listMethod,

@@ -1,6 +1,10 @@
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
+import { stripInlineDirectiveTagsForDisplay } from "openclaw/plugin-sdk/text-chunking";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getDiscordRuntime } from "../runtime.js";
-import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
+
+const SPEECH_EMOJI_RE =
+  /(?:\p{Extended_Pictographic}(?:\uFE0F|\u200D|\p{Extended_Pictographic}|\p{Emoji_Modifier})*)+/gu;
 
 export async function synthesizeVoiceReplyAudio(params: {
   cfg: OpenClawConfig;
@@ -16,7 +20,23 @@ export async function synthesizeVoiceReplyAudio(params: {
   });
   const directive = prepared.directives;
   const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
-  const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, params.speakerLabel);
+  let cleaned = stripInlineDirectiveTagsForDisplay(rawSpeakText).text.trim();
+  if (!cleaned) {
+    return { status: "empty" as const };
+  }
+
+  const label = params.speakerLabel?.trim();
+  if (label) {
+    const prefix = new RegExp(`^${escapeRegExp(label)}\\s*:\\s*`, "i");
+    cleaned = cleaned.replace(prefix, "").trim();
+  }
+
+  const speakText = cleaned
+    .replace(SPEECH_EMOJI_RE, " ")
+    .replace(/\s+([?!.,:;])/g, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/ *\n */g, "\n")
+    .trim();
   if (!speakText) {
     return { status: "empty" as const };
   }

@@ -5,6 +5,11 @@ import { en } from "./en.ts";
 // cannot leave an update failure without its host-side recovery command.
 const enUpdateActions = {
   updates: {
+    adminRequired: "Administrator access is required to change update settings or start an update.",
+    refreshFailed: "Could not refresh. Check your connection and try again.",
+    campaign: en.updates.campaign,
+    holdOneHour: "Hold 1 h",
+    reviewUpdate: "Review update",
     run: {
       title: "Update progress",
       phases: "Update phases",
@@ -13,10 +18,19 @@ const enUpdateActions = {
       noDetails: "No step details recorded yet.",
       verification: "Verification checks",
       report: "Update report",
-      restarting: en.updates.run.restarting,
+      restarting: "Gateway restarting…",
       reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",
-      progress: en.updates.run.progress,
-      phase: en.updates.run.phase,
+      progress: "{completed} of {total} phases complete",
+      phase: {
+        requested: "Requested",
+        staging: "Staging",
+        validating: "Validating",
+        repairing: "Repairing",
+        activating: "Activating",
+        restarting: "Restarting",
+        verifying: "Verifying",
+        finished: "Finished",
+      },
       step: {
         completed: "Complete",
         in_progress: "In progress",
@@ -53,6 +67,7 @@ const enUpdateActions = {
       },
     },
     confirm: {
+      action: "Update and restart",
       message: "Installs the available update on the connected Gateway and restarts it.",
       noKnownUpdateMessage:
         "Runs the Gateway updater and restarts it. The current version may be reinstalled.",
@@ -64,7 +79,30 @@ const enUpdateActions = {
       versionsBehind: "Installed {installed} · {available}",
       macAction: "Update Mac app and restart",
     },
+    target: {
+      version: en.updates.target.version,
+      commitBehind: en.updates.target.commitBehind,
+      commitsBehind: en.updates.target.commitsBehind,
+      viewChanges: "Compare on GitHub",
+    },
+    sidebar: {
+      campaignTarget: "{status} · {target}",
+      checking: "Checking for updates…",
+      checkFailed: "Could not check the latest update. Try again.",
+      updating: "Updating Gateway…",
+      availableTitle: "Update available",
+      availableBadge: "Available",
+      availableSummary: "A newer revision is ready.",
+      blockedTitle: "Update blocked",
+      blockedSummary: "The selected revision could not be applied to this checkout.",
+      blockedWaiting: "Blocked · waiting for active work · {target}",
+      waitingForIdle: en.updates.sidebar.waitingForIdle,
+    },
     dialog: {
+      disconnected:
+        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
+      restarting:
+        "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
       checkStatus: "Check status",
       checkingStatus: "Checking status…",
       statusRefreshed: "Status refreshed.",
@@ -75,7 +113,18 @@ const enUpdateActions = {
       notStarted:
         "The update request went unanswered. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
     },
+    channel: en.updates.channel,
+    installKind: en.updates.installKind,
+    page: en.updates.page,
+    coalescedRestart: en.updates.coalescedRestart,
+    error: en.updates.error,
+    checkError: en.updates.checkError,
+    status: en.updates.status,
+    verificationFailedWithIdentity: en.updates.verificationFailedWithIdentity,
+    handoffTimeout: en.updates.handoffTimeout,
+    outcomeUnknown: en.updates.outcomeUnknown,
     triage: {
+      hostHint: en.updates.triage.hostHint,
       failedTitle: "Diagnose failed update",
       unknownTitle: "Diagnose unknown update outcome",
       expectedTarget: "Expected update",
@@ -91,15 +140,51 @@ const enUpdateActions = {
       submit: "Continue",
       cancel: "Cancel",
     },
+    failureReasons: en.updates.failureReasons,
+    failedAtStep: en.updates.failedAtStep,
+    succeededVersion: en.updates.succeededVersion,
+    succeededCommit: en.updates.succeededCommit,
+    succeeded: en.updates.succeeded,
+  },
+  chat: {
+    updating: "Updating…",
+    sidebar: {
+      updateMacAndGateway: "Update Mac app + Gateway",
+      updateGateway: "Update Gateway",
+      serverUpdatedTitle: "Server updated",
+      serverUpdatedRefresh: "Refresh for full capabilities",
+    },
   },
 } satisfies TranslationMap;
 
 export const registerUpdateActionsEnglish = Object.assign(
   () => {
-    const sections = ["run", "confirm", "dialog", "triage", "report"] as const;
-    for (const section of sections) {
-      Object.assign(en.updates[section], enUpdateActions.updates[section]);
-    }
+    const {
+      run,
+      target,
+      sidebar,
+      confirm,
+      dialog,
+      triage,
+      report,
+      adminRequired,
+      refreshFailed,
+      holdOneHour,
+      reviewUpdate,
+    } = enUpdateActions.updates;
+    const { phase, ...runLabels } = run;
+    Object.assign(en.updates, { adminRequired, refreshFailed, holdOneHour, reviewUpdate });
+    Object.assign(en.updates.run, runLabels);
+    Object.assign(en.updates.run.phase, phase);
+    Object.assign(en.updates.target, target);
+    Object.assign(en.updates.sidebar, sidebar);
+    Object.assign(en.updates.confirm, confirm);
+    Object.assign(en.updates.dialog, dialog);
+    Object.assign(en.updates.triage, triage);
+    Object.assign(en.updates.report, report);
+    const { sidebar: chatSidebar, ...chat } = enUpdateActions.chat;
+    Object.assign(en.chat, chat);
+    Object.assign(en.chat.sidebar, chatSidebar);
   },
   { catalog: enUpdateActions },
 );

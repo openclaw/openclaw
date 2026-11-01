@@ -19,7 +19,6 @@ import {
   type SessionControllerSourceAdapter,
 } from "./session-controller.contracts.js";
 import { logSessionControllerSourceClaim } from "./session-controller.diagnostics.js";
-import { bindSessionControllerMailboxRestartDrain } from "./session-controller.mailbox-cleanup.js";
 import { pumpSessionControllerMailbox } from "./session-controller.mailbox-dispatch.js";
 import {
   bindSessionControllerSource,
@@ -201,6 +200,7 @@ export function submitSessionControllerTask(
   params: {
     signal?: AbortSignal;
     target?: SessionTarget;
+    projectSessionActive?: false;
     onCancelled?: (reason?: unknown) => void;
     onSettled?: () => Promise<void>;
     start(claim: SessionControllerMailboxClaim): void;
@@ -211,6 +211,7 @@ export function submitSessionControllerTask(
     target: params.target,
     adapter: {
       signal: params.signal,
+      projectSessionActive: params.projectSessionActive,
       cancel: params.onCancelled,
       onSettled: params.onSettled,
     },
@@ -246,7 +247,7 @@ export function reserveSessionControllerSource(
 }
 
 /** Reserves an input or joins the live one with the same reservationId; only the creator may retire it. */
-export function reserveOrJoinSessionControllerSource(
+function reserveOrJoinSessionControllerSource(
   key: string,
   params: SessionControllerSourceReservation,
 ): { input: SessionControllerInput; created: boolean } {
@@ -284,7 +285,6 @@ export function reserveOrJoinSessionControllerSource(
       retireSessionControllerInput(existing);
     }
   }
-  bindSessionControllerMailboxRestartDrain();
   const mailbox = getSessionControllerMailbox(key, target);
   const cancellation = new AbortController();
   const injectionOrder = createDeferredCore<boolean>();

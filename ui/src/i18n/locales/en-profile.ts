@@ -5,6 +5,19 @@ const identity = en.profilePage.identity;
 
 const enProfile = {
   profilePage: {
+    discord: {
+      title: "Discord account",
+      description:
+        "Connect your Discord identity to this profile. Your existing permissions and channel access rules still apply.",
+      unavailable:
+        "Discord account linking is not configured. Ask your Gateway administrator to enable it.",
+      gatewayAccount: "Discord gateway account",
+      connect: "Connect Discord",
+      disconnect: "Disconnect",
+      verified: "Verified",
+      waiting: "Waiting for Discord…",
+      continue: "Continue in Discord",
+    },
     access: {
       title: "Your access",
       admin: "You have permission to manage this server.",
@@ -18,6 +31,9 @@ const enProfile = {
       nextStep:
         "Ask your server administrator to review your access. Reconnect after they make changes.",
       reconnect: "Reconnect",
+      adminRequest: "Administrator access",
+      adminRequestHint:
+        "Request administrator access for this browser. An administrator must approve this device separately.",
       connecting: "Connecting… Your access will appear when the connection is ready.",
       details: "Technical details",
       description:
@@ -58,6 +74,10 @@ const enProfile = {
         "When a verified account is available, adds this profile's public GitHub noreply address or verified enterprise email address to shared-session commits, depending on the publishing host. The enterprise address is visible in commit history. Turning it off affects future commits only.",
       ownerGitCoauthorDescription:
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
+      prAttribution: "Add OpenClaw attribution to pull requests",
+      prAttributionDescription:
+        "Appends this link to new pull requests. Off by default and separate from Git co-author credit. Does not add work-session links.",
+      prAttributionLink: "🦞 Made with OpenClaw",
       avatarErrors: {
         invalid: "That image could not be processed.",
         sourceTooLarge: "Choose an image that is 10 MB or smaller.",
@@ -70,6 +90,7 @@ const enProfile = {
 export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
+    Object.assign(en.profilePage, { discord: enProfile.profilePage.discord });
     en.profilePage.access = enProfile.profilePage.access;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
   },

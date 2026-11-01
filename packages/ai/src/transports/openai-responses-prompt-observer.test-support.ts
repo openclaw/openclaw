@@ -7,6 +7,8 @@ import type {
   ProviderReplayState,
   UserMessage,
 } from "@openclaw/llm-core";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata as replayMetadata,
@@ -24,9 +26,6 @@ export function createReplayState(
   state: Pick<ProviderReplayState, "type" | "data"> & Partial<ProviderReplayState>,
 ): ProviderReplayState {
   const { source: _source, ...metadata } = replayMetadata(model, identity);
-  if (!metadata.baseUrlHash) {
-    throw new Error("test model must have a replayable base URL");
-  }
   return { ...metadata, ...state };
 }
 
@@ -144,18 +143,7 @@ function recoveryContext(
     model,
     replayMetadata(model, identity),
   );
-  const tail: Context["messages"] = orphaned
-    ? [
-        {
-          role: "toolResult",
-          toolCallId: callId,
-          toolName: "lookup",
-          content: [{ type: "text", text: "result" }],
-          isError: false,
-          timestamp: 2,
-        },
-      ]
-    : [];
+  const tail = orphaned ? [makeTextToolResult(callId, "lookup", "result", false, 2)] : [];
   return {
     systemPrompt: orphaned
       ? "PRIVATE-ORPHANED-OUTPUT-RECOVERY-PROMPT"
@@ -173,16 +161,11 @@ export function createModel<TApi extends Api = "openai-responses">(
   overrides: Partial<Model<TApi>> = {},
 ): Model<TApi> {
   return {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
+    ...makeProviderModel("openai-responses", "openai", "gpt-5.4", {
+      name: "GPT-5.4",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 200_000,
+    }),
     ...overrides,
   } as Model<TApi>;
 }

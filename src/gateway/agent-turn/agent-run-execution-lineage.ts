@@ -1,7 +1,4 @@
-import {
-  attachAgentCommandAdmissionFacts,
-  attachAgentCommandRecoveryAdmissionFacts,
-} from "../../agents/agent-command-admission-facts.js";
+import { attachAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
 import { executionIdentitySpawnAdmission } from "../../audit/execution-identity-spawn-admission.js";
 import {
@@ -16,7 +13,6 @@ export function prepareAgentRunExecutionIdentityFacts(
   params: {
     client: Pick<NonNullable<StartAgentRunExecutionParams["client"]>, "internal"> | null;
     context: Pick<StartAgentRunExecutionParams["context"], "validateAgentRuntimeApprovalAuthority">;
-    isRestartRecoveryResumeRun: boolean;
   },
   runContext: object,
   representedProfileId?: string,
@@ -34,9 +30,7 @@ export function prepareAgentRunExecutionIdentityFacts(
   const localUserIngress = getGatewayLocalUserIngress(params.client);
   const invokingAgentId =
     params.client?.internal?.agentToolCaller?.agentId ?? currentAgentRuntimeIdentity?.agentId;
-  if (params.isRestartRecoveryResumeRun) {
-    attachAgentCommandRecoveryAdmissionFacts(runContext);
-  } else if (invokingAgentId) {
+  if (invokingAgentId) {
     attachAgentCommandAdmissionFacts(runContext, {
       ingress: { kind: "api", boundary: "gateway.agent-tool", state: "present" },
       invoker: { state: "present", kind: "agent", rawPrincipalRef: invokingAgentId },

@@ -12,6 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { resolveDoctorAgentMigrationTargets } from "../commands/doctor-relative-session-store-paths.js";
 import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -82,6 +83,7 @@ import {
   prepareDoctorAgentDatabaseDiscovery,
   resolveConcreteBindingAccountId,
 } from "./state-migrations.doctor-discovery.js";
+import type { AutoMigrateLegacyStateParams } from "./state-migrations.doctor.types.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
@@ -105,7 +107,6 @@ import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
-import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
 import {
   detectLegacyMeetingTranscripts,
   migrateLegacyMeetingTranscripts,
@@ -191,7 +192,6 @@ import type {
   LegacyStateMigrationMode,
   LegacyStateMigrationPlan,
   LegacyStateMigrationStepReceipt,
-  MigrationLogger,
   MigrationMessages,
   LegacyStateMigrationStep,
   PreparedPostSessionPluginMigration,
@@ -2147,24 +2147,7 @@ export async function runLegacyStateMigrations(params: {
 }
 
 /** Run canonical startup migrations and explicit Doctor-owned file repairs. */
-export async function autoMigrateLegacyState(params: {
-  cfg: OpenClawConfigWithLegacyRoster;
-  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
-  invocationPurpose?: LegacyStateMigrationInvocationPurpose;
-  integrityCheck?: "quick" | "full";
-  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
-  pluginDoctorConfig?: OpenClawConfig;
-  /** Include inputs captured by the config snapshot that produced cfg. */
-  configIncludedPaths?: readonly string[];
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-  doctorOnlyStateMigrations?: boolean;
-  legacySessionSurfaces?: PreparedLegacySessionSurfaces;
-  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
-  beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
-}): Promise<{
+export async function autoMigrateLegacyState(params: AutoMigrateLegacyStateParams): Promise<{
   mode: LegacyStateMigrationMode;
   migrated: boolean;
   skipped: boolean;
@@ -2353,6 +2336,7 @@ async function executeLegacyStateMigrations(
       agentDatabaseTargets,
       agentDatabaseMigrationDiscovery,
       integrityCheck: params.integrityCheck,
+      inspectedSessionEntryPaths: params.inspectedSessionEntryPaths,
       orphanSessionStores: overrides?.orphanSessionStores,
       pluginSessionStoreAgentIds:
         overrides?.pluginSessionStoreAgentIds ?? pluginSessionStoreAgentIds,
@@ -2505,13 +2489,11 @@ async function executeLegacyStateMigrations(
           params.cfg,
           stateEnv,
         );
-        // Preflight inspects custom session stores without binding their migration owners.
-        agentDatabaseTargets = hasCustomAgentDirOverride(env)
-          ? []
-          : resolveConfiguredAgentDatabaseTargets(params.cfg, {
-              env: stateEnv,
-              registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
-            });
+        agentDatabaseTargets = resolveDoctorAgentMigrationTargets(params.cfg, stateEnv, {
+          registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
+          mode,
+          skipConfigured: hasCustomAgentDirOverride(env),
+        });
         return { changes: [], warnings: [] };
       } catch (error) {
         if (mode === "automatic") {

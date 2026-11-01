@@ -35,14 +35,11 @@ export async function runGatewayHealthJsonRoute(
       }),
     );
   } catch (error) {
-    const [
-      { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig },
-      {
-        formatGatewayAuthErrorJson,
-        formatGatewayClientRequestErrorJson,
-        formatGatewayTransportErrorJson,
-      },
-    ] = await Promise.all([import("../../commands/health.js"), import("../../gateway/call.js")]);
+    const {
+      emitReachableGatewayAuthDiagnostic,
+      emitGatewayHealthErrorJson,
+      readNonObservingHealthConfig,
+    } = await import("../../commands/health.js");
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
       config: rpc.config ?? (await readNonObservingHealthConfig()),
@@ -56,13 +53,7 @@ export async function runGatewayHealthJsonRoute(
     if (handled) {
       return;
     }
-    const payload =
-      formatGatewayAuthErrorJson(error) ??
-      formatGatewayClientRequestErrorJson(error) ??
-      formatGatewayTransportErrorJson(error);
-    if (payload) {
-      writeRuntimeJson(runtime, payload);
-      runtime.exit(1);
+    if (emitGatewayHealthErrorJson(error, runtime)) {
       return;
     }
     throw error;

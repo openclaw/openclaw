@@ -4,7 +4,8 @@ import type {
   SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -66,7 +67,12 @@ export function sessionCatalogPageFailed(host: Pick<SessionCatalogHost, "error">
 export function preserveExpandedCatalogHost(
   freshHost: SessionCatalogHost,
   previous: SessionCatalogHost | undefined,
+  requiresFreshList = false,
 ): SessionCatalogHost {
+  if (requiresFreshList) {
+    const { nextCursor: _cursor, ...details } = freshHost;
+    return { ...details, sessions: [] };
+  }
   if (!previous) {
     return freshHost;
   }
@@ -206,12 +212,13 @@ export async function refetchExpandedSessionCatalogPages(params: {
             params.pageDepths.get(sessionCatalogHostKey(catalog.id, host.hostId)) ?? 0;
           const previous = previousHosts.get(host.hostId);
           if (host.pending) {
-            return preserveExpandedCatalogHost(host, previous);
+            return preserveExpandedCatalogHost(host, previous, catalog.requiresFreshList);
           }
           if (sessionCatalogPageFailed(host) || sessionCatalogPageFailed(catalog)) {
             return preserveExpandedCatalogHost(
               { ...host, error: host.error ?? catalog.error },
               previous,
+              catalog.requiresFreshList,
             );
           }
           if (pageDepth === 0) {
@@ -224,12 +231,17 @@ export async function refetchExpandedSessionCatalogPages(params: {
             preserveExpandedCatalogHost(
               { ...host, error },
               previous ?? { ...host, sessions, nextCursor },
+              catalog.requiresFreshList,
             );
           const requestedCursors = new Set<string>();
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
             // Pausing automatic replay must retain the full visible window, not its partial prefix.
             if (!params.canRequestPage()) {
-              return preserveExpandedCatalogHost(host, previous);
+              return preserveExpandedCatalogHost(
+                catalog.requiresFreshList ? { ...host, pending: true } : host,
+                previous,
+                catalog.requiresFreshList,
+              );
             }
             requestedCursors.add(nextCursor);
             let result: SessionsCatalogListResult;
@@ -258,13 +270,18 @@ export async function refetchExpandedSessionCatalogPages(params: {
               return preserveExpandedCatalogHost(
                 pageHost ?? { ...host, pending: true },
                 previous ?? { ...host, sessions, nextCursor },
+                catalog.requiresFreshList,
               );
             }
             if (!pageHost) {
               return preserveOnError(missingCatalogPageError());
             }
             if (sessionCatalogPageFailed(pageHost)) {
-              return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
+              return preserveExpandedCatalogHost(
+                { ...host, ...pageHost },
+                previous ?? host,
+                catalog.requiresFreshList,
+              );
             }
             sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
             nextCursor = pageHost.nextCursor;

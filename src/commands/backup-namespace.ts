@@ -1,5 +1,7 @@
 import os from "node:os";
 import { z } from "zod";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { parseRemoteBackupTimestamp, resolveBackupNamespace } from "../infra/backup-retention.js";
 import type { StorageLocation } from "../storage/locations.js";
 
@@ -33,6 +35,15 @@ async function readNamespaceOwner(location: StorageLocation): Promise<NamespaceO
   }
 }
 
+function namespaceRefusal(literals: TemplateStringsArray, ...values: string[]): ExpectedCliError {
+  const message = String.raw({ raw: literals }, ...values);
+  return new ExpectedCliError({
+    message,
+    machineOutput: message,
+    humanOutput: terminalText(literals, ...values),
+  });
+}
+
 function assertOwner(
   location: StorageLocation,
   namespace: string,
@@ -41,14 +52,10 @@ function assertOwner(
 ): void {
   const name = location.describe().name;
   if (!owner) {
-    throw new Error(
-      `Backup namespace "${namespace}" in ${name} lost its ownership claim. Retry the backup.`,
-    );
+    throw namespaceRefusal`Backup namespace "${namespace}" in ${name} lost its ownership claim. Retry the backup.`;
   }
   if (owner.deviceId !== deviceId) {
-    throw new Error(
-      `Backup namespace "${namespace}" in ${name} belongs to another OpenClaw installation (${owner.hostname}, device ${owner.deviceId.slice(0, 12)}). Pass --namespace <name> to use a separate namespace, or --claim-namespace to take it over deliberately (for example after moving to new hardware).`,
-    );
+    throw namespaceRefusal`Backup namespace "${namespace}" in ${name} belongs to another OpenClaw installation (${owner.hostname}, device ${owner.deviceId.slice(0, 12)}). Pass --namespace <name> to use a separate namespace, or --claim-namespace to take it over deliberately (for example after moving to new hardware).`;
   }
 }
 

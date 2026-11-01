@@ -21,13 +21,14 @@ import { SessionProgressCard } from "../components/session-progress-card-solid.t
 import { AgentAvatar } from "../components/solid/agent-avatar.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { SanitizedHtml } from "../components/solid/sanitized-html.tsx";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { extractText } from "../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../lib/chat/sender-label.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { projectProgressCard } from "../lib/reactive/domain-keyed.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
@@ -39,9 +40,10 @@ import type {
   ChatHistoryResult,
 } from "../pages/chat/chat-history-snapshot.ts";
 import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
-import "../styles/chat/progress-card.css";
 import "../styles/sidebar-markdown.css";
 import "../styles/plugin-session-summary.css";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 export type PluginSessionSummaryProps = {
   session: BoardGetParams | null;
@@ -65,7 +67,8 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
   // The stable progress card keeps metadata from the last accepted history read.
   const [metadata, setMetadata] = createStore<{
     sessionInfo: ChatHistoryResult["sessionInfo"];
-  }>({ sessionInfo: undefined }, { shallow: true });
+    known: boolean;
+  }>({ sessionInfo: undefined, known: false }, { shallow: true });
   let alive = true;
   let snapshot: ChatHistoryResult | null = null;
   let cursor: string | undefined;
@@ -100,6 +103,13 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
           startedAt={metadata.sessionInfo?.startedAt}
           endedAt={metadata.sessionInfo?.endedAt}
           hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
+          runtime={{
+            hasActiveSubagentRun: metadata.sessionInfo?.hasActiveSubagentRun,
+            // Retained history must not retain a stale activity claim while its replacement waits.
+            known: latest(() => metadata.known) && Boolean(metadata.sessionInfo),
+            connected: true,
+            lastRunError: metadata.sessionInfo?.lastRunError,
+          }}
         />
       }
     >
@@ -110,6 +120,9 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     if (!current()) {
       return Promise.resolve();
     }
+    setMetadata((draft) => {
+      draft.known = false;
+    });
     const pending = readHistory();
     void setRead(pending);
     // The coordinator serializes admitted reads; the boundary presents their errors.
@@ -163,6 +176,7 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     cursor = snapshot.deltaCursor;
     setMetadata((draft) => {
       draft.sessionInfo = snapshot?.sessionInfo;
+      draft.known = true;
     });
     onSettled(hydrateIdentities);
     return snapshot;
@@ -380,9 +394,9 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
     }
     const state = projectGateway(current);
     let connection = new AbortController();
-    const stop = state.subscribe(() => {
+    const stop = current.subscribe(() => {
       // Retire while the owner publishes; Solid may only see the final reconnected snapshot.
-      if (state.read().snapshot.phase !== "connected") {
+      if (current.snapshot.phase !== "connected") {
         connection.abort();
       } else if (connection.signal.aborted) {
         connection = new AbortController();

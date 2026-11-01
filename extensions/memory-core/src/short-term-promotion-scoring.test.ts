@@ -19,7 +19,6 @@ import { createMemoryCoreTestHarness, shortTermTestState } from "./test-helpers.
 
 const NOW_ISO = "2026-04-03T10:01:00.000Z";
 const NOW_MS = Date.parse(NOW_ISO);
-const RECALL_DAYS = ["2026-04-01", "2026-04-02", "2026-04-03"];
 const THREE_QUERY_HASHES = ["query-a", "query-b", "query-c"];
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
@@ -48,7 +47,7 @@ function createRecallEntry(
     lastRecalledAt: NOW_ISO,
     queryHashes: THREE_QUERY_HASHES,
     userQueryHashes: overrides.queryHashes ?? THREE_QUERY_HASHES,
-    recallDays: RECALL_DAYS,
+    recallDays: ["2026-04-01", "2026-04-02", "2026-04-03"],
     conceptTags: ["backup", "glacier"],
     ...overrides,
   };

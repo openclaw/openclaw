@@ -1,4 +1,5 @@
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type {
   CronDeliveryPreview as CronDeliveryPreviewWire,
   CronJob as CronJobWire,
@@ -159,6 +160,7 @@ export type CronEvent = {
   completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
+  result?: AutomationResult;
   diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
@@ -219,6 +221,7 @@ export type CronRunOutcome = {
   /** Transient internal detail; never project into persisted or public cron events. */
   failureNotificationDetail?: CronFailureNotificationDetail;
   summary?: string;
+  result?: AutomationResult;
   /** Producer-authored terminal reply fact without exposing reply text. */
   replyDisposition?: AgentRunTerminalReplySnapshot["disposition"];
   sessionId?: string;
@@ -409,6 +412,8 @@ export type CronJob = CronJobBase<
    * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
    */
   payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
+  /** Human allowed to manage this automation; separate from its execution envelope. */
+  ownerProfileId?: string;
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -454,6 +459,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
+  /** A human transfer retired inference authority; only fresh capture clears this marker. */
+  ownerTransferPending?: true;
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
@@ -487,6 +494,7 @@ export type CronStoreFile = {
 type CronJobStateInput = Partial<
   Omit<
     CronJobState,
+    | "lastMeaningfulResult"
     | "autoDisabled"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
@@ -506,6 +514,7 @@ export type CronJobCreate = Omit<
   | "updatedAtMs"
   | "state"
   | "scheduledToolPolicy"
+  | "ownerProfileId"
   | "streamExecutionHost"
   | "payloadSource"
 > & {

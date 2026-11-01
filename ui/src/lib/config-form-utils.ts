@@ -197,15 +197,17 @@ function patchPathValue(
   path: Array<string | number>,
   index: number,
   replacement: unknown,
-  mode: "copy" | "set" | "remove",
+  mode: "copy" | "copy-set" | "copy-remove" | "set" | "remove",
 ): PathPatchResult {
   const segment = path[index];
   if (segment === undefined) {
     return { ok: false };
   }
   const last = index === path.length - 1;
-  const remove = mode === "remove" || (mode === "copy" && replacement === undefined);
-  if (mode === "remove" && current == null) {
+  const copy = mode === "copy" || mode === "copy-set" || mode === "copy-remove";
+  const remove =
+    mode === "remove" || mode === "copy-remove" || (mode === "copy" && replacement === undefined);
+  if ((mode === "remove" || mode === "copy-remove") && current == null) {
     return { ok: false };
   }
 
@@ -213,7 +215,7 @@ function patchPathValue(
     if (current != null && !Array.isArray(current)) {
       return { ok: false };
     }
-    const next = Array.isArray(current) ? (mode === "copy" ? [...current] : current) : [];
+    const next = Array.isArray(current) ? (copy ? [...current] : current) : [];
     if (last) {
       if (remove) {
         next.splice(segment, 1);
@@ -240,7 +242,7 @@ function patchPathValue(
   if (!isRecord(record)) {
     return { ok: false };
   }
-  const next = mode === "copy" ? { ...record } : record;
+  const next = copy ? { ...record } : record;
   const child: PathPatchResult = last
     ? { ok: true, value: replacement }
     : patchPathValue(
@@ -271,11 +273,12 @@ export function copyWithPathPatch(
   current: unknown,
   path: Array<string | number>,
   replacement: unknown,
+  mode: "copy" | "copy-set" | "copy-remove" = "copy",
 ): PathPatchResult {
   if (path.length === 0) {
-    return { ok: true, value: replacement };
+    return { ok: true, value: mode === "copy" ? replacement : current };
   }
-  return patchPathValue(current, path, 0, replacement, "copy");
+  return patchPathValue(current, path, 0, replacement, mode);
 }
 
 export function setPathValue(

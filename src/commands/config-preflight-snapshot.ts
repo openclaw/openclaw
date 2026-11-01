@@ -41,7 +41,6 @@ import {
   rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
 } from "./doctor-startup-migration-refusal.js";
-import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
 
 export type ConfigPreflightSnapshotRead = {
   databaseEngineSelection?: DatabaseEngineSelection;
@@ -51,6 +50,9 @@ export type ConfigPreflightSnapshotRead = {
 
 // Match the five-minute startup migration lease budget, including slow cold starts.
 const STARTUP_STATE_ADMISSION_TIMEOUT_MS = 5 * 60_000;
+let doctorIssuesModule:
+  | Promise<typeof import("./doctor/shared/legacy-config-issues.js")>
+  | undefined;
 
 /** Own executable inspection caches until a final snapshot transfers to its caller. */
 export function createConfigPreflightSnapshotReader() {
@@ -142,7 +144,9 @@ async function readConfigPreflightSnapshot(
           return {
             snapshot:
               params.purpose === "doctor" || !result.snapshot.valid
-                ? addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot)
+                ? await (
+                    await (doctorIssuesModule ??= import("./doctor/shared/legacy-config-issues.js"))
+                  ).addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot)
                 : result.snapshot,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           };
@@ -157,7 +161,9 @@ async function readConfigPreflightSnapshot(
         return {
           snapshot:
             params.purpose === "doctor" || !snapshot.valid
-              ? addDoctorLegacyIssues(snapshot)
+              ? await (
+                  await (doctorIssuesModule ??= import("./doctor/shared/legacy-config-issues.js"))
+                ).addDoctorLegacyIssues(snapshot)
               : snapshot,
         };
       },

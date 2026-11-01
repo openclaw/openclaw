@@ -178,6 +178,8 @@ struct MacNodeRuntimeTests {
             })
         }
 
+        var recordingBytes = 2
+        var recordingPaths: [String] = []
         var snapshotCallCount = 0
         var receivedSnapshotParams: MacNodeScreenSnapshotParams?
         var snapshotResult: ScreenSnapshotResult
@@ -254,7 +256,8 @@ struct MacNodeRuntimeTests {
         {
             let url = FileManager().temporaryDirectory
                 .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
-            try Data("ok".utf8).write(to: url)
+            try Data(repeating: 0x41, count: self.recordingBytes).write(to: url)
+            self.recordingPaths.append(url.path)
             return (path: url.path, hasAudio: false)
         }
 
@@ -333,6 +336,19 @@ struct MacNodeRuntimeTests {
 
         #expect(response.ok)
         #expect(response.payloadJSON == payload)
+    }
+
+    @Test func `shutdown removes this process's window captures`() async throws {
+        let executorDirectory = WindowObservationArtifacts.processDirectory
+            .appendingPathComponent("shutdown-\(UUID().uuidString)", isDirectory: true)
+        try WindowObservationArtifacts.createPrivateDirectory(executorDirectory)
+        let capture = executorDirectory.appendingPathComponent("peekaboo-observation.png")
+        try Data([0x89, 0x50]).write(to: capture)
+
+        await MacNodeRuntime().shutdown()
+
+        #expect(!FileManager.default.fileExists(atPath: capture.path))
+        #expect(!FileManager.default.fileExists(atPath: WindowObservationArtifacts.processDirectory.path))
     }
 
     @Test func `handle invoke enforces local Codex catalog consent`() async {
@@ -586,6 +602,58 @@ struct MacNodeRuntimeTests {
         #expect(!payload.base64.isEmpty)
     }
 
+    @Test(arguments: [19_660_800, 19_660_801])
+    func `handle invoke screen record rejects recordings exceeding the frame budget`(recordingBytes: Int) async throws {
+        let services = await MainActor.run {
+            let services = MainActorServicesProbe()
+            services.recordingBytes = recordingBytes
+            return services
+        }
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
+
+        let response = try await invoke(
+            runtime,
+            "req-screen-record-too-large",
+            OpenClawScreenCommand.record.rawValue,
+            params: OpenClawScreenRecordParams(durationMs: 60000))
+
+        #expect(response.ok == false)
+        let hasPayload = response.payloadJSON != nil
+        #expect(!hasPayload)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: screen.record payload too large; reduce durationMs or fps")
+        let path = try #require(await MainActor.run { services.recordingPaths.first })
+        #expect(!FileManager().fileExists(atPath: path))
+    }
+
+    @Test func `handle invoke screen record accepts near-limit recordings that fit the frame`() async throws {
+        let services = await MainActor.run {
+            let services = MainActorServicesProbe()
+            services.recordingBytes = 19_660_100
+            return services
+        }
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
+
+        let response = try await invoke(
+            runtime,
+            "req-screen-record-fit",
+            OpenClawScreenCommand.record.rawValue,
+            params: OpenClawScreenRecordParams(durationMs: 60000),
+            nodeId: "node-fit")
+
+        #expect(response.ok == true)
+        let payloadJSON = try #require(response.payloadJSON)
+        let projected = try MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: payloadJSON,
+            requestId: "req-screen-record-fit",
+            nodeId: "node-fit")
+        #expect(projected <= 25 * 1024 * 1024)
+    }
+
     @Test func `handle invoke screen snapshot uses injected services`() async throws {
         let services = await MainActor.run {
             MainActorServicesProbe(
@@ -631,9 +699,8 @@ struct MacNodeRuntimeTests {
         #expect(payload.width == 800)
         #expect(payload.height == 450)
         #expect(payload.capturedAtMs > 0)
-        let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
-        #expect(snapshotCalledAtMs != nil)
-        #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
+        let snapshotCalledAtMs = try #require(await MainActor.run { services.snapshotCalledAtMs })
+        #expect(payload.capturedAtMs <= snapshotCalledAtMs)
     }
 
     @Test func `handle invoke screen snapshot rejects malformed params before capture`() async {

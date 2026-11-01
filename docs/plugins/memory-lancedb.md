@@ -77,6 +77,30 @@ openclaw plugins inspect memory-lancedb --runtime --json
 See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 and [Hot reload](/gateway/configuration/hot-reload).
 
+## Host memory status and search
+
+When `memory-lancedb` owns the memory slot, it answers the Gateway
+`memory.status`, `memory.search` with
+`version: 2`, and `memory.get` methods from its own agent-scoped store. Doctor,
+`openclaw memory status`, and the Control UI Memory overview report it as the
+memory provider. Operator searches and owner-private sessions can read that
+agent's memories. Other session audiences receive no stored hits. The plugin's
+`memory_recall` tool and automatic recall keep their existing paths.
+
+The Control UI Memories tab does not search or open LanceDB memories yet. It
+sends the unversioned `memory.search` request, which this provider answers with
+a retry-with-`version: 2` error. Use `memory_recall`, `openclaw ltm`, or the
+Gateway methods above to read stored memories.
+
+Status reads the store without making an embedding request. A readable store
+with no recorded embedding failure reports `ready`; the latest embedding failure
+reports `degraded`; an unreadable store reports `unavailable`. A successful
+embedding request clears the recorded failure. Status is not a live probe of the
+embedding service.
+
+If embedding credentials are unavailable, inspect the Gateway log, resolve the
+secret-provider failure, run `openclaw secrets reload`, and retry memory search.
+
 ## Embedding config
 
 `embedding` is required and must include at least one field. `provider`
@@ -221,6 +245,13 @@ Auto-recall embeds the current turn's prompt after removing media attachment
 notes and normalizing whitespace. The same limit bounds each recalled item
 after prompt escaping before that text reaches the model.
 
+Automatic recall and `memory_recall` each have a 15-second budget shared by
+embedding-provider initialization, the embedding request, and database search.
+On the provider-adapter path, cold initialization does not give the embedding
+request a fresh budget: if initialization finishes after the deadline, that
+expired query is not sent. Shared provider initialization may still finish for
+later operations.
+
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture. `memory_store` rejects
 longer text before embedding or storage; the setting does not affect recall
@@ -267,12 +298,42 @@ to save them. Explicit tool calls still follow their normal data-handling rules.
 openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
 openclaw ltm search <query> [--agent <id>] [--limit <n>]
 openclaw ltm stats [--agent <id>]
+openclaw ltm optimize
 ```
 
 `ltm stats` gives its database read 60 seconds after plugin registration. It
 stops the isolated reader before reporting a timeout, without creating a memory
 table or changing existing memory data. A database with no memory table reports
 zero. Plugin discovery and source capture happen before this deadline starts.
+
+### Compact a local table
+
+Stop every Gateway and command using the table, including other profiles that
+share its `dbPath`, then run:
+
+```bash
+openclaw ltm optimize
+```
+
+The command compacts small fragments and prints before/after fragment and row
+counts. It operates on the entire shared table, across all agents, so it has no
+`--agent` option. All rows and existing version history are preserved. Retained
+versions still reference their old files, so fewer active fragments does not
+necessarily mean less disk usage.
+
+Optimization requires exclusive offline custody. It refuses while the active
+state directory has a Gateway owner or another plugin handle has the local table
+open, including handles from other profiles. Normal shared readers and writers
+remain supported outside maintenance. Restart the Gateways after it completes.
+
+Local filesystem paths and `file:` URLs share the same custody lock. Remote URI
+tables require distributed custody and are refused. Older plugin versions and
+external LanceDB scripts do not participate in the table lock; stop them before
+maintenance too.
+The command does not prune versions, delete memories, apply retention cleanup,
+or schedule background maintenance.
+
+### Query memories
 
 `ltm query` runs a non-vector query directly against the LanceDB table:
 

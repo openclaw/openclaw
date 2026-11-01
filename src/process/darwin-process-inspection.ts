@@ -139,7 +139,7 @@ export async function readDarwinProcessTree(
     process: topology(row),
     identity: row.identity,
   }));
-  const selected = new Set([process.pid, ...roots]);
+  const selected = new Set(roots);
   const pending = [...roots];
   for (const parent of pending) {
     for (const { process: row } of tree) {
@@ -149,6 +149,7 @@ export async function readDarwinProcessTree(
       }
     }
   }
+  selected.add(process.pid);
   // Unrelated users may deny birth identities. Only the selected lineage needs
   // them; missing relevant identity must never be treated as disappearance.
   const result = tree

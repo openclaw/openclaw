@@ -25,6 +25,7 @@ import type {
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairLegacyDashboardChatTypes } from "./doctor-session-dashboard-chat-type.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairLegacySessionEntryStates,
@@ -258,6 +259,7 @@ export async function noteSessionTranscriptHealth(options?: {
     const reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
     const deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
     repairLegacySessionExecPolicy(rowRepairParams);
+    repairLegacyDashboardChatTypes(rowRepairParams);
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,
@@ -398,14 +400,17 @@ export async function noteSessionTranscriptHealth(options?: {
     resolvedSkillsReport,
     legacyMainSessionResult,
   } = result;
-  if (worktreeWorkspaceReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Repaired saved workspace metadata for ${worktreeWorkspaceReport.repaired} of ${worktreeWorkspaceReport.found} managed-worktree session(s). Check project/worktree ownership for any remaining entries.`
-        : `- Found ${worktreeWorkspaceReport.found} managed-worktree session(s) missing saved workspace metadata. Run "openclaw doctor --fix" to repair them.`,
-      "Session worktrees",
-    );
-  }
+  const noteRepair = (found: number, title: string, message: () => string): void => {
+    if (found > 0) {
+      note(message(), title);
+    }
+  };
+
+  noteRepair(worktreeWorkspaceReport.found, "Session worktrees", () =>
+    params.shouldRepair
+      ? `- Repaired saved workspace metadata for ${worktreeWorkspaceReport.repaired} of ${worktreeWorkspaceReport.found} managed-worktree session(s). Check project/worktree ownership for any remaining entries.`
+      : `- Found ${worktreeWorkspaceReport.found} managed-worktree session(s) missing saved workspace metadata. Run "openclaw doctor --fix" to repair them.`,
+  );
   if (acpKeyReport.found > 0 || acpKeyReport.warnings.length > 0) {
     params.onWarnings?.(acpKeyReport.warnings);
     note(
@@ -430,38 +435,26 @@ export async function noteSessionTranscriptHealth(options?: {
       "Session titles",
     );
   }
-  if (reservedKeyReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
-        : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
-      "Session SQLite",
-    );
-  }
-  if (canonicalKeyReport.foundGroups > 0) {
-    note(
-      params.shouldRepair
-        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
-        : `- Found ${canonicalKeyReport.foundGroups} outdated or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and update the rows to use the current keys.`,
-      "Session SQLite",
-    );
-  }
-  if (deliveryReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
-        : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
-      "Session SQLite",
-    );
-  }
-  if (resolvedSkillsReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Stripped the runtime-only skills catalog from ${resolvedSkillsReport.repaired} durable session row(s). Logical SQLite pages are freed; shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents".`
-        : `- Found ${resolvedSkillsReport.found} durable session row(s) carrying a runtime-only skills catalog. Run "openclaw doctor --fix" to strip it.`,
-      "Session SQLite",
-    );
-  }
+  noteRepair(reservedKeyReport.found, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
+      : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
+  );
+  noteRepair(canonicalKeyReport.foundGroups, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
+      : `- Found ${canonicalKeyReport.foundGroups} outdated or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and update the rows to use the current keys.`,
+  );
+  noteRepair(deliveryReport.found, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
+      : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+  );
+  noteRepair(resolvedSkillsReport.found, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Stripped the runtime-only skills catalog from ${resolvedSkillsReport.repaired} durable session row(s). Logical SQLite pages are freed; shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents".`
+      : `- Found ${resolvedSkillsReport.found} durable session row(s) carrying a runtime-only skills catalog. Run "openclaw doctor --fix" to strip it.`,
+  );
   if (legacyMainSessionResult.changes.length > 0 || legacyMainSessionResult.warnings.length > 0) {
     note(
       [

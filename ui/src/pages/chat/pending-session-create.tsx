@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
@@ -19,8 +20,9 @@ import { createComposerQuestions } from "./components/chat-composer-questions.ts
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { MessageMarkdown } from "./components/chat-message-text-view.tsx";
-import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
+import { ChatPaneHeader, ChatPaneIncognitoNotice } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
+import { ChatPaneMobileHeader } from "./components/chat-pane-mobile-header.tsx";
 import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
@@ -88,7 +90,6 @@ function PendingSessionCreateContent(
     const startup = readDeletedSessionStartup(context, props.sessionKey);
     const failed = startup?.phase === "failed";
     const cancelled = startup?.phase === "cancelled";
-    const checking = startup?.action === "check-delivery";
     const submitting = !failed && !cancelled;
     const turn = startup?.initialTurn;
     const errorAction =
@@ -100,7 +101,7 @@ function PendingSessionCreateContent(
             }
           : startup.retryable
             ? {
-                label: t(checking ? "chat.queue.checkDelivery" : "common.retry"),
+                label: t("common.retry"),
                 onClick: () => context.placementStartup.retry(startup.sessionKey),
               }
             : undefined
@@ -143,7 +144,6 @@ function PendingSessionCreateContent(
         presented: false,
         narrow: props.narrow,
         mergedChrome: props.mergedChrome,
-        navDrawerOpen: props.navDrawerOpen,
         gatewayStatus: props.gatewayStatus,
         title: submissions.readCreate()?.displayName ?? t("newSession.title"),
         titlePending: submitting && !submissions.readCreate()?.displayName,
@@ -173,10 +173,7 @@ function PendingSessionCreateContent(
       } satisfies ChatPaneHeaderProps,
       body: {
         inChat: true,
-        error: failed
-          ? (startup.error ??
-            t(checking ? "chat.queue.checkDeliveryHelp" : "newSession.createFailed"))
-          : null,
+        error: failed ? (startup.error ?? t("newSession.createFailed")) : null,
         errorAction: errorAction
           ? {
               ...errorAction,
@@ -191,7 +188,7 @@ function PendingSessionCreateContent(
           ? { label: startup.error ?? t("newSession.placementCancelled") }
           : failed
             ? {
-                label: t(checking ? "chat.queue.deliveryUnconfirmed" : "chat.queue.notSent"),
+                label: t("chat.queue.notSent"),
               }
             : undefined,
         renderDraft: () => (
@@ -262,7 +259,40 @@ function PendingSessionCreateContent(
     <>
       <div class="sidebar-region">
         <div class="sidebar-region__header">
-          <ChatPaneHeader {...view().header} />
+          {/* Phones show the admitted chat's own header from the first frame; its
+              session controls stay disabled until the Gateway accepts the session. */}
+          <Show when={props.mergedChrome} fallback={<ChatPaneHeader {...view().header} />}>
+            <ChatPaneMobileHeader
+              active
+              title={view().header.title}
+              titlePending={view().header.titlePending}
+              incognito={view().header.incognito}
+              navDrawerOpen={props.navDrawerOpen}
+              panelsOpen={false}
+              notice={
+                props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
+                  ? {
+                      kind: "gateway",
+                      status: props.gatewayStatus.kind,
+                      onRetry: props.gatewayStatus.onRetry,
+                    }
+                  : undefined
+              }
+              actions={
+                <button
+                  type="button"
+                  class="mobile-header__control"
+                  disabled
+                  aria-label={t("chat.sidebar.sessionMenu", { session: view().header.title })}
+                >
+                  <Icon name="moreHorizontal" />
+                </button>
+              }
+            />
+            <Show when={view().header.incognito}>
+              <ChatPaneIncognitoNotice />
+            </Show>
+          </Show>
         </div>
         <section class="chat" data-region="main" aria-busy={view().submitting ? "true" : "false"}>
           <div class="chat-main__conversation-frame">

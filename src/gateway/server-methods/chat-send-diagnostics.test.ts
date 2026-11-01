@@ -1,6 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  markManagedWorktreePreparation,
+  timeWorktreePreparationPhase,
+  withWorktreePreparationTiming,
+} from "../../agents/worktrees/preparation-timing.js";
+import {
   areDiagnosticsEnabledForProcess,
   onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
@@ -50,6 +55,28 @@ test.each([999.9, 1_000])(
   },
 );
 
+test.each([false, true])(
+  "does not format fast-send timings with diagnostics enabled=%s",
+  async (enabled) => {
+    setDiagnosticsEnabledForProcess(enabled);
+    using _ = {
+      [Symbol.dispose]: onTrustedInternalDiagnosticEvent(() => {}, {
+        include: ["diagnostic.phase.completed"],
+      }),
+    };
+    const { info, diagnostics } = createDiagnostics();
+    const round = vi.spyOn(Math, "round");
+    diagnostics.scope("authority");
+    diagnostics.observeSpan("attempt.tool_catalog", undefined, 40);
+    at(100, () => diagnostics.acknowledge());
+    diagnostics.observeSpan("workspace", undefined, 20);
+    at(200, diagnostics.finish);
+    expect(info).not.toHaveBeenCalled();
+    expect(round).not.toHaveBeenCalled();
+    await waitForDiagnosticEventsDrained();
+  },
+);
+
 test.each(["startup", "steer", "queued"] as const)(
   "acknowledgement splits overlapping phases into request and %s observations",
   async (stage) => {
@@ -61,6 +88,7 @@ test.each(["startup", "steer", "queued"] as const)(
     using _ = { [Symbol.dispose]: stop };
     const { info, diagnostics } = createDiagnostics();
     const request = diagnostics.scope("persist")!;
+    diagnostics.setRunIdentity("synthetic-session", "synthetic-run");
     at(10, () => request.mark("response"));
     const snapshot = diagnostics.scope("snapshot")!;
     at(15, request.finish);
@@ -76,7 +104,10 @@ test.each(["startup", "steer", "queued"] as const)(
       isTerminal: () => false,
     });
     expect(events).toEqual([]);
-    expectLog(info, `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`);
+    expectLog(
+      info,
+      `slow chat send 1400ms stage=${stage} sessionId=synthetic-session runId=synthetic-run ack=15ms snapshot=2000ms dispatch=200ms`,
+    );
 
     at(4_000, () => snapshot.mark("effects"));
     snapshot.finish();
@@ -153,4 +184,30 @@ test("span observer failures preserve synchronous and asynchronous results and e
   expect(observeTimeline(observer, () => measureSpanSync("sync", () => 42))).toBe(42);
   const rejectOperation = () => measureSpan("async", () => Promise.reject(failure));
   await expect(observeTimeline(() => observer, rejectOperation)).rejects.toBe(failure);
+});
+
+test("slow startup consumes the sandbox owner's nested timing facts", async () => {
+  const { info, diagnostics } = createDiagnostics();
+  diagnostics.acknowledge();
+  await observeTimeline(diagnostics.observeSpan, () =>
+    measureSpan(
+      "agent.prepare",
+      () =>
+        withWorktreePreparationTiming("sandbox", async () => {
+          markManagedWorktreePreparation();
+          await timeWorktreePreparationPhase("templatePrepare", async () => {
+            at(50_000);
+          });
+          await timeWorktreePreparationPhase("containerStart", async () => {
+            at(75_000);
+          });
+        }),
+      { attributes: { stage: "attempt.setup" } },
+    ),
+  );
+  diagnostics.finish();
+  expectLog(
+    info,
+    "slow chat send 75000ms stage=startup ack=0ms detail.attempt.setup=75000ms detail.worktree.sandbox=75000ms detail.worktree.sandbox.containerStart=25000ms detail.worktree.sandbox.templatePrepare=50000ms detail.worktree.sandbox.unattributed=0ms",
+  );
 });

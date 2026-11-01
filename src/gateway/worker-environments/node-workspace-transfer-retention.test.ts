@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -23,8 +25,8 @@ import {
   startNodeWorkspaceTransferTestServer,
   transferOwner,
 } from "./node-workspace-transfer.test-support.js";
+import { memoryWorkspaceJournal } from "./tunnel.test-support.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
-import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
 import { ConcurrentWorkspacePathError } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -101,22 +103,68 @@ async function runtimeFixture(root: string, scope: string, credentialExpiry?: ()
   };
 }
 
-function reconciliationJournal(onCommit: (ref: string) => void) {
-  let pending: WorkerWorkspaceReconciliationJournal | undefined;
-  return {
-    load: async () => pending,
-    begin: async (next: WorkerWorkspaceReconciliationJournal) => {
-      pending = next;
-    },
-    commit: async (ref: string) => {
-      onCommit(ref);
-      pending = undefined;
-    },
-    abort: async () => {
-      pending = undefined;
-    },
-  };
+async function expectGit(workspace: string, queries: Array<[string[], string]>) {
+  for (const [args, expected] of queries) {
+    expect((await requireGit(workspace, args)).trim()).toBe(expected);
+  }
 }
+
+it("discards a failed origin clone before transferring the Gateway Git base", async () => {
+  const root = await fs.realpath(tempDirs.make("node-workspace-origin-fallback-"));
+  const origin = path.join(root, "origin");
+  const localPath = path.join(root, "gateway-workspace");
+  await fs.mkdir(origin);
+  await fs.mkdir(localPath);
+  await fs.writeFile(path.join(origin, "README"), "unrelated upstream repository\n");
+  await commitWorkspace(origin, "upstream base");
+  await requireGit(origin, ["update-server-info"]);
+  await fs.writeFile(path.join(localPath, "project.txt"), "unpublished local project\n");
+  await commitWorkspace(localPath, "unpublished local base");
+  const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    const pathname = new URL(request.url ?? "/", "http://fixture.test").pathname;
+    requests.push(pathname);
+    void fs.readFile(path.join(origin, ".git", pathname)).then(
+      (bytes) => response.end(bytes),
+      () => {
+        response.statusCode = 404;
+        response.end();
+      },
+    );
+  });
+  const sourceOrigin = `${await listenLoopback(server)}/`;
+  try {
+    await requireGit(localPath, ["remote", "add", "origin", sourceOrigin]);
+    const fixture = await runtimeFixture(root, "origin-fallback");
+    try {
+      const synced = await fixture.createActions().syncWorkspace({
+        source: { kind: "local", path: localPath },
+        sessionId: fixture.sessionId,
+        generation: fixture.ownerEpoch,
+      });
+      expect(requests).toContain("/HEAD");
+      await expectGit(synced.remoteWorkspaceDir, [
+        [["rev-parse", "HEAD"], baseCommit],
+        [["ls-files"], "project.txt"],
+        [["status", "--porcelain"], ""],
+        [["remote", "get-url", "origin"], sourceOrigin],
+      ]);
+      await workspaceFiles(synced.remoteWorkspaceDir).expect(
+        "project.txt",
+        "unpublished local project\n",
+      );
+      await workspaceFiles(synced.remoteWorkspaceDir).missing("README");
+    } finally {
+      await fixture.close();
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+});
 
 it.each([
   "git",
@@ -131,9 +179,9 @@ it.each([
     const localPath = path.join(root, "gateway-workspace");
     const localFiles = workspaceFiles(localPath);
     await fs.mkdir(localPath);
-    await fs.writeFile(path.join(localPath, "project.txt"), "existing project file\n");
-    await fs.writeFile(
-      path.join(localPath, ".gitignore"),
+    await localFiles.write("project.txt", "existing project file\n");
+    await localFiles.write(
+      ".gitignore",
       "unrelated-private.txt\nmedia/inbound/openclaw-staged-*/\n",
     );
     const explicitlyIncluded = `${stagedInputDirectory("d".repeat(64))}/input-secret.txt`;
@@ -144,23 +192,12 @@ it.each([
           : mode === "git-with-marker-only-include"
             ? [`${stagedInputDirectory("a1".repeat(32))}/.gitignore`]
             : [];
-      await fs.writeFile(path.join(localPath, ".worktreeinclude"), includePaths.join("\n"));
+      await localFiles.write(".worktreeinclude", includePaths.join("\n"));
     }
     if (mode !== "plain") {
-      await requireGit(localPath, ["init", "--quiet"]);
-      await requireGit(localPath, ["add", "."]);
-      await requireGit(localPath, [
-        "-c",
-        "user.name=Workspace Test",
-        "-c",
-        "user.email=workspace@example.invalid",
-        "commit",
-        "--quiet",
-        "-m",
-        "base before attachments",
-      ]);
+      await commitWorkspace(localPath, "base before attachments");
     }
-    const ownership = await createStagedInputOwnershipFixture(localPath);
+    await createStagedInputOwnershipFixture(localPath);
     const fixture = await runtimeFixture(root, "input", () => Date.now() + 60_000);
     const { owner, sessionId, ownerEpoch } = fixture;
     const actions = fixture.createActions();
@@ -181,37 +218,11 @@ it.each([
       expect(owner.signal.aborted).toBe(false);
       const remote = synced.remoteWorkspaceDir;
       const remoteFiles = workspaceFiles(remote);
-      for (const relative of ownership.ownedFiles) {
-        await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
-          await fs.readFile(path.join(localPath, relative)),
-        );
-      }
-      const selectedProjectFile = (relative: string) =>
-        (mode === "plain" && !relative.endsWith(".pyc")) ||
-        (mode === "git-with-explicit-include" && relative === explicitlyIncluded);
-      for (const relative of ownership.unownedFiles) {
-        if (selectedProjectFile(relative)) {
-          await expect(fs.readFile(path.join(remote, relative))).resolves.toEqual(
-            await fs.readFile(path.join(localPath, relative)),
-          );
-        } else {
-          await expect
-            .soft(fs.stat(path.join(remote, relative)), relative)
-            .rejects.toMatchObject({ code: "ENOENT" });
-        }
-      }
-      // New ignored project files on the worker must not be promoted on return either.
+      // Initial inventory selection is covered by workspace-sync-tunnel.test.ts.
+      // Keep unowned targets here for the node reconciliation collision boundary.
       await createStagedInputOwnershipFixture(remote);
-      for (const relative of ownership.unownedFiles) {
-        await fs.writeFile(path.join(remote, relative), "worker project bytes\n");
-      }
-      const ordinaryOutput =
-        mode === "plain" ? `${stagedInputDirectory("a1".repeat(32))}/new-output.txt` : undefined;
-      if (ordinaryOutput) {
-        await fs.writeFile(path.join(remote, ordinaryOutput), "ordinary project output\n");
-      }
       let baseManifestRef = synced.manifestRef;
-      const journal = reconciliationJournal((ref) => {
+      const journal = memoryWorkspaceJournal((ref) => {
         baseManifestRef = ref;
       });
       const reconcile = async (claimId: string) => {
@@ -276,24 +287,13 @@ it.each([
         });
       await stage();
       const editedNotes = Buffer.from("original private notes\nINPUT_EDIT_PRESERVED\n");
-      await fs.writeFile(path.join(remote, notesPath), editedNotes);
+      await remoteFiles.write(notesPath, editedNotes);
       expected.set(notesPath, editedNotes);
       await fs.copyFile(path.join(remote, pngPath), path.join(remote, "proof-output.png"));
-      await fs.writeFile(path.join(remote, "unrelated-keep.txt"), "unrelated worker file\n");
-      await fs.writeFile(path.join(remote, "unrelated-private.txt"), "unselected ignored file\n");
+      await remoteFiles.write("unrelated-keep.txt", "unrelated worker file\n");
+      await remoteFiles.write("unrelated-private.txt", "unselected ignored file\n");
 
       const assertRetained = async () => {
-        if (ordinaryOutput) {
-          await localFiles.expect(ordinaryOutput, "ordinary project output\n");
-        }
-        for (const relative of ownership.unownedFiles) {
-          await localFiles.expect(
-            relative,
-            selectedProjectFile(relative)
-              ? "worker project bytes\n"
-              : `fixture bytes: ${relative}\n`,
-          );
-        }
         for (const [relative, bytes] of expected) {
           // Assert Gateway bytes first: a successful upload alone did not prove retention.
           await localFiles.expect(relative, bytes);
@@ -334,7 +334,7 @@ it.each([
       await stage();
       await remoteFiles.expect(notesPath, editedNotes);
       const editedCache = Buffer.from("edited input cache\n");
-      await fs.writeFile(path.join(remote, directory, "input-cache.pyc"), editedCache);
+      await remoteFiles.write(`${directory}/input-cache.pyc`, editedCache);
       expected.set(`${directory}/input-cache.pyc`, editedCache);
       expect((await reconcile("next-input-turn"))?.conflictPaths).toEqual([]);
       await assertRetained();
@@ -429,17 +429,17 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
       generation: ownerEpoch,
     });
     const remote = synced.remoteWorkspaceDir;
-    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(sourceOrigin);
-    expect((await requireGit(remote, ["config", "--get", "remote.origin.fetch"])).trim()).toBe(
-      "+refs/heads/*:refs/remotes/origin/*",
-    );
+    await expectGit(remote, [
+      [["remote", "get-url", "origin"], sourceOrigin],
+      [["config", "--get", "remote.origin.fetch"], "+refs/heads/*:refs/remotes/origin/*"],
+    ]);
     const nodeOrigin = "git://127.0.0.1:19418/node-owned.git";
     await requireGit(remote, ["remote", "set-url", "origin", nodeOrigin]);
     await createNodeWorkerWorkspaceFallback(actions.runWorkspaceCommand).finalizeSync(
       { localPath, sessionId, generation: ownerEpoch },
       synced,
     );
-    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(nodeOrigin);
+    await expectGit(remote, [[["remote", "get-url", "origin"], nodeOrigin]]);
     await fs.writeFile(path.join(remote, "worker-commit.txt"), "node commit content\n");
     await requireGit(remote, ["add", "worker-commit.txt"]);
     await requireGit(remote, ["commit", "--quiet", "-m", "node-owned history"]);
@@ -467,7 +467,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     await restored.validateRestoredWorkspace();
 
     let accepted: string | undefined;
-    const journal = reconciliationJournal((ref) => {
+    const journal = memoryWorkspaceJournal((ref) => {
       accepted = ref;
     });
     const request = {
@@ -496,19 +496,15 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     for (const name of ["SOUL.md", "USER.md", "IDENTITY.md"]) {
       await workspaceFiles(localPath).expect(name, `local bootstrap ${name}\n`);
     }
-    expect((await requireGit(localPath, ["rev-parse", "HEAD"])).trim()).toBe(gatewayCommit);
-    expect((await requireGit(remote, ["rev-parse", "HEAD"])).trim()).toBe(nodeCommit);
-    expect((await requireGit(remote, ["rev-parse", `refs/heads/${nodeBranch}`])).trim()).toBe(
-      nodeCommit,
-    );
-    expect((await requireGit(remote, ["rev-parse", "--is-shallow-repository"])).trim()).toBe(
-      "false",
-    );
-    expect((await requireGit(remote, ["branch", "--show-current"])).trim()).toBe("");
-    expect((await requireGit(remote, ["remote", "get-url", "origin"])).trim()).toBe(nodeOrigin);
-    expect((await requireGit(remote, ["config", "--get", "remote.origin.fetch"])).trim()).toBe(
-      "+refs/heads/*:refs/remotes/origin/*",
-    );
+    await expectGit(localPath, [[["rev-parse", "HEAD"], gatewayCommit]]);
+    await expectGit(remote, [
+      [["rev-parse", "HEAD"], nodeCommit],
+      [["rev-parse", `refs/heads/${nodeBranch}`], nodeCommit],
+      [["rev-parse", "--is-shallow-repository"], "false"],
+      [["branch", "--show-current"], ""],
+      [["remote", "get-url", "origin"], nodeOrigin],
+      [["config", "--get", "remote.origin.fetch"], "+refs/heads/*:refs/remotes/origin/*"],
+    ]);
     for (const workspace of [localPath, remote]) {
       await workspaceFiles(workspace).expect("worker-commit.txt", "node commit content\n");
     }

@@ -1,14 +1,16 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
+import type { SessionPatchResult, SessionPatchRoute } from "./patch.ts";
 import type { readSessionChangedEvent } from "./reconcile.ts";
 import {
   normalizeAgentId,
   resolveUiConversationIdentity,
   resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
-import { requestSessionDelete } from "./session-requests.ts";
+import { prepareSessionDeferredMutation } from "./session-mutation-operations.ts";
 import type {
   SessionConnectionOwner,
   SessionDeleteBatchResult,
@@ -21,13 +23,15 @@ import type {
   SessionState,
 } from "./session-types.ts";
 
-type Deletion = {
+export type Deletion = {
   target: SessionDeleteTarget;
   sessionId?: string;
   phase: "pending" | "confirmed" | "rollback";
   owner: DeletionOwner;
   rows: WeakMap<object, { row: GatewaySessionRow; index: number }>;
   operation?: Promise<SessionDeleteOutcome>;
+  deferredToken?: symbol;
+  archiveBeforeDelete?: boolean;
 };
 
 type DeletionOwner = {
@@ -38,7 +42,9 @@ type DeletionOwner = {
 };
 
 type DeletionHost = {
+  defer: ApplicationGateway["defer"];
   connection: SessionConnectionOwner;
+  patchNow: (...args: Parameters<SessionPatchRoute>) => Promise<SessionPatchResult | null>;
   snapshot: () => SessionGateway["snapshot"];
   requestRevision: () => number;
   readState: () => SessionState;
@@ -56,7 +62,18 @@ type DeletionHost = {
   retire: (key: string) => void;
 };
 
+export type SessionDeletionOperationsHost = Pick<
+  DeletionHost,
+  "connection" | "patchNow" | "reconcileMutation" | "reconcilePreviousConnection"
+> & {
+  owns: (deletion: Deletion) => boolean;
+  rollback: (deletion: Deletion) => void;
+  confirm: (deletion: Deletion, key: string) => void;
+  reportError: (message: string) => void;
+};
+
 export function createSessionDeletions(host: DeletionHost) {
+  let retainedOwner: { scope: SessionListScope } = { scope: {} };
   // Canonical generation and request order outlive an individual mutation,
   // including rollback. Retired IDs share this owner with the active claim.
   const deletions = new Map<string, DeletionOwner>();
@@ -179,39 +196,15 @@ export function createSessionDeletions(host: DeletionHost) {
     }
     publish(deletion);
   };
-  const perform = (
-    deletion: Deletion,
-    scope: NonNullable<ReturnType<SessionConnectionOwner["capture"]>>,
-  ): Promise<SessionDeleteOutcome> => {
-    if (deletion.operation) {
-      return deletion.operation;
-    }
-    const { target } = deletion;
-    deletion.operation = (async () => {
-      try {
-        const response = await requestSessionDelete(scope.client, target.key, target);
-        if (!owns(deletion)) {
-          return { deleted: false };
-        }
-        if (!response.deleted && deletion.phase !== "confirmed") {
-          rollback(deletion);
-          return { deleted: false };
-        }
-        confirm(deletion, target.key);
-        return {
-          deleted: true,
-          ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
-        };
-      } catch (error) {
-        if (!owns(deletion)) {
-          return { deleted: false };
-        }
-        rollback(deletion);
-        reportError(formatUiError(error));
-        throw error;
-      }
-    })();
-    return deletion.operation;
+  const operationsHost: SessionDeletionOperationsHost = {
+    connection: host.connection,
+    patchNow: host.patchNow,
+    reconcileMutation: host.reconcileMutation,
+    reconcilePreviousConnection: host.reconcilePreviousConnection,
+    owns,
+    rollback,
+    confirm,
+    reportError,
   };
 
   const removeMany = async (
@@ -219,7 +212,69 @@ export function createSessionDeletions(host: DeletionHost) {
   ): Promise<SessionDeleteBatchResult> => {
     const scope = host.connection.capture();
     const result: SessionDeleteBatchResult = { deleted: [], errors: [], preservedWorktrees: [] };
-    if (!scope || targets.length === 0) {
+    if (targets.length === 0) {
+      return result;
+    }
+    const snapshot = host.snapshot();
+    if (!scope || snapshot.deferredIntentCount || snapshot.deferredIntentDraining) {
+      for (const target of targets) {
+        const record = begin({ ...target });
+        if (!record.sessionId?.trim()) {
+          rollback(record);
+          result.errors.push({
+            target,
+            error: new Error(
+              t("sessionsView.deleteSessionIdentityMissing", { session: target.key }),
+            ),
+          });
+          continue;
+        }
+        record.target.expectedSessionId ??= record.sessionId;
+        const token = Symbol("delete");
+        record.deferredToken = token;
+        // Coalescing releases older field claims before this deletion hides its row.
+        record.phase = "rollback";
+        const conversation = resolveUiConversationIdentity(snapshot, target.key, target.agentId);
+        const agentId = conversation.agentId ?? normalizeAgentId(target.agentId);
+        const lifecycleKey = `sessions.lifecycle:${agentId}:${conversation.sessionKey}`;
+        const prepared = prepareSessionDeferredMutation(
+          (runtime, replayScope) =>
+            runtime.runDeferredSessionDelete(record, replayScope, operationsHost),
+          host.connection,
+          () => {
+            if (record.deferredToken === token) {
+              rollback(record);
+            }
+          },
+        );
+        if (
+          host.defer({
+            key: lifecycleKey,
+            group: lifecycleKey,
+            discardGroup: true,
+            preservePosition: true,
+            run: prepared.run,
+            discard: prepared.discard,
+          })
+        ) {
+          const row = host.publishedRow(
+            (candidate) =>
+              candidate.key === conversation.sessionKey && candidate.sessionId === record.sessionId,
+          );
+          // Coalescing an unsent archive retains archive-only deletion authorization.
+          if (record.target.archivedOnly && row && !row.archived) {
+            record.archiveBeforeDelete = true;
+          }
+          record.phase = "pending";
+          (result.queued ??= []).push(target.key);
+        } else {
+          prepared.discard();
+        }
+      }
+      publish();
+      if (result.errors.length > 0) {
+        reportError(result.errors.map(({ error }) => formatUiError(error)).join("; "));
+      }
       return result;
     }
     // Claim the complete selection before the first RPC. Cloud teardown may
@@ -232,51 +287,28 @@ export function createSessionDeletions(host: DeletionHost) {
       records.set(record, callerTargets);
     }
     publish();
-    for (const [record, callerTargets] of records) {
-      if (!host.connection.isCurrent(scope) && !record.operation) {
-        const unstarted = [...records.keys()].filter(
-          (candidate) => !candidate.operation && owns(candidate),
-        );
-        if (unstarted.length > 0) {
-          const error = new Error(
-            t("sessionsView.deleteSessionsStale", { count: String(targets.length) }),
-          );
-          for (const candidate of unstarted) {
-            rollback(candidate);
-            for (const target of records.get(candidate)!.values()) {
-              result.errors.push({ target, error });
-            }
+    return import("./session-delete-operation.ts").then(
+      ({ settleSessionDeleteBatch }) =>
+        settleSessionDeleteBatch(records, targets, scope, operationsHost),
+      (error: unknown) => {
+        for (const [record, callerTargets] of records) {
+          if (!owns(record)) {
+            continue;
           }
-          reportError(error.message);
-        }
-        break;
-      }
-      try {
-        const outcome = await perform(record, scope);
-        if (outcome.deleted) {
-          result.deleted.push(...callerTargets.keys());
-          if (outcome.worktreePreserved) {
-            result.preservedWorktrees.push(outcome.worktreePreserved);
+          rollback(record);
+          for (const target of callerTargets.values()) {
+            result.errors.push({ target, error });
           }
         }
-      } catch (error) {
-        for (const target of callerTargets.values()) {
-          result.errors.push({ target, error });
+        if (result.errors.length > 0) {
+          reportError(formatUiError(error));
         }
-      }
-    }
-    if (result.deleted.length > 0) {
-      if (host.connection.isCurrent(scope)) {
-        await host.reconcileMutation(targets.length === 1 ? targets[0]?.agentId : undefined);
-      }
-      if (!host.connection.isCurrent(scope) && !(await host.reconcilePreviousConnection(scope))) {
-        return { deleted: [], errors: [], preservedWorktrees: [] };
-      }
-    }
-    return result;
+        return result;
+      },
+    );
   };
 
-  return {
+  const api = {
     acceptsGeneration: (key: string, sessionId?: string, agentId?: string | null) =>
       acceptsGeneration(deletions.get(identity(key, agentId)), sessionId),
     deletionState: (key: string, agentId?: string | null, sessionId?: string) =>
@@ -293,10 +325,21 @@ export function createSessionDeletions(host: DeletionHost) {
       }
       return {
         deleted: result.deleted.includes(key),
+        ...(result.queued?.includes(key) ? { queued: true as const } : {}),
         ...(result.preservedWorktrees[0]
           ? { worktreePreserved: result.preservedWorktrees[0] }
           : {}),
       };
+    },
+    applyRetained(
+      result: SessionsListResult | null,
+      agentId: string | null,
+    ): SessionsListResult | null {
+      // Stable query identity preserves the hidden row across reconnect for rollback.
+      if (retainedOwner.scope.agentId !== (agentId ?? undefined)) {
+        retainedOwner = { scope: { agentId: agentId ?? undefined } };
+      }
+      return api.apply(result, retainedOwner);
     },
     apply(
       result: SessionsListResult | null,
@@ -405,6 +448,26 @@ export function createSessionDeletions(host: DeletionHost) {
         }
       }
     },
+    retireConnection(retainDeferred: boolean) {
+      for (const [key, owner] of deletions) {
+        for (const record of owner.records) {
+          // Only unsent intents follow a replacement client; old RPC receipts retire as before.
+          if (!retainDeferred || !record.deferredToken || record.operation) {
+            if (retainDeferred) {
+              rollback(record);
+            }
+            owner.records.delete(record);
+          }
+        }
+        if (owner.active && !owner.records.has(owner.active)) {
+          owner.active = undefined;
+        }
+        if (owner.records.size === 0) {
+          deletions.delete(key);
+        }
+      }
+    },
     clear: () => deletions.clear(),
   };
+  return api;
 }

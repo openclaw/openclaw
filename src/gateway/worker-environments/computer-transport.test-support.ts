@@ -1,6 +1,5 @@
 import { Value } from "typebox/value";
 import { vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -8,7 +7,6 @@ import {
   claimAgentRunApprovalAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -27,6 +25,9 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createWorkerComputerTransportOwner } from "./computer-transport.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import {
   isCurrentPlacementTurnClaim,
   type WorkerSessionPlacementRecord,
@@ -68,28 +69,20 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     workerBundleHash: "a".repeat(64),
   });
   const environment: WorkerEnvironmentRecord = {
-    preparation: null,
-    lastActivatedAtMs: null,
+    ...createDispatchEnvironmentFixtures().attached,
     environmentId: "environment-1",
     providerId: sharedHost ? "device" : "fixture-cloud",
     profileId: "desktop",
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision-1",
-    nodeSetupId: null,
     nodeDeviceId: "desktop-node",
     sharedHost,
     desktop: sharedHost ? null : { protocol: "rfb", port: 5900, passwordFilePath: "/vnc.password" },
     bootstrapReceipt: null,
     ownerEpoch: 7,
-    teardownTerminalState: null,
     attachedSessionIds: [claim.sessionId],
-    lastError: null,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
-    state: "attached",
     leaseId: "lease-1",
     sshEndpoint: null,
   };
@@ -103,17 +96,13 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     commands: sharedHost ? ["screen.snapshot", "computer.act"] : [],
     computerUse: sharedHost ? COMPUTER_USE : undefined,
   };
-  const proof: NodeWorkerSupervisorNodeProof = {
+  const proof: NodeWorkerSupervisorNodeProof = createNodeWorkerBundleTestNode({
     nodeId: node.nodeId,
     connId: node.connId,
     pairingIdentity: "pairing-identity",
     pairingGeneration: "pairing-1",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
-    commands: [],
-  };
+  });
   const state: {
     placement: WorkerSessionPlacementRecord;
     environment: Extract<WorkerEnvironmentRecord, { leaseId: string }>;
@@ -292,16 +281,10 @@ export function createHarness(sharedHost = false, withPolicy = true) {
 export type Harness = ReturnType<typeof createHarness>;
 
 export function connectionIdentity(h: Harness): WorkerConnectionIdentity {
-  return {
+  return createWorkerConnectionIdentity(h.claim, {
     environmentId: h.state.environment.environmentId,
-    credentialHash: "credential-hash",
     bundleHash: "bundle-hash",
-    sessionId: h.claim.sessionId,
-    runId: h.claim.runId,
-    turnClaim: h.claim,
     ownerEpoch: h.state.environment.ownerEpoch,
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: Number.MAX_SAFE_INTEGER,
-  };
+  });
 }

@@ -5,10 +5,7 @@ import {
   type SettingsSearchBlock,
 } from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
-import type {
-  NativeDeviceSettingsCapability,
-  NativeDeviceSettingsSnapshot,
-} from "../../app/native-device-settings.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { currentThemeBranding } from "../../app/theme-branding.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
@@ -17,47 +14,24 @@ import {
 } from "../../components/config-form.search.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
 import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
-import { configPageForSection, omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
-import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
+import {
+  configPageForSection,
+  MEMORY_SETTINGS_KEYS,
+  omitCuratedOwnedConfigLeaves,
+} from "./config-sections.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
 import { setupVisibleSchema } from "./setup-schema.ts";
 
 registerSettingsEnglish();
+registerProfileEnglish();
 
 const STATIC_SETTINGS_BLOCKS: readonly SettingsSearchTarget[] =
   Object.values(SETTINGS_SEARCH_TARGETS);
-
-function resolveStaticSettingsBlock(
-  block: SettingsSearchTarget,
-  snapshot: NativeDeviceSettingsSnapshot | null,
-): SettingsSearchBlock & { searchText: string } {
-  const label = t(block.labelKey);
-  const nativeKeys = snapshot
-    ? Object.entries(block.nativeSearchKeys ?? {})
-        .filter(([, available]) => available(snapshot))
-        .map(([key]) => key)
-    : [];
-  return {
-    routeId: block.routeId,
-    ...(block.search === undefined ? {} : { search: block.search }),
-    hash: block.hash,
-    label,
-    searchText: [
-      label,
-      ...[...block.searchKeys, ...nativeKeys]
-        .filter(
-          (key) =>
-            currentThemeBranding().lobsterdex || key !== "configView.appearance.tabIcon.lobsterdex",
-        )
-        .map((key) => t(key)),
-      block.aliases ?? "",
-    ].join(" "),
-  };
-}
 
 // Curated pages render only a subset of their section's schema; search must
 // promise exactly what the destination page can edit, or the result is a
@@ -122,9 +96,34 @@ export function findSettingsSearchBlocks(params: {
               params.nativeDeviceSettings,
             ),
         )
-          .map((block) =>
-            resolveStaticSettingsBlock(block, params.nativeDeviceSettings?.snapshot ?? null),
-          )
+          .map((block): SettingsSearchBlock & { searchText: string } => {
+            const snapshot = params.nativeDeviceSettings?.snapshot ?? null;
+            const label = t(block.labelKey);
+            const nativeKeys = snapshot
+              ? Object.entries(block.nativeSearchKeys ?? {})
+                  .filter(([, available]) => available(snapshot))
+                  .map(([key]) => key)
+              : [];
+            return Object.assign(
+              { routeId: block.routeId },
+              block.search === undefined ? {} : { search: block.search },
+              {
+                hash: block.hash,
+                label,
+                searchText: [
+                  label,
+                  ...[...block.searchKeys, ...nativeKeys]
+                    .filter(
+                      (key) =>
+                        currentThemeBranding().lobsterdex ||
+                        key !== "configView.appearance.tabIcon.lobsterdex",
+                    )
+                    .map((key) => t(key)),
+                  block.aliases ?? "",
+                ].join(" "),
+              },
+            );
+          })
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
       : [];
   const schema = isRecord(params.schema) ? (params.schema as JsonSchema) : null;

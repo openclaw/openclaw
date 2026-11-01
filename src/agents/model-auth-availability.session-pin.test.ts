@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createApiKeyCredential as apiKey,
   createOAuthRefreshCredential as oauth,
+  createUnresolvedOAuthCredential as unresolvedOAuth,
 } from "./auth-profiles/credential-fixtures.test-support.js";
-import { LEGACY_OAUTH_REF_PROVIDER } from "./auth-profiles/legacy-oauth-ref.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
@@ -23,18 +23,6 @@ const subscription = (overrides: Parameters<typeof oauth>[0] = {}) =>
     refresh: "synthetic-refresh",
     expires: Date.now() + 600_000,
     ...overrides,
-  });
-const unresolvedOAuth = (provider: string) =>
-  subscription({
-    provider,
-    access: "",
-    refresh: "",
-    expires: 0,
-    oauthRef: {
-      source: "openclaw-credentials",
-      provider: LEGACY_OAUTH_REF_PROVIDER,
-      id: "00000000000000000000000000000000",
-    },
   });
 
 function readiness(

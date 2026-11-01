@@ -13,7 +13,7 @@ export type PluginInlineViewResult = {
   details: { pluginInlineView: PluginInlineViewDescriptor };
 };
 
-export function isInlineViewPayload(value: unknown): value is PluginJsonValue {
+function isInlineViewPayload(value: unknown): value is PluginJsonValue {
   return (
     isPluginJsonValue(value) &&
     Buffer.byteLength(JSON.stringify(value), "utf8") <= PLUGIN_INLINE_VIEW_MAX_BYTES

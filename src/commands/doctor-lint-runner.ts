@@ -67,6 +67,7 @@ import {
   type DoctorLintPluginStateRunner,
 } from "./doctor-lint-state-snapshot.js";
 import { isPostCoreConvergencePass, isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
+import { collectRecoveryDiskUsage, formatRecoveryDiskUsage } from "./recovery-disk-usage.js";
 
 type DoctorLintStateView = {
   coreChecks?: readonly DoctorHealthCheck[];
@@ -85,7 +86,10 @@ const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
 const PROJECT_CLONE_SHAPE_CHECK_ID = "core/doctor/project-clone-shape";
 const SKILLS_READINESS_CHECK_ID = "core/doctor/skills-readiness";
 const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
-const HEARTBEAT_CADENCE_CHECK_ID = "core/doctor/heartbeat-cadence-migration";
+const HEARTBEAT_SOURCE_CHECK_IDS = new Set([
+  "core/doctor/heartbeat-cadence-migration",
+  "core/doctor/heartbeat-scratch-migration",
+]);
 
 /** Only the rehearsal worker reports before disposal and inherits its CLI's budget anchor. */
 export async function runDoctorLintCliInProcess(
@@ -453,7 +457,7 @@ async function executeDoctorLint(
     stateSchemaHealthCheck,
     ...coreChecks.map((check): HealthCheck => {
       const checkCtx =
-        legacyHeartbeatConfig && check.id === HEARTBEAT_CADENCE_CHECK_ID
+        legacyHeartbeatConfig && HEARTBEAT_SOURCE_CHECK_IDS.has(check.id)
           ? { ...coreCtx, cfg: legacyHeartbeatConfig }
           : coreCtx;
       return {
@@ -487,7 +491,7 @@ async function executeDoctorLint(
             return inspectPrivate(detect);
           }
           // Source-bound loaders must keep the launch selectors of their retained read owner.
-          return check.id === AUTH_PROFILE_CHECK_ID || check.id === HEARTBEAT_CADENCE_CHECK_ID
+          return check.id === AUTH_PROFILE_CHECK_ID || HEARTBEAT_SOURCE_CHECK_IDS.has(check.id)
             ? checkCtx.runWithSourceState(detect)
             : detect();
         },
@@ -546,12 +550,14 @@ async function executeDoctorLint(
         (isUpdateDoctorLintPass(stateView.sourceEnv) && finding.severity === "warning")),
   );
   const exitCode = exitCodeFromFindings(findings, sevMin);
+  const recoveryCopies = collectRecoveryDiskUsage({ cfg, env: stateView.sourceEnv });
   return {
     checksRun: result.checksRun,
     checksSkipped: result.checksSkipped,
     exitCode,
     findings: visible,
     databaseStores,
+    recoveryCopies,
     warnings,
     cleanupWarnings: stateView.cleanupWarnings,
     writeOutput() {
@@ -562,11 +568,15 @@ async function executeDoctorLint(
           checksSkipped: result.checksSkipped,
           findings: visible,
           databaseStores: databaseStores.length ? databaseStores : undefined,
+          recoveryCopies,
           // Ordinary reports include settled cleanup warnings; rehearsal workers report before disposal.
           warnings: [...warnings, ...(stateView.cleanupWarnings ?? [])],
         });
         return;
       }
+      process.stdout.write(
+        `Recovery copies (read-only): ${formatRecoveryDiskUsage(recoveryCopies)}\n`,
+      );
       const displayed = [...visible, ...warnings, ...(stateView.cleanupWarnings ?? [])];
       process.stdout.write(
         `doctor --lint: ran ${result.checksRun} check(s), ${displayed.length} finding(s)\n`,

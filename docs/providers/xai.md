@@ -375,6 +375,11 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     reference images are converted to data URLs; remote `http(s)` references
     pass through unchanged.
 
+    For an operator-controlled private image endpoint, set `models.providers.xai.baseUrl`
+    and `models.providers.xai.request.allowPrivateNetwork: true`. Private endpoints
+    remain blocked without that opt-in. Returned image URLs and their redirects
+    cannot use this endpoint opt-in to reach other private origins.
+
     Select `xai/grok-imagine-image-2.0` explicitly to use Image 2.0; the default
     remains `xai/grok-imagine-image`. Explicit provider-qualified image model IDs
     pass through to xAI, including IDs not yet in OpenClaw's catalog. An unknown
