@@ -17,7 +17,10 @@ import {
 } from "./client.js";
 import { assertCodexThreadResumeResponse } from "./protocol-validators.js";
 import type { CodexThreadResumeParams, CodexThreadResumeResponse } from "./protocol.js";
-import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
+import {
+  CodexAppServerScopedRequestRejectedError,
+  isCodexThreadResumeClosingError,
+} from "./rpc-error.js";
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
 /** Resumes one thread, releasing or isolating every possible native subscription. */
@@ -53,7 +56,8 @@ export async function resumeCodexAppServerThread(params: {
       isCodexAppServerStartupError(error) ||
       error instanceof CodexAppServerScopedRequestRejectedError ||
       isCodexAppServerPrewriteRequestCancellationError(error) ||
-      isCodexAppServerOverloadError(error)
+      isCodexAppServerOverloadError(error) ||
+      isCodexThreadResumeClosingError(error, threadId)
     ) {
       throw error;
     }
