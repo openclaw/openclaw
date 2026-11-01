@@ -129,13 +129,14 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
   // match the neighbouring fields' type size, where a native select would need
   // 16px to stop iOS zooming on focus.
   function SheetChoice(choice: {
+    half?: boolean;
     label: string;
     value: string;
     options: readonly { value: string; label: string }[];
     onChange: (value: string) => void;
   }) {
     return (
-      <div class="session-groupby">
+      <div class={["session-groupby", { "session-groupby--half": choice.half }]}>
         <span class="session-groupby__label" aria-hidden="true">
           {choice.label}
         </span>
@@ -212,14 +213,20 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                       : t("sessionsView.limitTooltip")
                   }
                 >
-                  <label class="session-filter-field">
-                    <span class="session-filter-label">{t(labelKey)}</span>
+                  <label class={props.phoneLayout ? "field" : "session-filter-field"}>
+                    <span class={props.phoneLayout ? undefined : "session-filter-label"}>
+                      {t(labelKey)}
+                    </span>
                     <input
                       ref={(element) => {
                         input = element;
                         sheetControl(element);
                       }}
-                      class={["session-filter-input", `session-filter-input--${suffix}`]}
+                      class={
+                        props.phoneLayout
+                          ? "settings-input"
+                          : ["session-filter-input", `session-filter-input--${suffix}`]
+                      }
                       placeholder={
                         key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
                       }
@@ -310,6 +317,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         ) : undefined}
         <Show when={props.phoneLayout}>
           <SheetChoice
+            half
             label={t("cron.jobs.sort")}
             value={props.sortColumn}
             options={[
@@ -321,6 +329,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
             }
           />
           <SheetChoice
+            half
             label={t("cron.jobs.direction")}
             value={props.sortDir}
             options={[
