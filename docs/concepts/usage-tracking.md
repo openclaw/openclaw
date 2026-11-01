@@ -41,6 +41,10 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+In a selected session's conversation details, search ignores case and matches
+canonically equivalent composed and decomposed Unicode text. Filtering does not
+rewrite the displayed or stored messages.
+
 Detailed report batches share one short wait per agent for pending usage updates.
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date

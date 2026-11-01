@@ -665,6 +665,11 @@ bodies for turn appends). This count excludes optional initialization headers.
 The reported `phases.sqlMs` includes synchronous JavaScript work inside the
 transaction; it is not a sum of SQLite statement timings.
 
+Hot idempotency misses use the existing identity index for nonempty, already-trimmed
+keys. An absent result still checks that the transcript is hot. Present identities retain the
+newest-first canonical match, and cold archives retain their verification path.
+No schema, coverage marker, or backfill is added.
+
 Transcript-match slow holds include a fixed caller category, selector, outcome,
 and visited-row counts. `projectedRows` counts hot rows with navigation projections;
 `identityRows` counts hot rows using inline canonical text, not identity-index hits.

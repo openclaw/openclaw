@@ -35,6 +35,8 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
+import { shellEscape } from "../../src/shared/shell-quote.js";
+import { withEnv } from "../../src/test-utils/env.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -51,6 +53,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowExpression,
   evaluateWorkflowRunner,
+  runWorkflowShellScript,
   testNodeExecPath,
 } from "./ci-workflow.test-support.js";
 
@@ -220,7 +223,7 @@ const toolingTemplates = new Map<string, { directory: string; sha: string }>();
 let packageToolingTemplate:
   | { directory: string; capturedSha: string; advancedSha: string }
   | undefined;
-let fixtureGitPath: string | undefined;
+const fixtureGitPaths = new Map<string, string>();
 
 const frozenAdmissionClosure = [
   "scripts/preflight-frozen-target-contracts.mjs",
@@ -269,6 +272,84 @@ function readOptionalText(path: string): string {
 
 function writeExecutable(path: string, source: Parameters<typeof writeFileSync>[1]) {
   writeFileSync(path, source, { mode: 0o755 });
+}
+
+function configuredFixtureGit() {
+  const lookupPath = process.env.PATH ?? "";
+  let gitPath = fixtureGitPaths.get(lookupPath);
+  if (!gitPath) {
+    gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    fixtureGitPaths.set(lookupPath, gitPath);
+  }
+  return { gitPath, lookupPath };
+}
+
+function withGuardedFixtureGit(run: () => ReturnType<typeof frozenWorkflowFixture>) {
+  const { gitPath, lookupPath } = configuredFixtureGit();
+  const root = tempDirs.make("frozen-workflow-guarded-git-");
+  const bin = join(root, "bin");
+  const observations = join(root, "backend.log");
+  mkdirSync(bin);
+  writeFileSync(observations, "");
+  // Model a configured wrapper that rediscovers Git through PATH. Bound the
+  // cycle so removing the delegation boundary fails instead of timing out.
+  writeExecutable(
+    join(bin, "git"),
+    `#!${process.execPath}
+import { spawnSync } from 'node:child_process';
+import { accessSync, appendFileSync, constants, realpathSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
+const observations = ${JSON.stringify(observations)};
+const depth = Number(process.env.FIXTURE_GIT_DEPTH ?? '0');
+if (depth >= 4) {
+  appendFileSync(observations, 'recursion\\n');
+  process.exit(86);
+}
+const self = realpathSync(process.argv[1]);
+const candidate = (process.env.PATH ?? '').split(delimiter)
+  .map(directory => join(directory || '.', 'git'))
+  .find(file => {
+    try {
+      accessSync(file, constants.X_OK);
+      return realpathSync(file) !== self;
+    } catch {
+      return false;
+    }
+  });
+if (!candidate) throw new Error('Missing fixture Git backend');
+const guardedBackend = realpathSync(candidate) === realpathSync(${JSON.stringify(gitPath)});
+appendFileSync(observations, guardedBackend ? 'backend\\n' : 'interception\\n');
+const helperProbe = process.argv[2] === 'fixture-helper-probe';
+const result = spawnSync(helperProbe ? 'git-remote-fixture' : candidate,
+  helperProbe ? [] : process.argv.slice(2), {
+    env: {
+      ...process.env,
+      PATH: guardedBackend
+        ? (process.env.PATH ?? '').split(delimiter)
+            .filter(directory => directory !== ${JSON.stringify(bin)}).join(delimiter)
+        : process.env.PATH,
+      FIXTURE_GIT_DEPTH: String(depth + 1),
+    },
+    stdio: 'inherit',
+  });
+process.exit(result.status ?? 1);
+`,
+  );
+  withEnv({ PATH: `${bin}:${lookupPath}` }, () => {
+    const fixture = run();
+    const calls = readFileSync(observations, "utf8").trim().split("\n");
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((call) => call === "backend")).toBe(true);
+    for (const command of ["fetch", "clone", "fixture-helper-probe"]) {
+      const result = spawnSync("git", [command], { env: fixture.env, encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(97);
+    }
+    expect(readFileSync(join(fixture.root, "forbidden"), "utf8").trim().split("\n")).toEqual([
+      "hydration",
+      "hydration",
+      "git-remote-fixture",
+    ]);
+  });
 }
 
 function frozenFixtureGit(directory: string, ...args: string[]) {
@@ -352,8 +433,10 @@ function frozenWorkflowFixture(
   const toolingGit = (...args: string[]) => frozenFixtureGit(tooling, ...args);
   const job = workflowJob(file, jobName);
   const plan = workflowStep(job, "Plan frozen source admission");
+  const { gitPath, lookupPath } = configuredFixtureGit();
   const env = {
-    PATH: process.env.PATH,
+    PATH: lookupPath,
+    HOME: root,
     LANG: "C.UTF-8",
     RUNNER_TEMP: root,
     GITHUB_OUTPUT: join(root, "outputs"),
@@ -375,11 +458,13 @@ function frozenWorkflowFixture(
     suffix = "",
     options: { cwd?: string; timeout?: number } = {},
   ) {
-    return spawnSync(
-      "bash",
-      ["--noprofile", "--norc", "-c", `${workflowStep(job, stepName).run ?? ""}\n${suffix}`],
-      { encoding: "utf8", cwd: root, env: { ...env, ...extra }, timeout: 30_000, ...options },
-    );
+    return runWorkflowShellScript(`${workflowStep(job, stepName).run ?? ""}\n${suffix}`, {
+      cwd: root,
+      env: { ...env, ...extra },
+      linuxWorkflow: true,
+      tempDir: root,
+      ...options,
+    });
   }
   function selection() {
     const result = run("Plan frozen source admission");
@@ -406,17 +491,20 @@ function frozenWorkflowFixture(
       `#!/bin/sh\nprintf '${command}\\n' >> '${forbidden}'\nexit 97\n`,
     );
   }
-  const gitPath = (fixtureGitPath ??= execFileSync("which", ["git"], { encoding: "utf8" }).trim());
+  const gitBin = join(root, "git-bin");
+  mkdirSync(gitBin);
+  // Configured Git may discover its backend through PATH. Exclude this
+  // forwarder during delegation, retaining the forbidden-command directory.
   writeExecutable(
-    join(bin, "git"),
-    `#!/bin/sh\nfor arg in "$@"; do\ncase "$arg" in fetch|clone) printf 'hydration\\n' >> '${forbidden}'; exit 97;; esac\ndone\nexec '${gitPath}' "$@"\n`,
+    join(gitBin, "git"),
+    `#!/bin/sh\nfor arg in "$@"; do\ncase "$arg" in fetch|clone) printf 'hydration\\n' >> '${forbidden}'; exit 97;; esac\ndone\nexport PATH=${shellEscape(`${bin}:${lookupPath}`)}\nexec ${shellEscape(gitPath)} "$@"\n`,
   );
-  env.PATH = `${bin}:${process.env.PATH}`;
+  env.PATH = `${gitBin}:${bin}:${lookupPath}`;
   function admit(extra: Record<string, string> = {}, stepName = "Admit frozen source contracts") {
     const result = run(
       stepName,
       {
-        PATH: `${bin}:${process.env.PATH}`,
+        PATH: env.PATH,
         NODE_OPTIONS: "--import=forbidden-startup",
         NODE_PATH: join(root, "poison-modules"),
         GH_TOKEN: "synthetic-secret-must-not-survive",
@@ -477,10 +565,12 @@ function traceContractAcquisition(
   const bin = join(fixture.root, "acquisition-bin");
   const requested = join(fixture.root, "requested-blobs");
   mkdirSync(bin);
-  const gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const { gitPath, lookupPath } = configuredFixtureGit();
+  // Acquisition intentionally permits local hydration; only remove its own
+  // observation wrapper from the configured Git's backend lookup context.
   writeExecutable(
     join(bin, "git"),
-    `#!/bin/sh\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ]${oid ? ` && [ "$5" = '${oid}' ]` : ""}; then printf '%s\\n' "$5" >> '${requested}'; fi\nexec '${gitPath}' "$@"\n`,
+    `#!/bin/sh\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ]${oid ? ` && [ "$5" = '${oid}' ]` : ""}; then printf '%s\\n' "$5" >> '${requested}'; fi\nexport PATH=${shellEscape(lookupPath)}\nexec ${shellEscape(gitPath)} "$@"\n`,
   );
   const result = fixture.run(step, { PATH: `${bin}:${process.env.PATH}` });
   expect(result.status, result.stderr).toBe(0);
@@ -785,6 +875,7 @@ function packageToolingCheckoutFixture() {
     writeFileSync(validationOutput, "");
     const env = {
       PATH: process.env.PATH,
+      HOME: root,
       JOB_CONTEXT: JSON.stringify(context),
       GITHUB_REPOSITORY: options.githubRepository ?? "openclaw/openclaw",
       GITHUB_SHA: advancedSha,
@@ -808,10 +899,11 @@ function packageToolingCheckoutFixture() {
           }),
       );
     if (identity) {
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", identity.run ?? ""], {
+      const result = runWorkflowShellScript(identity.run ?? "", {
         cwd: beforeCheckout,
-        encoding: "utf8",
         env: { ...env, GITHUB_OUTPUT: identityOutput },
+        linuxWorkflow: true,
+        tempDir: root,
       });
       if (result.status !== 0) {
         return {
@@ -837,19 +929,16 @@ function packageToolingCheckoutFixture() {
     }
     git("checkout", "-q", "--detach", options.wrongCheckout ? advancedSha : selectedRef);
     const sha = git("rev-parse", "HEAD");
-    const result = spawnSync(
-      "bash",
-      ["--noprofile", "--norc", "-c", `${validate.run}\nprintf 'installation-reachable\\n'`],
-      {
-        cwd: repository,
-        encoding: "utf8",
-        env: {
-          ...env,
-          EXPECTED_TOOLING_SHA: identityOutputs.sha ?? "",
-          GITHUB_OUTPUT: validationOutput,
-        },
+    const result = runWorkflowShellScript(`${validate.run}\nprintf 'installation-reachable\\n'`, {
+      cwd: repository,
+      env: {
+        ...env,
+        EXPECTED_TOOLING_SHA: identityOutputs.sha ?? "",
+        GITHUB_OUTPUT: validationOutput,
       },
-    );
+      linuxWorkflow: true,
+      tempDir: root,
+    });
     return {
       result,
       checkoutReached: true,
@@ -1512,11 +1601,12 @@ describe("frozen admission workflow barriers", () => {
             : stepScript;
         })
         .join("\n");
-      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+      const result = runWorkflowShellScript(script, {
         cwd: file === PACKAGE_ACCEPTANCE_WORKFLOW ? f.tooling : f.root,
         env: { ...f.env, ...env },
-        encoding: "utf8",
         timeout: 30_000,
+        linuxWorkflow: true,
+        tempDir: f.root,
       });
       expect(existsSync(sentinel), result.stderr).toBe(false);
       expect(existsSync(join(f.root, "forbidden"))).toBe(false);
@@ -2327,34 +2417,45 @@ describe("frozen admission workflow barriers", () => {
     },
   );
 
-  it("acquires the sparse selected first-hop inventory before admission", () => {
-    const inventory = "scripts/lib/update-compat-inventory.json";
-    const postbuild = "scripts/runtime-postbuild.mts";
-    const lane = "update-first-hop-compat-2026.9.6";
-    const f = liveAdmissionFixture(
-      {
-        docker_lanes: lane,
-        allow_frozen_target_scenario_omissions: true,
-      },
-      {
-        [inventory]: JSON.stringify({ releases: [{ version: "2026.9.6" }] }),
-        [postbuild]: readFileSync(postbuild, "utf8"),
-      },
-    );
-    f.selection();
-    const oid = sparseSelectedFixture(f)(inventory);
+  it.each([false, true])(
+    "acquires the sparse selected first-hop inventory before admission with guarded Git=%s",
+    (guarded) => {
+      const verify = () => {
+        const inventory = "scripts/lib/update-compat-inventory.json";
+        const postbuild = "scripts/runtime-postbuild.mts";
+        const lane = "update-first-hop-compat-2026.9.6";
+        const f = liveAdmissionFixture(
+          {
+            docker_lanes: lane,
+            allow_frozen_target_scenario_omissions: true,
+          },
+          {
+            [inventory]: JSON.stringify({ releases: [{ version: "2026.9.6" }] }),
+            [postbuild]: readFileSync(postbuild, "utf8"),
+          },
+        );
+        f.selection();
+        const oid = sparseSelectedFixture(f)(inventory);
 
-    const unavailable = f.admit();
-    expect(unavailable.status).not.toBe(0);
-    expect(unavailable.stderr).toContain("unable to read selected source");
-    // A local promisor fetch may incidentally return other missing blobs too.
-    expect(traceContractAcquisition(f).trim().split("\n")).toContain(oid);
-    const admitted = f.admit();
-    expect(admitted.status, admitted.stderr).toBe(0);
-    const record = f.readJson();
-    expect(record.evaluations[0].docker.lanes).toEqual([lane]);
-    expect(record.sources.selected).toContainEqual({ path: inventory, oid });
-  });
+        const unavailable = f.admit();
+        expect(unavailable.status).not.toBe(0);
+        expect(unavailable.stderr).toContain("unable to read selected source");
+        // A local promisor fetch may incidentally return other missing blobs too.
+        expect(traceContractAcquisition(f).trim().split("\n")).toContain(oid);
+        const admitted = f.admit();
+        expect(admitted.status, admitted.stderr).toBe(0);
+        const record = f.readJson();
+        expect(record.evaluations[0].docker.lanes).toEqual([lane]);
+        expect(record.sources.selected).toContainEqual({ path: inventory, oid });
+        return f;
+      };
+      if (guarded) {
+        withGuardedFixtureGit(verify);
+      } else {
+        verify();
+      }
+    },
+  );
 
   it("acquires a sparse selected typed-onboarding assertion helper before admission", () => {
     const helper = "scripts/e2e/lib/release-assertion-files.mjs";

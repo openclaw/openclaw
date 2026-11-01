@@ -28,7 +28,7 @@
   max-block-size: calc(var(--shell-canvas-height) - var(--safe-area-top));
   padding-block-end: var(--shell-safe-area-bottom);
   border-width: 1px 0 0;
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
   background: var(--popover);
   animation: sidebar-sheet-in var(--motion-sheet);
 }

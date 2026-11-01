@@ -16,6 +16,8 @@ import {
   readActiveTranscriptEntryAnchorFromProjection,
   readActiveTranscriptEntryAnchorInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readIdempotencyKeyOwner } from "./session-accessor.sqlite-transcript-identity.js";
+import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import type { SessionTranscriptEventMatchRequest } from "./session-transcript-worker-read.types.js";
 
@@ -25,6 +27,18 @@ export function findTranscriptEventMatchingInDatabase(
   request: SessionTranscriptEventMatchRequest,
 ): { event: TranscriptEvent } | undefined {
   const { target, match } = request;
+  // A present owner need not be the newest historical match, so retain that scan.
+  // ID-less keyed rows exist only in preserved legacy v2/v3 transcripts; current
+  // producers always assign event IDs, so retry keys always have an owner.
+  if (
+    match.kind === "idempotency" &&
+    match.key.length > 0 &&
+    match.key === match.key.trim() &&
+    !readIdempotencyKeyOwner(database, target.sessionId, match.key)
+  ) {
+    assertSessionTranscriptHot(database.db, target.sessionId);
+    return undefined;
+  }
   const matchesVisibleFinal =
     match.kind === "visible-final"
       ? createVisibleAssistantResultEventMatcher(match.runId)

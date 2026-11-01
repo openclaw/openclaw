@@ -476,17 +476,21 @@ describe("Workshop review through the real Gateway", () => {
         assert.isDefined(notice);
         expect(JSON.stringify(notice.content)).toContain(JSON.stringify(text).slice(1, -1));
         expect(notice.openclawDeliveryMirror).toEqual({
-          kind: "skill-workshop-change",
-          agentId: "main",
-          runId,
-          skills: [
-            {
-              name: "contract-release",
-              action: "updated",
-              summary: "check the generation and receipt",
-            },
-            { name: "contract-created", action: "created", summary: "reuse the receipt" },
-          ],
+          kind: "plugin-notice",
+          pluginId: "skill-workshop",
+          type: "skills-changed",
+          data: {
+            agentId: "main",
+            runId,
+            skills: [
+              {
+                name: "contract-release",
+                action: "updated",
+                summary: "check the generation and receipt",
+              },
+              { name: "contract-created", action: "created", summary: "reuse the receipt" },
+            ],
+          },
         });
         const scope = {
           agentId: "main",
@@ -715,7 +719,9 @@ describe("Workshop review through the real Gateway", () => {
             assert.isDefined(notice);
             // The session records its own notice once, with the marker; the send adds no copy.
             expect(notice.openclawDeliveryMirror).toMatchObject({
-              kind: "skill-workshop-change",
+              kind: "plugin-notice",
+              pluginId: "skill-workshop",
+              type: "skills-changed",
             });
           }
           expect(

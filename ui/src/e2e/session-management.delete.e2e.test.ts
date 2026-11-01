@@ -3,6 +3,7 @@ import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-contex
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import * as support from "./session-management.test-support.ts";
 
@@ -17,6 +18,59 @@ const basicOptions = {
 const desktopOptions = { ...basicOptions, viewport: { height: 900, width: 1280 } };
 
 suite.define(() => {
+  it("does not archive a parent when clicking its removed child disclosure position", () =>
+    suite.withPage(desktopOptions, async ({ page }) => {
+      const now = Date.now();
+      const main = sessionRow("agent:main:main", "Home", now);
+      const parent = sessionRow("agent:main:parent", "Parent conversation", now + 2, {
+        childSessions: ["agent:main:child"],
+      });
+      const child = sessionRow("agent:main:child", "Child", now + 1, {
+        spawnedBy: parent.key,
+      });
+      await seedChatSettings(page, suite.server.baseUrl, { navWidth: 320 });
+      const gateway = await support.installMockGateway(page, {
+        sessions: [main, parent, child],
+        sessionKey: main.key,
+        sessionArchiveFiltering: true,
+      });
+      await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, main.key));
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${parent.key}"]`);
+      const toggle = row.locator("[data-child-session-toggle]");
+      await toggle.waitFor();
+      const bounds = await toggle.boundingBox();
+      const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
+      await page.mouse.click(point.x, point.y);
+      await gateway.setSessionsListResponse(
+        support.sessionsListResponse([main, { ...parent, childSessions: [] }]),
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: child.key,
+        sessionId: child.sessionId,
+        agentId: "main",
+        reason: "delete",
+      });
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "delete" });
+      await toggle.waitFor({ state: "detached" });
+      await support.captureUiProof(suite, page, "removed-child-disclosure.png");
+      const archiveAtPoint = await page.evaluate(
+        ({ x, y }) =>
+          Boolean(document.elementFromPoint(x, y)?.closest("[data-sidebar-session-archive]")),
+        point,
+      );
+      await page.mouse.click(point.x, point.y);
+      expect.soft(archiveAtPoint).toBe(false);
+      await expectRequestCountStable(gateway, "sessions.patch", 0, undefined, {
+        key: parent.key,
+        archived: true,
+      });
+      await row.hover();
+      await row.locator("[data-sidebar-session-archive]").click();
+      await gateway.waitForRequest("sessions.patch", {
+        match: { key: parent.key, archived: true },
+      });
+    }));
+
   it.each(["delete", "archive"] as const)(
     "recovers an offline workspace for sidebar %s only after loss consent",
     (action) =>

@@ -28,6 +28,11 @@ operator's connection scope when using ambient authentication. Unknown URLs and
 missing images share the avatar loader's requests and retry handling. Initials
 remain beneath the image and are visible if it fails.
 
+Transcript images reserve their preview space before loading. Remote images
+without known dimensions keep a 3:2 frame while displayed, with the full image
+fitted inside it. Previously learned dimensions size the next preview without
+moving the surrounding messages when the image decodes.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
@@ -253,7 +258,7 @@ If an app times out during initialization, use **Retry** to load it again.
 Changing Gateway, losing access, or selecting different content retires the old
 frame and its local state.
 
-Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. The Gateway publishes metadata changes when catalog or command inputs change; UI-only config changes retain both. Catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
 Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened. Search keeps a pending model catalog read when its command cache expires; catalog change events still replace obsolete model reads.
 
@@ -640,6 +645,10 @@ versioned profile image; profiles with neither use initials without probing an i
 misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
 the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+
+Current Work applies complete session events without a periodic list refresh.
+Uncertain membership and reconnects still fetch an authoritative list. Activity
+History retains its one-minute fallback for people counts and pulse aggregates.
 
 Activity and previews in the sidebar roster refresh on session events
 and Gateway reconnects. Reusing cached ancestry for the selected session does not

@@ -105,7 +105,6 @@
 
 .sessions-transcript-search__clear:focus-visible,
 .sessions-transcript-search__result:focus-visible,
-.sessions-filter-popover__clear:focus-visible,
 .session-actions .icon-btn:focus-visible,
 .session-details-toggle:focus-visible {
   outline: none;
@@ -209,59 +208,6 @@
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.sessions-filter-popover__search {
-  position: relative;
-  width: 100%;
-}
-
-.sessions-filter-popover__search > svg {
-  position: absolute;
-  top: 50%;
-  inset-inline-start: 9px;
-  width: 14px;
-  height: 14px;
-  translate: 0 -50%;
-  stroke: var(--muted);
-  stroke-width: 1.8px;
-  pointer-events: none;
-}
-
-.sessions-filter-popover__search input {
-  padding-inline: 30px 34px;
-}
-
-.sessions-filter-popover__clear {
-  position: absolute;
-  inset-inline-end: 1px;
-  top: 50%;
-  translate: 0 -50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: transparent;
-}
-
-.sessions-filter-popover__clear[hidden] {
-  display: none;
-}
-
-.sessions-filter-popover__clear:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.sessions-filter-popover__clear svg {
-  width: 14px;
-  height: 14px;
-  pointer-events: none;
 }
 
 @media (max-width: 768px), (pointer: coarse) {

@@ -278,3 +278,61 @@ Checkpoint history stays until session deletion; the managed-worktree seven-day 
 While the worker is active, **Files**, file editing, and diffs inspect its actual checkout through the authenticated node connection. After Stop, retained changed-file previews and change paths remain available, but unchanged upstream files, editing, and full diffs require a running worker. The diff panel explains that the workspace is stopped. Opening these views never substitutes the agent's Gateway workspace.
 
 After a reclaimed placement or a previously active failed placement, the next message starts a replacement on the original destination once cleanup and workspace recovery are complete. If initial setup never completed or the original destination is unavailable, use **Restart session…** to choose where to continue. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
+
+## Exact provider-resource receipts
+
+New Linux Azure Sandbox allocations made through Crabbox record their observed
+resource identity in the existing environment store before setup or node enrollment.
+The original provision operation remains the allocation recovery key. Restart
+recovery reuses that operation and refuses a different resource; an unavailable
+observation does not prove that the original resource was deleted.
+
+Stop still performs the existing final workspace save. Provider teardown then
+uses the saved exact resource identity and remains pending until the provider
+confirms deletion. A missing local claim, timeout, or failed observation cannot
+complete cleanup. Existing environments without a receipt retain their original
+fixed-lease cleanup behavior; they are not silently rebound to a newly observed
+resource. Providers without receipt support remain unchanged, but cannot operate
+on an environment that already has a receipt.
+
+This is a prerequisite for retained session disks, not activation: idle suspension
+still follows the existing lifecycle, and Gateway workspace checkpoints remain
+the recovery source. It enables neither retained allocation nor pause/resume nor
+disk-authoritative workspaces.
+
+### Explicit current-disk consumers (not activated)
+
+The repository owner can retain an exact disk binding, but no user-facing selector
+activates it yet. For that binding, active file reads, edits, downloads, and incoming
+attachments use the original attached node. Editor writes settle their existing
+result custody without updating an older Gateway mirror.
+
+Explicit publication captures a fresh immutable snapshot under the existing session
+reservation and node quiescence. All requests selected for the same accepted turn
+reuse that snapshot, including a retry after artifact capture but before receipt
+binding. An already selected publication never includes later disk edits.
+
+Gateway export preparation also requires the original attached disk and a fresh
+snapshot, preserving private Git history and working files. It verifies the source
+again before binding the local worktree. Staged changes and unavailable history
+fail closed rather than silently losing index contents or commits. This preparation
+also serves an explicit **Move to Gateway** for an already-bound, active disk.
+The existing pending-result record retains the immutable export and original
+resource receipt. Only after the verified managed worktree is bound to the session
+does the repository owner retire disk custody; the existing environment owner
+then settles exact-resource cleanup before the placement finishes locally.
+
+An interrupted Move before local binding captures the original disk again rather
+than restoring an old mirror. After local binding, recovery keeps that worktree
+and finishes custody retirement and cleanup without reapplying an export. Missing
+exports, replaced disks, or changed session ownership keep recovery held. Existing
+mirrored pending results keep their original acceptance semantics. This uses the
+existing schema and cleanup owners; it adds no disk-mode selector or activation.
+Paused-disk preparation remains a separate prerequisite. Missing or replaced disks
+never fall back to a stored mirror or source-only reconstruction.
+
+The shared-state schema upgrade preserves old rows with an absent receipt and
+fences older binaries that cannot honor recorded identities. To roll back, first
+settle the new environments and their pending cleanup, then restore the matching
+pre-upgrade state backup with its binary. Do not perform a package-only downgrade
+or erase receipt metadata to force cleanup.

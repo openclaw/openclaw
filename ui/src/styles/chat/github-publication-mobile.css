@@ -17,7 +17,7 @@
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, var(--bg-hover));
 }
 
@@ -56,7 +56,7 @@
   gap: 10px;
   min-height: 56px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, var(--bg-hover));
   text-align: start;
 }
@@ -102,7 +102,7 @@
   width: 100%;
   padding: 0;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: transparent;
   color: inherit;
   font: inherit;

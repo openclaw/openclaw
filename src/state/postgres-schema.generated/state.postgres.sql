@@ -1117,6 +1117,7 @@ CREATE TABLE "worker_environments" (
   "destroy_requested_at_ms" bigint,
   "last_error" text COLLATE "C",
   "shared_host" bigint,
+  "resource_receipt_json" text COLLATE "C",
   PRIMARY KEY ("environment_id"),
   CHECK (("preparation_key" IS NULL AND "preparation_demand_at_ms" IS NULL AND "preparation_expires_at_ms" IS NULL AND "preparation_consumed_at_ms" IS NULL) OR ("preparation_key" IS NOT NULL AND (char_length("preparation_key") = 64) AND ("preparation_key" COLLATE "C" !~ '\A.*[^0-9a-f].*\Z') AND "preparation_demand_at_ms" IS NOT NULL AND ("preparation_demand_at_ms" BETWEEN 0 AND 9007199254740991) AND "preparation_expires_at_ms" IS NOT NULL AND ("preparation_expires_at_ms" > "preparation_demand_at_ms") AND ("preparation_expires_at_ms" <= 9007199254740991) AND ("preparation_consumed_at_ms" IS NULL OR (("preparation_consumed_at_ms" >= "preparation_demand_at_ms") AND ("preparation_consumed_at_ms" < "preparation_expires_at_ms"))))),
   CHECK ("ssh_port" IS NULL OR (("ssh_port" >= 1) AND ("ssh_port" <= 65535))),
@@ -1260,6 +1261,7 @@ CREATE TABLE "worker_workspace_pending_results" (
   "staged_result_ref" text COLLATE "C",
   "repository_workspace_id" text COLLATE "C",
   "created_at_ms" bigint NOT NULL,
+  "repository_disk_authority_json" text COLLATE "C",
   PRIMARY KEY ("session_id"),
   CHECK (("owner_epoch" >= 1)),
   CHECK (("placement_generation" >= 0))

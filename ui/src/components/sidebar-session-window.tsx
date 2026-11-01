@@ -103,7 +103,9 @@ export function createSidebarSessionWindow(
     const first = positions.findIndex((item) => item.top + item.height > top);
     const beyond = positions.findIndex((item) => item.top >= top + viewportHeight);
     const start = first < 0 ? positions.length : Math.max(0, first - 2);
-    const end = beyond < 0 ? positions.length : Math.min(positions.length, beyond + 2);
+    // A section below the viewport has no visible rows to overscan.
+    const end =
+      beyond < 0 ? positions.length : beyond === 0 ? 0 : Math.min(positions.length, beyond + 2);
     const items = positions.filter(
       (_, index) => (index >= start && index < end) || current[index]!.retained,
     );

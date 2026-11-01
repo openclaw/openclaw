@@ -52,7 +52,7 @@ describe("Control UI accent presentation", () => {
     };
     try {
       shell.className = "shell shell--chat";
-      syncControlUiSystemChrome(false, true);
+      syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
       expectChrome("rgb(10, 20, 30)");
       reads.mockClear();
       for (let commit = 0; commit < 20; commit++) {
@@ -110,7 +110,7 @@ describe("Control UI accent presentation", () => {
         meta.remove();
       }
       palette.remove();
-      root.classList.remove("control-ui-content-canvas");
+      root.classList.remove("control-ui-system-chrome-canvas");
       delete root.dataset.theme;
       delete root.dataset.themeMode;
       vi.unstubAllGlobals();
@@ -128,30 +128,30 @@ describe("Control UI accent presentation", () => {
     );
     try {
       shell.className = "shell shell--chat";
-      syncControlUiSystemChrome(false, true);
-      expect(root.classList.contains("control-ui-content-canvas")).toBe(true);
+      syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
+      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(true);
       expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
         "rgb(20, 30, 40)",
       );
 
       shell.className = "shell";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-content-canvas")).toBe(true);
-      syncControlUiSystemChrome(false, false);
-      expect(root.classList.contains("control-ui-content-canvas")).toBe(false);
+      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(true);
+      syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
+      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(false);
       expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(
         "rgb(10, 20, 30)",
       );
 
       shell.className = "shell shell--chat";
       syncControlUiSystemChrome();
-      expect(root.classList.contains("control-ui-content-canvas")).toBe(false);
-      syncControlUiSystemChrome(false, true);
+      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(false);
+      syncControlUiSystemChrome(false, { contentCanvas: true, navScrim: false });
       shell.remove();
-      syncControlUiSystemChrome(false, false);
-      expect(root.classList.contains("control-ui-content-canvas")).toBe(false);
+      syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
+      expect(root.classList.contains("control-ui-system-chrome-canvas")).toBe(false);
     } finally {
-      root.classList.remove("control-ui-content-canvas");
+      root.classList.remove("control-ui-system-chrome-canvas");
       vi.unstubAllGlobals();
     }
   });

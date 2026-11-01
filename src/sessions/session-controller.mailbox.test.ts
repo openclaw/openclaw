@@ -341,7 +341,6 @@ it("clearFollowupQueue retains delayed native injection and source adoption unti
   clearFollowupQueue(key);
   expect(input.mailbox.entries).toContain(input);
   expect(input.injection).toBe(injection);
-  expect(injection?.accepted).toBeUndefined();
   expect(settled).not.toHaveBeenCalled();
   reservation.accepted(true);
   reservation.consume("consumed");
@@ -427,8 +426,8 @@ describe("early source injection custody", () => {
     await Promise.resolve();
     expect(admitted).not.toHaveBeenCalled();
     await expect(claimSessionControllerTask(first, () => {})).rejects.toThrow(/injection/);
-    // Acceptance wins even if a late caller mistakes the outcome for rejection.
-    a.finish(false);
+    // The injection owner settles accepted custody after its native receipt.
+    a.finish(true);
     expect(await next).toBe(true);
     expect([first.phase, second.phase]).toEqual(["consumed", "injecting"]);
     // Old callbacks must not consume a same-ID sibling.

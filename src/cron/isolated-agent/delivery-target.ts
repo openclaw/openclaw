@@ -90,6 +90,34 @@ const sessionGenerationRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-delivery-generation.js"),
 );
 
+export type CronDeliverySourceGeneration = Awaited<
+  ReturnType<
+    typeof import("../../config/sessions/session-delivery-generation.js").prepareSessionGenerationFactsBatch
+  >
+>[number];
+
+/** Prepare preview source leases together; callers release every successful preparation. */
+export async function prepareCronDeliverySourceGenerations(
+  cfg: OpenClawConfig,
+  requests: readonly {
+    agentId: string;
+    sourceConversation: NonNullable<CronStoredJob["sourceConversation"]>;
+  }[],
+) {
+  if (requests.length === 0) {
+    return [];
+  }
+  const { prepareSessionGenerationFactsBatch } = await sessionGenerationRuntimeLoader.load();
+  return prepareSessionGenerationFactsBatch(
+    requests.map(({ agentId, sourceConversation }) => ({
+      agentId,
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      ...sourceConversation,
+      lifecycleRevision: sourceConversation.lifecycleRevision ?? null,
+    })),
+  );
+}
+
 /** Read one preview batch after runtime loading, then release all source read ownership. */
 export async function prepareCronDeliveryTargetContexts(
   cfg: OpenClawConfig,
@@ -138,6 +166,7 @@ export async function resolveDeliveryTarget(
     dryRun?: boolean;
     inheritSessionThread?: boolean;
     sessionContext?: CronDeliveryTargetContext;
+    sourceGeneration?: CronDeliverySourceGeneration;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
@@ -147,17 +176,26 @@ export async function resolveDeliveryTarget(
   const source = jobPayload.sourceConversation;
   if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
     try {
-      const { prepareSessionGenerationFacts } = await sessionGenerationRuntimeLoader.load();
-      const generation = await prepareSessionGenerationFacts({
-        agentId,
-        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-        ...source,
-        lifecycleRevision: source.lifecycleRevision ?? null,
-      });
+      const preparedGeneration = options?.sourceGeneration;
+      if (preparedGeneration && !preparedGeneration.ok) {
+        throw preparedGeneration.error;
+      }
+      const generation =
+        preparedGeneration?.value ??
+        (await (
+          await sessionGenerationRuntimeLoader.load()
+        ).prepareSessionGenerationFacts({
+          agentId,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+          ...source,
+          lifecycleRevision: source.lifecycleRevision ?? null,
+        }));
       try {
         generation.assertCurrent();
       } finally {
-        generation.release();
+        if (!preparedGeneration) {
+          generation.release();
+        }
       }
     } catch (error) {
       return {

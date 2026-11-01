@@ -13,7 +13,7 @@
 .chat-details-processes__row {
   position: relative;
   min-width: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
 
   &:is(:hover, :focus-within) {
     background: var(--bg-hover);

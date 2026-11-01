@@ -698,32 +698,6 @@ span.new-session-page__select {
   margin-top: var(--space-2);
 }
 
-.new-session-page__project-search {
-  display: block;
-  padding: 4px 8px 6px;
-}
-
-.new-session-page__project-search input {
-  width: 100%;
-  padding: 6px 8px;
-  background: var(--bg);
-  font: inherit;
-}
-
-.new-session-page__project-search input,
-.new-session-page__menu-field input {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-}
-
-.new-session-page__project-search input:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-}
-
 .new-session-page__project-status,
 .new-session-page__project-error {
   padding: 5px 8px;
@@ -755,8 +729,14 @@ span.new-session-page__select {
 
 .new-session-page__menu-field input {
   flex: 1 1 auto;
+  min-width: 0;
   padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
 }
 
 .new-session-page__menu-field input:focus-visible {
@@ -852,39 +832,10 @@ span.new-session-page__select {
   overflow: hidden;
 }
 
-.new-session-page__environment-search {
-  background: var(--bg-hover);
-  margin-bottom: var(--space-1);
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  color: var(--muted);
-  border-radius: var(--menu-item-radius);
-}
-
-.new-session-page__environment-search svg,
 .new-session-page__connect-device svg {
   display: block;
   width: 14px;
   height: 14px;
-}
-
-.new-session-page__environment-search input {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-  outline: none;
-}
-
-.new-session-page__environment-search input::placeholder {
-  color: var(--muted);
 }
 
 .new-session-page__environment-list {

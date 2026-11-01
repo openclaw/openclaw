@@ -671,11 +671,13 @@ if (
     port === sandboxPort ||
     [port, sandboxPort].some(
       (value) =>
-        value === undefined || !Number.isInteger(value) || value < 40_000 || value > 65_535,
+        value === undefined ||
+        !Number.isInteger(value) ||
+        !((value >= 19_600 && value <= 19_699) || (value >= 40_000 && value <= 65_535)),
     ))
 ) {
   throw new Error(
-    "Explicit port and sandbox-port require a built bundle and distinct ports from 40000 to 65535",
+    "Explicit port and sandbox-port require a built bundle and distinct ports in 19600–19699 or 40000–65535",
   );
 }
 if (

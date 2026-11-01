@@ -1,37 +1,24 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
 import { setRuntimeConfigSnapshotRefreshHandler } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { completeProviderModelAccess, prepareProviderModelAccess } from "./auth-model-policy.js";
+import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
+import { allowProviderModels } from "./auth-model-policy.js";
 import { updateConfig } from "./shared.js";
 
-describe("provider model access consent", () => {
+describe("provider model access after sign-in", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let config: OpenClawConfig;
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const choose = (index = 0, beforeSelect?: () => Promise<unknown>) =>
-    createWizardPrompter({
-      select: async ({ options }) => {
-        await beforeSelect?.();
-        return options[index]!.value;
-      },
-    });
-  const identity = { agentId: "main", provider: "sample", providerLabel: "Sample" };
-  const prepare = () => prepareProviderModelAccess({ config, ...identity });
   const readSaved = async (): Promise<OpenClawConfig> =>
     JSON.parse(await fs.readFile(state.configPath, "utf8"));
   const readBytes = () => fs.readFile(state.configPath, "utf8");
-  const complete = (options: Partial<Parameters<typeof completeProviderModelAccess>[0]> = {}) =>
-    completeProviderModelAccess({ prepared: prepare(), prompter: choose(), runtime, ...options });
-  async function restrictOwner() {
-    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
-    await state.writeConfig(config);
-  }
+  const allow = (assertCurrent?: (config?: OpenClawConfig) => void) =>
+    allowProviderModels({ config, agentId: "main", provider: "sample", runtime, assertCurrent });
 
   beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "model-access-consent" });
+    state = await createOpenClawTestState({ label: "model-access" });
     config = {
       agents: {
         defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
@@ -46,47 +33,78 @@ describe("provider model access consent", () => {
     await state.cleanup();
   });
 
-  it("widens only the consenting agent owner", async () => {
-    await restrictOwner();
-    const outcome = await complete();
-    expect(outcome.message).toContain("Application by the running Gateway is not confirmed");
-    expect(outcome.message).toContain("openclaw gateway restart");
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("models are now visible"));
-    const saved = await readSaved();
-    expect(saved.agents).toMatchObject({
-      defaults: { model: "other/current", modelPolicy: { allow: ["other/current"] } },
+  it("widens only the allowlist that governs the agent", async () => {
+    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
+    await state.writeConfig(config);
+    const access = await allow();
+    expect(access).toEqual({
+      applied: false,
+      message: expect.stringContaining("Added sample/* to allowed models."),
+    });
+    expect((await readSaved()).agents).toMatchObject({
+      defaults: { modelPolicy: { allow: ["other/current"] } },
       entries: { main: { modelPolicy: { allow: ["other/private", "sample/*"] } } },
     });
   });
 
-  it("keeps restrictions without writing config", async () => {
+  it("leaves config untouched without an allowlist or when the provider is already allowed", async () => {
+    delete config.agents!.defaults!.modelPolicy;
+    await state.writeConfig(config);
     const before = await readBytes();
-    await complete({ prompter: choose(1) });
+    await expect(allow()).resolves.toBeUndefined();
+    config.agents!.defaults!.modelPolicy = { allow: ["sample/*"] };
+    await expect(allow()).resolves.toBeUndefined();
     expect(await readBytes()).toBe(before);
   });
 
-  it("preserves deferred legacy restrictions across consent and later config writes", async () => {
+  it.each([
+    ["exact models", ["other/current", "sample/one", "sample/two"]],
+    ["a narrower wildcard", ["other/current", "sample/family/*"]],
+  ])("keeps an allowlist that already names %s of the provider", async (_name, allowed) => {
+    config.agents!.defaults!.modelPolicy = { allow: allowed };
+    await state.writeConfig(config);
+    const before = await readBytes();
+    await expect(allow()).resolves.toBeUndefined();
+    expect(await readBytes()).toBe(before);
+  });
+
+  it("keeps every model of a deferred legacy allowlist", async () => {
     delete config.agents!.defaults!.modelPolicy;
     config.agents!.defaults!.models = { "existing-model": {} };
     await state.writeConfig(config);
-    await complete();
+    await allow();
     await updateConfig((current) => ({ ...current, logging: { level: "debug" } }));
     const saved = await readSaved();
     expect(saved.agents?.defaults?.models).toEqual({ "existing-model": {}, "sample/*": {} });
     expect(saved.agents?.defaults?.modelPolicy).toBeUndefined();
-    expect(saved.meta?.migrations?.modelPolicyAllowlist).not.toBe(true);
-    config = saved;
-    expect(prepare()).toBeUndefined();
   });
 
-  it("does not infer consent from a migrated model map", () => {
+  it("infers a bare legacy ref's provider like the policy owner", async () => {
+    delete config.agents!.defaults!.modelPolicy;
+    config.agents!.defaults!.models = { tiny: {} };
+    config.models = {
+      providers: {
+        sample: {
+          baseUrl: "https://sample.invalid/v1",
+          models: [createTestModelDefinition("tiny", { name: "Tiny" })],
+        },
+      },
+    };
+    await state.writeConfig(config);
+    const before = await readBytes();
+    await expect(allow()).resolves.toBeUndefined();
+    expect(await readBytes()).toBe(before);
+  });
+
+  it("does not treat a migrated model map as an allowlist", async () => {
     delete config.agents!.defaults!.modelPolicy;
     config.agents!.defaults!.models = { "other/current": {} };
     config.meta = { migrations: { modelPolicyAllowlist: true } };
-    expect(prepare()).toBeUndefined();
+    await state.writeConfig(config);
+    await expect(allow()).resolves.toBeUndefined();
   });
 
-  it("rechecks login authority after the writer's asynchronous preflight", async () => {
+  it("rechecks sign-in authority after the writer's asynchronous preflight", async () => {
     const before = await readBytes();
     const assertCurrent = vi.fn();
     setRuntimeConfigSnapshotRefreshHandler({
@@ -97,31 +115,7 @@ describe("provider model access consent", () => {
       },
       refresh: () => true,
     });
-    await expect(complete({ assertCurrent })).rejects.toThrow("Login replaced");
+    await expect(allow(assertCurrent)).rejects.toThrow("Login replaced");
     expect(await readBytes()).toBe(before);
   });
-
-  it.each([undefined, { allow: ["other/replacement"] }])(
-    "rejects removed or replaced consent owner: %j",
-    async (replacement) => {
-      await restrictOwner();
-      const prepared = prepare();
-      const replace = async () => {
-        config.agents!.entries!.main!.modelPolicy = replacement;
-        await state.writeConfig(config);
-      };
-      if (!replacement) {
-        await replace();
-      }
-      await expect(
-        complete({
-          prepared,
-          prompter: choose(0, replacement ? replace : undefined),
-        }),
-      ).rejects.toThrow("Model restrictions changed during sign-in");
-      const saved = await readSaved();
-      expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
-      expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual(replacement?.allow);
-    },
-  );
 });

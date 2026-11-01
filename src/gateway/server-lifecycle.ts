@@ -442,7 +442,6 @@ export async function prepareGatewayLifecycle(params: {
       step("model-accounts", stopModelAccountsForClose),
       step("mention-inbox", () => mentionInbox.dispose()),
       step("sandbox-registry", () => sandboxRegistry.drain()),
-      step("talk-persistence", () => talkClose.drain()),
     ]);
   const beginClosePrelude = async (options?: GatewayCloseOptions) => {
     await step("prelude-fence", () => markClosePreludeStarted(options));
@@ -466,20 +465,24 @@ export async function prepareGatewayLifecycle(params: {
   let exitAfterClose = false;
   const runClosePrelude = async () => {
     await beginClosePrelude();
-    stopNodeConnectionNotifications();
-    await watchNodeHttpRuntime.close();
-    await shutdownRuntime.runGatewayClosePrelude({
-      stopDiagnostics: stopGatewayDiagnosticHeartbeat,
-      skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
-      disposeNodeReapproval: () => nodeReapprovalCoordinator.dispose(),
-      stopChannelHealthMonitor: async () => {
-        const monitor = runtimeState?.channelHealthMonitor;
-        monitor?.shutdown();
-        await monitor?.waitForIdle();
-      },
-      stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
-      closeMcpServer: shutdownRuntime.closeMcpLoopbackServer,
-    });
+    try {
+      await step("talk-persistence", () => talkClose.drain());
+    } finally {
+      stopNodeConnectionNotifications();
+      await watchNodeHttpRuntime.close();
+      await shutdownRuntime.runGatewayClosePrelude({
+        stopDiagnostics: stopGatewayDiagnosticHeartbeat,
+        skillsChangeUnsub: () => runtimeState.skillsChangeUnsub({ exitAfterClose }),
+        disposeNodeReapproval: () => nodeReapprovalCoordinator.dispose(),
+        stopChannelHealthMonitor: async () => {
+          const monitor = runtimeState?.channelHealthMonitor;
+          monitor?.shutdown();
+          await monitor?.waitForIdle();
+        },
+        stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
+        closeMcpServer: shutdownRuntime.closeMcpLoopbackServer,
+      });
+    }
   };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
