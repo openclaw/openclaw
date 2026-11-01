@@ -64,8 +64,12 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
   } else if (recovery?.kind === "launchd") {
     try {
       const target = "gui/" + recovery.uid + "/" + recovery.label;
-      const deadline = Date.now() + params.recoveryTimeoutMs;
-      const run = (args) => runOwned("launchctl", args, undefined, deadline);
+      // The recovery budget is elapsed time; a wall-clock step must not extend or
+      // truncate it. Spawns still receive an epoch deadline because they share the
+      // cross-process parent-exit contract consumed by runServiceCommand.
+      const recoveryBudget = createMonotonicBudget(params.recoveryTimeoutMs);
+      const run = (args) =>
+        runOwned("launchctl", args, undefined, recoveryBudget.commandDeadlineAt());
       const before = await run(["print", target]);
       if (before.code === 0) {
         const pid = parseLaunchctlJob(before.stdout, target).runtime.pid;
@@ -88,7 +92,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       } else {
         const enabled = await run(["enable", target]);
         let kickstarted = false;
-        for (let inspection = enabled; enabled.code === 0 && Date.now() < deadline;) {
+        for (let inspection = enabled; enabled.code === 0 && recoveryBudget.remainingMs() > 0;) {
           inspection = await run(["print", target]);
           if (inspection.code === 0) {
             const pid = parseLaunchctlJob(inspection.stdout, target).runtime.pid;
@@ -99,7 +103,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
             }
             // launchd retains the old label until its ExitTimeOut-bounded teardown completes.
             if (pid === params.parentPid) {
-              await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
+              await sleep(Math.min(500, recoveryBudget.remainingMs()));
               continue;
             }
             if (kickstarted) break;
@@ -114,7 +118,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
             /already exists in domain|operation already in progress|bootstrap failed: 37/i.test(detail)) continue;
           if (kickstarted && isLaunchdNotLoaded(inspection)) continue;
           if (!/bootstrap failed: 5|input\/output error/i.test(detail)) break;
-          await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
+          await sleep(Math.min(500, recoveryBudget.remainingMs()));
         }
         serviceRunning = restored;
       }
