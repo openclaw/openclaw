@@ -1,0 +1,2 @@
+# Scheduled-run child tool snapshot: record, exact run-key check, spawn writers, run context, run-origin stamp, Codex facts; exact net test-line growth.
+867

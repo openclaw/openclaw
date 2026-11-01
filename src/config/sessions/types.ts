@@ -399,8 +399,17 @@ type SessionEntryCore = SessionEntryProvenance &
     blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
-    /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
-    inheritedToolPolicySource?: "sender";
+    /**
+     * Provenance retained with the inherited tool snapshot: "sender" for a sender/channel
+     * restriction; "scheduled-run" when a scheduled run that resolved without sender policy
+     * spawned this child (directly or through other sub-agents).
+     */
+    inheritedToolPolicySource?: "sender" | "scheduled-run";
+    /**
+     * Host-written at spawn, only with "scheduled-run": the per-run session of the scheduled
+     * run whose work spawned this child (directly or through other sub-agents).
+     */
+    inheritedToolPolicyRunSessionKey?: string;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */

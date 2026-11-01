@@ -12,6 +12,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { admitScheduledOccurrence } from "./execution-context-admission.js";
 import {
+  readScheduledFreshRunSessionKey,
   readScheduledMemoryParent,
   readScheduledToolTargets,
 } from "./execution-context-registry.js";
@@ -211,6 +212,49 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     await expect(readCronSessionEntry(storePath, boundSessionKey)).resolves.toMatchObject({
       sessionId: "bound-session",
     });
+  });
+
+  it.for([
+    { kind: "its own fresh run session", sessionTarget: "isolated", sessionKey: "cron:job-1" },
+    {
+      kind: "a named conversation session",
+      sessionTarget: "session:agent:main:telegram:direct:42",
+      sessionKey: "agent:main:telegram:direct:42",
+    },
+  ] as const)("marks the run's fresh session only for $kind", async (row, { home }) => {
+    const storePath = await f.writeSessionStoreEntries(home, {
+      "agent:main:telegram:direct:42": { sessionId: "chat", updatedAt: Date.now() },
+    });
+    const cfg = f.makeCfg(home, storePath);
+    const job = sessionJob({ sessionTarget: row.sessionTarget });
+    const admitted = await admitScheduledOccurrence({ cfg, job, agentId: "main", trigger: "cron" });
+    const minted: unknown[] = [];
+    const occurrence = {
+      ...admitted,
+      mint: (run: Parameters<typeof admitted.mint>[0]) => {
+        minted.push(run.freshRunSessionKey);
+        return admitted.mint(run);
+      },
+    };
+    let seen: { sessionKey?: string; fresh?: string } | undefined;
+    h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+      const run = await input.preparedRunAdmission!.admit("gateway", input.runId);
+      seen = { sessionKey: input.sessionKey, fresh: readScheduledFreshRunSessionKey(run) };
+      return embeddedResult(input.sessionId);
+    });
+
+    let res;
+    try {
+      res = await runSessionTurn(cfg, job, row.sessionKey, undefined, occurrence);
+    } finally {
+      admitted.release();
+    }
+
+    expect(res.status, res.error).toBe("ok");
+    const fresh = row.sessionTarget === "isolated" ? seen?.sessionKey : undefined;
+    expect(seen?.sessionKey).toMatch(/^agent:main:/);
+    expect(minted).toEqual([fresh]);
+    expect(seen?.fresh).toBe(fresh);
   });
 
   it("runs a linked current job as a child of its conversation", async ({ home }) => {

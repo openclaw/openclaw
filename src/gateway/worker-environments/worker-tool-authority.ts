@@ -60,6 +60,8 @@ export async function resolveWorkerToolAuthority(params: {
           : undefined,
         runtimeToolAllowlist: turn.toolsAllow,
         inheritRuntimeToolAllowlist: true,
+        // A turn admitted later (prepared admission) has no bound scheduled context yet: no mark.
+        operationalRunInstance: turn.admittedRunContext?.operationalRunInstance,
       });
       if (capabilityProfile.policy.delegatedToolPolicy) {
         // Worker-local tools do not carry the Gateway’s live delegation authority.

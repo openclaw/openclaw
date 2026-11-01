@@ -261,6 +261,26 @@ describe("gateway caller context wrapper", () => {
     },
   );
 
+  it.each([
+    { kind: "its own session", nestedSession: "agent:main:cron:job:run:r1", kept: true },
+    { kind: "another session", nestedSession: "agent:main:main", kept: false },
+  ])("keeps a same-run caller's scheduled run stamp only for $kind", async (row) => {
+    const sessionKey = "agent:main:cron:job:run:r1";
+    const run = runInstance("cron");
+    const nestedOrigin = { sessionKey: row.nestedSession, scheduledRunSessionKey: sessionKey };
+    await withCallers(
+      [
+        { sessionKey, operationalRunInstance: run, requesterOrigin: { sessionKey } },
+        { sessionKey, operationalRunInstance: run, requesterOrigin: nestedOrigin },
+      ],
+      () => {
+        expect(getCaller()?.requesterOrigin).toEqual(
+          row.kept ? { sessionKey, scheduledRunSessionKey: sessionKey } : { sessionKey },
+        );
+      },
+    );
+  });
+
   it("preserves every delegated tool restriction through same-run wrappers", async () => {
     await withCallers(
       [

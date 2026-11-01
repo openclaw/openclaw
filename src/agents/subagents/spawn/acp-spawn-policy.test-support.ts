@@ -27,6 +27,35 @@ export function registerAcpSpawnPolicyTests(fixture: {
     },
   );
 
+  it.each([
+    { mark: true, key: true },
+    { mark: false, key: true },
+    { mark: true, key: false },
+  ])(
+    "persists a scheduled-run mark on an ACP helper only with its run session (%j)",
+    async (row) => {
+      fixture.state.cfg.acp = { ...fixture.state.cfg.acp, defaultAgent: "codex" };
+      const runSessionKey = "agent:main:cron:nightly:run:r1";
+      const marked = row.mark && row.key;
+      const result = await fixture.spawn(
+        { task: "inspect", agentId: "codex" },
+        {
+          agentSessionKey: "agent:main:main",
+          ...(row.mark ? { inheritedToolPolicySource: "scheduled-run" as const } : {}),
+          ...(row.key ? { inheritedToolPolicyRunSessionKey: runSessionKey } : {}),
+        },
+      );
+      expect(result.status).toBe("accepted");
+      const upserts = fixture.upsertSessionEntryMock as {
+        mock: { calls: [unknown, Record<string, unknown>][] };
+      };
+      const child = upserts.mock.calls.find(([, entry]) => entry.inheritedToolPolicyVersion)?.[1];
+      expect(child).toBeDefined();
+      expect(child?.inheritedToolPolicySource).toBe(marked ? "scheduled-run" : undefined);
+      expect(child?.inheritedToolPolicyRunSessionKey).toBe(marked ? runSessionKey : undefined);
+    },
+  );
+
   it("keeps a restricted same-agent ACP helper in the requester's root", async () => {
     const result = await fixture.spawn(
       { task: "inspect", agentId: "codex" },

@@ -11,6 +11,7 @@ import {
 } from "../agents/computer-use-node-capabilities.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { prepareSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import {
@@ -59,6 +60,7 @@ type CachedScopedTools = {
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
   sessionFacts: ReturnType<typeof captureMcpCatalogSessionFacts>;
+  requesterOrigin?: RequesterOrigin;
 };
 
 type McpLoopbackScopeParams = {
@@ -376,6 +378,7 @@ async function constructMcpLoopbackTools(
     tools,
     toolSchema,
     sessionFacts,
+    requesterOrigin: scoped.requesterOrigin,
   };
 }
 

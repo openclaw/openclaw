@@ -303,7 +303,11 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     phase === "execution" ? boundClientGrant.mintCronRequesterGrant : undefined,
                   agentId,
                   sessionKey: requestContext.sessionKey,
-                  requesterOrigin: requestContext.requesterOrigin,
+                  // Tool calls hand sub-agents the origin the tools resolved (a scheduled run's
+                  // own turn stamps it); construction keeps the request's own origin.
+                  requesterOrigin:
+                    (phase === "execution" ? scopedTools?.requesterOrigin : undefined) ??
+                    requestContext.requesterOrigin,
                   turnSourceChannel: requestContext.messageProvider,
                   turnSourceLocal:
                     !requestContext.messageProvider &&

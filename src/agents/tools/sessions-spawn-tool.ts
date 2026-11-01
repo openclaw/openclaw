@@ -421,10 +421,7 @@ export function createSessionsSpawnTool(
         const runTimeoutSeconds = readNonNegativeIntegerParam(params, "runTimeoutSeconds");
         const taskNameResult = normalizeSubagentTaskName(params.taskName);
         if (taskNameResult.error) {
-          return jsonResult({
-            status: "error",
-            error: taskNameResult.error,
-          });
+          return jsonResult({ status: "error", error: taskNameResult.error });
         }
         const taskName = taskNameResult.taskName;
         const label = readToolStringParam(params, "label") ?? "";
@@ -604,6 +601,7 @@ export function createSessionsSpawnTool(
               }
             : {}),
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
+          inheritedToolPolicyRunSessionKey: opts?.inheritedToolPolicyRunSessionKey,
           workspaceDir: opts?.workspaceDir,
           sessionPermissionPolicy: opts?.sessionPermissionPolicy,
         });

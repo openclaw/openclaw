@@ -26,6 +26,7 @@ type InheritedSessionToolPolicy = Pick<
   SessionEntry,
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
+  | "inheritedToolPolicyRunSessionKey"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
   | "delegatedToolPolicy"
@@ -44,6 +45,9 @@ export function preserveSessionInheritedToolPolicy(
       : {}),
     ...(entry?.inheritedToolPolicySource
       ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
+      : {}),
+    ...(entry?.inheritedToolPolicyRunSessionKey
+      ? { inheritedToolPolicyRunSessionKey: entry.inheritedToolPolicyRunSessionKey }
       : {}),
     ...(entry?.inheritedToolAllow ? { inheritedToolAllow: [...entry.inheritedToolAllow] } : {}),
     ...(entry?.inheritedToolDeny ? { inheritedToolDeny: [...entry.inheritedToolDeny] } : {}),

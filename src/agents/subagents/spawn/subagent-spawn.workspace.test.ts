@@ -198,6 +198,28 @@ it.each([false, true])("inherits sender tools/root (sandboxed=%s)", async (sandb
   expect(request("agent")?.params.sessionKey).toBe(result.childSessionKey);
 });
 
+it.each([
+  { mark: true, key: true },
+  { mark: false, key: true },
+  { mark: true, key: false },
+])("persists a scheduled-run mark only with its run session, unconfined (%j)", async (row) => {
+  const runSessionKey = "agent:main:cron:nightly:run:r1";
+  const marked = row.mark && row.key;
+  const result = await spawn(
+    { agentId: "ops" },
+    {
+      ...context,
+      ...(row.mark ? { inheritedToolPolicySource: "scheduled-run" as const } : {}),
+      ...(row.key ? { inheritedToolPolicyRunSessionKey: runSessionKey } : {}),
+    },
+  );
+  expect(result.status).toBe("accepted");
+  const child = store[result.childSessionKey!];
+  expect(child).toMatchObject({ spawnedWorkspaceDir: "/tmp/workspace-ops" });
+  expect(child?.inheritedToolPolicySource).toBe(marked ? "scheduled-run" : undefined);
+  expect(child?.inheritedToolPolicyRunSessionKey).toBe(marked ? runSessionKey : undefined);
+});
+
 it.each([{ agentId: "ops" }, { cwd: "/tmp" }, { worktree: true }])(
   "refuses sender-restricted selection: %j",
   async (selection) => {

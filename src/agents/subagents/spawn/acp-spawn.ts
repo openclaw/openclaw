@@ -151,7 +151,8 @@ type SpawnAcpContext = SpawnRequesterConversationSource & {
   sandboxed?: boolean;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
+  inheritedToolPolicyRunSessionKey?: string;
   workspaceDir?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
 };
@@ -503,9 +504,15 @@ export async function spawnAcpDirect(
             parentSessionKey: requesterInternalKey,
             ...childSessionPatch,
             inheritedToolPolicyVersion: 1,
-            ...(ctx.inheritedToolPolicySource
-              ? { inheritedToolPolicySource: ctx.inheritedToolPolicySource }
-              : {}),
+            ...(ctx.inheritedToolPolicySource === "sender"
+              ? { inheritedToolPolicySource: "sender" as const }
+              : ctx.inheritedToolPolicySource === "scheduled-run" &&
+                  ctx.inheritedToolPolicyRunSessionKey
+                ? {
+                    inheritedToolPolicySource: "scheduled-run" as const,
+                    inheritedToolPolicyRunSessionKey: ctx.inheritedToolPolicyRunSessionKey,
+                  }
+                : {}),
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
             ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
             ...(senderRestricted

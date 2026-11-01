@@ -23,6 +23,7 @@ import {
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
+import { stampScheduledRunOrigin } from "../agents/requester-origin.js";
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
@@ -446,6 +447,7 @@ export async function resolveGatewayScopedTools(
     inheritedToolAllowlist,
     inheritedToolDenylist,
     inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+    inheritedToolPolicyRunSessionKey: requesterPolicies.inheritedToolPolicyRunSessionKey,
     delegatedToolPolicyUnavailable: Boolean(requesterPolicies.delegatedToolPolicy),
   };
   const openClawTools = await createOpenClawToolsAsync(openClawToolOptions, { assertCurrent });
@@ -714,10 +716,14 @@ export async function resolveGatewayScopedTools(
     nativeCapture,
   );
 
+  const stampedRequesterOrigin = stampScheduledRunOrigin(params.requesterOrigin, requesterPolicies);
   return {
     agentId: sessionAgentId,
     tools: applyToolAvailabilityDescriptions(tools),
     workspaceDir,
+    // The origin this turn's tool calls hand to sub-agents; only a scheduled run's own turn stamps
+    // it. Absent = callers keep the request's own origin.
+    ...(stampedRequesterOrigin ? { requesterOrigin: stampedRequesterOrigin } : {}),
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef
       ? (callableToolNames: ReadonlySet<string>) =>

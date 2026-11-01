@@ -90,6 +90,17 @@ export function readScheduledToolOptions(
 }
 
 /**
+ * The per-run session the isolated runner freshly minted for the run its owner
+ * names, or undefined. Only the host-bound run instance can read it.
+ */
+export function readScheduledFreshRunSessionKey(
+  owner: Readonly<{ operationalRunInstance?: OperationalRunInstanceRef }> | undefined,
+): string | undefined {
+  const run = owner?.operationalRunInstance;
+  return run ? contextsByRun.get(run)?.freshRunSessionKey : undefined;
+}
+
+/**
  * The automations scope a scheduled occurrence (not an ingress turn) takes from
  * its admitted context, or undefined when the run has no such context.
  */

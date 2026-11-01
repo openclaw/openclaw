@@ -21,7 +21,7 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
 
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
-const { readScheduledMemoryParent, readScheduledToolTargets } =
+const { readScheduledFreshRunSessionKey, readScheduledMemoryParent, readScheduledToolTargets } =
   await import("./execution-context-registry.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
 const { sessionChanges } = await import("../sessions/session-row-changes.js");
@@ -283,6 +283,38 @@ describe("admitScheduledOccurrence", () => {
     expect(minted.result).toEqual({ status: "fail", error: "worker unavailable" });
     expect(() => minted.release()).not.toThrow();
     expect(() => occurrence.release()).not.toThrow();
+  });
+
+  it.each([
+    { kind: "a detached run on its fresh session", fresh: RUN.runSessionKey, exposed: true },
+    { kind: "a detached run without the runner's fact", fresh: undefined, exposed: false },
+    { kind: "another fresh session", fresh: "agent:main:cron:job-1:run:s2", exposed: false },
+    {
+      kind: "an in-session run",
+      fresh: RUN.runSessionKey,
+      exposed: false,
+      stored: {
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "check in" },
+        owner: { agentId: "main", sessionKey: "agent:main:main" },
+      } as const,
+    },
+  ])("exposes the run's fresh session for $kind", async ({ fresh, exposed, stored }) => {
+    const occurrence = await admit(job({ ...stored }));
+    const admission = prepareCronRunAdmission({
+      cfg: {},
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: RUN.runSessionKey,
+      jobId: "job-1",
+      deliveryAttemptFence: null,
+      scheduledExecution: occurrence.mint({ ...RUN, freshRunSessionKey: fresh }),
+    });
+    const run = await admission.preparedRunAdmission.admit("embedded");
+    expect(admission.readScheduledExecution()).toBeDefined();
+    expect(readScheduledFreshRunSessionKey(run)).toBe(exposed ? RUN.runSessionKey : undefined);
+    admission.close();
+    occurrence.release();
   });
 
   it("reads the parent once for every run the occurrence admits", async () => {

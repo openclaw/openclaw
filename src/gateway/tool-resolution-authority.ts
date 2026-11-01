@@ -13,6 +13,7 @@ import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readScheduledAutomationsSelfJobId,
+  readScheduledFreshRunSessionKey,
   readScheduledOccurrenceAutomationsScope,
   readScheduledSenderBit,
   readScheduledToolOptions,
@@ -50,6 +51,7 @@ export async function resolveGatewayRequesterToolPolicies(
   > & {
     cfg: OpenClawConfig;
     senderIsOwner?: boolean;
+    admittedRunContext?: AdmittedRunContext;
   },
   options: {
     runtimePolicySessionKey: string;
@@ -65,6 +67,7 @@ export async function resolveGatewayRequesterToolPolicies(
     resolveRequesterToolPolicies({
       config: params.cfg,
       requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
       conversationId: params.conversationId,
       chatType: params.chatType,
       conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
@@ -95,6 +98,7 @@ export async function resolveGatewayRequesterToolPolicies(
           : "when-sender-id",
       groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
       requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+      trustedScheduledRunSessionKey: readScheduledFreshRunSessionKey(params.admittedRunContext),
     }),
   );
   if (params.trustedInternalHandoff && policies.requesterPolicySource !== "completion-handoff") {
