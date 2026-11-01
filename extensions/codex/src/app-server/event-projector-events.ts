@@ -38,6 +38,37 @@ import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 
+export function projectCodexHookEventData(
+  method: "hook/started" | "hook/completed",
+  params: JsonObject,
+  threadId: string,
+  fallbackTurnId?: string,
+): Record<string, unknown> | undefined {
+  const run = isJsonObject(params.run) ? params.run : undefined;
+  if (!run) {
+    return undefined;
+  }
+  const durationMs = asFiniteNumber(run.durationMs);
+  const entries = readHookOutputEntries(run.entries);
+  const hookTurnId = readNullableString(params, "turnId");
+  return {
+    phase: method === "hook/started" ? "started" : "completed",
+    threadId,
+    turnId: hookTurnId === undefined ? fallbackTurnId : hookTurnId,
+    hookRunId: readString(run, "id"),
+    eventName: readString(run, "eventName"),
+    handlerType: readString(run, "handlerType"),
+    executionMode: readString(run, "executionMode"),
+    scope: readString(run, "scope"),
+    source: readString(run, "source"),
+    sourcePath: readString(run, "sourcePath"),
+    status: readString(run, "status"),
+    statusMessage: readNullableString(run, "statusMessage"),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(entries.length > 0 ? { entries } : {}),
+  };
+}
+
 /** Downstream event consumers must never corrupt the canonical Codex turn projection. */
 export function emitCodexAgentEvent(params: EmbeddedRunAttemptParams, event: AgentEvent): void {
   try {
@@ -415,31 +446,18 @@ export class CodexEventProjection {
   }
 
   handleHook(method: string, params: JsonObject): void {
-    const run = isJsonObject(params.run) ? params.run : undefined;
-    if (!run) {
+    const data = projectCodexHookEventData(
+      method as "hook/started" | "hook/completed",
+      params,
+      this.threadId,
+      this.turnId,
+    );
+    if (!data) {
       return;
     }
-    const durationMs = asFiniteNumber(run.durationMs);
-    const entries = readHookOutputEntries(run.entries);
-    const hookTurnId = readNullableString(params, "turnId");
     this.emitAgentEvent({
       stream: "codex_app_server.hook",
-      data: {
-        phase: method === "hook/started" ? "started" : "completed",
-        threadId: this.threadId,
-        turnId: hookTurnId === undefined ? this.turnId : hookTurnId,
-        hookRunId: readString(run, "id"),
-        eventName: readString(run, "eventName"),
-        handlerType: readString(run, "handlerType"),
-        executionMode: readString(run, "executionMode"),
-        scope: readString(run, "scope"),
-        source: readString(run, "source"),
-        sourcePath: readString(run, "sourcePath"),
-        status: readString(run, "status"),
-        statusMessage: readNullableString(run, "statusMessage"),
-        ...(durationMs !== undefined ? { durationMs } : {}),
-        ...(entries.length > 0 ? { entries } : {}),
-      },
+      data,
     });
   }
 
