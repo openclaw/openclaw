@@ -40,6 +40,7 @@ const { values } = parseArgs({
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
+    "dashboard-end-anchor": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     route: { type: "string", default: "both" },
@@ -53,7 +54,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation --cpu-profile
+  --transcript-late-paint --dashboard-end-anchor --reload-after-navigation --cpu-profile
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -110,7 +111,7 @@ const buildIdentity = {
 };
 const directory = createControlUiE2eArtifactDir("warm-reload", values.output);
 const stateDir = path.join(directory, "state");
-const viewport = { width: 1720, height: 1180 };
+const viewport = { width: 1720, height: values["dashboard-end-anchor"] ? 1515 : 1180 };
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 async function waitForGateway(url: string, child: ChildProcess) {
@@ -475,6 +476,7 @@ async function captureReload(
       "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
       "firstPaintedRowsMs",
+      "bottomParagraphPaintMs",
       "finalRowsDomMs",
       "helloPublishedMs",
       "helloHandledMs",
@@ -492,6 +494,7 @@ async function captureReload(
       ...probe.textStates,
       ...probe.animationSamples,
       ...probe.sidebarFrames,
+      ...probe.transcriptGeometry,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -732,6 +735,7 @@ try {
     uiRoot: servedUiRoot,
     sessions,
     transcriptLatePaint: values["transcript-late-paint"],
+    dashboardEndAnchor: values["dashboard-end-anchor"],
     ...(admission
       ? {
           admission: {
@@ -930,8 +934,34 @@ try {
           });
           await cdp.send("Network.clearBrowserCache");
           await page.evaluate(
-            ({ viewerId, groups }) => {
+            ({ viewerId, groups, endAnchor, targetKey }) => {
               const gatewayUrl = `ws://${location.host}`;
+              if (endAnchor) {
+                const key = `openclaw.control.settings.v1:${gatewayUrl}`;
+                const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+                settings.sidebarSessionLayouts = {
+                  [targetKey]: {
+                    columns: [
+                      {
+                        id: "side-panel-column",
+                        side: "right",
+                        panels: [
+                          { id: "dashboard", slot: "dashboard" },
+                          { id: "conversation", slot: "conversation" },
+                        ],
+                        activePanelId: "conversation",
+                        height: 360,
+                        width: 320,
+                      },
+                    ],
+                    mainPanelId: "dashboard",
+                    open: true,
+                    dock: "right",
+                    dashboardPresentationOverride: "split",
+                  },
+                };
+                localStorage.setItem(key, JSON.stringify(settings));
+              }
               localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
               localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
               localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
@@ -950,6 +980,8 @@ try {
             },
             {
               viewerId: fixture.fixtureSummary.viewerId,
+              endAnchor: values["dashboard-end-anchor"] && route === "dashboard",
+              targetKey: fixture.fixtureSummary.targets[1]!.key,
               groups: Array.from(
                 { length: 97 },
                 (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,

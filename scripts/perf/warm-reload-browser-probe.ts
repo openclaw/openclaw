@@ -21,6 +21,16 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     firstTranscriptDomMs: null as number | null,
     firstDashboardContentDomMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
+    bottomParagraphPaintMs: null as number | null,
+    transcriptGeometry: [] as Array<{
+      atMs: number;
+      scrollTop: number;
+      distanceFromEnd: number;
+      width: number;
+      height: number;
+      rowHeight: number;
+      bottomVisible: boolean;
+    }>,
     finalRowsDomMs: null as number | null,
     helloPublishedMs: null as number | null,
     helloHandledMs: null as number | null,
@@ -147,6 +157,13 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     if (identifier === "openclaw-transcript" && typeof renderTime === "number" && renderTime > 0) {
       data.firstPaintedRowsMs ??= renderTime;
     }
+    if (
+      identifier === "openclaw-transcript-bottom" &&
+      typeof renderTime === "number" &&
+      renderTime > 0
+    ) {
+      data.bottomParagraphPaintMs ??= renderTime;
+    }
   });
   let firstShift = 0;
   let lastShift = 0;
@@ -232,6 +249,13 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
           }
         }
       }
+    }
+    const bottom = [...document.querySelectorAll(".chat-group.assistant .chat-text p")].at(-1);
+    if (
+      bottom?.textContent?.startsWith("Synthetic paragraph 18.") &&
+      bottom.getAttribute("elementtiming") !== "openclaw-transcript-bottom"
+    ) {
+      bottom.setAttribute("elementtiming", "openclaw-transcript-bottom");
     }
   });
   textObserver.observe(document, {
@@ -419,6 +443,28 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       }
     }
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
+    const lastAssistant = [...document.querySelectorAll(".chat-group.assistant")].at(-1);
+    const scroller = lastAssistant?.closest<HTMLElement>(".chat-thread");
+    if (
+      scroller &&
+      lastAssistant &&
+      lastAssistant.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+    ) {
+      const rowBox = lastAssistant.getBoundingClientRect();
+      const box = scroller.getBoundingClientRect();
+      const bottom = [...lastAssistant.querySelectorAll(".chat-text p")]
+        .at(-1)
+        ?.getBoundingClientRect();
+      data.transcriptGeometry.push({
+        atMs: performance.now(),
+        scrollTop: scroller.scrollTop,
+        distanceFromEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+        width: box.width,
+        height: box.height,
+        rowHeight: rowBox.height,
+        bottomVisible: Boolean(bottom && bottom.bottom > box.top && bottom.top < box.bottom),
+      });
+    }
     const rows = rowElements.length;
     const sidebarRowElements = [
       ...document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
