@@ -1,15 +1,149 @@
 /* @vitest-environment jsdom */
 
-import { expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
-import { createTestChatPane, nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
+import {
+  createRefreshChatPane,
+  createTestChatPane,
+  nativeHistoryMessage,
+} from "./chat-pane-history.test-support.ts";
 import { flushDeferredRowPrune } from "./components/chat-transcript.test-support.ts";
 
 const sourceId = "source-message";
 const message = { role: "assistant", content: "Original answer", __openclaw: { id: sourceId } };
 const pair = (last: number) => [last - 1, last].map((seq) => nativeHistoryMessage(seq));
+
+it("revises reply access only when final message or availability facts change", () => {
+  const { pane, state } = createRefreshChatPane();
+  onTestFinished(() => pane.chatProps?.transcript.dispose());
+  const access = () => {
+    pane.render();
+    return expectDefined(pane.chatProps?.replyMessageAccess, "reply access");
+  };
+  const reply = (
+    id: string,
+    result?: { ok: boolean; message?: unknown; unavailableReason?: string },
+  ) => ({
+    role: "user",
+    content: "Follow-up",
+    timestamp: 1,
+    __openclaw: { replyToId: id, replyToMessage: result },
+  });
+  const original = { role: "assistant", content: "Original" };
+  const replacement = { ...original };
+  const cases = [
+    { messages: [], revision: 0, status: "pending", body: undefined },
+    {
+      messages: [reply("source", { ok: true, message: original })],
+      revision: 1,
+      status: undefined,
+      body: original,
+    },
+    {
+      messages: [reply("source", { ok: true, message: original })],
+      revision: 1,
+      status: undefined,
+      body: original,
+    },
+    {
+      messages: [reply("other", { ok: false }), reply("source", { ok: true, message: original })],
+      revision: 2,
+      status: undefined,
+      body: original,
+    },
+    {
+      messages: [reply("source", { ok: true, message: original }), reply("other", { ok: false })],
+      revision: 2,
+      status: undefined,
+      body: original,
+    },
+    {
+      messages: [
+        reply("source", { ok: false, unavailableReason: "oversized" }),
+        reply("other", { ok: false }),
+        reply("source", { ok: true, message: original }),
+      ],
+      revision: 2,
+      status: undefined,
+      body: original,
+    },
+    {
+      messages: [
+        reply("other", { ok: false }),
+        reply("source", { ok: true, message: replacement }),
+      ],
+      revision: 3,
+      status: undefined,
+      body: replacement,
+    },
+    {
+      messages: [reply("other", { ok: false }), reply("source", { ok: false })],
+      revision: 4,
+      status: "missing",
+      body: undefined,
+    },
+    {
+      messages: [
+        reply("other", { ok: false }),
+        reply("source", { ok: false, unavailableReason: "oversized" }),
+      ],
+      revision: 5,
+      status: "oversized",
+      body: undefined,
+    },
+    {
+      messages: [reply("other", { ok: false }), reply("source")],
+      revision: 6,
+      status: "pending",
+      body: undefined,
+    },
+    { messages: [], revision: 7, status: "pending", body: undefined },
+    { messages: [], revision: 7, status: "pending", body: undefined },
+  ];
+  for (const entry of cases) {
+    state.chatMessages = entry.messages;
+    const current = access();
+    expect(current.read("source")).toBe(entry.body);
+    expect(current.status?.("source")).toBe(entry.status);
+    expect(current.revision).toBe(entry.revision);
+  }
+});
+
+it("invalidates retired reply facts while preserving them across a connection epoch change", () => {
+  const { pane, state } = createRefreshChatPane();
+  onTestFinished(() => pane.chatProps?.transcript.dispose());
+  const source = { role: "assistant", content: "Held original" };
+  const followup = {
+    role: "user",
+    content: "Follow-up",
+    __openclaw: { replyToId: "source", replyToMessage: { ok: true, message: source } },
+  };
+  const access = () => {
+    pane.render();
+    return expectDefined(pane.chatProps?.replyMessageAccess, "reply access");
+  };
+  state.chatMessages = [followup];
+  const held = access();
+  expect(held.read("source")).toBe(source);
+  state.connectionEpoch += 1;
+  expect(access().revision).toBe(held.revision);
+  expect(access().read("source")).toBe(source);
+  state.chatMessages = [];
+  expectDefined(state.transcriptMessagesRetired, "retirement callback")([followup]);
+  const retired = access();
+  expect(retired.read("source")).toBeUndefined();
+  expect(retired.status?.("source")).toBe("pending");
+  expect(retired.revision).toBe(held.revision + 1);
+  state.transcriptMessagesRetired?.([]);
+  expect(access().revision).toBe(retired.revision);
+  state.chatMessages = [followup];
+  const restored = access();
+  expect(restored.read("source")).toBe(source);
+  expect(restored.revision).toBe(retired.revision + 1);
+});
 const page = (messages: unknown[], totalMessages = 4, hasMore = false, nextOffset?: number) => ({
   messages,
   totalMessages,

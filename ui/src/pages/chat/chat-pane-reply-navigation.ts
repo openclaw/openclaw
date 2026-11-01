@@ -31,6 +31,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     const messages = this.state?.chatMessages;
     if (this.replyMessageSource !== messages) {
       this.replyMessageSource = messages;
+      const previous = new Map(this.replyMessages);
       this.replyMessages.clear();
       for (const message of messages ?? []) {
         const target = normalizeMessage(message).replyTarget;
@@ -46,7 +47,17 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
             : { status: result.unavailableReason === "oversized" ? "oversized" : "missing" },
         );
       }
-      this.replyMessageRevision += 1;
+      // History arrays can change without changing any reply preview. Invalidate
+      // mounted rows only when the final lookup facts change, including removals.
+      if (
+        previous.size !== this.replyMessages.size ||
+        [...this.replyMessages].some(([id, current]) => {
+          const held = previous.get(id);
+          return !held || held.message !== current.message || held.status !== current.status;
+        })
+      ) {
+        this.replyMessageRevision += 1;
+      }
     }
   }
 
@@ -82,6 +93,10 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   }
 
   protected retireReplyMessages(): void {
+    // Clearing quoted bodies must invalidate cached previews before the next projection.
+    if (this.replyMessages.size) {
+      this.replyMessageRevision += 1;
+    }
     this.replyMessages.clear();
     this.replyMessageSource = undefined;
   }

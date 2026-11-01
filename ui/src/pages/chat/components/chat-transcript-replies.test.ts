@@ -1,8 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { admitChatHistoryPages } from "../chat-history-snapshot.ts";
+import { createRefreshChatPane } from "../chat-pane-history.test-support.ts";
+import * as transcriptResidency from "../chat-pane-transcript-residency.ts";
 import {
   createTestTranscript as createTranscript,
   stubAnimationFrames,
@@ -13,7 +16,9 @@ import {
   renderChatThread,
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
+import * as chatMessage from "./chat-message-group-frame.ts";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
+import { transcriptContainer } from "./chat-transcript-fixture.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -66,6 +71,110 @@ afterEach(() => {
   }
   vi.useRealTimers();
   resetTranscriptTestDom();
+});
+
+it.each(["older", "newer"] as const)(
+  "keeps mounted survivor frames idle after %s history replaces unchanged reply facts",
+  async (direction) => {
+    const { pane, state } = createRefreshChatPane();
+    onTestFinished(() => pane.chatProps?.transcript.dispose());
+    const messages = Array.from({ length: 12 }, (_, index) => ({
+      role: index % 2 ? "assistant" : "user",
+      content: `reply-fact body ${index + 1}`,
+      timestamp: (index + 1) * 10,
+      __openclaw: { id: `reply-fact-${index + 1}`, seq: index + 1, runId: `turn-${index >> 1}` },
+    }));
+    const initial = direction === "older" ? messages.slice(4) : messages.slice(0, 8);
+    const incoming = direction === "older" ? messages.slice(0, 8) : messages.slice(4);
+    const survivors = messages.slice(4, 8);
+    const retained = new Set<unknown>(survivors);
+    expect(admitChatHistoryPages(state, [{ messages: initial }], "around")).toBe("messages");
+    pane.render();
+    const actualProps = expectDefined(pane.chatProps, "pane props");
+    const props = threadProps(actualProps.paneId, state.sessionKey, state.chatMessages, {
+      replyMessageAccess: actualProps.replyMessageAccess,
+    });
+    const container = transcriptContainer();
+    const transcript = actualProps.transcript;
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.update();
+    };
+    onTestFinished(() => transcript.dispose());
+    rerender();
+    await flushDeferredRowPrune();
+    const bubble = (message: (typeof messages)[number]) =>
+      requireElement(container, `[data-message-text="${message.content}"]`);
+    const before = survivors.map((message) => {
+      const node = bubble(message);
+      return {
+        node,
+        key: node.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
+      };
+    });
+    const preparation = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
+    const retirement = vi.spyOn(transcriptResidency, "retireChatTranscriptSources");
+    onTestFinished(() => {
+      preparation.mockRestore();
+      retirement.mockRestore();
+    });
+    try {
+      expect(admitChatHistoryPages(state, [{ messages: incoming }], "around")).toBe("messages");
+      expect(state.chatMessages).toEqual(incoming);
+      expect(survivors.every((message) => state.chatMessages.includes(message))).toBe(true);
+      pane.render();
+      props.messages = state.chatMessages;
+      props.replyMessageAccess = expectDefined(pane.chatProps, "pane props").replyMessageAccess;
+      expect(pane.chatProps?.paneId).toBe(props.paneId);
+      expect(pane.chatProps?.transcript).toBe(transcript);
+      expect(retirement).toHaveBeenCalledExactlyOnceWith(
+        props.paneId,
+        transcript,
+        state,
+        initial.filter((message) => !retained.has(message)),
+      );
+      rerender();
+      await flushDeferredRowPrune();
+      for (const [index, message] of survivors.entries()) {
+        const node = bubble(message);
+        expect(node.textContent).toContain(message.content);
+        expect(node.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key")).toBe(
+          before[index]!.key,
+        );
+      }
+      const incomingSources = new Set<unknown>(incoming);
+      const prepared = preparation.mock.calls.flatMap(([group]) =>
+        group.messages.map((entry) => entry.message),
+      );
+      expect(
+        prepared.some((message) => incomingSources.has(message) && !retained.has(message)),
+      ).toBe(true);
+      // Latest-assistant status changes for turn 7–8. Only the complete
+      // interior turn 5–6 keeps all row dependencies unchanged.
+      expect(prepared).toContain(survivors[3]);
+      const unchanged = new Set<unknown>(survivors.slice(0, 2));
+      for (const [index, message] of survivors.slice(0, 2).entries()) {
+        expect.soft(bubble(message)).toBe(before[index]!.node);
+      }
+      expect(prepared.filter((message) => unchanged.has(message))).toHaveLength(0);
+    } finally {
+      preparation.mockRestore();
+      retirement.mockRestore();
+    }
+  },
+);
+
+it("keeps the reply-fact revision stable when a fresh message array still has no replies", () => {
+  const { pane, state } = createRefreshChatPane();
+  onTestFinished(() => pane.chatProps?.transcript.dispose());
+  pane.render();
+  const before = expectDefined(pane.chatProps, "pane props").replyMessageAccess;
+  state.chatMessages = [...state.chatMessages];
+  pane.render();
+  const after = expectDefined(pane.chatProps, "pane props").replyMessageAccess;
+  expect(after?.read("absent")).toBeUndefined();
+  expect(expectDefined(after?.status, "reply status")("absent")).toBe("pending");
+  expect(after?.revision).toBe(before?.revision);
 });
 
 function replyMessages() {

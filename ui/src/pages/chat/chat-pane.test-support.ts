@@ -347,6 +347,7 @@ class RenderTestChatPane extends ChatPaneRuntime {
         dispatchEvent: (event) => this.element.dispatchEvent(event),
       },
     );
+    this.bindTranscriptViewport(this.state);
     return this.state;
   }
 
