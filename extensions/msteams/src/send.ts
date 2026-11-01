@@ -256,7 +256,7 @@ export async function sendMessageMSTeams(
     }
 
     try {
-      const siteId = await resolveMSTeamsSharePointSiteId({
+      const uploadSite = await resolveMSTeamsSharePointSiteId({
         siteId: sharePointSiteId,
         accountId: ctx.accountId,
         app: ctx.app,
@@ -271,14 +271,15 @@ export async function sendMessageMSTeams(
         filename: fileName,
         contentType: media.contentType,
         tokenProvider,
-        siteId,
+        siteId: uploadSite.siteId,
+        memberScoped: uploadSite.memberScoped,
         chatId: conversationId,
         usePerUserSharing: conversationType === "groupChat",
       });
 
       const driveItem = await getDriveItemProperties({
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-        siteId,
+        siteId: uploadSite.siteId,
         itemId: uploaded.itemId,
         tokenProvider,
       });
