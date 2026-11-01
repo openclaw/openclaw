@@ -28,7 +28,7 @@ const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
+  listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfigMock,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({

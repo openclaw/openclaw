@@ -57,7 +57,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({

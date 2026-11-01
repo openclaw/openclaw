@@ -215,6 +215,11 @@ export async function loadStatusScanModuleForTest(
       env?: NodeJS.ProcessEnv;
       includePersistedAuthState?: boolean;
     }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
+    hasConfiguredChannelsForReadOnlyScopeAsync: async (params: {
+      config: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+      includePersistedAuthState?: boolean;
+    }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
     listConfiguredChannelIdsForReadOnlyScope: (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
