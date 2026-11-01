@@ -1219,6 +1219,8 @@ const enSettings = {
       selectProvider: "Select a provider",
       save: "Save provider",
       saved: "Provider {provider} added.",
+      policyHidden:
+        'Model policy hides all {provider} models, so they do not show in the model picker. Add "{provider}/*" to agents.defaults.modelPolicy.allow to use them.',
     },
     defaults: {
       title: "Defaults for all agents",
