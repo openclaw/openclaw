@@ -24,6 +24,42 @@ const identityFields = {
   ),
 };
 
+const VisitorInviteParameters = Type.Object(
+  {
+    ...identityFields,
+    days: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 3650,
+        description: "Grant duration in days; cannot be combined with forever.",
+      }),
+    ),
+    forever: Type.Optional(
+      Type.Boolean({ description: "Explicitly grant access without expiry." }),
+    ),
+    note: Type.Optional(
+      Type.String({
+        maxLength: VISITOR_NOTE_MAX_CHARS,
+        description:
+          "Free-text message from the inviter to the visitor, included in the invitation text; may include a session link. Replaces the stored note; omit to keep it on renewal.",
+      }),
+    ),
+  },
+  { additionalProperties: false, oneOf: [{ required: ["email"] }, { required: ["github"] }] },
+);
+const VisitorInviteOutputSchema = Type.Union([visitorInviteDetailsSchema, visitorToolErrorSchema]);
+const VisitorRevokeParameters = Type.Object(
+  {
+    ...identityFields,
+    profileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+    grantId: Type.Optional(Type.String({ format: "uuid" })),
+  },
+  { additionalProperties: false },
+);
+const VisitorRevokeOutputSchema = Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]);
+const VisitorListParameters = Type.Object({}, { additionalProperties: false });
+const VisitorListOutputSchema = Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]);
+
 export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAgentTool[] {
   let runtime = visitorRuntimeStore.tryGetRuntime();
   const assertCurrent = () => {
@@ -40,30 +76,8 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       label: "Invite visitor",
       description:
         "Grant or renew visitor access to the Team Gateway. Requires administrator or designated-owner authority. Provide exactly one Team sign-in email or GitHub login. A GitHub invitation uses the immutable account ID, not public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit. An optional note from you to the visitor, such as a session link to start from, is stored with the grant; renewal without a note keeps the existing one. The result includes invitationText: short plain text naming the inviter, sign-in address, identity to use, expiry, and note, ready to hand to the visitor.",
-      parameters: Type.Object(
-        {
-          ...identityFields,
-          days: Type.Optional(
-            Type.Integer({
-              minimum: 1,
-              maximum: 3650,
-              description: "Grant duration in days; cannot be combined with forever.",
-            }),
-          ),
-          forever: Type.Optional(
-            Type.Boolean({ description: "Explicitly grant access without expiry." }),
-          ),
-          note: Type.Optional(
-            Type.String({
-              maxLength: VISITOR_NOTE_MAX_CHARS,
-              description:
-                "Free-text message from the inviter to the visitor, included in the invitation text; may include a session link. Replaces the stored note; omit to keep it on renewal.",
-            }),
-          ),
-        },
-        { additionalProperties: false, oneOf: [{ required: ["email"] }, { required: ["github"] }] },
-      ),
-      outputSchema: Type.Union([visitorInviteDetailsSchema, visitorToolErrorSchema]),
+      parameters: VisitorInviteParameters,
+      outputSchema: VisitorInviteOutputSchema,
       run: async ({ service, readInviter, readSignInUrl }: VisitorRuntime, raw: unknown) =>
         service.invite(raw, {
           assertCurrent,
@@ -77,15 +91,8 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       label: "Revoke visitor",
       description:
         "Remove the recorded Visitor invitations selected for a profileId, or cancel one invitation by grantId, including before first sign-in. Use the IDs returned by visitor_list or visitor_invite. Person selection keeps the selected identity current at local commit and before policy requests. Already committed expirations remain ended if cleanup fails. Email targets that address. GitHub login targets its immutable account and its person's recorded invitations. An explicit email or GitHub login can remove that target's unmanaged policy entry. Do not combine profileId or grantId with another selector. Preserves saved work, existing PRs and independent staff access. Already absent grants are a no-op.",
-      parameters: Type.Object(
-        {
-          ...identityFields,
-          profileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-          grantId: Type.Optional(Type.String({ format: "uuid" })),
-        },
-        { additionalProperties: false },
-      ),
-      outputSchema: Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]),
+      parameters: VisitorRevokeParameters,
+      outputSchema: VisitorRevokeOutputSchema,
       run: ({ service }: VisitorRuntime, raw: unknown) => service.revoke(raw, assertCurrent),
     },
     {
@@ -93,8 +100,8 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       label: "List visitors",
       description:
         "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored.",
-      parameters: Type.Object({}, { additionalProperties: false }),
-      outputSchema: Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]),
+      parameters: VisitorListParameters,
+      outputSchema: VisitorListOutputSchema,
       run: ({ service }: VisitorRuntime) => service.list(assertCurrent),
     },
   ];

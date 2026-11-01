@@ -369,7 +369,7 @@ export function persistedMessageEntryId(message: unknown): string | null {
     : (id ?? null);
 }
 
-function transcriptMessageSourceKey(message: unknown): string | null {
+export function transcriptMessageSourceKey(message: unknown): string | null {
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).

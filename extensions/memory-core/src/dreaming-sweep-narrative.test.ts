@@ -20,8 +20,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendNarrativeEntry } from "./dreaming-dreams-file.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
@@ -61,7 +59,6 @@ afterEach(async () => {
     }),
   );
   backgroundOwners.clear();
-  resetSystemEventsForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
@@ -207,11 +204,6 @@ async function createSweep(
   const beforeReply = registration[1] as BeforeReply;
   const run = async (trigger: "heartbeat" | "cron" = "heartbeat") => {
     const sessionKey = "agent:main:main";
-    enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
-      agentId: "main",
-      sessionKey,
-      contextKey: "cron:memory-dreaming",
-    });
     return await beforeReply(
       { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT },
       { trigger, agentId: "main", workspaceDir, sessionKey },

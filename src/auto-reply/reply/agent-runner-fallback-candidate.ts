@@ -356,7 +356,36 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
             prepareAgentRunStart: runStart.prepareAgentRunStart,
             notifyAgentRunStart: runStart.notifyAgentRunStart,
-            hasAgentRunStarted: runStart.hasAgentRunStarted,
+            notifyScheduledExecutionStarted: async (lifecycleBackstop, resolveSessionKey) => {
+              try {
+                await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
+                  params.runId,
+                );
+                params.runAbortSignal?.throwIfAborted();
+                turn.followupRun.run.internalEventExecution?.assertCurrent?.();
+                const automation = turn.followupRun.run.scheduledAutomation;
+                // Embedded execution resolves its current key after admission; CLI keeps its captured key.
+                const sessionKey = resolveSessionKey();
+                if (automation && sessionKey) {
+                  automation.onExecutionStarted?.({
+                    runId: params.runId,
+                    sessionId: turn.followupRun.run.sessionId,
+                    sessionKey,
+                    provider,
+                    model,
+                    ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
+                  });
+                }
+              } catch (error) {
+                if (!runStart.hasAgentRunStarted()) {
+                  lifecycleBackstop.note({
+                    stream: "lifecycle",
+                    data: { phase: "finishing", executionStarted: false, providerStarted: false },
+                  });
+                }
+                throw error;
+              }
+            },
             preserveProgressCallbackStartOrder,
             onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
               params.state.pendingLifecycleTerminal = { provider, model, backstop };
