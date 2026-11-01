@@ -60,8 +60,14 @@ it.each([
   "routes %j with scoped authority and sanitized output",
   async (args, response, method, options, params, scope, text) => {
     const { output, run } = createProgram(response);
-    await run(...args);
+    await run(...args, "--port", "19999", "--password", "test-password");
     expect(callGatewayFromCli).toHaveBeenCalledWith(method, options, params, { scopes: [scope] });
+    expect(callGatewayFromCli.mock.calls[0]?.[1]).toMatchObject({
+      port: "19999",
+      password: "test-password",
+      timeout: "10000",
+      json: false,
+    });
     expect(output).toHaveBeenCalledWith(text);
   },
 );
