@@ -525,7 +525,44 @@ a.oc-menu-item[href] {
     corner-shape: superellipse(1.5);
   }
 
-  .oc-menu-item {
+  /* Every option row draws the same corner as its menu. corner-shape doesn't
+     inherit, so a fill drawn by a pseudo-element is listed with its row. */
+  .oc-menu-item,
+  .slash-menu-item,
+  .chat-reply-context-menu button,
+  .chat-selection-popup button,
+  .chat-controls__inline-select-option,
+  .chat-controls__access-option,
+  .chat-pr-menu--drill
+    :is(
+      .chat-pr-menu__fact,
+      .chat-pr__checks-row,
+      .chat-ci__automation-option--menu,
+      .chat-ci__job-summary,
+      .chat-ci__skipped > summary
+    ),
+  .chat-pr-mobile .chat-ci__automation-option--menu,
+  .chat-pane__sharing-access-option,
+  .chat-pane__sharing-person,
+  .cmd-palette__item,
+  .cron-job-menu__item,
+  .new-session-page__browser-entry,
+  .palette-session-settings__row,
+  .palette-session-settings__remember,
+  .picker-select__option,
+  .picker-select__option::before,
+  .multi-select__option,
+  .multi-select__option::before,
+  .session-actions-page__row,
+  .session-menu__communication-choice,
+  .session-menu__item,
+  .sidebar-session-filter-footer,
+  .sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger,
+  .sidebar-session-menu-reset,
+  .sidebar-session-menu-row,
+  .sidebar-session-menu-switch,
+  .sidebar-session-sort-menu__item,
+  .usage-filter-option {
     corner-shape: superellipse(1.5);
   }
 }

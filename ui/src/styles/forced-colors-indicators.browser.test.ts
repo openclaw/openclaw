@@ -45,6 +45,8 @@ const css = readStyles(
   "styles/chat/startup-layout",
   "styles/chat/layout",
   "styles/chat/text",
+  "pages/chat/components/chat-processes-panel",
+  "pages/chat/components/chat-subagents-panel-desktop",
 );
 
 function fixtureDocument(direction: "ltr" | "rtl"): string {
@@ -59,6 +61,39 @@ function fixtureDocument(direction: "ltr" | "rtl"): string {
 }
 
 fixture.describe("Control UI forced-colors indicators", () => {
+  it("keeps masked status rings readable against their opaque backing", async () => {
+    await withBrowserPage(
+      fixture.page({ forcedColors: "active", colorScheme: "light" }),
+      async (page) => {
+        await page.setContent(
+          styleDocument(
+            css,
+            `
+        <span id="palette" style="color:CanvasText;background:Canvas"></span>
+        <span class="chat-processes__spinner"></span>
+        <span class="subagents-desktop__spinner"></span>`,
+            'data-theme-mode="dark"',
+          ),
+        );
+        const colors = await page.evaluate(() => {
+          const palette = getComputedStyle(document.getElementById("palette")!);
+          return {
+            expected: [palette.backgroundColor, palette.color],
+            actual: Array.from(
+              document.querySelectorAll(".chat-processes__spinner, .subagents-desktop__spinner"),
+            ).map((element) => [
+              getComputedStyle(element).backgroundColor,
+              getComputedStyle(element, "::before").backgroundColor,
+            ]),
+          };
+        });
+        for (const actual of colors.actual) {
+          expect(actual).toEqual(colors.expected);
+        }
+      },
+    );
+  });
+
   it("keeps row-button keyboard focus visible when forced colors suppress shadows", async () => {
     const classes = [
       "channels-item__detail",

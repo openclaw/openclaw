@@ -266,7 +266,7 @@ export function buildResponsesInputMessage(
 
 export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from "./assistant-output.js";
 
-type ConvertResponsesMessagesOptions = {
+export type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
@@ -284,7 +284,7 @@ const responsesMessageProjections = new WeakMap<
 >();
 
 /** Detach hook-editable JSON containers while retaining scalar strings. */
-function cloneResponsesInputForPayloadHook<T>(value: T): T {
+export function cloneResponsesInputForPayloadHook<T>(value: T): T {
   if (!value || typeof value !== "object") {
     return value;
   }

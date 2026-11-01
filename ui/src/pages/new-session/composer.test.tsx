@@ -3,13 +3,14 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   buildFallbackSlashCommands,
   getSkillCommandCompletions,
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
@@ -233,7 +234,10 @@ describe("new-session composer keyboard submission", () => {
     async (owner) => {
       const response = createDeferred<CommandsListResult>();
       const request = vi.fn(() => response.promise);
-      const snapshot = { client: { request } as unknown as GatewayBrowserClient };
+      const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+      vi.spyOn(client, "request").mockImplementation(request);
+      vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
+      const snapshot = { client };
       const context = composerContext(snapshot);
       const commandProjectId = owner === "project" ? "project-alpha" : undefined;
       const view = renderComposer({ agentId: "writer", commandProjectId, context, message: "$" });
@@ -273,7 +277,10 @@ describe("new-session composer keyboard submission", () => {
       .fn()
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise);
-    const context = composerContext({ client: { request } as unknown as GatewayBrowserClient });
+    const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+    vi.spyOn(client, "request").mockImplementation(request);
+    vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
+    const context = composerContext({ client });
     const { composer, rerenderForProject } = renderComposer({
       agentId: "writer",
       commandProjectId: "project-alpha",

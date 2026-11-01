@@ -116,6 +116,7 @@ function estimateTranscriptBoundaryTokenPressure(
           toolResult: estimateStringTokenPressure,
         },
         params.systemPrompt,
+        params.requestContext,
       )
     : undefined;
   const messages = replay?.messages ?? params.messages;
@@ -154,6 +155,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
   prompt: string;
   replay?: CompactionReplayPressureContext;
   toolSchemaTokens?: number;
+  requestContext?: Parameters<StreamFn>[1];
 }): number {
   return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
@@ -195,6 +197,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   toolSchemaTokens?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
   replay?: CompactionReplayPressureContext;
+  requestContext?: Parameters<StreamFn>[1];
 }): PreemptiveCompactionDecision {
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
@@ -208,6 +211,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
       replay,
+      requestContext: params.requestContext,
       ...(typeof params.toolSchemaTokens === "number"
         ? { toolSchemaTokens: params.toolSchemaTokens }
         : {}),
@@ -301,6 +305,7 @@ export function resolveProjectedRequestPressure(params: {
   const precheck = shouldPreemptivelyCompactBeforePrompt({
     ...params,
     messages: context.messages,
+    requestContext: context,
     systemPrompt: context.systemPrompt,
     toolSchemaTokens:
       params.replay && !anchor ? estimateToolSchemaTokenPressure(context.tools) : undefined,

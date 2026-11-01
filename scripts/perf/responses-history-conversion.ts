@@ -10,6 +10,9 @@
  * adds 8-KiB tool arguments/results and the production transport transform. --hook
  * includes mutable input preparation required by the agent's payload callback.
  * --conversion-only omits post-conversion image sanitation; default measures both.
+ * --context-usage --messages 600 measures admission followed by the managed OpenAI
+ * request builder, including the saved compaction/usage prefix. Verify identical
+ * wire/pressure hashes and 2 -> 1 conversions; compare CPU/allocation against A/A.
  * Run at least five alternating base/candidate arms per workload and mode. Accept
  * identical wireSha256 and consistent CPU/allocation reductions without material
  * controlled GC regression. Timing/GC gates use untraced runs, allocation is separate.
@@ -23,10 +26,18 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { getHeapSnapshot } from "node:v8";
 import { configureAiTransportHost } from "../../packages/ai/src/host.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+} from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
+import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
 import { buildOpenAIResponsesParams } from "../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
+import { createAssistantMessageEventStream } from "../../packages/ai/src/utils/event-stream.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
+import { resolveProjectedRequestPressure } from "../../src/agents/embedded-agent-runner/run/preemptive-compaction.js";
 import { transformTransportMessages } from "../../src/agents/transport-message-transform.js";
+import { createOpenAIResponsesContextManagementWrapper } from "../../src/llm/providers/stream-wrappers/openai.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
@@ -36,13 +47,19 @@ const messageCount = Number(process.argv[process.argv.indexOf("--messages") + 1]
 const frozen = process.argv.includes("--frozen");
 const hook = process.argv.includes("--hook");
 const conversionOnly = process.argv.includes("--conversion-only");
-const options = hook ? { onPayload: () => undefined } : undefined;
+const contextUsage = process.argv.includes("--context-usage");
+const initialOptions = hook ? { onPayload: () => undefined } : undefined;
+let options: Parameters<typeof buildOpenAIResponsesParams>[2] = initialOptions;
+let conversions = 0;
 if (messageCount !== undefined) {
-  assert(messageCount === 40 || messageCount === 150, "--messages must be 40 or 150");
+  assert(Number.isSafeInteger(messageCount) && messageCount > 0, "--messages must be positive");
 }
-if (messageCount !== undefined || frozen) {
+if (messageCount !== undefined || frozen || contextUsage) {
   configureAiTransportHost({
-    transformTransportMessages,
+    transformTransportMessages: (...args) => {
+      conversions += 1;
+      return transformTransportMessages(...args);
+    },
     immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
   });
 }
@@ -165,7 +182,7 @@ if (process.argv.includes("--retained")) {
 const imageBytes = Buffer.alloc(16 * 1024, 0x61);
 Buffer.from("89504e470d0a1a0a", "hex").copy(imageBytes);
 const messages: Context["messages"] = [];
-for (let turn = 0; turn < 200; turn++) {
+for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); turn++) {
   messages.push({
     role: "user",
     timestamp: turn,
@@ -238,18 +255,68 @@ if (frozen) {
   messages.forEach(freezeJsonSnapshot);
 }
 const context: Context = { systemPrompt: "Synthetic measurement", messages };
+const identity = { sessionId: "conversion-measure", authProfileId: "synthetic-profile" };
+if (contextUsage) {
+  // Capture the real managed wrapper's options once; the loop measures its owners.
+  await createOpenAIResponsesContextManagementWrapper((_model, _context, preparedOptions) => {
+    options = preparedOptions;
+    return createAssistantMessageEventStream();
+  }, undefined)(model, context, { ...initialOptions, ...identity });
+  const assistant = messages.find((message) => message.role === "assistant");
+  assert(assistant?.role === "assistant");
+  const checkpoint = { ...assistant, content: [] };
+  captureOpenAIResponsesCompaction(
+    checkpoint,
+    { type: "compaction", encrypted_content: "synthetic-checkpoint" },
+    0,
+    model,
+    buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+  );
+  messages.unshift(checkpoint);
+  const request = buildOpenAIResponsesParams(model, context, options);
+  const measured = {
+    ...assistant,
+    content: [{ type: "text" as const, text: "Completed inspection" }],
+    usage: {
+      ...assistant.usage,
+      contextUsage: { state: "available" as const, promptTokens: 100_000, totalTokens: 100_100 },
+    },
+  };
+  recordResponsesContextUsage(measured, model, identity, request, [], "transport");
+  messages.push(measured, { role: "user", content: "Continue inspection", timestamp: 999 });
+  if (frozen) {
+    messages.forEach(freezeJsonSnapshot);
+  }
+}
+let pressure: ReturnType<typeof resolveProjectedRequestPressure> | undefined;
 const request = () => {
-  const params = buildOpenAIResponsesParams(model, context, options);
+  const requestContext = contextUsage ? { ...context } : context;
+  if (contextUsage) {
+    pressure = resolveProjectedRequestPressure({
+      context: requestContext,
+      contextTokenBudget: 1_000_000,
+      reserveTokens: 0,
+      replay: { model, ...identity },
+    });
+  }
+  const params = buildOpenAIResponsesParams(model, requestContext, options);
+  if (contextUsage) {
+    assert.equal(options?.onPayload?.(params, model), undefined, "Fixture hooks patch in place");
+  }
   return conversionOnly ? params : sanitizeResponsesImagePayload(params);
 };
 globalThis.gc?.();
 const retainedBefore = process.memoryUsage();
 const first = request();
-assert.equal(first.store, false);
+assert.equal(first.store, contextUsage);
 const wire = JSON.stringify(first);
 assert.equal(JSON.stringify(request()), wire);
 const wireSha256 = createHash("sha256").update(wire).digest("hex");
-for (let i = 0; i < 50; i++) {
+const pressureSha256 = pressure
+  ? createHash("sha256").update(JSON.stringify(pressure)).digest("hex")
+  : undefined;
+const warmup = contextUsage ? 200 : 50;
+for (let i = 0; i < warmup; i++) {
   request();
 }
 globalThis.gc?.();
@@ -275,6 +342,7 @@ const cpu = process.cpuUsage();
 const threadCpu = process.threadCpuUsage();
 const start = performance.now();
 started = start;
+conversions = 0;
 for (let i = 0; i < iterations; i++) {
   request();
 }
@@ -299,10 +367,14 @@ const retainedAfter = process.memoryUsage();
 console.log(
   JSON.stringify({
     iterations,
+    warmup,
     messages: messages.length,
     frozen,
     hook,
     conversionOnly,
+    contextUsage,
+    conversionsPerRequest: conversions / iterations,
+    pressureSha256,
     images: messages.filter(
       (message) =>
         message.role === "user" &&
