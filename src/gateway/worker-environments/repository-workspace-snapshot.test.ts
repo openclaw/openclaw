@@ -149,7 +149,9 @@ describe("new capture through native private transport", () => {
       placements,
       environments: f.environments,
       assertCurrent() {
-        if (!current) throw new Error("retained requester revoked");
+        if (!current) {
+          throw new Error("retained requester revoked");
+        }
       },
     };
     try {
