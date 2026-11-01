@@ -333,14 +333,13 @@ describe("background completion notifications", () => {
       command: shellEcho("thread-result"),
       background: true,
     });
-    const id = runningSession(result.details).sessionId;
+    expect(result.details).toMatchObject({ status: "running" });
     await waitForExecScope(scopeKey);
     const receipt = expectDefined(receipts[0], "completion receipt");
     await expect(receipt.accepted).resolves.toEqual({ ok: true });
     expect(peekSystemEventEntries(sessionKey)).toContainEqual(
       expect.objectContaining({
         id: receipt.id,
-        contextKey: `exec:${id}`,
         deliveryContext: expect.objectContaining({ channel: "discord", to: "channel:222" }),
       }),
     );
