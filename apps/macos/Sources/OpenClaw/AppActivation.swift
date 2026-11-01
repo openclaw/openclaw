@@ -83,13 +83,17 @@ final class AppActivation {
         NSWorkspace.shared.open(url, configuration: configuration, completionHandler: completionHandler)
     }
 
-    func open(_ urls: [URL], withApplicationAt applicationURL: URL) {
+    func open(
+        _ urls: [URL],
+        withApplicationAt applicationURL: URL,
+        completionHandler: (@Sendable (NSRunningApplication?, (any Error)?) -> Void)? = nil)
+    {
         guard self.requestExternalNavigation() else { return }
         NSWorkspace.shared.open(
             urls,
             withApplicationAt: applicationURL,
             configuration: NSWorkspace.OpenConfiguration(),
-            completionHandler: nil)
+            completionHandler: completionHandler)
     }
 
     func makeKeyAndOrderFront(window: (any AppActivationWindow)?) {
