@@ -35,6 +35,7 @@ import {
   type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
+import { fingerprintCodexPluginThreadConfig } from "./plugin-thread-binding.js";
 import { buildCodexPluginThreadConfigInputFingerprint } from "./plugin-thread-config-input.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
@@ -112,8 +113,6 @@ type BuildCodexPluginThreadConfigParams = {
 // bypass updated app approval checks after the gateway has been upgraded.
 export { buildCodexPluginThreadConfigInputFingerprint };
 export { shouldBuildCodexPluginThreadConfig } from "./plugin-thread-config-input.js";
-
-const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Builds the deny-all app patch used when plugin discovery exceeds its turn budget. */
 export function buildCodexPluginThreadConfigTimeoutFallback(params: {
@@ -457,8 +456,7 @@ export async function buildCodexPluginThreadConfig(
     ...(provisionalAppIds.size > 0
       ? { provisionalAppIds: Array.from(provisionalAppIds).toSorted() }
       : {}),
-    fingerprint: fingerprintCodexPolicy({
-      version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
+    fingerprint: fingerprintCodexPluginThreadConfig({
       inputFingerprint,
       configPatch,
       policyContext,
@@ -497,28 +495,6 @@ export function mergeCodexThreadConfigs(
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function isCodexPluginThreadBindingStale(params: {
-  codexPluginsEnabled: boolean;
-  bindingFingerprint?: string;
-  bindingInputFingerprint?: string;
-  currentInputFingerprint?: string;
-  hasBindingPolicyContext?: boolean;
-}): boolean {
-  if (!params.codexPluginsEnabled) {
-    return Boolean(
-      params.bindingFingerprint || params.bindingInputFingerprint || params.hasBindingPolicyContext,
-    );
-  }
-  if (
-    !params.bindingFingerprint ||
-    !params.bindingInputFingerprint ||
-    !params.hasBindingPolicyContext
-  ) {
-    return true;
-  }
-  return params.bindingInputFingerprint !== params.currentInputFingerprint;
-}
-
 function emptyPluginThreadConfig(params: {
   enabled: boolean;
   inputFingerprint: string;
@@ -527,10 +503,9 @@ function emptyPluginThreadConfig(params: {
   const policyContext = buildPluginAppPolicyContext({}, {});
   return {
     enabled: params.enabled,
-    fingerprint: fingerprintCodexPolicy({
-      version: CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION,
+    fingerprint: fingerprintCodexPluginThreadConfig({
       inputFingerprint: params.inputFingerprint,
-      configPatch: params.configPatch ?? null,
+      configPatch: params.configPatch,
       policyContext,
     }),
     inputFingerprint: params.inputFingerprint,

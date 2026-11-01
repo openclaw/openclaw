@@ -2,10 +2,13 @@ import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it } from "vitest";
+import { retainCodexAppServerLiveThread } from "./client-runtime.js";
+import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
   createCodexManagedThreadStore,
   type StoredCodexManagedThread,
 } from "./managed-thread-store.js";
+import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { isJsonObject, type RpcRequest } from "./protocol.js";
 import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
 import {
@@ -41,8 +44,18 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
     "completed tool rotation",
     "legacy tool rotation",
     "settling tool rotation",
+    "plugin input refresh",
+    "idle plugin input refresh",
+    "warm plugin input refresh",
+    "plugin input refresh notice unconfirmed",
+    "plugin policy change",
   ] as const)("settles an accepted orphan after Gateway restart: %s", async (scenario) => {
-    const completedReceipt = scenario.startsWith("completed");
+    const warm = scenario === "warm plugin input refresh";
+    const idle = scenario === "idle plugin input refresh" || warm;
+    const pluginRefresh = scenario.includes("plugin");
+    const noticeUnconfirmed =
+      scenario === "notice unconfirmed" || scenario === "plugin input refresh notice unconfirmed";
+    const completedReceipt = scenario.startsWith("completed") || idle;
     const expectsInterrupt =
       !completedReceipt && !scenario.startsWith("settling") && scenario !== "failed receipt";
     const sessionFile = path.join(tempDir, "orphan-restart.jsonl");
@@ -87,7 +100,9 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         return { requirements: null };
       }
       if (request.method === "thread/start") {
-        return source;
+        return requests.filter(({ method }) => method === "thread/start").length > 1
+          ? { ...source, thread: { ...source.thread, id: "unexpected-replacement" } }
+          : source;
       }
       if (request.method === "thread/read") {
         return {
@@ -130,11 +145,7 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
         return { ...source, thread: { ...source.thread, status: { type: "idle" }, turns } };
       }
       if (request.method === "thread/inject_items") {
-        if (
-          scenario === "notice unconfirmed" &&
-          !noticeFailed &&
-          JSON.stringify(params).includes("uncertain")
-        ) {
+        if (noticeUnconfirmed && !noticeFailed && JSON.stringify(params).includes("uncertain")) {
           noticeFailed = true;
           throw new Error("notice response lost");
         }
@@ -146,6 +157,32 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
     const appServer = fixtures.createThreadLifecycleAppServerOptions();
     appServer.start = { ...appServer.start, transport: "websocket", url: "ws://127.0.0.1:8123" };
     const params = { ...fixtures.createParams(sessionFile, cwd), agentDir };
+    const pluginPolicy = { apps: {}, pluginAppIds: {} };
+    const policyContext = {
+      ...pluginPolicy,
+      fingerprint: fingerprintCodexPolicy({ version: 2, ...pluginPolicy }),
+    };
+    const configPatch = { apps: { _default: { enabled: false } } };
+    // Persisted v2 config identity includes the admission input version. A new
+    // validator can require rebuilding even when its effective grants stay equal.
+    let pluginConfig: CodexPluginThreadConfig = {
+      enabled: true,
+      inputFingerprint: "admission-v15",
+      configPatch,
+      policyContext,
+      fingerprint: fingerprintCodexPolicy({
+        version: 2,
+        inputFingerprint: "admission-v15",
+        configPatch,
+        policyContext,
+      }),
+      diagnostics: [],
+    };
+    const pluginProvider = {
+      enabled: true,
+      inputFingerprint: pluginConfig.inputFingerprint,
+      build: async () => pluginConfig,
+    };
     if (scenario === "legacy" || scenario === "legacy tool rotation") {
       const scope = {
         agentId: "main",
@@ -187,14 +224,15 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       appServer,
       userMcpServersEnabled: false,
       signal: new AbortController().signal,
+      ...(pluginRefresh ? { pluginThreadConfig: pluginProvider } : {}),
     };
     try {
       const started = await fixtures.startOrResumeThread(common);
       await fixtures.writeCodexAppServerBinding(
         sessionFile,
         Object.assign({}, started, {
-          clientId: "client-before-gateway-restart",
-          ...(["legacy", "legacy tool rotation", "missing receipt"].includes(scenario)
+          clientId: warm ? started.clientId : "client-before-gateway-restart",
+          ...(idle || ["legacy", "legacy tool rotation", "missing receipt"].includes(scenario)
             ? {}
             : {
                 turnRecovery: {
@@ -204,7 +242,42 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
               }),
         }),
       );
+      if (warm) {
+        await retainCodexAppServerLiveThread(
+          wire.client,
+          source.thread.id,
+          undefined,
+          started.liveThreadConfigFingerprint,
+        );
+      }
       active = expectsInterrupt;
+      if (pluginRefresh) {
+        const nextPatch =
+          scenario === "plugin policy change"
+            ? { apps: { _default: { enabled: true } } }
+            : configPatch;
+        pluginConfig = {
+          ...pluginConfig,
+          inputFingerprint: "admission-v16",
+          configPatch: nextPatch,
+          fingerprint: fingerprintCodexPolicy({
+            version: 2,
+            inputFingerprint: "admission-v16",
+            configPatch: nextPatch,
+            policyContext,
+          }),
+        };
+        pluginProvider.inputFingerprint = pluginConfig.inputFingerprint;
+        if (scenario === "plugin policy change") {
+          await expect(fixtures.startOrResumeThread(common)).rejects.toThrow(/previous Codex task/);
+          expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
+          expect(requests.some(({ method }) => method === "thread/resume")).toBe(false);
+          expect((await readCodexAppServerBinding(sessionFile))?.pluginAppsInputFingerprint).toBe(
+            "admission-v15",
+          );
+          return;
+        }
+      }
       if (completedReceipt) {
         turns[0]!.status = "completed";
       }
@@ -319,11 +392,16 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
           "settling",
         );
       }
-      if (scenario === "notice unconfirmed") {
+      if (noticeUnconfirmed) {
         await expect(fixtures.startOrResumeThread(common)).rejects.toThrow(/notice response lost/);
         expect((await readCodexAppServerBinding(sessionFile))?.turnRecovery?.state).toBe(
           "settling",
         );
+        if (pluginRefresh) {
+          expect((await readCodexAppServerBinding(sessionFile))?.pluginAppsInputFingerprint).toBe(
+            "admission-v15",
+          );
+        }
         wire.client.close();
         wire = await fixtures.createLeasedLifecycleWireClient(agentDir, respond, "websocket");
         common.client = wire.client;
@@ -335,9 +413,16 @@ export function registerThreadOrphanRecoveryTests(fixtures: PolicyRefreshFixture
       );
       expect(requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
       expect(requests.some((request) => request.method === "turn/start")).toBe(false);
-      expect(
-        JSON.stringify(requests.filter((request) => request.method === "thread/inject_items")),
-      ).toContain("uncertain");
+      if (!idle) {
+        expect(
+          JSON.stringify(requests.filter((request) => request.method === "thread/inject_items")),
+        ).toContain("uncertain");
+      }
+      if (pluginRefresh) {
+        expect((await readCodexAppServerBinding(sessionFile))?.pluginAppsInputFingerprint).toBe(
+          "admission-v16",
+        );
+      }
       expect(await readCodexAppServerBinding(sessionFile)).not.toHaveProperty("turnRecovery");
     } finally {
       testCodexAppServerBindingStore.managedThreads = previous;

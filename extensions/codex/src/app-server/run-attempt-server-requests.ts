@@ -224,6 +224,20 @@ export function createCodexAttemptServerRequestController(
       if (!call || call.threadId !== resourceState.thread.threadId || call.turnId !== turnId) {
         return undefined;
       }
+      const retainedCatalog = resourceState.thread.lifecycle.retainedDynamicTools;
+      if (
+        retainedCatalog &&
+        !retainedCatalog.some((spec) =>
+          spec.type === "namespace"
+            ? spec.name === call.namespace && spec.tools.some((tool) => tool.name === call.tool)
+            : call.namespace == null && spec.name === call.tool,
+        )
+      ) {
+        return {
+          success: false,
+          contentItems: [{ type: "inputText", text: "Tool is unavailable on this thread." }],
+        };
+      }
       // A replay owns a new reply channel, but the original execution keeps its
       // existing deadline. Preserve this tool's wire budget on both deliveries.
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({

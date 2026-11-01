@@ -1,17 +1,20 @@
-import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
-import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
+import {
+  assertCanonicalCodexAttemptCatalog,
+  hasCodexNativeToolCatalog,
+  retainCompatibleCodexCatalog,
+} from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
+  hasUnchangedCodexPluginThreadPolicy,
   isCodexPluginThreadBindingStale,
-  mergeCodexThreadConfigs,
-  type CodexPluginThreadConfig,
-} from "./plugin-thread-config.js";
+} from "./plugin-thread-binding.js";
+import { mergeCodexThreadConfigs, type CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   assertCodexBindingMayBeReplaced,
   type CodexAppServerPendingSupervisionBranch,
@@ -69,24 +72,7 @@ export async function startOrResumeThread(
     let binding = saved;
     let selectionBinding = binding;
     if (hasCodexNativeToolCatalog(binding)) {
-      // A resumed native catalog is immutable data. Run eligibility only changes
-      // the bridge's available executors, never this thread's inherited history.
-      const nativeCatalog = await loadCodexNativeToolCatalog({
-        client: params.client,
-        binding,
-        appServer: params.appServer,
-        agentDir: resolveCodexThreadAgentDir(params),
-        authority,
-        assertCurrent: () => {
-          params.signal?.throwIfAborted();
-          assert();
-        },
-      });
-      if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
-        throw new Error(
-          "Canonical Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
-        );
-      }
+      await assertCanonicalCodexAttemptCatalog(params, binding, resolveCodexThreadAgentDir(params));
     }
     const preflight = await prepareCodexThreadLifecyclePreflight(params);
     const callerConfig = params.config;
@@ -364,12 +350,14 @@ export async function startOrResumeThread(
         !binding?.threadId);
     let rotatedContextEngineBinding = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+    let revalidatedPluginInput = false;
     // Scoped inventory requires a loaded native thread. The warm/resume owner
     // calls this only after acquiring that exact subscription, before admission.
     const buildLoadedPluginThreadConfig = async (
       current: CodexAppServerThreadBinding,
     ): Promise<CodexPluginThreadConfig | undefined> => {
       if (
+        !revalidatedPluginInput &&
         !params.pluginThreadConfig?.requiresCurrentPolicyCheck &&
         !shouldRecheckRecoverablePluginBinding({
           binding: current,
@@ -384,7 +372,7 @@ export async function startOrResumeThread(
         );
       } catch (error) {
         throwIfAborted();
-        if (params.pluginThreadConfig?.requiresCurrentPolicyCheck) {
+        if (revalidatedPluginInput || params.pluginThreadConfig?.requiresCurrentPolicyCheck) {
           throw error;
         }
         embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
@@ -542,11 +530,47 @@ export async function startOrResumeThread(
         hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
       });
       if (pluginBindingStale) {
-        rotateStaleBinding(binding, "plugin app config");
+        const pluginProvider = params.pluginThreadConfig;
+        if (
+          !incognito &&
+          !binding.connectionScope &&
+          !binding.preserveNativeModel &&
+          pluginProvider?.enabled &&
+          binding.pluginAppsFingerprint &&
+          binding.pluginAppsInputFingerprint &&
+          binding.pluginAppPolicyContext
+        ) {
+          const rebuilt = await lifecycleTiming.measure("plugin-config-revalidation", () =>
+            pluginProvider.build(),
+          );
+          assert();
+          throwIfAborted();
+          revalidatedPluginInput = hasUnchangedCodexPluginThreadPolicy({
+            bindingFingerprint: binding.pluginAppsFingerprint,
+            bindingInputFingerprint: binding.pluginAppsInputFingerprint,
+            config: rebuilt,
+          });
+          if (revalidatedPluginInput) {
+            prebuiltPluginThreadConfig = rebuilt;
+          }
+        }
+        if (!revalidatedPluginInput) {
+          rotateStaleBinding(binding, "plugin app config");
+        }
       }
     }
+    const retainedCatalog =
+      binding && !incognito
+        ? await retainCompatibleCodexCatalog(
+            params,
+            binding,
+            dynamicToolsFingerprint,
+            resolveCodexThreadAgentDir(params),
+          )
+        : undefined;
     if (binding?.threadId) {
       if (
+        !retainedCatalog &&
         binding.dynamicToolsFingerprint &&
         params.dynamicTools.length > 0 &&
         binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
@@ -559,6 +583,7 @@ export async function startOrResumeThread(
       // `/codex resume <thread>` writes a binding before the next turn can know
       // the dynamic tool catalog, so only invalidate fingerprints we actually have.
       if (
+        !retainedCatalog &&
         binding.dynamicToolsFingerprint &&
         !areCodexDynamicToolFingerprintsCompatible({
           previous: binding.dynamicToolsFingerprint,
@@ -583,14 +608,27 @@ export async function startOrResumeThread(
         }
       } else {
         const requestContext = await prepareRequestContext();
-        const warmReuse = await tryReuseCodexLiveThread({
-          ...requestContext,
-          params,
-          binding,
-          clientId,
-          buildLoadedPluginThreadConfig,
-        });
+        const resumeParams = retainedCatalog
+          ? { ...params, dynamicTools: retainedCatalog }
+          : params;
+        if (retainedCatalog && binding.dynamicToolsFingerprint) {
+          requestContext.dynamicToolsFingerprint = binding.dynamicToolsFingerprint;
+          requestContext.dynamicToolsContainDeferred = binding.dynamicToolsContainDeferred === true;
+        }
+        // Commit refreshed metadata only through the existing attested resume path.
+        const warmReuse = revalidatedPluginInput
+          ? { kind: "resume" as const }
+          : await tryReuseCodexLiveThread({
+              ...requestContext,
+              params: resumeParams,
+              binding,
+              clientId,
+              buildLoadedPluginThreadConfig,
+            });
         if (warmReuse.kind === "ready") {
+          if (retainedCatalog) {
+            warmReuse.binding.lifecycle.retainedDynamicTools = retainedCatalog;
+          }
           return publishCodexThreadInferenceBinding(params, warmReuse.binding, true);
         }
         if (incognito || warmReuse.kind === "rotate") {
@@ -602,14 +640,15 @@ export async function startOrResumeThread(
           );
         } else {
           const resumeBinding = binding;
-          const resumed = await resumeExistingCodexThread(params, {
+          const resumed = await resumeExistingCodexThread(resumeParams, {
             ...requestContext,
             binding: resumeBinding,
             stageBindingReplacement,
             prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
             prebuiltPluginThreadConfig,
             buildLoadedPluginThreadConfig,
-            prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
+            prepareResume: () =>
+              prepareCodexThreadResume(resumeParams, resumeBinding, requestContext),
             releaseRetainedThread: async (assertCurrent) => {
               await releaseRetainedThread(
                 resumeBinding.threadId,
@@ -619,6 +658,9 @@ export async function startOrResumeThread(
             },
           });
           if (resumed) {
+            if (retainedCatalog) {
+              resumed.lifecycle.retainedDynamicTools = retainedCatalog;
+            }
             return publishCodexThreadInferenceBinding(params, resumed);
           }
         }
