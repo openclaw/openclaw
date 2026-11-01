@@ -90,13 +90,16 @@
   white-space: nowrap;
 }
 
-.oc-sheet__close {
+/* Page-level touch sizing on bare buttons must not move the X between sheets. */
+.oc-popover.oc-sheet .oc-sheet__close {
   display: inline-flex;
   grid-area: 1 / 5;
   align-items: center;
   justify-content: center;
   width: 32px;
+  min-width: 32px;
   height: 32px;
+  min-height: 32px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -140,12 +143,15 @@
 }
 
 /* While searching, the field takes the row and its clear button is the only X. */
-.oc-sheet__header:has(.header-search[data-searching]) > :is(.oc-sheet__title, .oc-sheet__close) {
+.oc-popover.oc-sheet
+  .oc-sheet__header:has(.header-search[data-searching])
+  > :is(.oc-sheet__title, .oc-sheet__close) {
   display: none;
 }
 
 .oc-sheet__action:has(> .header-search[data-searching]) {
   grid-column-end: -1;
+  padding-inline-start: var(--space-1);
 }
 
 .oc-sheet__close svg {
