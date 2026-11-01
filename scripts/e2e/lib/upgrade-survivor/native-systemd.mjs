@@ -98,7 +98,7 @@ try {
       HOME: home,
       USER: user,
       LOGNAME: user,
-      PATH: `${prefix}/bin:${process.env.PATH}`,
+      PATH: `${prefix}/bin:${path.dirname(process.execPath)}:${process.env.PATH}`,
       XDG_RUNTIME_DIR: `/run/user/${uid}`,
       DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`,
       OPENCLAW_STATE_DIR: state,
@@ -158,6 +158,18 @@ try {
       linger = true;
       run("user-manager", "systemctl", ["start", `user@${uid}.service`]);
       asUser("mkdir", "mkdir", ["-p", state, workspace, prefix]);
+      record.runtime = JSON.parse(
+        asUser("runtime", "node", [
+          "-p",
+          "JSON.stringify({version:process.version,execPath:process.execPath,sqlite:process.versions.sqlite})",
+        ]).stdout,
+      );
+      assert.equal(
+        record.runtime.version,
+        process.version,
+        "Fixture runtime differs from controller",
+      );
+      record.npmVersion = asUser("npm-version", "npm", ["--version"]).stdout.trim();
       asUser(
         "baseline-install",
         "npm",
@@ -293,7 +305,9 @@ try {
       record.stopped = stopped;
       save(path.join(artifacts, "summary.json"), summary);
       assert.equal(stopped.MainPID, "0", "Owned native service did not stop");
-      if (linger) run("disable-linger", "loginctl", ["disable-linger", user]);
+      if (linger) {
+        run("disable-linger", "loginctl", ["disable-linger", user]);
+      }
     }
     record.status = "passed";
     console.log(`${row.baseline} -> ${candidate.buildId}: PASS`);
