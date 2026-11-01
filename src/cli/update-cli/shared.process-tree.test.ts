@@ -10,7 +10,8 @@ vi.mock("../../process/exec-spawn.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec-spawn.js")>()),
   spawnCommandWithInvocation: spawn,
 }));
-vi.mock("../../process/scoped-child-reaper.js", () => ({
+vi.mock("../../process/scoped-child-reaper.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/scoped-child-reaper.js")>()),
   scheduleAdoptedChildZombieReapAfterExit: vi.fn(),
 }));
 
