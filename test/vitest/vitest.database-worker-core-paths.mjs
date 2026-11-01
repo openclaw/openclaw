@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/infra/backup-local-companion.test.ts",
+  "src/commands/backup-verify-completeness.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
@@ -8,6 +10,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/harness/context-media-runtime.test.ts",
   "src/agents/subagents/registry/subagent-controller-inputs.test.ts",
   "src/commands/doctor/shared/model-replacement.test.ts",
+  "src/commands/database-migration-capture.test.ts",
+  "src/commands/database-migration-capture.quiesced.test.ts",
   "src/infra/database-engine/memory-path-migration.conformance.test.ts",
   "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/auto-reply/reply/agent-runner-subagent-conflict.test.ts",

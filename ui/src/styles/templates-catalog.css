@@ -81,7 +81,7 @@
 .templates-workspace-file__open::after {
   position: absolute;
   inset: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   content: "";
 }
 

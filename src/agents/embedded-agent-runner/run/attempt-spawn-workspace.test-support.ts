@@ -392,13 +392,6 @@ vi.mock("./images.js", () => ({
   hydratePromptMediaMessages: async (messages: AgentMessage[]) => messages,
 }));
 
-// mock-isolation: Workspace tests supply runtime facts without host discovery.
-vi.mock("../../system-prompt-params.js", () => ({
-  buildSystemPromptParams: () => ({
-    runtimeInfo: {},
-  }),
-}));
-
 vi.mock("../../system-prompt-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../system-prompt-config.js")>()),
   buildConfiguredAgentSystemPrompt: (params: unknown) => {

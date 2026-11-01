@@ -1,0 +1,2 @@
+# Exact capture/restore, credential promotion, alias and physical-engine refusal; verified companion-anchor admission and SQLite-only companion control.
+354

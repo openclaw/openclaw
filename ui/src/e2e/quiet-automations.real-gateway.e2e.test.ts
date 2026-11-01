@@ -606,12 +606,14 @@ suite.define(() => {
           expect(real.run?.provider).toBe("openai");
           expect(real.run?.model).toBe("gpt-4.1-mini");
         }
-        // Reload independently reconstructs the status from persisted Gateway data.
+        // Reload reconstructs the conversation and automation from persisted Gateway data.
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await pane.locator(".chat-bubble").getByText(fixture.done, { exact: true }).waitFor();
         await openAutomations(page);
-        await expect.poll(() => row.textContent()).toContain(fixture.done);
+        await expect.poll(() => row.textContent()).toContain(fixture.name);
+        await expect.poll(() => row.textContent()).toContain("Every 1 hour");
+        expect(await row.textContent()).not.toContain(fixture.done);
         proof.complete = true;
         proof.stage = "complete";
         await save();

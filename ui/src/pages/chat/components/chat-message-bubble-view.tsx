@@ -19,7 +19,10 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import {
+  resolveMessageDisplayMarkdown,
+  type ChatMessageRenderPreparation,
+} from "../../../lib/chat/message-display.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -49,7 +52,6 @@ import {
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import {

@@ -52,14 +52,22 @@
 
 .session-hovercard__commentary,
 .session-hovercard__excerpt {
-  --session-hovercard-fade: linear-gradient(to bottom, black calc(100% - 14px), transparent);
-
   max-height: 4.5em;
-  overflow: hidden;
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+/* The Markdown owner supplies only the retained preview, including its ellipsis. */
+.session-hovercard__commentary {
+  overflow: clip;
+}
+
+.session-hovercard__excerpt {
+  --session-hovercard-fade: linear-gradient(to bottom, black calc(100% - 14px), transparent);
+
+  overflow: hidden;
   @supports (animation-timeline: scroll(self block)) {
     animation-name: session-hovercard-fade;
     animation-duration: 1s;

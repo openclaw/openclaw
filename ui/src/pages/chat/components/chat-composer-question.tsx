@@ -28,7 +28,7 @@ export function createComposerQuestionPanel(
         (item) => item.key === questions.disclosure.activeQuestionKey,
       );
       return {
-        active: request?.asyncIdentity === null && !questions.disclosure.questionCollapsed,
+        active: request?.takesOverComposer === true && !questions.disclosure.questionCollapsed,
         source,
         composition: readComposition?.(),
         state: questions.state,
@@ -80,7 +80,8 @@ export function createComposerQuestionPanel(
       collapsed: questions.disclosure.questionCollapsed,
       onCollapsedChange: (collapsed) => {
         questions.setCollapsed(collapsed);
-        state.restoreComposerFocus = collapsed;
+        state.restoreComposerFocus =
+          collapsed && (request.takesOverComposer || request.asyncIdentity !== null);
         if (collapsed) {
           queueMicrotask(() => {
             if (state.restoreComposerFocus && state.composerTextarea?.isConnected) {

@@ -529,6 +529,12 @@ suite.define(() => {
         await gateway.resolveDeferred("connect");
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         const complete = async () => {
+          for (const source of facts.updateSources) {
+            await thread
+              .locator(`.chat-session-activity__summary a[data-session-key="${source.sessionKey}"]`)
+              .getByText(source.title, { exact: true })
+              .waitFor();
+          }
           await thread
             .locator(".markdown-session-link--titled > .session-label")
             .filter({ hasText: facts.sessionTitle })
@@ -586,7 +592,12 @@ suite.define(() => {
         const requests = http.requests.length;
         await page.reload();
         await gateway.waitForRequest("connect");
+        await thread.locator(".chat-session-activity__summary").last().waitFor();
+        await page.screenshot({ path: `${suite.artifactDir}/cached-session-updates.png` });
         await complete();
+        for (const method of ["sessions.resolve", "controlUi.sessionPreview"]) {
+          expect(await gateway.getRequests(method)).toHaveLength(0);
+        }
         expect(
           await thread
             .locator(".chat-image-frame img")

@@ -415,12 +415,11 @@ div.chat-thread:where(.chat-thread--annotations) {
   justify-self: stretch;
 }
 
-.chat-pane__header:not(.chat-pane__header--mobile)
-  > .chat-pane__header-trailing
-  > .chat-pane__actions:only-child {
-  flex-grow: 1;
-  align-self: stretch;
-  justify-content: flex-end;
+.chat-pane__connection-slot {
+  /* Zero intrinsic width keeps feedback out of header sizing; the remaining gap clips it. */
+  flex: 1 1 0;
+  width: 0;
+  overflow: hidden;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
@@ -494,6 +493,12 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
   gap: 4px;
+
+  & .chat-pane__actions {
+    flex-grow: 1;
+    align-self: stretch;
+    justify-content: flex-end;
+  }
 
   & .chat-icon-btn {
     width: 32px;
@@ -641,6 +646,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     align-items: center;
     gap: 16px;
     height: 28px;
+    max-width: 100%;
     padding-inline: 8px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--warn) 10%, transparent);
@@ -653,6 +659,7 @@ div.chat-thread:where(.chat-thread--annotations) {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    overflow: hidden;
   }
 
   & .chat-pane__connection-icon {
@@ -666,6 +673,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   & .chat-pane__connection-retry {
+    flex: 0 0 auto;
     border: 0;
     border-radius: 0;
     padding: 0;

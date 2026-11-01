@@ -172,7 +172,8 @@ it.each([
         environment: { OPENCLAW_STATE_DIR: stateDir },
       });
       let consumed: GatewayRestartIntent | null = null;
-      service.restart.mockImplementationOnce(async () => {
+      service.restart.mockImplementationOnce(async (args) => {
+        await args.prepareRestart?.();
         consumed = await prepareGatewayRestartIntentConsumption(env)();
         return { outcome: "completed" };
       });

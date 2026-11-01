@@ -1,8 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { redactSensitiveText, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import type { WorkerResourceReceipt } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { runCrabboxProcess } from "./crabbox-process.js";
+import { crabboxResourceIdentityArgs } from "./crabbox-worker-resource-receipt.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -12,7 +14,13 @@ export function sanitizeCrabboxNotice(text: string): string {
   return sliceUtf16Safe(redactToolPayloadText(text).replace(/\s+/gu, " ").trim(), 0, 512);
 }
 
-export type LeaseCommandContext = { binary: string; id: string; provider: string };
+export type LeaseCommandContext = {
+  binary: string;
+  id: string;
+  provider: string;
+  resourceReceipt?: WorkerResourceReceipt;
+  assertCurrent?: () => void;
+};
 
 export function leaseRunArgs(
   context: LeaseCommandContext,
@@ -48,8 +56,10 @@ export async function runCrabboxCommand(params: {
   input?: string | Uint8Array;
   signal?: AbortSignal;
   timeoutMs: number;
+  assertCurrent?: () => void;
 }): Promise<SpawnResult> {
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   let result: SpawnResult;
   try {
     result = await runCrabboxProcess([params.binary, ...params.args], {
@@ -282,6 +292,8 @@ export async function stopCrabboxLease(params: {
   id: string;
   provider: string;
   warn: (message: string) => void;
+  resourceReceipt?: WorkerResourceReceipt;
+  assertCurrent?: () => void;
   onCleanupAccepted?: () => void;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -291,14 +303,17 @@ export async function stopCrabboxLease(params: {
     if (timeoutMs <= 0) {
       throw new Error("Crabbox stop exceeded its cleanup deadline");
     }
+    params.assertCurrent?.();
     let result = await runCrabboxCommandWithCoordinatorRetry({
       action: "stop",
+      assertCurrent: params.assertCurrent,
       args: [
         "stop",
         "--provider",
         params.provider,
         "--id",
         params.id,
+        ...(params.resourceReceipt ? crabboxResourceIdentityArgs(params.resourceReceipt) : []),
         ...(!wait ? ["--wait=false"] : []),
       ],
       binary: params.binary,
@@ -330,6 +345,7 @@ export async function stopCrabboxLease(params: {
       }
       result = await runCrabboxCommandWithCoordinatorRetry({
         action: "stop recovery",
+        assertCurrent: params.assertCurrent,
         args: [
           "stop",
           "--provider",
@@ -344,7 +360,8 @@ export async function stopCrabboxLease(params: {
         signal: params.signal,
       });
     }
-    if (isUnrecognizedLease(result, params.id, "stop")) {
+    params.assertCurrent?.();
+    if (!params.resourceReceipt && isUnrecognizedLease(result, params.id, "stop")) {
       params.warn(
         `Crabbox lease ${params.id} (provider ${params.provider}) is absent; treating stop as already released`,
       );
