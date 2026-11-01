@@ -621,6 +621,7 @@ describe("gateway sessions patch", () => {
     expect(set.toolOverrides).toEqual({
       mcpServers: { alpha: true, zeta: false },
       mcpToolsDeny: { alpha: ["read", "write"] },
+      webSearch: true,
     });
 
     const replaced = await patchOk({ store, toolOverrides: { skills: { release: false } } });
@@ -635,6 +636,39 @@ describe("gateway sessions patch", () => {
     };
     const cleared = await patchOk({ store, toolOverrides: null });
     expect(cleared.toolOverrides).toBeUndefined();
+  });
+
+  test("persists explicit toolOverrides.webSearch true and false", async () => {
+    const store = mainStoreEntry({});
+    const enabled = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { webSearch: true } },
+      }),
+    );
+    expect(enabled.toolOverrides).toEqual({ webSearch: true });
+
+    const denied = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { webSearch: false } },
+      }),
+    );
+    expect(denied.toolOverrides).toEqual({ webSearch: false });
+
+    const withSkills = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          toolOverrides: { skills: { docs: true }, webSearch: true },
+        },
+      }),
+    );
+    expect(withSkills.toolOverrides).toEqual({
+      skills: { docs: true },
+      webSearch: true,
+    });
   });
 
   test.each([
