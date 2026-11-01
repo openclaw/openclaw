@@ -1172,6 +1172,19 @@ span.new-session-page__select {
     padding: 24px 0;
   }
 
+  /* With the keyboard open, dock the draft on it like the chat composer, with
+     the same bottom gap. Centering would leave an empty, scrollable band
+     between the composer and the keyboard once Safari pans to the caret. */
+  :root[data-shell-keyboard] .new-session-page .agent-chat__welcome {
+    margin-block: auto 0;
+    padding-block-end: 0;
+  }
+
+  :root[data-shell-keyboard] .new-session-page__composer {
+    /* Matches .agent-chat__composer-shell[data-mobile-composer="true"]. */
+    --chat-composer-bottom-gap: 10px;
+  }
+
   /* Center the whole composition, not the introduction alone. Auto margins
      yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome-identity {
