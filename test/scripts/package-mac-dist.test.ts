@@ -16,6 +16,7 @@ import {
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = "scripts/package-mac-dist.sh";
@@ -594,7 +595,9 @@ it.runIf(process.platform === "darwin").each(["app", "dmg"] as const)(
         const symbols = `${product}.dSYM`;
         const dwarf = `${symbols}/Contents/Resources/DWARF/OpenClaw`;
         const binaryBytes = readFileSync(second.file(product));
-        const symbolEntries = readdirSync(second.file(symbols), { recursive: true }).toSorted();
+        const symbolEntries = listDirectoryTreeStrictSync(second.file(symbols)).map(
+          ({ relativePath }) => relativePath,
+        );
         const symbolFiles = symbolEntries
           .filter((entry) => statSync(second.file(symbols, entry)).isFile())
           .map((entry) => [entry, readFileSync(second.file(symbols, entry))] as const);
@@ -611,7 +614,9 @@ it.runIf(process.platform === "darwin").each(["app", "dmg"] as const)(
         f = makeDistributionFixture("native");
         expect(setup).toHaveBeenCalledTimes(6);
         expect(readFileSync(f.file(product))).toEqual(binaryBytes);
-        expect(readdirSync(f.file(symbols), { recursive: true }).toSorted()).toEqual(symbolEntries);
+        expect(
+          listDirectoryTreeStrictSync(f.file(symbols)).map(({ relativePath }) => relativePath),
+        ).toEqual(symbolEntries);
         for (const [entry, bytes] of symbolFiles) {
           expect(readFileSync(f.file(symbols, entry))).toEqual(bytes);
         }
