@@ -410,7 +410,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
       : undefined,
     restartRecoverySourceReplyDeliveryMode: adoptsExistingClaim
       ? params.entry.restartRecoverySourceReplyDeliveryMode
-      : params.sourceRunId
+      : params.sourceRunId || params.deliveryContext
         ? params.sourceReplyDeliveryMode
         : undefined,
     restartRecoveryForceSafeTools: adoptsExistingClaim
@@ -466,7 +466,13 @@ export function prepareCommandHarnessCompletionRecovery(params: {
         generatedMediaSourceRunId || harnessCompletion ? ("internal" as const) : undefined,
       sourceRunId: generatedMediaSourceRunId ?? harnessCompletion?.sourceRunId,
       sourceReplyDeliveryMode:
-        opts.sourceReplyDeliveryMode ?? (harnessCompletion ? ("automatic" as const) : undefined),
+        // Direct command delivery already treats an omitted mode as automatic.
+        // Preserve that decision so a synthetic recovery does not replace it
+        // with the harness default after the original turn was accepted.
+        opts.sourceReplyDeliveryMode ??
+        (harnessCompletion || (opts.deliver === true && params.hasDeliveryContext)
+          ? ("automatic" as const)
+          : undefined),
     },
   };
 }
