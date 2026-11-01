@@ -22,6 +22,11 @@ type LlamaServerModelStatus =
 type LlamaServerModelWire = Record<string, unknown> & {
   id?: unknown;
   object?: unknown;
+  context_length?: unknown;
+  meta?: {
+    n_ctx?: unknown;
+    n_ctx_train?: unknown;
+  };
   status?: {
     value?: unknown;
     failed?: unknown;
@@ -111,11 +116,20 @@ export function mapLlamaServerModel(
   if (!id || (row.object !== undefined && row.object !== "model")) {
     return null;
   }
-  // Setup must not turn an unverified runtime fallback into an authored override.
-  const contextWindow =
+  const nativeContextWindow =
+    asPositiveSafeInteger(row.context_length) ?? asPositiveSafeInteger(row.meta?.n_ctx_train);
+  const runtimeContextWindow =
     asPositiveSafeInteger(props?.default_generation_settings?.n_ctx) ??
     asPositiveSafeInteger(props?.n_ctx) ??
+    asPositiveSafeInteger(row.meta?.n_ctx);
+  // Setup must not turn an unverified runtime fallback into an authored override.
+  const contextWindow =
+    nativeContextWindow ??
+    runtimeContextWindow ??
     (useRuntimeDefaults ? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW : undefined);
+  // Cold router rows report native capacity, not the loaded server's effective cap.
+  const contextTokens =
+    runtimeContextWindow ?? (nativeContextWindow === undefined ? contextWindow : undefined);
   const compat = buildCompat(props, useRuntimeDefaults);
   return {
     config: {
@@ -125,8 +139,11 @@ export function mapLlamaServerModel(
       input: resolveInput(row, props),
       cost: { ...SELF_HOSTED_DEFAULT_COST },
       contextWindow,
-      contextTokens: contextWindow,
-      maxTokens: resolveMaxTokens(props, contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW),
+      contextTokens,
+      maxTokens: resolveMaxTokens(
+        props,
+        contextTokens ?? contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+      ),
       compat,
     },
     status: normalizeStatus(row.status?.value),
