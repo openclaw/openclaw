@@ -344,19 +344,13 @@ export function withLocalWorkspaceStore<T>(
                   if (previous.worktree_id !== params.worktreeId) {
                     throw new Error("Local workspace binding changed");
                   }
-                  // Reuse is optional: stop a slow live probe before falling back to paused
-                  // reconciliation. Keep its cancellation separate from the custody lease.
-                  const signal =
-                    action.kind === "probe"
-                      ? AbortSignal.any([lease.signal, AbortSignal.timeout(5_000)])
-                      : lease.signal;
                   const result = await executeExistingOpenClawStateRead(
                     { path: context.admission.databasePath, env: context.environment },
                     {
                       type: "localWorkspace.manifest",
                       input: { id: params.worktreeId, revision: previous.revision, action },
                     },
-                    { context, current: true, live: true, signal },
+                    { context, current: true, live: true, signal: lease.signal },
                   );
                   assertCurrent();
                   if (!result) {
@@ -364,7 +358,7 @@ export function withLocalWorkspaceStore<T>(
                   }
                   const value = await computeWorkspaceManifest(
                     { type: "workspace.manifest.local", input: { snapshot: result.snapshot } },
-                    signal,
+                    lease.signal,
                   );
                   assertCurrent();
                   if (value.kind === "scan") {

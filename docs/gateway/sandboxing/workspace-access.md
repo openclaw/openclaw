@@ -243,10 +243,9 @@ The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
 this checkout while capturing or applying changes. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
-are unchanged and no recovery is pending, its runtimes keep running. Each live
-check has a five-second budget. Changed, interrupted, or timed-out checks return
-to paused reconciliation; file edits are never applied from the live check.
-Concurrent preparations of the same workspace and session
+are unchanged and no recovery is pending, its runtimes keep running. Changed or
+interrupted checks return to paused reconciliation; file edits are never applied
+from the live check. Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
