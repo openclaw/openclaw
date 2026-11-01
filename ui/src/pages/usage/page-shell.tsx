@@ -11,11 +11,9 @@ import { projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createUsagePhoneLayout } from "./phone-layout.ts";
 
-export function UsagePageShell(props: {
-  result: SessionsUsageResult | null;
-  children: JSX.Element;
-}) {
+export function UsageAgentScope(props: { result: SessionsUsageResult | null }) {
   const context = useApplication();
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
@@ -26,18 +24,27 @@ export function UsagePageShell(props: {
         .filter((agentId): agentId is string => Boolean(agentId?.trim())) ?? [],
   );
   return (
+    <AgentScopeControl
+      agents={agents.read().agentsList?.agents ?? []}
+      additionalAgentIds={additionalAgentIds()}
+      selection={context.agentSelection}
+      selectedId={selection.read().state.scopeId}
+    />
+  );
+}
+
+export function UsagePageShell(props: {
+  result: SessionsUsageResult | null;
+  phoneActions: JSX.Element;
+  children: JSX.Element;
+}) {
+  const phone = createUsagePhoneLayout();
+  return (
     <>
       <HubPageHeader
         active="usage"
         docsUrl="https://docs.openclaw.ai/concepts/usage-tracking"
-        actions={
-          <AgentScopeControl
-            agents={agents.read().agentsList?.agents ?? []}
-            additionalAgentIds={additionalAgentIds()}
-            selection={context.agentSelection}
-            selectedId={selection.read().state.scopeId}
-          />
-        }
+        actions={phone() ? props.phoneActions : <UsageAgentScope result={props.result} />}
       />
       <SettingsWorkspace>{props.children}</SettingsWorkspace>
     </>
