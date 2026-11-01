@@ -90,7 +90,7 @@ async function writeSmallArchive(
 }
 
 describe("standalone backup database completeness", () => {
-  it("refuses an ordinary backup in explicit local-companion restore mode before extraction", async () => {
+  it("distinguishes ordinary backups from SQLite-only companions before extraction", async () => {
     const fixture = await writeSmallArchive([], []);
     const target = path.join(fixture.root, "refused");
     await expect(
@@ -101,6 +101,19 @@ describe("standalone backup database completeness", () => {
       }),
     ).rejects.toThrow("requires a local-companion checkpoint");
     await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    const manifest = await readManifest(fixture.root, fixture.archiveRoot);
+    manifest.profile = "local-companion";
+    manifest.postgresAnchors = [];
+    await writeJson(path.join(fixture.root, fixture.archiveRoot, "manifest.json"), manifest);
+    const archive = await repack(fixture.root, fixture.archiveRoot, "sqlite-companion");
+    await expect(
+      backupRestoreCommand(createTestRuntime(), {
+        archive,
+        target,
+        sourceEngine: "sqlite",
+        localCompanion: true,
+      }),
+    ).resolves.toMatchObject({ ok: true, profile: "local-companion" });
   });
 
   it.each([
@@ -192,6 +205,15 @@ describe("standalone backup database completeness", () => {
     expect(verified.warnings).toEqual(
       expect.arrayContaining([expect.stringContaining("not disaster recovery")]),
     );
+    const refused = path.join(fixture.root, "sqlite-only");
+    await expect(
+      backupRestoreCommand(createTestRuntime(), {
+        archive,
+        target: refused,
+        sourceEngine: "sqlite",
+      }),
+    ).rejects.toThrow("requires a SQLite-only archive");
+    await expect(fs.stat(refused)).rejects.toMatchObject({ code: "ENOENT" });
     const target = path.join(fixture.root, "restored");
     await backupRestoreCommand(createTestRuntime(), { archive, target, localCompanion: true });
     using restored = new DatabaseSync(path.join(target, archivePath), { readOnly: true });

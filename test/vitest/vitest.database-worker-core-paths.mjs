@@ -10,6 +10,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/harness/context-media-runtime.test.ts",
   "src/agents/subagents/registry/subagent-controller-inputs.test.ts",
   "src/commands/doctor/shared/model-replacement.test.ts",
+  "src/commands/database-migration-capture.test.ts",
+  "src/commands/database-migration-capture.quiesced.test.ts",
   "src/infra/database-engine/memory-path-migration.conformance.test.ts",
   "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/auto-reply/reply/agent-runner-subagent-conflict.test.ts",

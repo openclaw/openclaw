@@ -559,6 +559,24 @@ Acceptance is zero denied calls for unavailable surfaces, with allowed chat read
 still succeeding. Inspect screenshots for usable chat and absent unavailable
 controls. This is a request-count measurement, not a CPU or latency benchmark.
 
+`control-ui-forbidden-diff-measure.ts` separately measures the client diff owner:
+5,000 repeated activations of one denied host session in a 5,000-row synthetic
+roster. Both versions select the row through the existing pane owner before
+resolving a diff. The transport fixture rejects every issued request. This
+includes client error handling, but excludes Gateway authorization, SQLite,
+workspace files, and network latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/control-ui-forbidden-diff-measure.ts
+```
+
+Use `--module <baseline-owner.ts>` with the owner's relative imports intact.
+Run at least five interleaved baseline/candidate pairs and repeated baseline A/A
+controls. `--allocations` samples a separate pass; do not compare its timings.
+Acceptance is zero denied requests, an explanatory unavailable result for every
+activation, and lower CPU and allocation. The roster cardinality is configurable
+with `--rows`; `--activations` controls repeated demand within the same dashboard.
+
 ## Main-thread filesystem durability
 
 Use `fsync-gateway-entry.ts` as the `--entry` for

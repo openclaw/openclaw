@@ -11,12 +11,47 @@ import {
   publicationOptions,
   waitForWatchedSessionKey,
 } from "./chat-github-publication.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details Environment changes" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
+  it("explains host workspace restrictions without requesting a forbidden diff", async () => {
+    await suite.withPage({ viewport: { width: 1180, height: 800 } }, async ({ page }) => {
+      const reason =
+        "Your operator role requires a sandboxed session. Ask the owner to share the files in your own session.";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...publicationMethods, "sessions.diff"],
+        operatorScopes: ["operator.read", "operator.write"],
+        workspace: "/workspace/project",
+        workspaceGit: true,
+        sessions: [
+          createControlUiSessionRow("agent:main:main", "Shared host session", 1, {
+            workspaceReadDisabledReason: reason,
+          }),
+        ],
+        methodResponses: {
+          "sessions.diff": { __mockError: { code: "FORBIDDEN", message: reason } },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await openChatDetails(page);
+      await openChatSidePanelType(page, "Review");
+      const panel = page.locator('[data-panel-slot="detail"]:not([hidden])');
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, panel, [panel], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, "restricted-workspace.png"), frame.png);
+      }
+      expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
+      await panel.getByText(reason, { exact: true }).waitFor();
+      expect(await panel.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+    });
+  });
+
   it.each(["published", "failed"] as const)(
     "shows local changes beside an existing PR after a %s publication",
     async (status) => {

@@ -399,6 +399,12 @@ JSONC edits go through `jsonc-parser`, so comments and whitespace survive a
 `set`. Run with `--dry-run` first to inspect the bytes before committing.
 `.json` files use the same adapter and edit path as `.jsonc`.
 
+For named object keys, JSON, JSONC, and JSONL reads, searches, and replacements
+use the last duplicate occurrence, matching runtime parsing. Replacements preserve
+earlier shadowed copies. Insertion beneath a duplicated parent is refused:
+consolidate the duplicate parents into one, retaining the last effective value,
+then retry.
+
 ### JSONL
 
 ```text
@@ -450,6 +456,12 @@ YAML uses the `yaml` package's `Document` API rather than a hand-rolled
 parser, so ordinary parse/emit round-trips preserve comments and authoring
 shape while resolved paths use the same map-key / sequence-index model as
 JSONC. The same adapter handles `.yaml`, `.yml`, and `.lobster` files.
+
+`resolve` and `find` follow aliases to their anchored values, including
+predicate fields. Reported lines refer to the anchor. `set` can replace an alias
+slot without changing its anchor, but writes through an alias remain refused.
+Recursive searches stop at cyclic alias edges while retaining distinct logical
+paths. YAML merge keys (`<<`) are not expanded.
 
 ## Subcommand reference
 
