@@ -67,7 +67,10 @@ export function registerCronCreatorSessionTests(fixture: {
         },
       });
       const client = callerClient("ops");
-      const scope = createCronCreatorAuthorityRunScope("run-cron-validation", { kind: "local" });
+      const scope = createCronCreatorAuthorityRunScope(
+        client.internal!.agentRuntimeIdentity!.operationalRunInstance.runId,
+        { kind: "local" },
+      );
       using _ = { [Symbol.dispose]: () => revokeCronCreatorAuthorityRunScope(scope) };
       client.internal!.agentRuntimeIdentity!.cronCreatorAuthorityGrant =
         mintCronCreatorAuthorityGrant(scope, undefined, undefined, undefined, "requester");

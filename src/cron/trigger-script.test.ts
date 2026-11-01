@@ -173,7 +173,7 @@ it.each([
 ] as const)(
   "honors current host $host for a canonically captured pinned exec cap",
   async ({ host, expected }) => {
-    // Automatic placement must honor the pin despite the script's node request;
+    // Automatic placement must honor the captured Gateway pin;
     // an explicit current node restriction must reject the captured Gateway host.
     const evaluate = execEvaluator(host, "configured-node-must-not-run");
 
@@ -181,7 +181,7 @@ it.each([
       evaluate({
         ...INPUT,
         script:
-          'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
+          'await exec({ command: "printf openclaw-canonical-ok", host: "gateway" }); return { fire: false };',
         toolsAllow: ["exec", "process"],
         scheduledToolPolicy: { version: 1, mode: "trusted" },
         execTarget: { version: 1, host: "gateway" },

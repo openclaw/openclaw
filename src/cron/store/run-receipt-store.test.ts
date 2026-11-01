@@ -352,7 +352,7 @@ describe("cron run receipt store", () => {
           }
         }
         expect(assertSourceCurrent).toThrow();
-        if (mutation === "tool policy") {
+        if (mutation === "tool policy" || mutation === "native requester") {
           expect(assertMessageCurrent).toThrow();
         } else {
           expect(assertMessageCurrent).not.toThrow();
