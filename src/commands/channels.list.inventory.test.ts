@@ -35,7 +35,7 @@ vi.mock("../plugins/control-plane-workspace.js", () => ({
   resolvePluginControlPlaneWorkspace: () => ({ workspaceScope: "shared" }),
 }));
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => [],
+  listReadOnlyChannelPluginsForConfigAsync: async () => [],
 }));
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
   resolveMissingOfficialExternalChannelPluginRepairHints: () => [],

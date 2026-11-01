@@ -24,6 +24,7 @@ import {
   listReadOnlyChannelPluginsForConfig,
   listReadOnlyChannelPluginsForConfigAsync,
   resolveReadOnlyChannelPluginsForConfig,
+  resolveReadOnlyChannelPluginsForConfigAsync,
 } from "./read-only.js";
 import {
   writeBundledSetupChannelPlugin,
@@ -694,8 +695,8 @@ Object.assign(module.exports.plugin.config, {
     },
   );
 
-  it.each([true, false])("reports setup failures (requiresRuntime=%s)", (missing) => {
-    const { resolve, pluginDir, fullMarker, setupMarker } = setupFixture({
+  it.each([true, false])("reports setup failures (requiresRuntime=%s)", async (missing) => {
+    const { cfg, resolve, pluginDir, fullMarker, setupMarker } = setupFixture({
       manifestChannelConfig: true,
       setupRequiresRuntime: missing,
     });
@@ -706,7 +707,14 @@ Object.assign(module.exports.plugin.config, {
     );
 
     const result = resolve({ includeSetupFallbackPlugins: true });
+    const asyncResult = await resolveReadOnlyChannelPluginsForConfigAsync(cfg, {
+      ...coldOptions(),
+      includeSetupFallbackPlugins: true,
+    });
 
+    expect(pluginIds(asyncResult.plugins)).toEqual(pluginIds(result.plugins));
+    expect(asyncResult.missingConfiguredChannelIds).toEqual(result.missingConfiguredChannelIds);
+    expect(asyncResult.loadFailures).toEqual(result.loadFailures);
     expect(pluginIds(result.plugins).includes("external-chat")).toBe(!missing);
     expect(result.missingConfiguredChannelIds).toEqual(missing ? ["external-chat"] : []);
     expect(result.loadFailures).toEqual([

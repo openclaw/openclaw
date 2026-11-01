@@ -14,7 +14,7 @@ type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
   resolveGatewayPort: Mock<(cfg?: OpenClawConfig) => number>;
   hasConfiguredChannels: UnknownMock;
-  hasConfiguredChannelsForReadOnlyScope: UnknownMock;
+  hasConfiguredChannelsForReadOnlyScopeAsync: UnknownMock;
   readConfigFileSnapshotWithPluginMetadata: Mock<ReadConfigSnapshot>;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
@@ -36,7 +36,7 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
     resolveGatewayPort: vi.fn((cfg?: OpenClawConfig) => cfg?.gateway?.port ?? 18789),
     hasConfiguredChannels: vi.fn(),
-    hasConfiguredChannelsForReadOnlyScope: vi.fn(),
+    hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn(),
     readConfigFileSnapshotWithPluginMetadata: vi.fn<ReadConfigSnapshot>(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getUpdateCheckResult: vi.fn(),
@@ -210,11 +210,11 @@ export async function loadStatusScanModuleForTest(
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
-    hasConfiguredChannelsForReadOnlyScope: (params: {
+    hasConfiguredChannelsForReadOnlyScopeAsync: (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
       includePersistedAuthState?: boolean;
-    }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
+    }) => mocks.hasConfiguredChannelsForReadOnlyScopeAsync(params),
     listConfiguredChannelIdsForReadOnlyScope: (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
@@ -402,7 +402,7 @@ export function applyStatusScanDefaults(
   const resolvedConfig = options.resolvedConfig ?? sourceConfig;
 
   mocks.hasConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
-  mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((rawParams: unknown) => {
+  mocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockImplementation((rawParams: unknown) => {
     const params = rawParams as {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;

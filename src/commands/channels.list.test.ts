@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
     effectiveConfig: config,
     diagnostics: [],
   })),
-  listReadOnlyChannelPluginsForConfig: vi.fn<() => ChannelPlugin[]>(() => []),
+  listReadOnlyChannelPluginsForConfigAsync: vi.fn<() => Promise<ChannelPlugin[]>>(async () => []),
   resolveChannelAccountSnapshot: vi.fn(),
   listTrustedChannelPluginCatalogEntries: vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
   listPluginContributionIds: vi.fn<() => readonly string[]>(() => []),
@@ -57,7 +57,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfigAsync,
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({
@@ -119,8 +119,8 @@ describe("channels list", () => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockReset().mockResolvedValue(createTestConfigSnapshot({}));
     mocks.resolveCommandConfigWithSecrets.mockClear();
-    mocks.listReadOnlyChannelPluginsForConfig.mockReset();
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockReset();
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([]);
     mocks.resolveChannelAccountSnapshot.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReset();
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
@@ -176,7 +176,7 @@ describe("channels list", () => {
     const accountId = `${control}default\nforged-row`;
     const channelLabel = `${control}Telegram 🦞\r\nAdmin`;
     const accountName = `${control}Primary\tAccount`;
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([
       createMockChannelPlugin({ label: channelLabel, accountIds: [accountId] }),
     ]);
     mocks.resolveChannelAccountSnapshot.mockResolvedValue({
@@ -232,7 +232,7 @@ describe("channels list", () => {
   });
 
   it("prefers reachable gateway account snapshots over command-local token state", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
     mocks.resolveChannelAccountSnapshot.mockResolvedValue({
@@ -276,7 +276,7 @@ describe("channels list", () => {
   });
 
   it("falls back to command-local account snapshots when gateway status is unavailable", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
     mocks.resolveChannelAccountSnapshot.mockResolvedValue({
@@ -296,7 +296,7 @@ describe("channels list", () => {
   });
 
   it("marks configured-but-unavailable credential sources in text output", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
     ]);
     mocks.resolveChannelAccountSnapshot.mockResolvedValue({
@@ -349,7 +349,7 @@ describe("channels list", () => {
   );
 
   it("--all surfaces bundled-but-unconfigured plugins with installed=true / not configured", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);
     mocks.resolveChannelAccountSnapshot.mockResolvedValue({
@@ -375,7 +375,7 @@ describe("channels list", () => {
   });
 
   it("--all JSON exposes 'origin' tag (configured / available / installable)", async () => {
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+    mocks.listReadOnlyChannelPluginsForConfigAsync.mockResolvedValue([
       createMockChannelPlugin({ id: "telegram", accountIds: ["default"] }),
       createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: [] }),
     ]);

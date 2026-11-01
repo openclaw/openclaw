@@ -457,6 +457,13 @@ export async function listReadOnlyChannelPluginsForConfigAsync(
   cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions = {},
 ): Promise<ChannelPlugin[]> {
+  return (await resolveReadOnlyChannelPluginsForConfigAsync(cfg, options)).plugins;
+}
+
+export async function resolveReadOnlyChannelPluginsForConfigAsync(
+  cfg: OpenClawConfig,
+  options: ReadOnlyChannelPluginOptions = {},
+): Promise<ReadOnlyChannelPluginResolution> {
   const context = resolveReadOnlyChannelContext(cfg, options);
   const loadedChannelPlugins = listChannelPlugins();
   const loadedChannelIds = new Set(loadedChannelPlugins.map((plugin) => plugin.id));
@@ -483,7 +490,7 @@ export async function listReadOnlyChannelPluginsForConfigAsync(
     context,
     configuredChannelIds,
     loadedChannelPlugins,
-  ).plugins;
+  );
 }
 
 function resolveReadOnlyChannelContext(cfg: OpenClawConfig, options: ReadOnlyChannelPluginOptions) {
