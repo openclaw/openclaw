@@ -404,11 +404,24 @@ export function createNativeSubagentSubmissionCalls(
     call.accepted = true;
     call.owner = owner;
     call.completionCustody ??= owner.completionCustody?.retain();
+    const inputThreadId = call.modelInput?.threadId;
     const modelSource = retainNativeModelSource(call.modelInput?.source.owner);
     try {
       settleSubmissionModelInput(call, true);
       const targets = call.targets;
       call.targets = [];
+      const receiver = inputThreadId ? dependencies.knownChildren.get(inputThreadId) : undefined;
+      if (
+        !targets.length &&
+        inputThreadId &&
+        modelSource &&
+        receiver?.parent === state &&
+        receiver.assignment.unanchored
+      ) {
+        // A collected receiver has no predecessor to recover. Keep only the
+        // accepted source; its exact native turn will create the assignment.
+        dependencies.acceptContinuation(state, owner, inputThreadId, call, modelSource.owner);
+      }
       for (const target of targets) {
         const { childThreadId, predecessor } = target;
         const modelOwner = modelSource?.owner ?? owner;
