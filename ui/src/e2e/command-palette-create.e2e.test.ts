@@ -353,14 +353,20 @@ suite.define(() => {
           });
           expect(create.params).not.toHaveProperty("execNode");
           expect(create.params).not.toHaveProperty("parentSessionKey");
-          await expect.poll(() => start.isEnabled()).toBe(false);
-          // A second physical chord while admission is pending must not start a second session.
-          await page.keyboard.press("ControlOrMeta+Enter");
-          expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-          expect(page.url()).toBe(url);
-          await gateway.resolveDeferred("sessions.create");
+          // Optimistic start: the launcher returns to the foreground before admission.
           await input.waitFor({ state: "hidden" });
           await expectForegroundUnchanged(page, composer, url);
+          // Reopening shows the pending start; a second chord must not start a second session.
+          await page.keyboard.press("ControlOrMeta+K");
+          await input.waitFor({ state: "visible" });
+          expect(await input.inputValue()).toBe(submittedPrompt);
+          await expect.poll(() => start.isEnabled()).toBe(false);
+          await input.press("ControlOrMeta+Enter");
+          expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+          await input.press("Escape");
+          await input.waitFor({ state: "hidden" });
+          await gateway.resolveDeferred("sessions.create");
+          expect(page.url()).toBe(url);
           if (destination === "device") {
             expect((await gateway.waitForRequest("sessions.dispatch")).params).toEqual({
               key: sessionKey,
@@ -412,15 +418,19 @@ suite.define(() => {
       await expect.poll(() => start.isEnabled()).toBe(true);
       await input.press("ControlOrMeta+Enter");
       await gateway.waitForRequest("sessions.create");
+      await input.waitFor({ state: "hidden" });
+      const toast = page.locator(".app-toast");
+      await expect.poll(() => toast.textContent()).toContain("Initial turn rejected");
+      await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await toast.waitFor({ state: "hidden" });
+      expect(page.url()).toBe(url);
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
       await expect
         .poll(() => palette.getByRole("alert").textContent())
         .toContain("Initial turn rejected");
-      const toast = page.locator(".app-toast");
-      await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
-      await toast.waitFor({ state: "hidden" });
       expect(await input.inputValue()).toBe(prompt);
-      expect(page.url()).toBe(url);
-      expect(await composer.inputValue()).toBe(foregroundDraft);
       await input.press("ControlOrMeta+Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       const recovery = palette.getByRole("button", { name: "Open session", exact: true });
@@ -463,7 +473,10 @@ suite.define(() => {
       await gateway.deferNext("sessions.create");
       await input.press("ControlOrMeta+Enter");
       await gateway.waitForRequest("sessions.create");
-      // A disabled field loses focus on the next frame; the pending prompt stays focused and read-only.
+      await input.waitFor({ state: "hidden" });
+      // Reopened while pending, the prompt stays focused and read-only.
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
       await expect.poll(() => start.isEnabled()).toBe(false);
       await twoFrames(page);
       expect(
@@ -473,24 +486,34 @@ suite.define(() => {
           element.getAttribute("aria-busy"),
         ]),
       ).toEqual([true, true, "true"]);
+      await input.press("Escape");
+      await input.waitFor({ state: "hidden" });
       await gateway.rejectDeferred("sessions.create", {
         code: "INVALID_REQUEST",
         message: "Fixture denied creation; correct the request and retry.",
       });
+      const toast = page.locator(".app-toast");
+      await expect.poll(() => toast.textContent()).toContain("Session didn't start");
+      await toast.getByRole("button", { name: "Edit prompt", exact: true }).click();
+      await input.waitFor({ state: "visible" });
       const error = palette.getByRole("alert");
       await expect.poll(() => error.textContent()).toContain("Fixture denied creation");
       expect(await input.inputValue()).toBe(prompt);
       expect(page.url()).toBe(url);
       expect(await composer.inputValue()).toBe(foregroundDraft);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
+      await expect
+        .poll(() => input.evaluate((element) => document.activeElement === element))
+        .toBe(true);
       expect(await input.getAttribute("aria-busy")).toBeNull();
       await expect.poll(() => start.isEnabled()).toBe(true);
       await input.press("ControlOrMeta+Enter");
       const retry = await gateway.waitForRequest("sessions.create", { after: 1 });
       expect(retry.params).toMatchObject({ agentId: "main", message: prompt });
       await input.waitFor({ state: "hidden" });
-      await expectForegroundUnchanged(page, composer, url);
+      // Opened from the retired notice, the launcher has no focus origin to restore.
+      expect(page.url()).toBe(url);
+      expect(await composer.inputValue()).toBe(foregroundDraft);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(2);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
     });

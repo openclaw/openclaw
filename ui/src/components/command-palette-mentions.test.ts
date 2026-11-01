@@ -314,6 +314,8 @@ describe("command palette people mentions", () => {
     });
     await f.choose();
     await f.send();
+    expect(f.palette.isOpen).toBe(false);
+    await openPalette(f.palette);
     expect(f.query('[role="alert"]')?.textContent).toContain("First turn rejected");
     expect(f.recipients()).toHaveLength(1);
     await f.key("Escape");
@@ -330,6 +332,9 @@ describe("command palette people mentions", () => {
     vi.mocked(f.context.sessions.createResult).mockReturnValueOnce(pending.promise);
     await f.choose();
     await f.send();
+    // The launcher closes once create is sent; reopening shows the locked pending start.
+    expect(f.palette.isOpen).toBe(false);
+    await openPalette(f.palette);
     expect(f.input).toMatchObject({ disabled: false, readOnly: true });
     expect(f.input.getAttribute("aria-busy")).toBe("true");
     expect(f.query(".cmd-palette__mentions")?.hasAttribute("inert")).toBe(true);

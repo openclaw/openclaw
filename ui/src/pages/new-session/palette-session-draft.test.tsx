@@ -275,6 +275,38 @@ describe("PaletteSessionDraft", () => {
     ).toBe(false);
   });
 
+  it("releases the launcher once create is sent and reopens a failed prompt from its notice", async () => {
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    const { host, create } = await mount();
+    const created = createDeferred<SessionCreateOutcome>();
+    create.mockReturnValueOnce(created.promise);
+    host.draft.setMessage("Start this while I keep working");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    const submission = host.draft.submit();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(host.paletteOpen).toBe(false);
+    expect(host.draft).toMatchObject({
+      submitting: true,
+      message: "Start this while I keep working",
+    });
+    created.reject(new Error("Gateway refused the session"));
+    await submission;
+    const notice = showToast.mock.calls.at(-1)?.[0];
+    expect(notice).toMatchObject({
+      message: "Session didn't start: Gateway refused the session",
+      actionLabel: "Edit prompt",
+    });
+    notice?.onAction?.();
+    await host.updateComplete;
+    expect(host.paletteOpen).toBe(true);
+    expect(host.draft).toMatchObject({
+      message: "Start this while I keep working",
+      error: "Gateway refused the session",
+      submitting: false,
+    });
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it.each(["unchanged", "connection", "account"] as const)(
     "settles one locked creation when its owner is %s",
     async (change) => {
@@ -318,7 +350,8 @@ describe("PaletteSessionDraft", () => {
         await submission;
       }
       expect(create).toHaveBeenCalledOnce();
-      expect(host.started).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
+      // Dispatch releases the launcher; acceptance closes only the reopened pending view.
+      expect(host.started).toHaveBeenCalledTimes(change === "unchanged" ? 2 : 1);
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       if (change !== "unchanged") {
         expect(showToast).not.toHaveBeenCalled();
@@ -359,7 +392,7 @@ describe("PaletteSessionDraft", () => {
         recovery?.click();
         expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:main:dashboard:rejected");
         expect(context.navigate).toHaveBeenCalledOnce();
-        expect(host.started).toHaveBeenCalledOnce();
+        expect(host.started).toHaveBeenCalledTimes(2);
       } else {
         open?.();
         expect(context.navigate).not.toHaveBeenCalled();

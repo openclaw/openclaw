@@ -44,7 +44,14 @@ export class PaletteDraftHost {
     {
       changed: this.onDraftChange,
       updateComplete: () => this.updateComplete,
-      onClose: () => this.started(),
+      onClose: () => {
+        this.paletteOpen = false;
+        this.started();
+      },
+      onOpen: () => {
+        this.paletteOpen = true;
+        this.draft.open();
+      },
     },
   );
   constructor(readonly context: ApplicationContext) {

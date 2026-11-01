@@ -264,6 +264,8 @@ describe("command palette attachments", () => {
     paste(input, [], "data:image/png;base64,aW1hZ2U=");
     await vi.waitFor(() => expect(start().disabled).toBe(false));
     start().click();
+    await vi.waitFor(() => expect(palette.isOpen).toBe(false));
+    await openPalette(palette);
     await vi.waitFor(() =>
       expect(query('[role="alert"]')?.textContent).toContain("Image turn rejected"),
     );

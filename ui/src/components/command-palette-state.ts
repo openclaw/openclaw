@@ -169,6 +169,7 @@ export class CommandPaletteState {
         changed: this.changed,
         updateComplete: rendered,
         onClose: () => this.closePalette(),
+        onOpen: () => this.openPalette(),
         onAttachmentModeChange: () => this.scheduleSessionSearch(this.draft.message),
         onMessageChange: (query) => {
           const text = query.trim();
@@ -311,9 +312,10 @@ export class CommandPaletteState {
   }
 
   readonly togglePalette = () => {
+    // A closed launcher keeps custody of an in-flight start and reports its outcome.
     if (!this.open) {
       this.openPalette();
-    } else if (!this.draft.submitting) {
+    } else {
       this.closePalette();
     }
   };

@@ -513,10 +513,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             }
             return;
           }
-          if (snapshot.draft.submitting) {
-            event.preventDefault();
-            return;
-          }
           snapshot.onToggle();
         }}
       >
