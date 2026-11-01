@@ -4,6 +4,7 @@ import {
   pollRelease,
   probeCapabilities,
   ReleaseRefusal,
+  requireReleaseValue as required,
   shellCommand,
   type ReleaseContext,
   type ReleasePhase,
@@ -17,13 +18,6 @@ import {
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-
-function required(value: string | undefined, name: string): string {
-  if (!value) {
-    throw new Error(`Missing ${name}; complete the preceding release phase.`);
-  }
-  return value;
-}
 
 async function ensureCapabilities(ctx: ReleaseContext): Promise<void> {
   await probeCapabilities(ctx, required(ctx.state.validate.toolingSha, "tooling SHA"));
@@ -243,32 +237,29 @@ export async function macos(ctx: ReleaseContext): Promise<void> {
   const validateId = required(state.macos.validateRunId, "macOS validate run");
   const preflightId = required(state.macos.preflightRunId, "macOS preflight run");
   ctx.save();
-  const validation = await waitForRun(ctx, state.releasesRepo, validateId, "macos", 3 * HOUR, true);
-  if (validation.conclusion !== "success") {
-    throw new ReleaseRefusal(
-      `macOS validate run ${validateId} concluded ${String(validation.conclusion)}.`,
-      [
-        workflowCommand(state.releasesRepo, "openclaw-macos-validate.yml", [`tag=${state.tag}`]),
-        "# Resolve the new validate run ID and supply it on resume.",
-        ctx.resume("macos", ["--macos-validate-run-id", "<new-run-id>"]),
-      ],
-    );
-  }
-  const preflight = await waitForRun(ctx, state.releasesRepo, preflightId, "macos", 3 * HOUR, true);
-  if (preflight.conclusion !== "success") {
-    throw new ReleaseRefusal(
-      `macOS preflight run ${preflightId} concluded ${String(preflight.conclusion)}.`,
-      [
-        workflowCommand(state.releasesRepo, "openclaw-macos-publish.yml", [
-          ...macosInputs(ctx, true),
-          `resume_notarization_run_id=${preflightId}`,
-          `resume_notarization_run_attempt=${String(preflight.run_attempt)}`,
-          "resume_notarization_variant=all",
-        ]),
-        "# Resolve the new preflight run ID and supply it on resume.",
-        ctx.resume("macos", ["--macos-preflight-run-id", "<new-run-id>"]),
-      ],
-    );
+  for (const [lane, id] of [
+    ["validate", validateId],
+    ["preflight", preflightId],
+  ] as const) {
+    const run = await waitForRun(ctx, state.releasesRepo, id, "macos", 3 * HOUR, true);
+    if (run.conclusion !== "success") {
+      throw new ReleaseRefusal(`macOS ${lane} run ${id} concluded ${String(run.conclusion)}.`, [
+        workflowCommand(
+          state.releasesRepo,
+          lane === "validate" ? "openclaw-macos-validate.yml" : "openclaw-macos-publish.yml",
+          lane === "validate"
+            ? [`tag=${state.tag}`]
+            : [
+                ...macosInputs(ctx, true),
+                `resume_notarization_run_id=${id}`,
+                `resume_notarization_run_attempt=${String(run.run_attempt)}`,
+                "resume_notarization_variant=all",
+              ],
+        ),
+        `# Resolve the new ${lane} run ID and supply it on resume.`,
+        ctx.resume("macos", [`--macos-${lane}-run-id`, "<new-run-id>"]),
+      ]);
+    }
   }
   if (!state.macos.publishRunId) {
     const release = await readGithubRelease(ctx);
@@ -396,6 +387,64 @@ async function closeoutAssetsPresent(ctx: ReleaseContext): Promise<boolean> {
   return expected.every((name) => assets.includes(name));
 }
 
+async function verifyWebsite(ctx: ReleaseContext): Promise<void> {
+  const repo = "openclaw/openclaw.ai";
+  const workflow = "companion-downloads-deployed.yml";
+  // A phase restart retains prior receipts. A completed verification is history,
+  // not proof of the current download service; retain IDs only while unfinished.
+  if (ctx.state.closeout.verifiedAt) {
+    delete ctx.state.closeout.websiteRunId;
+    delete ctx.state.closeout.verifiedAt;
+    ctx.save();
+  }
+  if (!ctx.state.closeout.websiteRunId) {
+    // Verification only reads production. Repeating
+    // an unacknowledged dispatch is safe; the website serializes its verification job.
+    const result = await ctx.run(
+      "gh",
+      [
+        "api",
+        "--method",
+        "POST",
+        "-H",
+        "X-GitHub-Api-Version: 2022-11-28",
+        `repos/${repo}/actions/workflows/${workflow}/dispatches`,
+        "-f",
+        "ref=main",
+        "-F",
+        "return_run_details=true",
+        "-f",
+        "inputs[site_url]=https://openclaw.ai/",
+        "--jq",
+        ".workflow_run_id",
+      ],
+      { dryRunStdout: "503" },
+    );
+    const runId = result.stdout.trim();
+    if (!/^[1-9][0-9]*$/.test(runId)) {
+      throw new Error("Website dispatch did not return a run ID.");
+    }
+    ctx.state.closeout.websiteRunId = runId;
+    ctx.save();
+  }
+  const runId = ctx.state.closeout.websiteRunId;
+  const run = await waitForRun(ctx, repo, runId, "closeout", 30 * MINUTE);
+  if (run.conclusion !== "success") {
+    ctx.state.history.push({
+      at: new Date().toISOString(),
+      phase: "closeout",
+      event: "website-verification-failed",
+      detail: JSON.stringify({ runId, conclusion: run.conclusion }),
+    });
+    delete ctx.state.closeout.websiteRunId;
+    ctx.save();
+    throw new ReleaseRefusal(`Website verification ${runId} concluded ${String(run.conclusion)}.`, [
+      shellCommand("gh", ["run", "view", runId, "--repo", repo, "--log-failed"]),
+      ctx.resume("closeout"),
+    ]);
+  }
+}
+
 export async function closeout(ctx: ReleaseContext): Promise<void> {
   const { state } = ctx;
   ctx.log("closeout", "waiting for the publish parent and checking the shipped state on main");
@@ -441,6 +490,7 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
     );
   }
   if (await closeoutAssetsPresent(ctx)) {
+    await verifyWebsite(ctx);
     state.closeout.verifiedAt = new Date().toISOString();
     ctx.save();
     return;
@@ -477,6 +527,7 @@ export async function closeout(ctx: ReleaseContext): Promise<void> {
       ],
     );
   }
+  await verifyWebsite(ctx);
   state.closeout.verifiedAt = new Date().toISOString();
   ctx.save();
 }

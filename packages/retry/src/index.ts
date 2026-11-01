@@ -35,9 +35,6 @@ export function racePromiseWithAbortSignal<T>(
     // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Callers own abort reasons, including non-Error values.
     onAbort = () => reject(abortError());
     signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
   });
   return Promise.race([run(), aborted]).finally(() => {
     signal.removeEventListener("abort", onAbort);
@@ -49,29 +46,53 @@ export async function raceWithTimeout<T, F>(
   operation: Promise<T> | (() => Promise<T>),
   timeoutMs: number,
   onTimeout: () => F,
-  options: { ref?: boolean } = {},
+  options: { ref?: boolean; signal?: AbortSignal; onAbort?: (signal: AbortSignal) => F } = {},
 ): Promise<T | F> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   try {
     const deadline = new Promise<F>((resolve, reject) => {
-      timer = setTimeout(() => {
+      const settle = (result: () => F) => {
         try {
-          resolve(onTimeout());
+          resolve(result());
         } catch (error) {
-          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the timeout callback's rejection identity.
+          // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the boundary callback's rejection identity.
           reject(error);
         }
-      }, timeoutMs);
+      };
+      timer = setTimeout(() => settle(onTimeout), timeoutMs);
       if (options.ref === false) {
         timer.unref?.();
       }
+      const signal = options.signal;
+      if (signal) {
+        onAbort = () =>
+          settle(() => {
+            if (options.onAbort) {
+              return options.onAbort(signal);
+            }
+            throw createAbortError("Operation aborted", { cause: signal.reason });
+          });
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+        }
+      }
     });
-    return await Promise.race([
-      typeof operation === "function" ? operation() : operation,
-      deadline,
-    ]);
+    let source: Promise<T>;
+    try {
+      source = typeof operation === "function" ? operation() : operation;
+    } catch (error) {
+      // A throwing factory must observe cancellation before synchronous cleanup.
+      void deadline.catch(() => {});
+      throw error;
+    }
+    return await Promise.race([source, deadline]);
   } finally {
     clearTimeout(timer);
+    if (onAbort) {
+      options.signal?.removeEventListener("abort", onAbort);
+    }
   }
 }
 
@@ -109,18 +130,13 @@ export async function sleepWithAbort(
     return;
   }
   await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const cleanup = () => abortSignal?.removeEventListener("abort", onAbort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
     const onAbort = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      timer = null;
+      clearTimeout(timer);
       cleanup();
       reject(
         createAbortError("aborted", {
@@ -133,18 +149,9 @@ export async function sleepWithAbort(
       onAbort();
       return;
     }
-    timer = setTimeout(() => {
-      settled = true;
-      cleanup();
-      timer = null;
-      resolve();
-    }, delayMs);
     // Retry loops can stay abortable without keeping an otherwise idle process alive.
     if (options.ref === false) {
       timer.unref?.();
-    }
-    if (abortSignal?.aborted) {
-      onAbort();
     }
   });
 }
@@ -227,6 +234,7 @@ export type RetryOptions = RetryConfig & {
 };
 
 export type RetryRuntime = {
+  shouldRetry?: (err: unknown) => boolean;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
   createFailure?: (attemptErrors: readonly unknown[]) => Error;
@@ -261,30 +269,17 @@ function clampNumber(value: unknown, fallback: number, min?: number, max?: numbe
   );
 }
 
-function resolveAttemptCount(value: unknown, fallback: number): number {
-  return Math.max(1, Math.round(clampNumber(value, fallback)));
-}
-
 function resolveRetryDelayMs(value: number): number {
   const finite =
     value === Number.POSITIVE_INFINITY ? MAX_TIMER_TIMEOUT_MS : Number.isFinite(value) ? value : 0;
   return Math.min(Math.max(Math.round(finite), 0), MAX_TIMER_TIMEOUT_MS);
 }
 
-function resolveJitterConfig(value: unknown, fallback: number | "full"): number | "full" {
-  if (value === "full") {
-    return "full";
-  }
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(Math.max(value, 0), 1)
-    : fallback;
-}
-
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
-  const attempts = resolveAttemptCount(overrides?.attempts, defaults.attempts);
+  const attempts = Math.max(1, Math.round(clampNumber(overrides?.attempts, defaults.attempts)));
   const minDelayMs = resolveRetryDelayMs(
     clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0),
   );
@@ -292,11 +287,18 @@ export function resolveRetryConfig(
     minDelayMs,
     resolveRetryDelayMs(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
   );
+  const jitter = overrides?.jitter;
+  const fallbackJitter = defaults.jitter;
   return {
     attempts,
     minDelayMs,
     maxDelayMs,
-    jitter: resolveJitterConfig(overrides?.jitter, defaults.jitter),
+    jitter:
+      jitter === "full"
+        ? jitter
+        : typeof jitter === "number" && Number.isFinite(jitter)
+          ? Math.min(Math.max(jitter, 0), 1)
+          : fallbackJitter,
   };
 }
 
@@ -377,7 +379,11 @@ export function createRetryRunner(runtime: RetryRuntime = {}) {
         return await fn();
       } catch (err) {
         attemptErrors.push(err);
-        if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {
+        if (
+          attempt >= maxAttempts ||
+          runtime.shouldRetry?.(err) === false ||
+          !shouldRetry(err, attempt)
+        ) {
           break;
         }
         if (numeric) {

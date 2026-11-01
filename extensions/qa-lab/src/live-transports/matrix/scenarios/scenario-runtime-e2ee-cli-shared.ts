@@ -13,7 +13,7 @@ import {
 import {
   createMatrixQaE2eeAccountClient,
   formatMatrixQaSasEmoji,
-  requireMatrixQaRegistrationToken,
+  registerMatrixQaE2eeScenarioAccount,
 } from "./scenario-runtime-e2ee-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
@@ -143,25 +143,7 @@ export async function registerMatrixQaCliE2eeAccount(params: {
   deviceName: string;
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
-  const localpartSuffix = params.scenarioId
-    .replace(/^matrix-e2ee-cli-/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 24);
-  const account = await createMatrixQaClient({
-    baseUrl: params.context.baseUrl,
-  }).registerWithToken({
-    deviceName: params.deviceName,
-    localpart: `qa-cli-${localpartSuffix}-${randomUUID().replaceAll("-", "").slice(0, 8)}`,
-    password: `matrix-qa-${randomUUID()}`,
-    registrationToken: requireMatrixQaRegistrationToken(params.context),
-  });
-  if (!account.deviceId) {
-    throw new Error(
-      `Matrix CLI QA registration for ${params.scenarioId} did not return a device id`,
-    );
-  }
-  return account;
+  return await registerMatrixQaE2eeScenarioAccount({ ...params, kind: "cli" });
 }
 
 export async function loginMatrixQaCliDevice(
@@ -243,7 +225,7 @@ export async function runMatrixQaSetupCliJson(
 ) {
   const result = await cli.run(...args);
   const artifacts = await writeMatrixQaCliOutputArtifacts({ label, result, rootDir: cli.rootDir });
-  return { artifacts, payload: parseMatrixQaCliJson(result), result };
+  return { artifacts, payload: parseMatrixQaCliJson(result) };
 }
 
 export function assertMatrixQaCliSasMatches(params: {
@@ -261,7 +243,6 @@ export function assertMatrixQaCliSasMatches(params: {
   if (params.cliSas.value !== ownerSas) {
     throw new Error(`Matrix CLI SAS ${kind} did not match the owner client`);
   }
-  return emoji ? ownerSas.split(" | ") : [ownerSas];
 }
 
 export function isMatrixQaCliOwnerSelfVerification(params: {

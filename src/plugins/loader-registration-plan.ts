@@ -4,26 +4,20 @@ import type { ChannelPluginLoadIntent } from "./loader-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRegistrationMode } from "./types.js";
 
-export type PluginRegistrationPlan = {
-  /** Public compatibility label passed to plugin register(api). */
-  mode: PluginRegistrationMode;
-  /** Load a setup entry instead of the normal runtime entry. */
-  loadSetupEntry: boolean;
-  /** Setup flow also needs the runtime channel entry for runtime setters/plugin shape. */
-  loadSetupRuntimeEntry: boolean;
-  /** Apply runtime capability policy such as memory-slot selection. */
-  runRuntimeCapabilityPolicy: boolean;
-  /** Register metadata that only belongs to live activation. */
-  runFullActivationOnlyRegistrations: boolean;
-};
+export type PluginRegistrationPlan = ReturnType<typeof createRegistrationPlan>;
 
-function createRegistrationPlan(mode: PluginRegistrationMode): PluginRegistrationPlan {
+function createRegistrationPlan(mode: PluginRegistrationMode) {
   const loadSetupEntry = mode === "setup-only" || mode === "setup-runtime";
   return {
+    /** Public compatibility label passed to plugin register(api). */
     mode,
+    /** Load a setup entry instead of the normal runtime entry. */
     loadSetupEntry,
+    /** Setup flow also needs the runtime channel entry for runtime setters/plugin shape. */
     loadSetupRuntimeEntry: mode === "setup-runtime",
+    /** Apply runtime capability policy such as memory-slot selection. */
     runRuntimeCapabilityPolicy: !loadSetupEntry,
+    /** Register metadata that only belongs to live activation. */
     runFullActivationOnlyRegistrations: mode === "full",
   };
 }

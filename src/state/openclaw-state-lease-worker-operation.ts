@@ -32,7 +32,11 @@ export function runWithOpenClawStateLeaseWorker<T>(
       return runOpenClawStateWorkerOperation(
         context,
         (scope) => operation(scope, admission.identity),
-        { assertCurrent: admission.assertCurrent, createAdmission: admission.createAdmission },
+        {
+          assertCurrent: admission.assertCurrent,
+          createAdmission: admission.createAdmission,
+          signal: authority?.signal,
+        },
       );
     },
     authority,
@@ -58,6 +62,7 @@ export function runWithOpenClawStateLeasesWorker<T>(
         {
           assertCurrent: admission.assertCurrent,
           createAdmission: admission.createAdmission,
+          signal: authority?.signal,
         },
       );
     },

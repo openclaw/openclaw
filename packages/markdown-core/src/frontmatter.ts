@@ -159,7 +159,7 @@ function parseYamlFrontmatterOnce(
       return failed([{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }]);
     }
 
-    const inlineColonKeys = new Set<string>();
+    const inlineColonValues = new Map<string, string>();
     for (const pair of doc.contents.items) {
       if (!isNode(pair.key)) {
         continue;
@@ -171,8 +171,18 @@ function parseYamlFrontmatterOnce(
       const lineEnd = block.indexOf("\n", start);
       const line = block.slice(start, lineEnd === -1 ? block.length : lineEnd);
       const match = line.match(/^([\w-]+):\s*(.*)$/);
-      if (match?.[1] && match[2]?.includes(":")) {
-        inlineColonKeys.add(match[1]);
+      const valueEnd = isNode(pair.value) ? pair.value.range?.[1] : undefined;
+      // The raw line is the authored value only when that line holds all of it.
+      // A flow that continues past the line was being replaced by its first line.
+      if (
+        match?.[1] &&
+        match[2]?.includes(":") &&
+        valueEnd !== undefined &&
+        (lineEnd === -1 || valueEnd <= lineEnd)
+      ) {
+        // Keep authored JSON spacing, but exclude YAML comments after the value.
+        const valueStart = start + line.length - match[2].length;
+        inlineColonValues.set(match[1], block.slice(valueStart, valueEnd).trim());
       }
     }
 
@@ -183,15 +193,16 @@ function parseYamlFrontmatterOnce(
       if (!coerced) {
         continue;
       }
-      const fallbackValue = Object.hasOwn(fallback, key) ? fallback[key] : undefined;
+      const inlineValue = inlineColonValues.get(key);
       result[key] =
-        coerced.kind === "structured" && inlineColonKeys.has(key) && fallbackValue !== undefined
-          ? fallbackValue
+        coerced.kind === "structured" && inlineValue !== undefined && Object.hasOwn(fallback, key)
+          ? inlineValue
           : coerced.value;
     }
 
     for (const [key, value] of Object.entries(fallback)) {
-      if (!Object.hasOwn(result, key)) {
+      // `key: # note` is a YAML comment; `key: #1 pick` is authored text the line parser rescues.
+      if (!Object.hasOwn(result, key) && !/^#(?:\s|$)/.test(value)) {
         result[key] = value;
       }
     }

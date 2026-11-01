@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 372878,
-  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
-  "updatedAt": "2026-10-02"
+  "startupJsGzipBytes": 90111,
+  "reason": "First-pane snapshot admission starts the scoped read and validation before application loading: 11 interleaved warm chat pairs improve first rows by a 96 ms paired median, with breadcrumb and archived footer present at first mount in all 11. Exact-base startup grows 794 B to 90111 B; complete Chat/New boot shrinks 279/200 B, with unchanged request counts and FCP/hello/LoAF within A/A. Record the measured earlier-load redistribution; keep existing growth and variance allowances.",
+  "updatedAt": "2026-10-31"
 }

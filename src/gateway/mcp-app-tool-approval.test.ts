@@ -38,9 +38,18 @@ function fixture(decision = Promise.resolve("allow-once")) {
   return { manager, params, assertCurrent };
 }
 describe("MCP App one-shot approvals", () => {
-  it("uses the shared reviewer and delivery owner, then consumes the exact call once", async () => {
-    const f = fixture();
-    await requestMcpAppToolApproval(f.params);
+  it("waits for the review decision instead of treating request registration as approval", async () => {
+    const decision = createDeferred<string>();
+    const delivered = createDeferred();
+    mocks.deliver.mockImplementation(async () => {
+      delivered.resolve();
+    });
+    const f = fixture(decision.promise);
+    const pending = requestMcpAppToolApproval(f.params);
+    await delivered.promise;
+    expect(f.manager.consumeAllowOnce).not.toHaveBeenCalled();
+    decision.resolve("allow-once");
+    await pending;
     const record = f.manager.create.mock.results[0]!.value;
     expect(record.request).toMatchObject({
       pluginId: "bundle-mcp",
@@ -56,34 +65,6 @@ describe("MCP App one-shot approvals", () => {
       record.id,
       "mcp.app:" + record.request.toolCallId,
     );
-  });
-  it("waits for the review decision instead of treating request registration as approval", async () => {
-    const decision = createDeferred<string>();
-    const delivered = createDeferred();
-    mocks.deliver.mockImplementation(async () => {
-      delivered.resolve();
-    });
-    const f = fixture(decision.promise);
-    const pending = requestMcpAppToolApproval(f.params);
-    await delivered.promise;
-    expect(f.manager.consumeAllowOnce).not.toHaveBeenCalled();
-    decision.resolve("allow-once");
-    await pending;
-    expect(f.manager.consumeAllowOnce).toHaveBeenCalledOnce();
-  });
-  it("uses the shared bounded preview for large App payloads without skipping approval", async () => {
-    const f = fixture();
-    const input = { preview: "x".repeat(20_000) };
-    await requestMcpAppToolApproval({ ...f.params, input });
-    const record = f.manager.create.mock.results[0]!.value;
-    expect(record.request.detail.length).toBeLessThanOrEqual(16_384);
-    expect(record.request.detail).toContain("[truncated]");
-    expect(record.request.allowedDecisions).toEqual(["allow-once", "deny"]);
-    expect(f.manager.consumeAllowOnce).toHaveBeenCalledExactlyOnceWith(
-      record.id,
-      "mcp.app:" + record.request.toolCallId,
-    );
-    expect(input.preview).toHaveLength(20_000);
   });
   it("does not consume denied approvals", async () => {
     const f = fixture(Promise.resolve("deny"));

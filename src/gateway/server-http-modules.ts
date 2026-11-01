@@ -34,9 +34,6 @@ export const getSessionKillHttpModule = createLazyRuntimeModule(
 export const getToolsInvokeHttpModule = createLazyRuntimeModule(
   () => import("./tools-invoke-http.js"),
 );
-export const getUserProfilesHttpModule = createLazyRuntimeModule(
-  () => import("./user-profiles-http.js"),
-);
 export const getDevicePairingJoinHttpModule = createLazyRuntimeModule(
   () => import("./device-pairing-join-http.js"),
 );
@@ -46,4 +43,8 @@ export const getPluginNodeCapabilityAuthModule = createLazyRuntimeModule(
 export const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
 export const getPluginRouteRuntimeScopesModule = createLazyRuntimeModule(
   () => import("./server/plugin-route-runtime-scopes.js"),
+);
+
+export const getNativeHookRelayModule = createLazyRuntimeModule(
+  () => import("./native-hook-relay-http.js"),
 );

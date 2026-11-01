@@ -16,6 +16,27 @@ struct GatewayManualTransportPresentation: Equatable {
 }
 
 extension GatewayConnectionController {
+    /// Rebuild connect options from current local settings (caps/commands/permissions)
+    /// and re-apply the active gateway config so capability changes take effect immediately.
+    @discardableResult
+    func refreshActiveGatewayRegistrationFromSettings() -> Task<Void, Never> {
+        Task { [weak self] in
+            guard let self, let appModel = self.appModel,
+                  let cfg = appModel.activeGatewayConnectConfig,
+                  appModel.gatewayAutoReconnectEnabled
+            else { return }
+            let generation = appModel.gatewayConnectGeneration
+            var refreshedConfig = cfg
+            refreshedConfig.nodeOptions = await self.makeConnectOptions(
+                deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
+                allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
+            guard !Task.isCancelled,
+                  !self.hasPendingForgetCleanup(stableID: cfg.stableID),
+                  cfg.ingressAuthorization?.isCurrent() != false else { return }
+            appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
+        }
+    }
+
     func buildGatewayURL(
         host: String,
         port: Int,
@@ -53,6 +74,19 @@ extension GatewayConnectionController {
             requiresTLS: requiresTLS,
             effectiveTLS: effectiveTLS,
             helperText: helperText)
+    }
+
+    /// Explains a Host value the connect path cannot turn into a gateway URL. It asks the same
+    /// endpoint builder as `connectManual`, so the forms block exactly the input that would fail.
+    static func manualHostValidationMessage(host: String) -> String? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty,
+              GatewayConnectEndpoint(host: trimmedHost, port: 1, tls: true).websocketURL == nil
+        else { return nil }
+        if trimmedHost.contains("://") {
+            return String(localized: "Enter the host without https:// or wss://.")
+        }
+        return String(localized: "Enter only a host name or IP address.")
     }
 
     func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {
@@ -178,10 +212,9 @@ extension GatewayConnectionController {
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
         let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
-        let locationServicesEnabled = await LocationService.servicesEnabled()
-        permissions["location"] = Self.isLocationAvailable(
-            servicesEnabled: locationServicesEnabled,
-            status: locationStatus)
+        permissions["location"] = await Self.isLocationAvailable(
+            status: locationStatus,
+            servicesEnabled: LocationService.servicesEnabled)
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
         permissions["photos"] = PhotoLibraryAccess.canRead(PhotoLibraryAccess.authorizationStatus())
@@ -201,13 +234,17 @@ extension GatewayConnectionController {
         return permissions
     }
 
-    private static func isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
-        guard servicesEnabled else { return false }
+    private static func isLocationAvailable(
+        status: CLAuthorizationStatus,
+        servicesEnabled: @MainActor () async -> Bool) async -> Bool
+    {
+        // An unauthorized app cannot use location regardless of the global switch;
+        // registration need not wait for that system probe to report false.
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            return true
+            await servicesEnabled()
         default:
-            return false
+            false
         }
     }
 
@@ -238,8 +275,11 @@ extension GatewayConnectionController {
         self.hasEventKitReadAccess(status)
     }
 
-    static func _test_isLocationAvailable(servicesEnabled: Bool, status: CLAuthorizationStatus) -> Bool {
-        self.isLocationAvailable(servicesEnabled: servicesEnabled, status: status)
+    static func _test_isLocationAvailable(
+        status: CLAuthorizationStatus,
+        servicesEnabled: @MainActor () async -> Bool) async -> Bool
+    {
+        await self.isLocationAvailable(status: status, servicesEnabled: servicesEnabled)
     }
 
     func _test_resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {

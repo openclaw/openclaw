@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { assertSupportedExecParams } from "./bash-tools.exec-request-preparation.js";
+import { resolveExecHost, resolveExecTarget } from "./bash-tools.exec-target.js";
+import { createExecTool } from "./bash-tools.js";
+import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
+import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 describe("resolveExecTarget", () => {
@@ -46,7 +50,6 @@ describe("resolveExecTarget", () => {
   });
 
   it.each([
-    ["auto", undefined, true, false, "auto", "sandbox"],
     ["auto", undefined, false, false, "auto", "gateway"],
     ["auto", "node", false, true, "node", "node"],
     ["node", "node", true, false, "node", "node"],
@@ -105,7 +108,7 @@ describe("resolveExecTarget", () => {
   });
 
   describe("required session sandbox", () => {
-    it.each(["gateway", "node"] as const)(
+    it.each(["node"] as const)(
       "rejects explicit host=%s even when configured host matches",
       (host) => {
         expect(() =>
@@ -154,4 +157,95 @@ describe("resolveExecTarget", () => {
       ).toThrow(/sandbox|required|unavailable/i);
     });
   });
+});
+
+describe("removed exec timeout field", () => {
+  it("rejects a stale timeout argument before command execution", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("legacy-timeout", {
+        command: "exit 99",
+        timeout: 5,
+      } as never),
+    ).rejects.toThrow('exec parameter "timeout" is unsupported; use "timeoutSeconds" instead');
+  });
+});
+
+describe("durable exec admission", () => {
+  it.each([
+    [{ durable: "true", background: true }, "durable must be a boolean"],
+    [{ durable: true }, "requires background=true or yieldMs"],
+    [{ durable: true, yieldMs: Number.NaN }, "requires background=true or yieldMs"],
+    [{ durable: true, yieldMs: 100, awaitResults: true }, "cannot use awaitResults"],
+    [{ durable: true, background: true, pty: true }, "does not support interactive input or PTY"],
+  ] as const)("refuses unsupported request %j before launch", (args, message) => {
+    expect(() => assertSupportedExecParams({ command: ":", ...args })).toThrow(message);
+  });
+
+  it.each([
+    { host: "node" as const },
+    { host: "gateway" as const, allowBackground: false },
+    {
+      sandbox: {
+        containerName: "test-durable-sandbox",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+      },
+    },
+  ])("refuses unavailable durable execution on %j", async (defaults) => {
+    const tool = createExecTool({ ...defaults, mode: "full" });
+    await expect(
+      tool.execute("durable-host", { command: ":", durable: true, background: true }),
+    ).rejects.toThrow("Durable exec requires Gateway-host background execution");
+  });
+
+  it("refuses durable execution before a node-pinned surface can discard it", async () => {
+    const tool = pinExecToolTarget(createExecTool({ mode: "full" }), { host: "node" });
+    await expect(async () =>
+      tool.execute("durable-node", { command: ":", durable: true, background: true }),
+    ).rejects.toThrow("Durable exec requires Gateway-host background execution");
+  });
+});
+
+describe("named node host policy", () => {
+  const sandbox = {
+    containerName: "test-sandbox",
+    workspaceDir: "/workspace",
+    containerWorkdir: "/workspace",
+  };
+
+  it.each([
+    { host: "gateway" as const },
+    { sandbox },
+    { host: "node" as const, sandbox, sandboxRequired: true },
+  ])("keeps node-only calls within configured policy %j", (defaults) => {
+    expect(() => resolveExecHost({ node: "node-1" }, defaults)).toThrow(
+      /exec host not allowed.*node/,
+    );
+  });
+});
+
+describe("foreground node exec wait budgets", () => {
+  it.each([
+    { timeoutSec: undefined, timeoutSeconds: undefined, expectedMs: 1_810_000 },
+    { timeoutSec: 120, timeoutSeconds: 0, expectedMs: 130_000 },
+  ])(
+    "keeps prepared and pinned budgets for $timeoutSec/$timeoutSeconds seconds",
+    ({ timeoutSec, timeoutSeconds, expectedMs }) => {
+      for (const createTool of [createExecTool, createLazyExecTool]) {
+        const tool = createTool({ host: "node", timeoutSec });
+        const args = { command: "echo ready", timeoutSeconds };
+        expect(tool.getExecutionTimeoutMs?.(args)).toBe(expectedMs);
+        const defaultTool = createTool({ timeoutSec });
+        expect(defaultTool.getExecutionTimeoutMs?.({ ...args, node: "node-1" })).toBe(expectedMs);
+
+        const nodeTool = pinExecToolTarget(tool, { host: "node" });
+        expect(nodeTool.getExecutionTimeoutMs?.({ ...args, host: "gateway" })).toBe(expectedMs);
+
+        const gatewayTool = pinExecToolTarget(tool, { host: "gateway" });
+        expect(gatewayTool.getExecutionTimeoutMs?.(args)).toBeUndefined();
+      }
+    },
+  );
 });

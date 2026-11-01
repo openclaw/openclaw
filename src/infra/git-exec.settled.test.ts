@@ -3,10 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
+import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../agents/worktrees/git.js";
 import { removeManagedCheckout } from "../agents/worktrees/removal-git.js";
 import * as commandExec from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { GIT_TIMEOUT_MS } from "./git-exec.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -14,10 +14,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("joins an admitted destructive child beyond the ordinary Git deadline", async () => {
+it("joins admitted recovery despite caller cancellation and the checkout removal deadline", async () => {
   const directory = dirs.make("openclaw-settled-git-");
   const release = path.join(directory, "release");
   const ready = createDeferredCore();
+  const controller = new AbortController();
   const run = commandExec.runCommandWithTimeout;
   vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (_argv, options) =>
     run(
@@ -59,6 +60,9 @@ it("joins an admitted destructive child beyond the ordinary Git deadline", async
       },
       git,
       true,
+      "recovery",
+      undefined,
+      controller.signal,
     ),
   );
   try {
@@ -68,7 +72,8 @@ it("joins an admitted destructive child beyond the ordinary Git deadline", async
         throw new Error("child exited before admission");
       }),
     ]);
-    await vi.advanceTimersByTimeAsync(GIT_TIMEOUT_MS + 1_000);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(WORKTREE_CHECKOUT_TIMEOUT_MS + 1_000);
     await fs.writeFile(release, "settle");
     await expect(removal).resolves.toBeUndefined();
   } finally {

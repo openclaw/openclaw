@@ -1,0 +1,778 @@
+import { flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
+import type { JsonSchema } from "../../components/config-form.shared.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
+import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { emptyPairingSnapshot } from "./pairing.test-support.ts";
+import { ChannelConfig } from "./view.config.tsx";
+import { renderChannelDetail } from "./view.detail.tsx";
+import { resolveChannelDisplayState } from "./view.shared.tsx";
+import {
+  renderChannelView,
+  disposeChannelViews,
+  createChannelsViewProps,
+} from "./view.test-support.ts";
+import { ChannelsView } from "./view.tsx";
+import type { ChannelsProps } from "./view.types.ts";
+
+function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
+  return createChannelsViewProps(snapshot, emptyPairingSnapshot());
+}
+
+function channelSnapshot(
+  channels: ChannelsStatusSnapshot["channels"],
+  overrides: Partial<ChannelsStatusSnapshot> = {},
+): ChannelsStatusSnapshot {
+  return {
+    ts: 1,
+    channelOrder: Object.keys(channels),
+    channelLabels: Object.fromEntries(Object.keys(channels).map((id) => [id, id])),
+    channels,
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+    ...overrides,
+  };
+}
+
+function renderHub(props: ChannelsProps) {
+  const container = document.createElement("div");
+  renderChannelView(ChannelsView, props, container);
+  return container;
+}
+
+function channelProps(
+  channels: ChannelsStatusSnapshot["channels"],
+  overrides: Partial<ChannelsStatusSnapshot> = {},
+) {
+  return createProps(channelSnapshot(channels, overrides));
+}
+
+const text = (root: ParentNode, selector: string) =>
+  root.querySelector(selector)?.textContent?.trim();
+const texts = (root: ParentNode, selector: string) =>
+  Array.from(root.querySelectorAll(selector), (node) => node.textContent?.trim());
+const facts = (root: ParentNode) =>
+  Array.from(root.querySelectorAll("dt"), (node) => [
+    node.textContent?.trim(),
+    node.nextElementSibling?.textContent?.trim(),
+  ]);
+const heading = ".settings-section__heading";
+const probeButton = ".settings-row--actions button";
+const whatsappStatus = {
+  configured: true,
+  linked: false,
+  running: false,
+  connected: false,
+  reconnectAttempts: 0,
+};
+
+describe("channel hub refresh actions", () => {
+  it("keeps both timestamps in icon-button tooltips", () => {
+    const onRefresh = vi.fn();
+    const onPairingRefresh = vi.fn();
+    const props = channelProps({ slack: { configured: true } });
+    props.channels.channelsLastSuccess = Date.now();
+    props.channels.pairingLastSuccess = Date.now();
+    props.onRefresh = onRefresh;
+    props.onPairingRefresh = onPairingRefresh;
+    const container = renderHub(props);
+
+    const refreshButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button[aria-label="Refresh"]'),
+    );
+    expect(refreshButtons).toHaveLength(2);
+    expect(refreshButtons.map((button) => button.textContent?.trim())).toEqual(["", ""]);
+    expect(container.textContent).not.toContain("Updated just now");
+    expect(
+      refreshButtons.map(
+        (button) =>
+          (button.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+            ?.content,
+      ),
+    ).toEqual(["Updated just now", "Updated just now"]);
+
+    refreshButtons[0]!.click();
+    refreshButtons[1]!.click();
+    expect(onPairingRefresh).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledWith(true);
+  });
+
+  it("announces a channel status failure as an alert", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: [],
+      channelLabels: {},
+      channels: {},
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    props.channels.channelsError = "Channel status unavailable";
+    const container = document.createElement("div");
+
+    renderChannelView(ChannelsView, props, container);
+
+    expect(
+      Array.from(container.querySelectorAll('[role="alert"]'), (alert) => alert.textContent),
+    ).toEqual(["Channel status unavailable"]);
+  });
+});
+
+const channelPlugin: PluginCatalogItem = {
+  id: "slack",
+  name: "Slack",
+  description: "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
+  origin: "bundled",
+  installed: true,
+  enabled: false,
+  state: "disabled",
+  hasIcon: true,
+};
+
+describe("channels plugin presentation metadata", () => {
+  it("uses matching plugins.list metadata and package icons or placeholders throughout setup", () => {
+    const props = channelProps(
+      { slack: { configured: false } },
+      {
+        channelDetailLabels: { slack: "Legacy channel subtitle" },
+      },
+    );
+    Object.assign(props.presentation, {
+      pluginCatalog: { plugins: [channelPlugin], diagnostics: [], mutationAllowed: true },
+      pluginIconUrls: { slack: "blob:slack-plugin-icon" },
+    });
+    props.selectedChannel = "slack";
+    props.wizardHost.state = () => ({ phase: "error", channel: "slack", message: "Setup failed" });
+    const container = renderHub(props);
+
+    const row = container.querySelector(".channels-item");
+    expect(row?.querySelector(".settings-row__title")?.textContent).toBe("Slack");
+    expect(row?.querySelector(".settings-row__desc")?.textContent).toBe(
+      "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
+    );
+    expect(row?.querySelector("img")?.getAttribute("src")).toBe("blob:slack-plugin-icon");
+    const detailIcon = container.querySelector(
+      ".channels-detail__header .channels-cover--icon img",
+    );
+    expect(detailIcon?.getAttribute("src")).toBe("blob:slack-plugin-icon");
+    expect(container.querySelector(".channels-wizard h2")?.textContent).toBe("Set up Slack");
+    expect(container.querySelector(".channels-wizard img")?.getAttribute("src")).toBe(
+      "blob:slack-plugin-icon",
+    );
+    expect(container.textContent).not.toContain("Legacy channel subtitle");
+    const selectors = [".channels-item", ".channels-detail__header", ".channels-wizard"];
+    const originalIcons = selectors.map((selector) => container.querySelector(`${selector} img`)!);
+    for (const [index, selector] of selectors.entries()) {
+      const icon = originalIcons[index]!;
+      icon.dispatchEvent(new Event("error"));
+      flush();
+      expect(container.querySelector(`${selector} img`)).toBeNull();
+      expect(
+        container.querySelector(
+          `${selector} .channels-tile--fallback, ${selector} .channels-cover--fallback`,
+        )?.textContent,
+      ).toContain("SL");
+    }
+    renderChannelView(ChannelsView, props, container);
+    for (const selector of selectors) {
+      expect(container.querySelector(`${selector} img`)).toBeNull();
+    }
+    Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:replacement-slack-icon" } });
+    renderChannelView(ChannelsView, props, container);
+    for (const [index, selector] of selectors.entries()) {
+      const replacement = container.querySelector(`${selector} img`)!;
+      expect(replacement.getAttribute("src")).toBe("blob:replacement-slack-icon");
+      originalIcons[index]!.dispatchEvent(new Event("error"));
+      flush();
+      expect(container.querySelector(`${selector} img`)).toBe(replacement);
+    }
+    Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:slack-plugin-icon" } });
+    renderChannelView(ChannelsView, props, container);
+    for (const selector of selectors) {
+      expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(
+        "blob:slack-plugin-icon",
+      );
+    }
+    Object.assign(props.presentation, {
+      pluginIconUrls: {},
+      pluginCatalog: {
+        ...props.presentation.pluginCatalog,
+        plugins: [{ ...channelPlugin, hasIcon: false }],
+      },
+    });
+    renderChannelView(ChannelsView, props, container);
+    expect(container.querySelector(".channels-item img")).toBeNull();
+  });
+});
+
+describe("channels setup access", () => {
+  it("keeps unconfigured recommended channels available after one channel is configured", () => {
+    const props = channelProps(
+      { slack: { configured: true } },
+      {
+        channelLabels: { slack: "Slack" },
+        channelMeta: [{ id: "slack", label: "Slack", detailLabel: "Slack Bot" }],
+      },
+    );
+    const container = renderHub(props);
+
+    const availableLabels = texts(container, ".channels-item__detail .settings-row__title");
+    expect(availableLabels).toEqual([
+      "whatsapp",
+      "telegram",
+      "discord",
+      "googlechat",
+      "signal",
+      "imessage",
+      "nostr",
+    ]);
+  });
+
+  it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
+    const onStartSetup = vi.fn();
+    const props = channelProps({ telegram: { configured: false } });
+    props.canAdmin = false;
+    props.onStartSetup = onStartSetup;
+    const container = renderHub(props);
+
+    expect(container.textContent).toContain(
+      "Browsing only. Channel setup requires operator.admin access.",
+    );
+    expect(texts(container, "button")).not.toContain("Set up");
+    expect(container.textContent).not.toContain("More channels…");
+    expect(onStartSetup).not.toHaveBeenCalled();
+  });
+});
+
+describe("channel row actions", () => {
+  it.each([
+    { list: "connected", action: "details", update: "reorder" },
+    { list: "available", action: "details", update: "reorder" },
+    { list: "available", action: "setup", update: "reorder" },
+    { list: "available", action: "details", update: "connect" },
+    { list: "available", action: "setup", update: "connect" },
+  ])(
+    "keeps $list $action clicks on their channel after a status $update",
+    ({ list, action, update }) => {
+      const configured = list === "connected";
+      const snapshot = channelSnapshot(
+        { whatsapp: { configured }, telegram: { configured } },
+        {
+          channelLabels: { whatsapp: "WhatsApp", telegram: "Telegram" },
+        },
+      );
+      const props = createProps(snapshot);
+      const onAction = vi.fn();
+      if (action === "setup") {
+        props.onStartSetup = onAction;
+      } else {
+        props.onShowDetail = onAction;
+      }
+      const container = renderHub(props);
+      const row = Array.from(container.querySelectorAll<HTMLElement>(".channels-item")).find(
+        (element) => element.querySelector(".settings-row__title")?.textContent === "Telegram",
+      )!;
+      const button = row.matches("button")
+        ? (row as HTMLButtonElement)
+        : row.querySelector<HTMLButtonElement>(
+            action === "setup" ? ".btn" : ".channels-item__detail",
+          )!;
+
+      props.channels.channelsSnapshot = {
+        ...snapshot,
+        ts: 2,
+        ...(update === "connect"
+          ? { channels: { ...snapshot.channels, whatsapp: { configured: true } } }
+          : { channelOrder: ["telegram", "whatsapp"] }),
+      };
+      renderChannelView(ChannelsView, props, container);
+      expect(container.contains(button)).toBe(true);
+      button.click();
+
+      expect(onAction).toHaveBeenCalledExactlyOnceWith("telegram");
+    },
+  );
+});
+
+describe("channel status issues", () => {
+  function createRunningSnapshot(): ChannelsStatusSnapshot {
+    return channelSnapshot(
+      {
+        discord: { configured: true, running: true, connected: true, lastError: null },
+        slack: { configured: true, running: true },
+      },
+      {
+        channelLabels: { discord: "Discord", slack: "Slack" },
+        channelAccounts: {
+          discord: [
+            { accountId: "default", configured: true, running: true, lastError: null },
+            { accountId: "community", configured: true, running: true, lastError: null },
+          ],
+        },
+        channelDefaultAccountId: { discord: "default" },
+      },
+    );
+  }
+
+  function findChannelRow(container: HTMLElement, label: string) {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>("button.channels-item")).find(
+      (row) => row.querySelector(".settings-row__title")?.textContent === label,
+    )!;
+  }
+
+  it("shows account policy and pending reload issues without hiding a running transport", () => {
+    const snapshot = createRunningSnapshot();
+    snapshot.statusIssues = [
+      {
+        channel: "discord",
+        accountId: "community",
+        kind: "config",
+        message: "Guild messages are blocked because the guild allowlist is empty.",
+        fix: "Add the intended guild to the allowlist.",
+      },
+      {
+        channel: "discord",
+        accountId: "community",
+        kind: "runtime",
+        message: "Channel restart is pending while active work drains.",
+        fix: "Wait for active work to finish, then refresh status.",
+      },
+    ];
+    const props = createProps(snapshot);
+    const container = document.createElement("div");
+    props.onShowDetail = (channel) => {
+      props.selectedChannel = channel;
+      renderChannelView(ChannelsView, props, container);
+    };
+
+    renderChannelView(ChannelsView, props, container);
+
+    const discord = findChannelRow(container, "Discord");
+    expect(text(discord, ".settings-status")).toBe("Needs attention");
+    expect(discord.querySelector(".settings-row__desc")?.textContent).toBe(
+      snapshot.statusIssues[0]!.message,
+    );
+    expect(text(findChannelRow(container, "Slack"), ".settings-status")).toBe("Running");
+    expect(container.textContent).not.toContain("Some channel checks did not finish");
+
+    discord.click();
+
+    const detail = container.querySelector(".channels-detail")!;
+    const notices = detail.querySelectorAll('[role="note"]');
+    expect(notices).toHaveLength(2);
+    snapshot.statusIssues.forEach((issue, index) => {
+      expect(notices[index]!.textContent).toContain("Needs attention · community");
+      expect(notices[index]!.textContent).toContain(issue.message);
+      expect(notices[index]!.textContent).toContain(issue.fix);
+    });
+    expect(facts(detail)).toContainEqual(["Running", "Yes"]);
+
+    props.channels.channelsSnapshot = { ...snapshot, ts: 2, statusIssues: [] };
+    renderChannelView(ChannelsView, props, container);
+
+    expect(text(findChannelRow(container, "Discord"), ".settings-status")).toBe("Running");
+    expect(container.querySelectorAll('.channels-detail [role="note"]')).toHaveLength(0);
+    expect(container.textContent).not.toContain(snapshot.statusIssues[0]!.message);
+  });
+
+  it("escapes and redacts plugin issue text in the row and recovery notice", () => {
+    const snapshot = createRunningSnapshot();
+    snapshot.statusIssues = [
+      {
+        channel: "discord",
+        accountId: "<b>community</b>",
+        kind: "config",
+        message: 'Policy blocks <img src="x" onerror="alert(1)"> with Bearer abcdefghijkl',
+        fix: "Check <script>alert(1)</script> with Bearer mnopqrstuvwxyz",
+      },
+    ];
+    const props = createProps(snapshot);
+    props.selectedChannel = "discord";
+    const container = renderHub(props);
+
+    const row = findChannelRow(container, "Discord");
+    const notice = container.querySelector('.channels-detail [role="note"]')!;
+    expect(row.textContent).toContain('<img src="x" onerror="alert(1)"> with Bearer [redacted]');
+    expect(notice.textContent).toContain("<b>community</b>");
+    expect(notice.textContent).toContain("<script>alert(1)</script> with Bearer [redacted]");
+    expect(container.textContent).not.toContain("abcdefghijkl");
+    expect(container.textContent).not.toContain("mnopqrstuvwxyz");
+    expect(row.querySelector(".settings-row__desc img")).toBeNull();
+    expect(notice.querySelector("b, img, script")).toBeNull();
+  });
+
+  it("keeps transport failures and partial probe diagnostics distinct from policy issues", () => {
+    const snapshot = createRunningSnapshot();
+    snapshot.channels.discord = { configured: true, running: true, lastError: "Connection closed" };
+    snapshot.partial = true;
+    snapshot.warnings = ["Slack probe timed out."];
+    const props = createProps(snapshot);
+    props.selectedChannel = "discord";
+    const container = renderHub(props);
+
+    expect(text(findChannelRow(container, "Discord"), ".settings-status")).toBe("Needs attention");
+    expect(text(findChannelRow(container, "Slack"), ".settings-status")).toBe("Running");
+    expect(container.textContent).toContain("Connection closed");
+    expect(container.textContent).toContain("Slack probe timed out.");
+    expect(container.querySelectorAll('.channels-detail [role="note"]')).toHaveLength(0);
+  });
+});
+
+function renderChannelDetailFixture(
+  channelId: string,
+  channels: ChannelsStatusSnapshot["channels"],
+  options: {
+    label?: string;
+    loading?: boolean;
+    configError?: string;
+    onRefresh?: ChannelsProps["onRefresh"];
+    accounts?: ChannelsStatusSnapshot["channelAccounts"][string];
+  } = {},
+) {
+  const props = channelProps(channels, {
+    channelLabels: { [channelId]: options.label ?? channelId },
+    channelAccounts: { [channelId]: options.accounts ?? [] },
+  });
+  props.channels.channelsLoading = options.loading ?? false;
+  props.config.lastError = options.configError ?? null;
+  if (options.onRefresh) {
+    props.onRefresh = options.onRefresh;
+  }
+  const container = document.createElement("div");
+  renderChannelView(
+    renderChannelDetail,
+    {
+      channelId,
+      label: options.label ?? channelId,
+      props,
+      onClose: () => {},
+      onSetup: () => {},
+    },
+    container,
+  );
+  return container;
+}
+
+const objectSchema = (properties: Record<string, JsonSchema>): JsonSchema => ({
+  type: "object",
+  properties,
+});
+const CHANNEL_TIER_SCHEMA = objectSchema({
+  channels: objectSchema({
+    whatsapp: objectSchema({
+      enabled: { type: "boolean" },
+      timeoutMs: { type: "integer" },
+      retry: objectSchema({ attempts: { type: "integer" } }),
+    }),
+  }),
+});
+
+const CHANNEL_TIER_HINTS = {
+  "channels.whatsapp.enabled": { advanced: false },
+  "channels.whatsapp.timeoutMs": { advanced: true },
+  "channels.whatsapp.retry": { advanced: true },
+  "channels.whatsapp.retry.attempts": { advanced: true },
+};
+
+function renderWhatsAppConfigForm(
+  showAdvancedSettings: boolean,
+  hints: Record<string, { advanced: boolean }> = CHANNEL_TIER_HINTS,
+) {
+  const props = channelProps({ whatsapp: whatsappStatus });
+  const onShowAdvancedSettings = vi.fn();
+  props.config.configSchema = CHANNEL_TIER_SCHEMA;
+  props.config.configUiHints = hints;
+  props.config.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
+  props.showAdvancedSettings = showAdvancedSettings;
+  props.onShowAdvancedSettings = onShowAdvancedSettings;
+
+  const container = document.createElement("div");
+  renderChannelView(
+    (viewProps: ChannelsProps) => <ChannelConfig channelId="whatsapp" props={viewProps} />,
+    props,
+    container,
+  );
+  return { container, onShowAdvancedSettings };
+}
+
+describe("channel config advanced tier", () => {
+  it("hides advanced channel settings behind the disclosure by default", () => {
+    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
+
+    expect(container.textContent).toContain("Enabled");
+    expect(container.textContent).not.toContain("Timeout Ms");
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.querySelector("summary")?.textContent?.trim()).toBe("Advanced settings");
+    disclosure!.open = true;
+    disclosure!.dispatchEvent(new Event("toggle"));
+    expect(onShowAdvancedSettings).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps the collapse control for channels whose settings are all advanced", () => {
+    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true, {
+      ...CHANNEL_TIER_HINTS,
+      "channels.whatsapp.enabled": { advanced: true },
+    });
+
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-disclosure",
+    );
+    expect(disclosure?.open).toBe(true);
+    disclosure!.open = false;
+    disclosure!.dispatchEvent(new Event("toggle"));
+    expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
+  });
+
+  it("renders field help from the resolved hints", () => {
+    const { container } = renderWhatsAppConfigForm(false, {
+      ...CHANNEL_TIER_HINTS,
+      "channels.whatsapp.enabled": { advanced: false, help: "Turn this channel on or off." },
+    } as typeof CHANNEL_TIER_HINTS);
+
+    expect(texts(container, ".settings-row__desc")).toContain("Turn this channel on or off.");
+  });
+});
+
+const CHANNEL_DETAIL_CASES = [
+  ["discord", "Discord", []],
+  [
+    "googlechat",
+    "Google Chat",
+    [
+      ["Credential", "service-account"],
+      ["Audience", "url · https://chat.example"],
+    ],
+  ],
+  ["imessage", "iMessage", []],
+  ["signal", "Signal", [["Base URL", "https://signal.example"]]],
+  ["slack", "Slack", []],
+  ["telegram", "Telegram", [["Mode", "polling"]]],
+] satisfies Array<[string, string, Array<[string, string]>]>;
+
+describe("channel detail", () => {
+  it.each(["whatsapp", "nostr"] as const)(
+    "shows an escaped configuration save error inside the %s editor",
+    (channelId) => {
+      const message = 'Gateway rejected <img src="x" onerror="alert(1)">';
+      const container = renderChannelDetailFixture(
+        channelId,
+        { [channelId]: channelId === "whatsapp" ? whatsappStatus : null },
+        {
+          configError: message,
+        },
+      );
+      const alert = container.querySelector(".channels-detail [role=alert]");
+
+      expect(alert?.textContent).toBe(message);
+      expect(alert?.querySelector("img")).toBeNull();
+    },
+  );
+
+  it.each(CHANNEL_DETAIL_CASES)(
+    "preserves localized status facts and probe actions for %s",
+    (channelId, title, extraFacts) => {
+      const onRefresh = vi.fn();
+      const status = {
+        configured: true,
+        running: true,
+        baseUrl: "https://signal.example",
+        credentialSource: "service-account",
+        audienceType: "url",
+        audience: "https://chat.example",
+        mode: "polling",
+      };
+      const container = renderChannelDetailFixture(
+        channelId,
+        { [channelId]: status },
+        { onRefresh },
+      );
+      expect(text(container, heading)).toBe(title);
+      expect(facts(container)).toEqual([
+        ["Configured", "Yes"],
+        ["Running", "Yes"],
+        ...extraFacts,
+        ["Last start", "n/a"],
+        ["Last connection check", "n/a"],
+      ]);
+      container.querySelector<HTMLButtonElement>(probeButton)!.click();
+      expect(onRefresh).toHaveBeenCalledWith(true);
+    },
+  );
+
+  it.each(CHANNEL_DETAIL_CASES)(
+    "keeps the cold recommended %s detail available",
+    (channelId, title) => {
+      const props = createProps(null);
+      props.selectedChannel = channelId;
+      const container = renderHub(props);
+      const detail = container.querySelector(".channels-detail")!;
+
+      expect(text(detail, heading)).toBe(title);
+      expect(text(detail, probeButton)).toBe("Check connection");
+      expect(texts(detail, "dt")).toContain("Last connection check");
+      expect(detail.textContent).not.toContain("Channel status and configuration.");
+    },
+  );
+
+  it.each(CHANNEL_DETAIL_CASES)(
+    "projects an in-flight %s read onto its Probe action",
+    (channelId) => {
+      const onRefresh = vi.fn();
+      const container = renderChannelDetailFixture(
+        channelId,
+        { [channelId]: { configured: true, running: true } },
+        { loading: true, onRefresh },
+      );
+      const probe = container.querySelector<HTMLButtonElement>(probeButton);
+
+      expect(probe?.disabled).toBe(true);
+      expect(probe?.getAttribute("aria-busy")).toBe("true");
+      expect(probe?.textContent?.trim()).toBe("Refreshing…");
+      probe?.click();
+      expect(onRefresh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps missing Google Chat status unknown while other known channels are stopped", () => {
+    const google = renderChannelDetailFixture("googlechat", { googlechat: null });
+    const googlePresent = renderChannelDetailFixture("googlechat", { googlechat: {} });
+    const discord = renderChannelDetailFixture("discord", { discord: null });
+    expect(facts(google)).toContainEqual(["Running", "n/a"]);
+    expect(facts(googlePresent)).toContainEqual(["Running", "No"]);
+    expect(facts(discord)).toContainEqual(["Running", "No"]);
+  });
+
+  it.each([0, 1, 2])("shows Telegram account rows only above its %i-account threshold", (count) => {
+    const accounts = [
+      {
+        accountId: "first",
+        name: "First",
+        configured: true,
+        running: false,
+        probe: { bot: { username: "first_bot" } },
+      },
+      { accountId: "second", name: "Second", configured: false, running: true },
+    ].slice(0, count);
+    const container = renderChannelDetailFixture(
+      "telegram",
+      { telegram: { running: true } },
+      { accounts },
+    );
+    if (count < 2) {
+      expect(container.querySelector("dl")?.textContent).toContain("RunningYes");
+      expect(container.textContent).not.toContain("@first_bot");
+    } else {
+      expect(container.querySelector("dl")).toBeNull();
+      const rows = Array.from(container.querySelectorAll(".settings-row")).filter((row) =>
+        row.querySelector(".settings-row__title"),
+      );
+      expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
+        "@first_bot",
+        "Second",
+      ]);
+      expect(rows.map((row) => row.querySelector(".settings-row__desc")?.textContent)).toEqual([
+        "first · Configured: Yes",
+        "second · Configured: No",
+      ]);
+      expect(rows.map((row) => text(row, ".settings-status"))).toEqual(["No", "Running"]);
+    }
+  });
+
+  it("keeps the bundled display policy for a same-ID custom channel status", () => {
+    const container = renderChannelDetailFixture(
+      "signal",
+      {
+        signal: {
+          configured: true,
+          baseUrl: "https://custom.example",
+          lastError: "Custom failure",
+          probe: { ok: false, error: "Probe failure" },
+          lastStartAt: Date.now(),
+          lastProbeAt: Date.now(),
+        },
+      },
+      { label: "Custom Signal" },
+    );
+    expect(text(container, heading)).toBe("Signal");
+    expect(container.textContent).toContain("https://custom.example");
+    expect(container.textContent).toContain("Custom failure");
+    expect(container.textContent).toContain("Probe failure");
+    expect(container.textContent).toContain("just now");
+  });
+
+  it("updates the same mounted detail when the locale changes", async () => {
+    try {
+      await i18n.setLocale("en");
+      const container = renderChannelDetailFixture("signal", { signal: {} });
+      const english = "signal-cli status and channel configuration.";
+      expect(container.textContent).toContain(english);
+      await i18n.setLocale("fr");
+      flush();
+      expect(container.textContent).toContain(i18n.t("channels.signal.subtitle"));
+      expect(container.textContent).not.toContain(english);
+      await i18n.setLocale("en");
+      flush();
+      expect(container.textContent).toContain(english);
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
+  it.each(["__proto__"])(
+    "opens accountless plugin %s from its actual hub row without inherited account values",
+    (channelId) => {
+      for (const configured of [false, true]) {
+        const props = channelProps(
+          { [channelId]: { configured, running: configured } },
+          {
+            channelLabels: { [channelId]: "Custom channel" },
+          },
+        );
+        const container = document.createElement("div");
+        props.onShowDetail = (selected) => {
+          props.selectedChannel = selected;
+          renderChannelView(ChannelsView, props, container);
+        };
+        renderChannelView(ChannelsView, props, container);
+        const trigger = container.querySelector<HTMLButtonElement>(
+          configured ? "button.channels-item" : ".channels-item__detail",
+        );
+
+        expect(trigger).toBeInstanceOf(HTMLButtonElement);
+        trigger!.click();
+        const detail = container.querySelector(".channels-detail");
+        expect(text(detail!, heading)).toBe("Custom channel");
+        expect(detail?.textContent).toContain("Channel status and configuration.");
+        expect(texts(detail!, "dt")).toEqual(["Configured", "Running", "Connected"]);
+      }
+    },
+  );
+});
+
+describe("channel display selectors", () => {
+  it("keeps disabled channels hidden when neither summary nor accounts are active", () => {
+    const props = channelProps(
+      { quietchat: {} },
+      {
+        channelLabels: { quietchat: "Quiet Chat" },
+        channelAccounts: {
+          quietchat: [
+            { accountId: "default", configured: false, running: false, connected: false },
+          ],
+        },
+        channelDefaultAccountId: { quietchat: "default" },
+      },
+    );
+
+    const displayState = resolveChannelDisplayState("quietchat", props);
+
+    expect(displayState).toMatchObject({ configured: false, running: null, connected: null });
+    expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "quietchat")).toBe(false);
+  });
+});
+
+afterEach(disposeChannelViews);

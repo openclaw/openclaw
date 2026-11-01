@@ -1,15 +1,14 @@
-// Tests package install directory detection and validation.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { expectedNpmCommand } from "../test-utils/npm-command.js";
-import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
   copyPackageDirInstallTransactionRequest,
   installPackageDir,
@@ -20,70 +19,23 @@ import {
   createExistingInstallFixture,
   listMatchingDirs,
   normalizeComparablePath,
+  updateOptions,
 } from "./install-package-dir.test-support.js";
+
+const npmSuccess: SpawnResult = createCommandResult();
 
 vi.mock("../process/exec.js", async () => {
   const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-  return {
-    ...actual,
-    runCommandWithTimeout: vi.fn(actual.runCommandWithTimeout),
-  };
+  return { ...actual, runCommandWithTimeout: vi.fn(actual.runCommandWithTimeout) };
 });
 
 async function listMatchingEntries(root: string, prefix: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
-  const names: string[] = [];
-  for (const entry of entries) {
-    if (entry.name.startsWith(prefix)) {
-      names.push(entry.name);
-    }
-  }
-  return names;
+  return entries.filter((entry) => entry.name.startsWith(prefix)).map((entry) => entry.name);
 }
 
 async function expectMissingPath(filePath: string): Promise<void> {
-  try {
-    await fs.stat(filePath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`Expected missing path: ${filePath}`);
-}
-
-function expectRunCommandCallForArgv(
-  expectedArgv: string[],
-  predicate?: (options: CommandOptions) => boolean,
-): CommandOptions {
-  const calls = vi.mocked(runCommandWithTimeout).mock.calls as [
-    string[],
-    number | CommandOptions,
-  ][];
-  for (const [argv, optionsOrTimeout] of calls.toReversed()) {
-    if (
-      JSON.stringify(argv) !== JSON.stringify(expectedArgv) ||
-      typeof optionsOrTimeout === "number"
-    ) {
-      continue;
-    }
-    if (!predicate || predicate(optionsOrTimeout)) {
-      return optionsOrTimeout;
-    }
-  }
-  throw new Error(`Expected runCommandWithTimeout call: ${expectedArgv.join(" ")}`);
-}
-
-async function rebindInstallBasePath(params: {
-  installBaseDir: string;
-  preservedDir: string;
-  outsideTarget: string;
-}): Promise<void> {
-  await fs.rename(params.installBaseDir, params.preservedDir);
-  await fs.symlink(
-    params.outsideTarget,
-    params.installBaseDir,
-    process.platform === "win32" ? "junction" : undefined,
-  );
+  await expect(fs.stat(filePath)).rejects.toHaveProperty("code", "ENOENT");
 }
 
 async function addHardlinkedFile(filePath: string, linkPath: string): Promise<void> {
@@ -91,62 +43,83 @@ async function addHardlinkedFile(filePath: string, linkPath: string): Promise<vo
   await fs.link(filePath, linkPath);
 }
 
-async function createReboundInstallFixture(params: {
-  fixtureRoot: string;
-  withExistingInstall?: boolean;
-}) {
-  const sourceDir = path.join(params.fixtureRoot, "source");
-  const installBaseDir = path.join(params.fixtureRoot, "plugins");
-  const preservedInstallRoot = path.join(params.fixtureRoot, "plugins-preserved");
-  const outsideInstallRoot = path.join(params.fixtureRoot, "outside-plugins");
+async function createReboundInstallFixture(fixtureRoot: string, withExistingInstall: boolean) {
+  const sourceDir = path.join(fixtureRoot, "source");
+  const installBaseDir = path.join(fixtureRoot, "plugins");
+  const preservedInstallRoot = path.join(fixtureRoot, "plugins-preserved");
+  const outsideInstallRoot = path.join(fixtureRoot, "outside-plugins");
   const targetDir = path.join(installBaseDir, "demo");
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.mkdir(installBaseDir, { recursive: true });
   await fs.mkdir(outsideInstallRoot, { recursive: true });
-  if (params.withExistingInstall) {
+  if (withExistingInstall) {
     await fs.mkdir(targetDir, { recursive: true });
     await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
   }
   await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
-  return { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir };
+  const rebind = async () => {
+    await fs.rename(installBaseDir, preservedInstallRoot);
+    await fs.symlink(
+      outsideInstallRoot,
+      installBaseDir,
+      process.platform === "win32" ? "junction" : undefined,
+    );
+  };
+  return { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir, rebind };
+}
+
+async function expectText(directory: string, expected: string, name = "marker.txt") {
+  await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(expected);
 }
 
 describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
   });
-  async function installWithNpmResult(
-    npmResult: SpawnResult | Promise<SpawnResult>,
-    activity?: import("./install-progress.js").InstallActivityObserver["activity"],
-  ) {
+  async function createFixture(name: string) {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make(name);
+    return { fixtureRoot, ...(await createExistingInstallFixture(fixtureRoot)) };
+  }
+
+  async function createSourceFixture() {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
     const targetDir = path.join(fixtureRoot, "plugins", "demo");
     await fs.mkdir(sourceDir, { recursive: true });
+    return { fixtureRoot, sourceDir, targetDir };
+  }
+
+  async function writeManifest(
+    sourceDir: string,
+    overrides: {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    } = {},
+  ) {
     await fs.writeFile(
       path.join(sourceDir, "package.json"),
       JSON.stringify({
         name: "demo-plugin",
         version: "1.0.0",
-        dependencies: {
-          zod: "^4.0.0",
-        },
+        dependencies: { zod: "^4.0.0" },
+        ...overrides,
       }),
       "utf-8",
     );
-    vi.mocked(runCommandWithTimeout).mockImplementation(() => Promise.resolve(npmResult));
+  }
 
-    return await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
+  async function createNpmFixture(overrides?: Parameters<typeof writeManifest>[1]) {
+    const fixture = await createSourceFixture();
+    await writeManifest(fixture.sourceDir, overrides);
+    const options = {
+      ...updateOptions(fixture.sourceDir, fixture.targetDir),
+      mode: "install" as const,
       hasDeps: true,
       depsLogMessage: "Installing deps…",
-      logger: { activity },
-    });
+    };
+    return { ...fixture, options };
   }
 
   afterEach(async () => {
@@ -158,10 +131,13 @@ describe("installPackageDir", () => {
     "reports dependency settlement only after npm finishes with code %s",
     async (code) => {
       const pending = createDeferred<SpawnResult>();
+      const { options } = await createNpmFixture();
       const events: import("../../packages/gateway-protocol/src/schema/plugins.js").PluginInstallActivity[] =
         [];
-      const install = installWithNpmResult(pending.promise, (event) => {
-        events.push(event);
+      vi.mocked(runCommandWithTimeout).mockReturnValue(pending.promise);
+      const install = installPackageDir({
+        ...options,
+        logger: { activity: (event) => events.push(event) },
       });
       try {
         await vi.waitFor(() =>
@@ -176,12 +152,9 @@ describe("installPackageDir", () => {
         ]);
       } finally {
         pending.resolve({
+          ...npmSuccess,
           code,
-          stdout: "",
           stderr: code ? "registry refused dependency" : "",
-          signal: null,
-          killed: false,
-          termination: "exit",
         });
         await install;
       }
@@ -194,54 +167,58 @@ describe("installPackageDir", () => {
     },
   );
 
-  it("keeps the existing install in place when staged validation fails", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const { installBaseDir, sourceDir, targetDir } =
-      await createExistingInstallFixture(fixtureRoot);
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "update",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "Installing deps…",
-      afterCopy: async (installedDir) => {
-        expect(installedDir).not.toBe(targetDir);
-        await expect(fs.readFile(path.join(installedDir, "marker.txt"), "utf8")).resolves.toBe(
-          "new",
-        );
-        throw new Error("validation boom");
-      },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: "post-copy validation failed: Error: validation boom",
-    });
-    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
-    await expect(
-      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
-    ).resolves.toHaveLength(0);
-    await expect(
-      listMatchingDirs(installBaseDir, ".openclaw-install-backups"),
-    ).resolves.toHaveLength(0);
-  });
+  it.each(["copy", "backup"])(
+    "preserves the old install when %s validation fails",
+    async (phase) => {
+      const { installBaseDir, sourceDir, targetDir } = await createFixture("case");
+      const result = await installPackageDir({
+        ...updateOptions(sourceDir, targetDir),
+        depsLogMessage: "Installing deps…",
+        afterCopy:
+          phase === "copy"
+            ? async (installedDir) => {
+                expect(installedDir).not.toBe(targetDir);
+                await expectText(installedDir, "new");
+                throw new Error("validation boom");
+              }
+            : undefined,
+        afterBackup:
+          phase === "backup"
+            ? async (backupDir) => {
+                await fs.writeFile(path.join(backupDir, "local.txt"), "keep me");
+                return { ok: false, error: "existing install changed" };
+              }
+            : undefined,
+      });
+      expect(result).toEqual({
+        ok: false,
+        error:
+          phase === "copy"
+            ? "post-copy validation failed: Error: validation boom"
+            : "existing install changed",
+      });
+      await expectText(targetDir, "old");
+      await expect(
+        listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+      ).resolves.toHaveLength(0);
+      if (phase === "backup") {
+        await expectText(targetDir, "keep me", "local.txt");
+        await expect(
+          fs.readdir(path.join(installBaseDir, ".openclaw-install-backups")),
+        ).resolves.toHaveLength(0);
+      } else {
+        await expect(
+          listMatchingDirs(installBaseDir, ".openclaw-install-backups"),
+        ).resolves.toHaveLength(0);
+      }
+    },
+  );
 
   it("checks update authority before displacing the existing install", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const { sourceDir, targetDir } = await createFixture("case");
     let backupReached = false;
     const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "update",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
+      ...updateOptions(sourceDir, targetDir),
       depsLogMessage: "unused",
       beforePersistentApply() {
         throw new Error("update authority closed");
@@ -257,83 +234,11 @@ describe("installPackageDir", () => {
       error: "failed to copy plugin: Error: update authority closed",
     });
     expect(backupReached).toBe(false);
-    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
-  });
-
-  it("restores edits detected after the existing install moves to backup", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const { installBaseDir, sourceDir, targetDir } =
-      await createExistingInstallFixture(fixtureRoot);
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "update",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "Installing deps…",
-      afterBackup: async (backupDir) => {
-        await fs.writeFile(path.join(backupDir, "local.txt"), "keep me");
-        return { ok: false, error: "existing install changed" };
-      },
-    });
-
-    expect(result).toEqual({ ok: false, error: "existing install changed" });
-    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
-    await expect(fs.readFile(path.join(targetDir, "local.txt"), "utf8")).resolves.toBe("keep me");
-    await expect(
-      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
-    ).resolves.toHaveLength(0);
-    await expect(
-      fs.readdir(path.join(installBaseDir, ".openclaw-install-backups")),
-    ).resolves.toHaveLength(0);
-  });
-
-  it("restores the original install if publish rename fails", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const { installBaseDir, sourceDir, targetDir } =
-      await createExistingInstallFixture(fixtureRoot);
-
-    const realRename = fs.rename.bind(fs);
-    let renameCalls = 0;
-    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
-      renameCalls += 1;
-      if (renameCalls === 2) {
-        throw new Error("publish boom");
-      }
-      return await realRename(...args);
-    });
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "update",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "Installing deps…",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: "failed to copy plugin: Error: publish boom",
-    });
-    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
-    await expect(
-      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
-    ).resolves.toHaveLength(0);
-    const backupRoot = path.join(installBaseDir, ".openclaw-install-backups");
-    await expect(fs.readdir(backupRoot)).resolves.toHaveLength(0);
+    await expectText(targetDir, "old");
   });
 
   it("restores the original without publishing when authority closes during move preparation", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("publication-authority");
-    const { installBaseDir, sourceDir, targetDir } =
-      await createExistingInstallFixture(fixtureRoot);
+    const { installBaseDir, sourceDir, targetDir } = await createFixture("publication-authority");
     const owner = new AbortController();
     const assertPublicationAuthority = () => owner.signal.throwIfAborted();
     const paused = createDeferred();
@@ -364,13 +269,8 @@ describe("installPackageDir", () => {
       return realRename(...args);
     });
 
-    const params = {
-      sourceDir,
-      targetDir,
-      mode: "update" as const,
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
+    const installing = installPackageDir({
+      ...updateOptions(sourceDir, targetDir),
       depsLogMessage: "Installing deps…",
       beforePersistentApply: assertPublicationAuthority,
       afterInstall: async (installedDir: string) => {
@@ -382,8 +282,7 @@ describe("installPackageDir", () => {
         backupDir = installedDir;
         return { ok: true as const };
       },
-    };
-    const installing = installPackageDir(params);
+    });
     try {
       await Promise.race([
         paused.promise,
@@ -393,7 +292,7 @@ describe("installPackageDir", () => {
       ]);
       expect(pauseConsumed).toBe(true);
       expect(backupDir).not.toBe("");
-      await expect(fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).resolves.toBe("old");
+      await expectText(backupDir, "old");
       await expectMissingPath(targetDir);
       owner.abort(new Error("publication authority revoked"));
       expect(assertPublicationAuthority).toThrow("publication authority revoked");
@@ -406,7 +305,7 @@ describe("installPackageDir", () => {
       if (!result.ok) {
         expect(result.error).toContain("publication authority revoked");
       }
-      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+      await expectText(targetDir, "old");
       await expect(
         listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
       ).resolves.toHaveLength(0);
@@ -420,180 +319,60 @@ describe("installPackageDir", () => {
     }
   });
 
-  it("publishes through the staged-copy path when source hardlinks are rejected", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const installBaseDir = path.join(fixtureRoot, "plugins");
-    const targetDir = path.join(installBaseDir, "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
-
-    const realRename = fs.rename.bind(fs);
-    let directMoves = 0;
-    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
-      const [from, to] = args;
-      const fromPath = String(from);
-      if (
-        path.basename(fromPath).startsWith(".openclaw-install-stage-") &&
-        normalizeComparablePath(String(to)) === normalizeComparablePath(targetDir)
-      ) {
-        directMoves += 1;
-      }
-      return await realRename(...args);
-    });
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "Installing deps…",
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(directMoves).toBe(0);
-    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
-    await expect(
-      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
-    ).resolves.toHaveLength(0);
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "updates package-manager installs that contain hardlinked package files",
-    async () => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("case");
-      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+  it.runIf(process.platform !== "win32").each([true, false])(
+    "requires explicit package-manager hardlink allowance (allowed=%s)",
+    async (allowed) => {
+      const { fixtureRoot, sourceDir, targetDir } = await createFixture("case");
       await addHardlinkedFile(
         path.join(targetDir, "marker.txt"),
         path.join(fixtureRoot, "cache", "existing-marker.txt"),
       );
-
-      vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
-        const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-        if (cwd === undefined) {
-          throw new Error("expected staged package install cwd");
-        }
-        const depFile = path.join(cwd, "node_modules", "demo-dep", "index.js");
-        await fs.mkdir(path.dirname(depFile), { recursive: true });
-        await fs.writeFile(depFile, "module.exports = 1;\n", "utf8");
-        await addHardlinkedFile(depFile, path.join(fixtureRoot, "cache", "staged-dep.js"));
-        return {
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      });
-
+      if (allowed) {
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
+          const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+          if (cwd === undefined) {
+            throw new Error("expected staged package install cwd");
+          }
+          const depFile = path.join(cwd, "node_modules", "demo-dep", "index.js");
+          await fs.mkdir(path.dirname(depFile), { recursive: true });
+          await fs.writeFile(depFile, "module.exports = 1;\n", "utf8");
+          await addHardlinkedFile(depFile, path.join(fixtureRoot, "cache", "staged-dep.js"));
+          return npmSuccess;
+        });
+      } else {
+        vi.mocked(runCommandWithTimeout).mockResolvedValue(npmSuccess);
+      }
       const result = await installPackageDir({
-        sourceDir,
-        targetDir,
-        mode: "update",
-        timeoutMs: 1_000,
-        copyErrorPrefix: "failed to copy plugin",
+        ...updateOptions(sourceDir, targetDir),
         hasDeps: true,
-        sourceHardlinks: "package-manager",
+        ...(allowed ? { sourceHardlinks: "package-manager" as const } : {}),
         depsLogMessage: "Installing deps…",
       });
-
-      expect(result).toEqual({ ok: true });
-      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
-      await expect(
-        fs.lstat(path.join(targetDir, "node_modules", "demo-dep", "index.js")),
-      ).resolves.toMatchObject({ nlink: 2 });
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "requires explicit package-manager hardlink allowance for dependency installs",
-    async () => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("case");
-      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
-      await addHardlinkedFile(
-        path.join(targetDir, "marker.txt"),
-        path.join(fixtureRoot, "cache", "existing-marker.txt"),
-      );
-
-      vi.mocked(runCommandWithTimeout).mockResolvedValue({
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
-
-      const result = await installPackageDir({
-        sourceDir,
-        targetDir,
-        mode: "update",
-        timeoutMs: 1_000,
-        copyErrorPrefix: "failed to copy plugin",
-        hasDeps: true,
-        depsLogMessage: "Installing deps…",
-      });
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("Refusing to move hardlinked file");
+      if (allowed) {
+        expect(result).toEqual({ ok: true });
+        await expectText(targetDir, "new");
+        await expect(
+          fs.lstat(path.join(targetDir, "node_modules", "demo-dep", "index.js")),
+        ).resolves.toMatchObject({ nlink: 2 });
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("Refusing to move hardlinked file"),
+        });
+        await expectText(targetDir, "old");
       }
-      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "keeps hardlinked existing installs rejected for dependency-free updates",
-    async () => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("case");
-      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
-      await addHardlinkedFile(
-        path.join(targetDir, "marker.txt"),
-        path.join(fixtureRoot, "cache", "existing-marker.txt"),
-      );
-
-      const result = await installPackageDir({
-        sourceDir,
-        targetDir,
-        mode: "update",
-        timeoutMs: 1_000,
-        copyErrorPrefix: "failed to copy plugin",
-        hasDeps: false,
-        depsLogMessage: "Installing deps…",
-      });
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("Refusing to move hardlinked file");
-      }
-      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "keeps hardlinked staged installs rejected for dependency-free publishes",
     async () => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("case");
-      const sourceDir = path.join(fixtureRoot, "source");
-      const targetDir = path.join(fixtureRoot, "plugins", "demo");
-      await fs.mkdir(sourceDir, { recursive: true });
+      const { fixtureRoot, sourceDir, targetDir } = await createSourceFixture();
       await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
 
       const result = await installPackageDir({
-        sourceDir,
-        targetDir,
+        ...updateOptions(sourceDir, targetDir),
         mode: "install",
-        timeoutMs: 1_000,
-        copyErrorPrefix: "failed to copy plugin",
-        hasDeps: false,
         depsLogMessage: "Installing deps…",
         afterCopy: async (installedDir) => {
           await addHardlinkedFile(
@@ -603,121 +382,82 @@ describe("installPackageDir", () => {
         },
       });
 
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("Refusing to move hardlinked file");
-      }
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Refusing to move hardlinked file"),
+      });
       await expectMissingPath(path.join(targetDir, "marker.txt"));
     },
   );
 
-  it("aborts without outside writes when the install base is rebound before publish", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir } =
-      await createReboundInstallFixture({ fixtureRoot });
-
-    const warnings: string[] = [];
-    let rebound = false;
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "Installing deps…",
-      logger: { warn: (message) => warnings.push(message) },
-      afterInstall: async (installedDir) => {
-        await expect(fs.readFile(path.join(installedDir, "marker.txt"), "utf8")).resolves.toBe(
-          "new",
-        );
-        await rebindInstallBasePath({
-          installBaseDir,
-          preservedDir: preservedInstallRoot,
-          outsideTarget: outsideInstallRoot,
+  it.each([false, true])(
+    "preserves outside paths when the base changes (backup cleanup=%s)",
+    async (cleanup) => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const {
+        installBaseDir,
+        outsideInstallRoot,
+        preservedInstallRoot,
+        sourceDir,
+        targetDir,
+        rebind,
+      } = await createReboundInstallFixture(fixtureRoot, cleanup);
+      const warnings: string[] = [];
+      let rebound = false;
+      let statCalls = 0;
+      if (cleanup) {
+        const installBasePath = normalizeComparablePath(installBaseDir);
+        const realStat = fs.stat.bind(fs);
+        vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+          if (normalizeComparablePath(String(args[0])) === installBasePath && ++statCalls === 3) {
+            await rebind();
+          }
+          return realStat(...args);
         });
-        rebound = true;
-        return { ok: true };
-      },
-    });
-
-    expect(rebound).toBe(true);
-    expect((await fs.lstat(installBaseDir)).isSymbolicLink()).toBe(true);
-    expect(result).toEqual({
-      ok: false,
-      error: "failed to copy plugin: Error: install base directory changed during install",
-    });
-    await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
-    await expect(fs.readdir(outsideInstallRoot)).resolves.toEqual([]);
-    expect(warnings).toContain(
-      "Install base directory changed during install; aborting staged publish.",
-    );
-  });
-
-  it("warns and leaves the backup in place when the install base changes before backup cleanup", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const { installBaseDir, outsideInstallRoot, preservedInstallRoot, sourceDir, targetDir } =
-      await createReboundInstallFixture({ fixtureRoot, withExistingInstall: true });
-
-    const warnings: string[] = [];
-    const installBasePath = normalizeComparablePath(installBaseDir);
-    const realStat = fs.stat.bind(fs);
-    let installBaseStatCalls = 0;
-    vi.spyOn(fs, "stat").mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
-      if (normalizeComparablePath(String(args[0])) === installBasePath) {
-        installBaseStatCalls += 1;
-        if (installBaseStatCalls === 3) {
-          await rebindInstallBasePath({
-            installBaseDir,
-            preservedDir: preservedInstallRoot,
-            outsideTarget: outsideInstallRoot,
-          });
-        }
       }
-      return await realStat(...args);
-    });
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "update",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "Installing deps…",
-      logger: { warn: (message) => warnings.push(message) },
-    });
-
-    expect(result).toEqual({ ok: true });
-    expect(installBaseStatCalls).toBe(3);
-    expect(warnings).toContain(
-      "Install base directory changed before backup cleanup; leaving backup in place.",
-    );
-    await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
-    const backupRoot = path.join(preservedInstallRoot, ".openclaw-install-backups");
-    await expect(fs.readdir(backupRoot)).resolves.toHaveLength(1);
-  });
+      const result = await installPackageDir({
+        ...updateOptions(sourceDir, targetDir),
+        mode: cleanup ? "update" : "install",
+        depsLogMessage: "Installing deps…",
+        logger: { warn: (message) => warnings.push(message) },
+        afterInstall: cleanup
+          ? undefined
+          : async (installedDir) => {
+              await expectText(installedDir, "new");
+              await rebind();
+              rebound = true;
+              return { ok: true };
+            },
+      });
+      if (cleanup) {
+        expect(result).toEqual({ ok: true });
+        expect(statCalls).toBe(3);
+        expect(warnings).toContain(
+          "Install base directory changed before backup cleanup; leaving backup in place.",
+        );
+        await expect(
+          fs.readdir(path.join(preservedInstallRoot, ".openclaw-install-backups")),
+        ).resolves.toHaveLength(1);
+      } else {
+        expect(rebound).toBe(true);
+        expect((await fs.lstat(installBaseDir)).isSymbolicLink()).toBe(true);
+        expect(result).toEqual({
+          ok: false,
+          error: "failed to copy plugin: Error: install base directory changed during install",
+        });
+        expect(warnings).toContain(
+          "Install base directory changed during install; aborting staged publish.",
+        );
+        await expect(fs.readdir(outsideInstallRoot)).resolves.toEqual([]);
+      }
+      await expectMissingPath(path.join(outsideInstallRoot, "demo", "marker.txt"));
+    },
+  );
 
   it("hides the staged project .npmrc while npm install runs and restores it afterward", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    const { sourceDir, targetDir, options } = await createNpmFixture();
     const npmrcContent = "git=calc.exe\n";
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify({
-        name: "demo-plugin",
-        version: "1.0.0",
-        dependencies: {
-          zod: "^4.0.0",
-        },
-      }),
-      "utf-8",
-    );
     await fs.writeFile(path.join(sourceDir, ".npmrc"), npmrcContent, "utf-8");
 
     vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
@@ -729,50 +469,18 @@ describe("installPackageDir", () => {
       await expect(
         listMatchingEntries(cwd, ".openclaw-install-hidden-npmrc-"),
       ).resolves.toHaveLength(1);
-      return {
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return npmSuccess;
     });
 
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: true,
-      depsLogMessage: "Installing deps…",
-    });
-
-    expect(result).toEqual({ ok: true });
-    await expect(fs.readFile(path.join(targetDir, ".npmrc"), "utf8")).resolves.toBe(npmrcContent);
+    expect(await installPackageDir(options)).toEqual({ ok: true });
+    await expectText(targetDir, npmrcContent, ".npmrc");
     await expect(
       listMatchingEntries(targetDir, ".openclaw-install-hidden-npmrc-"),
     ).resolves.toHaveLength(0);
   });
 
   it("forces dependency installs to stay project-local when npm global config leaks in", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "plugins", "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify({
-        name: "demo-plugin",
-        version: "1.0.0",
-        dependencies: {
-          zod: "^4.0.0",
-        },
-      }),
-      "utf-8",
-    );
+    const { fixtureRoot, options: installOptions } = await createNpmFixture();
 
     vi.stubEnv("NPM_CONFIG_GLOBAL", "true");
     vi.stubEnv("npm_config_global", "true");
@@ -780,41 +488,36 @@ describe("installPackageDir", () => {
     vi.stubEnv("npm_config_location", "global");
     vi.stubEnv("NPM_CONFIG_PREFIX", path.join(fixtureRoot, "global-prefix-uppercase"));
     vi.stubEnv("npm_config_prefix", path.join(fixtureRoot, "global-prefix"));
-    vi.mocked(runCommandWithTimeout).mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    vi.mocked(runCommandWithTimeout).mockResolvedValue(npmSuccess);
 
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: true,
-      depsLogMessage: "Installing deps…",
+    expect(await installPackageDir(installOptions)).toEqual({ ok: true });
+    const expectedArgv = expectedNpmCommand([
+      "install",
+      "--omit=dev",
+      "--loglevel=error",
+      "--ignore-scripts",
+      "--workspaces=false",
+    ]);
+    const call = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.toReversed()
+      .find(
+        ([argv, options]) =>
+          JSON.stringify(argv) === JSON.stringify(expectedArgv) &&
+          typeof options !== "number" &&
+          options.env?.npm_config_global === "false",
+      );
+    const options = call?.[1];
+    if (!options || typeof options === "number") {
+      throw new Error("Expected project-local npm install call");
+    }
+    const env = options.env ?? {};
+    expect(env).toMatchObject({
+      npm_config_global: "false",
+      npm_config_location: "project",
+      npm_config_package_lock: "false",
+      npm_config_save: "false",
     });
-
-    expect(result).toEqual({ ok: true });
-    const installOptions = expectRunCommandCallForArgv(
-      expectedNpmCommand([
-        "install",
-        "--omit=dev",
-        "--loglevel=error",
-        "--ignore-scripts",
-        "--workspaces=false",
-      ]),
-      (options) => options.env?.npm_config_global === "false",
-    );
-    const env = installOptions.env ?? {};
-    expect(env.npm_config_global).toBe("false");
-    expect(env.npm_config_location).toBe("project");
-    expect(env.npm_config_package_lock).toBe("false");
-    expect(env.npm_config_save).toBe("false");
     expect("NPM_CONFIG_GLOBAL" in env).toBe(false);
     expect("NPM_CONFIG_LOCATION" in env).toBe(false);
     expect("NPM_CONFIG_PREFIX" in env).toBe(false);
@@ -824,25 +527,10 @@ describe("installPackageDir", () => {
   it.each(["exit", "throw"] as const)(
     "restores manifest bytes before cleanup and preserves the old install on npm %s failure",
     async (failure) => {
-      await fixtureRootTracker.setup();
-      const fixtureRoot = await fixtureRootTracker.make("case");
-      const sourceDir = path.join(fixtureRoot, "source");
-      const targetDir = path.join(fixtureRoot, "plugins", "demo");
-      await fs.mkdir(sourceDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sourceDir, "package.json"),
-        JSON.stringify({
-          name: "demo-plugin",
-          version: "1.0.0",
-          dependencies: {
-            bad: "workspace:^",
-          },
-          devDependencies: {
-            openclaw: "2026.6.1",
-          },
-        }),
-        "utf-8",
-      );
+      const { sourceDir, targetDir, options } = await createNpmFixture({
+        dependencies: { bad: "workspace:^" },
+        devDependencies: { openclaw: "2026.6.1" },
+      });
 
       const originalManifest = await fs.readFile(path.join(sourceDir, "package.json"));
       const oldManifest = '{"name":"demo-plugin","version":"0.9.0"}\n';
@@ -862,13 +550,10 @@ describe("installPackageDir", () => {
       // Mirrors the Blacksmith repro: npm 11 preserved this stderr with
       // `--loglevel=error`, while `--silent` returned empty output.
       vi.mocked(runCommandWithTimeout).mockResolvedValue({
-        stdout: "",
+        ...npmSuccess,
         stderr:
           'npm error code EUNSUPPORTEDPROTOCOL\nnpm error Unsupported URL Type "workspace:": workspace:^\n',
         code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
       });
 
       if (failure === "throw") {
@@ -876,14 +561,9 @@ describe("installPackageDir", () => {
       }
       const result = await installPackageDir(
         requestDeferredPackageDirInstall({
-          sourceDir,
-          targetDir,
+          ...options,
           mode: "update",
-          timeoutMs: 1_000,
-          copyErrorPrefix: "failed to copy plugin",
-          hasDeps: true,
           omitOpenClawHostDependency: true,
-          depsLogMessage: "Installing deps…",
           afterCopy: (dir: string) => {
             stagedDir = dir;
           },
@@ -898,9 +578,7 @@ describe("installPackageDir", () => {
         );
       }
       expect(restoredBeforeCleanup).toBe(true);
-      await expect(fs.readFile(path.join(targetDir, "package.json"), "utf8")).resolves.toBe(
-        oldManifest,
-      );
+      await expectText(targetDir, oldManifest, "package.json");
       await expect(fs.readFile(path.join(sourceDir, "package.json"))).resolves.toEqual(
         originalManifest,
       );
@@ -908,75 +586,19 @@ describe("installPackageDir", () => {
     },
   );
 
-  it.each(npmCommandFailureCases)(
-    "preserves $label when npm dependency install fails",
-    async ({ npmResult, expectedDetail }) => {
-      const result = await installWithNpmResult(npmResult);
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toContain("npm install failed:");
-        expect(result.error).toContain(expectedDetail);
-        expect(result.error.replace(/\s+/g, " ").trim()).not.toMatch(/npm install failed:\s*$/);
-      }
-    },
-  );
-
-  it("restores the previous package when a deferred update rolls back", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("deferred-rollback");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "plugins", "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.writeFile(path.join(sourceDir, "version.txt"), "v2", "utf8");
-    await fs.writeFile(path.join(targetDir, "version.txt"), "v1", "utf8");
-
-    const result = await installPackageDir(
-      requestDeferredPackageDirInstall({
-        sourceDir,
-        targetDir,
-        mode: "update",
-        timeoutMs: 1_000,
-        copyErrorPrefix: "failed to copy plugin",
-        hasDeps: false,
-        depsLogMessage: "",
-      }),
-    );
-
-    expect(result.ok).toBe(true);
-    const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
-    if (!transaction) {
-      throw new Error("expected deferred package transaction");
-    }
-    expect(await fs.readFile(path.join(targetDir, "version.txt"), "utf8")).toBe("v2");
-    await transaction.rollback();
-    expect(await fs.readFile(path.join(targetDir, "version.txt"), "utf8")).toBe("v1");
-  });
-
   it("does not let a closed installer roll back under a successor's live lease", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("closed-installer");
-    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const { fixtureRoot, sourceDir, targetDir } = await createFixture("closed-installer");
     const leaseOptions = {
       path: path.join(fixtureRoot, "leases.sqlite"),
       leaseMs: 300_000,
       waitMs: 0,
     };
-    const installOptions = {
-      sourceDir,
-      targetDir,
-      mode: "update" as const,
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: false,
-      depsLogMessage: "",
-    };
+    const installOptions = updateOptions(sourceDir, targetDir);
     let originalBackup = "";
 
     try {
       const original = await withPluginLifecycleLease(leaseOptions, async (lease) => {
-        const assertOwned = lease.assertOwned.bind(lease);
+        const assertOwned = lease.assertOwned;
         const result = await installPackageDir(
           copyPackageDirInstallTransactionRequest(
             requestDeferredPackageDirInstall({}, assertOwned),
@@ -1002,17 +624,13 @@ describe("installPackageDir", () => {
       await withPluginLifecycleLease(leaseOptions, async (lease) => {
         // A's inode still matches, so only its copied lease can reject this rollback.
         await expect.soft(original.transaction.rollback()).rejects.toThrow();
-        await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
+        await expectText(targetDir, "new");
         expect((await installPackageDir(installOptions)).ok).toBe(true);
         lease.assertOwned();
         // The active async context is B's, but A's retained handle still owns A's lease.
         await expect.soft(original.transaction.rollback()).rejects.toThrow();
-        await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe(
-          "successor",
-        );
-        await expect(fs.readFile(path.join(originalBackup, "marker.txt"), "utf8")).resolves.toBe(
-          "old",
-        );
+        await expectText(targetDir, "successor");
+        await expectText(originalBackup, "old");
       });
     } finally {
       closeOpenClawStateDatabaseForTest();

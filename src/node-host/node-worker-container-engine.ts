@@ -25,7 +25,7 @@ type NodeWorkerContainerExpectedOwner = {
   launchId: string;
 };
 
-const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.21.0-slim";
+const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.22.1-slim";
 // Burst launches can delay a healthy daemon's identity response; keep revalidation
 // fail-closed without treating temporary daemon contention as an unavailable engine.
 const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;
@@ -216,7 +216,7 @@ async function resolveContainerEngineTarget(
 export async function resolveNodeWorkerContainerEngine(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<NodeWorkerContainerEngine> {
-  const env = options.env ? Object.freeze({ ...process.env, ...options.env }) : process.env;
+  const env = options.env ? { ...process.env, ...options.env } : process.env;
   const failures: string[] = [];
   for (const id of ["docker", "podman"] as const) {
     const command = resolveExecutableFromPathEnv(id, env.PATH ?? process.env.PATH ?? "", env);
@@ -255,6 +255,7 @@ export async function createNodeWorkerContainer(
     bundleRoot: string;
     bundleEntry: string;
     workspaceDir: string;
+    homeDir?: string;
     gatewayNamespace: string;
     launchId: string;
     env: NodeJS.ProcessEnv;
@@ -286,13 +287,16 @@ export async function createNodeWorkerContainer(
     "--workdir",
     params.workspaceDir,
   ];
+  if (params.homeDir && params.homeDir !== params.workspaceDir) {
+    args.push("--mount", `type=bind,source=${params.homeDir},target=${params.homeDir}`);
+  }
   if (engine.id === "docker" && process.getuid && process.getgid) {
     args.push("--user", `${process.getuid()}:${process.getgid()}`);
   }
   const containerEnv: NodeJS.ProcessEnv = {
     ...params.env,
     PATH: CONTAINER_PATH,
-    HOME: params.workspaceDir,
+    HOME: params.homeDir ?? params.workspaceDir,
   };
   if (containerEnv.NODE_EXTRA_CA_CERTS) {
     let certificatePath: string;
@@ -354,13 +358,6 @@ export async function createNodeWorkerContainer(
     throw new Error("node worker container engine returned an invalid container identity");
   }
   return { engine: engine.id, containerId, engineTarget: engine.target };
-}
-
-export function buildNodeWorkerContainerStartArgv(
-  engine: NodeWorkerContainerEngine,
-  containerId: string,
-): string[] {
-  return [engine.command, "start", "--attach", "--interactive", containerId];
 }
 
 /** Inspect the container rather than its disposable Docker client process. */

@@ -1,17 +1,21 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import type { OpenClawConfig } from "../config/types.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
+import { isPluginReloadingError } from "../plugins/plugin-replacement-retry.js";
 import type {
   ContextEngineFactory,
   ContextEngineFactoryContext,
   ContextEngineRegistration,
   ContextEngineRegistrationLifecycle,
 } from "../plugins/registry-contribution-types.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getSelectedContextEngineOwner } from "../plugins/runtime/load-context-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { contextEngineAbortSignal, isContextEngineAbortRejection } from "./context-engine-abort.js";
 import { pluginIdFromContextEngineOwner } from "./registry-adoption.js";
 import {
@@ -19,7 +23,6 @@ import {
   projectContextEngineHostParams,
 } from "./registry-contract.js";
 import {
-  clearContextEngineQuarantineForActivation,
   clearContextEngineRuntimeQuarantine,
   getContextEngineQuarantine,
   recordContextEngineQuarantine,
@@ -35,6 +38,7 @@ import {
   type ContextEngineFactoryResources,
   type ContextEngineFactoryPreparation,
 } from "./registry.resources.js";
+import { resolveMaxActiveTranscriptBytes } from "./transcript-byte-limit.js";
 import type {
   BootstrapResult,
   ContextEngine,
@@ -46,7 +50,7 @@ import type {
 export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
 export { listContextEngineQuarantines } from "./registry-quarantine.js";
 
-type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string | null };
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
@@ -65,9 +69,14 @@ type ResolvedContextEngineMetadata = {
   sourceEngine?: ContextEngine;
   source?: ContextEngineFactoryResources;
   ownsSource?: boolean;
+  maxActiveTranscriptBytes?: number;
 };
 
-const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
+// Built SDK artifacts and the host must read the same admitted engine facts.
+const resolvedEngineMetadata = resolveGlobalSingleton(
+  Symbol.for("openclaw.contextEngine.resolvedMetadata"),
+  () => new WeakMap<ContextEngine, ResolvedContextEngineMetadata>(),
+);
 
 function wrapResolvedContextEngine(
   rawEngine: ContextEngine,
@@ -264,6 +273,7 @@ function wrapResolvedContextEngine(
   );
   resolvedEngineMetadata.set(wrapped, {
     ...metadata,
+    maxActiveTranscriptBytes: resolveMaxActiveTranscriptBytes(metadata.factoryCtx.config),
     sourceEngine: resolvedEngineMetadata.get(rawEngine)?.sourceEngine ?? rawEngine,
   });
   return wrapped;
@@ -279,15 +289,11 @@ export async function registerContextEngineForOwner(
   id: string,
   factory: ContextEngineFactory,
   owner: string,
-  opts?: RegisterContextEngineForOwnerOptions,
+  opts?: Omit<RegisterContextEngineForOwnerOptions, "lifecycle">,
 ): Promise<ContextEngineRegistrationResult> {
   const targetRegistry = requireActivePluginRegistry();
   const result = registerContextEngineInRegistry(targetRegistry, id, factory, owner, opts);
-  if (
-    result.ok &&
-    (opts?.lifecycle ?? "runtime") === "runtime" &&
-    getActivePluginRegistry() === targetRegistry
-  ) {
+  if (result.ok && getActivePluginRegistry() === targetRegistry) {
     const assertCurrent = () => {
       if (getActivePluginRegistry() !== targetRegistry) {
         throw new Error("Context engine registration was superseded");
@@ -323,6 +329,10 @@ export function registerContextEngineInRegistry(
     // The default fallback id is core-owned; plugins can select other ids through slots.
     return { ok: false, existingOwner: CORE_CONTEXT_ENGINE_OWNER };
   }
+  const selectedOwner = getSelectedContextEngineOwner(pluginRegistry, id);
+  if (selectedOwner !== undefined && selectedOwner !== normalizedOwner) {
+    return { ok: false, existingOwner: selectedOwner };
+  }
   if (existing && existing.owner !== normalizedOwner) {
     return { ok: false, existingOwner: existing.owner };
   }
@@ -349,25 +359,30 @@ export function activateContextEngineRegistrations(
     assertCurrent: () => void;
     trackCleanup: (completion: Promise<void>) => void;
   },
-): void {
+): Promise<void> {
+  const authority = activation ? undefined : capturePluginLifecycleAuthority(pluginRegistry);
+  const cleanup: Promise<void>[] = [];
   for (const [id, registration] of pluginRegistry.contextEngines) {
     if (registration.lifecycle === "runtime") {
-      if (activation) {
-        activation.trackCleanup(
-          clearContextEngineRuntimeQuarantine(id, () => {
+      const completion = trackAsyncWork(() =>
+        clearContextEngineRuntimeQuarantine(id, () => {
+          if (activation) {
             activation.assertCurrent();
-            // An RPC can retain its predecessor registry while publishing this one.
-            if (pluginRegistry.contextEngines.get(id) !== registration) {
-              throw new Error("Context engine registration changed during activation cleanup");
-            }
-          }),
-        );
-      } else {
-        // The shipped provider-catalog SDK can activate while returning a synchronous array.
-        clearContextEngineQuarantineForActivation(id);
-      }
+          } else if (!authority?.()) {
+            throw new Error("Context engine activation was superseded");
+          }
+          // An RPC can retain its predecessor registry while publishing this one.
+          if (pluginRegistry.contextEngines.get(id) !== registration) {
+            throw new Error("Context engine registration changed during activation cleanup");
+          }
+        }),
+      );
+      cleanup.push(completion);
+      activation?.trackCleanup(completion);
     }
   }
+  // Legacy synchronous loaders publish immediately; their host work scope owns settlement.
+  return Promise.allSettled(cleanup).then(() => {});
 }
 
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
@@ -394,6 +409,11 @@ export function resolveContextEngineOwnerPluginId(
 export const hasSameContextEngineInstance = (left: ContextEngine, right: ContextEngine): boolean =>
   (resolvedEngineMetadata.get(left)?.sourceEngine ?? left) ===
   (resolvedEngineMetadata.get(right)?.sourceEngine ?? right);
+
+export const resolveContextEngineTranscriptByteLimit = (
+  engine: ContextEngine | undefined,
+): number | undefined =>
+  engine ? resolvedEngineMetadata.get(engine)?.maxActiveTranscriptBytes : undefined;
 
 const CONTEXT_ENGINE_FALLBACK_RESULTS = {
   bootstrap: { bootstrapped: false, reason: "context engine downgraded to legacy" },
@@ -505,13 +525,16 @@ async function resolveRawContextEngineRef(
  */
 export async function resolveLogicalTurnContextEngines(
   config?: OpenClawConfig,
-  options?: ResolveContextEngineOptions,
+  options?: ResolveContextEngineOptions & { beforeCustomEngine?: () => Promise<void> },
 ): Promise<LogicalTurnContextEngineResolution> {
   const initialization = options?.initialize?.();
   try {
     return await runContextEngineFactoryResolution(async (abandon) => {
       const defaultEngineId = defaultSlotIdForKey("contextEngine");
-      const configuredEngineId = resolveEffectiveContextEngineId(config, getContextEngines());
+      const configuredEngineId = resolveEffectiveContextEngineId(
+        config,
+        requireActivePluginRegistry(),
+      );
       const factoryCtx: ContextEngineFactoryContext = {
         config,
         agentDir: options?.agentDir,
@@ -532,6 +555,10 @@ export async function resolveLogicalTurnContextEngines(
       try {
         if (initialization) {
           await initialization;
+          getAsyncWorkSignal()?.throwIfAborted();
+        }
+        if (configuredEngineId !== defaultEngineId && options?.beforeCustomEngine) {
+          await options.beforeCustomEngine();
           getAsyncWorkSignal()?.throwIfAborted();
         }
         fallback = await resolveContextEngineFactory(sources.fallback, sourceResources, () =>
@@ -590,11 +617,6 @@ export async function resolveLogicalTurnContextEngines(
  *   1. `config.plugins.slots.contextEngine` when its plugin policy permits it
  *   2. Default slot value ("legacy")
  *
- * When `config` is provided it is forwarded to the factory as part of a
- * {@link ContextEngineFactoryContext}. Additional runtime paths can be
- * supplied via `options`. Existing no-arg factories continue to work
- * because JavaScript permits extra arguments at call sites.
- *
  * Non-default engines that fail (unregistered, factory throw, or contract
  * violation) are logged and silently replaced by the default engine.
  * Host admission/resource failures and owner cancellation propagate without quarantine.
@@ -611,7 +633,7 @@ export async function resolveContextEngine(
     : undefined;
   try {
     const defaultEngineId = defaultSlotIdForKey("contextEngine");
-    const engineId = resolveEffectiveContextEngineId(config, getContextEngines());
+    const engineId = resolveEffectiveContextEngineId(config, requireActivePluginRegistry());
     const isDefaultEngine = engineId === defaultEngineId;
 
     const factoryCtx: ContextEngineFactoryContext = {
@@ -675,7 +697,13 @@ export async function resolveContextEngine(
         preparation,
       );
     } catch (error) {
-      if (isDefaultEngine || !operation || isContextEngineAbortRejection(error, abortSignal)) {
+      // A reload refusing admission is not an engine defect; its caller may wait it out.
+      if (
+        isDefaultEngine ||
+        !operation ||
+        isContextEngineAbortRejection(error, abortSignal) ||
+        isPluginReloadingError(error)
+      ) {
         throw error;
       }
       const recording = recordContextEngineQuarantine({

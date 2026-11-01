@@ -9,7 +9,7 @@ afterEach(() => {
 
 describe("DraftSubmissionFlow permission selection", () => {
   it("preserves navigation recovery until the user changes permission mode", async () => {
-    const { context, flow, requestUpdate } = createDraftFixture({
+    const { context, flow, changed } = createDraftFixture({
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
     vi.mocked(context.sessions.createResult).mockResolvedValue({
@@ -38,9 +38,9 @@ describe("DraftSubmissionFlow permission selection", () => {
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
       expect(context.navigateAndWait).toHaveBeenCalledTimes(2);
 
-      requestUpdate.mockClear();
+      changed.mockClear();
       flow.setPermissionMode("full");
-      expect(requestUpdate).toHaveBeenCalledOnce();
+      expect(changed).toHaveBeenCalledOnce();
       await flow.submit();
       expect(context.sessions.createResult).toHaveBeenCalledTimes(2);
       expect(context.sessions.createResult).toHaveBeenLastCalledWith(

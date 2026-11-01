@@ -5,29 +5,46 @@ export type KeyedAsyncQueueHooks = {
   onSettle?: () => void;
 };
 
-/** Serialize async work per key while allowing unrelated keys to run concurrently. */
+type KeyedAsyncTask<T, TKey> = {
+  tails: {
+    get(key: TKey): Promise<unknown> | undefined;
+    set(key: TKey, tail: Promise<void>): unknown;
+    delete(key: TKey): boolean;
+  };
+  task: () => Promise<T>;
+  hooks?: KeyedAsyncQueueHooks;
+} & ({ key: TKey } | { keys: readonly TKey[] });
+
+/** Reserve every task key before yielding; unrelated keys remain independent. */
+export function enqueueKeyedTask<T, TKey>(params: KeyedAsyncTask<T, TKey>): Promise<T>;
 export function enqueueKeyedTask<T>(params: {
   tails: Map<string, Promise<void>>;
   key: string;
   task: () => Promise<T>;
   hooks?: KeyedAsyncQueueHooks;
-}): Promise<T> {
+}): Promise<T>;
+export function enqueueKeyedTask<T, TKey>(params: KeyedAsyncTask<T, TKey>): Promise<T> {
   params.hooks?.onEnqueue?.();
-  const previous = params.tails.get(params.key) ?? Promise.resolve();
-  const current = previous
-    .catch(() => undefined)
-    .then(params.task)
-    .finally(() => {
-      params.hooks?.onSettle?.();
-    });
+  const keys = "keys" in params ? params.keys : [params.key];
+  const previous =
+    "keys" in params
+      ? Promise.allSettled(keys.map((key) => params.tails.get(key) ?? Promise.resolve()))
+      : (params.tails.get(params.key) ?? Promise.resolve()).catch(() => undefined);
+  const current = previous.then(params.task).finally(() => {
+    params.hooks?.onSettle?.();
+  });
   const tail = current.then(
     () => undefined,
     () => undefined,
   );
-  params.tails.set(params.key, tail);
+  for (const key of keys) {
+    params.tails.set(key, tail);
+  }
   const cleanup = () => {
-    if (params.tails.get(params.key) === tail) {
-      params.tails.delete(params.key);
+    for (const key of keys) {
+      if (params.tails.get(key) === tail) {
+        params.tails.delete(key);
+      }
     }
   };
   tail.then(cleanup, cleanup);

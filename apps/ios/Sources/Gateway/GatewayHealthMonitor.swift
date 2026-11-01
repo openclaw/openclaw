@@ -1,11 +1,9 @@
 import Foundation
-import OpenClawKit
 
 @MainActor
 final class GatewayHealthMonitor {
     struct Config {
         var intervalSeconds: Double
-        var timeoutSeconds: Double
         var maxFailures: Int
     }
 
@@ -14,7 +12,7 @@ final class GatewayHealthMonitor {
     private var task: Task<Void, Never>?
 
     init(
-        config: Config = Config(intervalSeconds: 15, timeoutSeconds: 5, maxFailures: 3),
+        config: Config = Config(intervalSeconds: 15, maxFailures: 3),
         sleep: @escaping @Sendable (UInt64) async -> Void = { nanoseconds in
             try? await Task.sleep(nanoseconds: nanoseconds)
         })
@@ -33,26 +31,21 @@ final class GatewayHealthMonitor {
         self.task = Task { @MainActor in
             var failures = 0
             while !Task.isCancelled {
-                let ok = await Self.runCheck(check: check, timeoutSeconds: config.timeoutSeconds)
+                // The Gateway request owns its timeout; do not race a second deadline here.
+                let ok = await (try? check()) ?? false
                 guard !Task.isCancelled else { return }
                 if ok {
                     failures = 0
                 } else {
                     failures += 1
-                    if failures >= max(1, config.maxFailures) {
+                    if failures >= config.maxFailures {
                         await onFailure(failures)
                         failures = 0
                     }
                 }
 
                 if Task.isCancelled { break }
-                let interval = max(0.0, config.intervalSeconds)
-                let nanos = UInt64(interval * 1_000_000_000)
-                if nanos > 0 {
-                    await sleep(nanos)
-                } else {
-                    await Task.yield()
-                }
+                await sleep(UInt64(config.intervalSeconds * 1_000_000_000))
             }
         }
     }
@@ -60,23 +53,5 @@ final class GatewayHealthMonitor {
     func stop() {
         self.task?.cancel()
         self.task = nil
-    }
-
-    private static func runCheck(
-        check: @escaping @Sendable () async throws -> Bool,
-        timeoutSeconds: Double) async -> Bool
-    {
-        let timeout = max(0.0, timeoutSeconds)
-        if timeout == 0 {
-            return await (try? check()) ?? false
-        }
-        let timeoutError = NSError(
-            domain: "GatewayHealthMonitor",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "health check timed out"])
-        return await (try? AsyncTimeout.withTimeout(
-            seconds: timeout,
-            onTimeout: { timeoutError },
-            operation: check)) ?? false
     }
 }

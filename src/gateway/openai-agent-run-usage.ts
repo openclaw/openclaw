@@ -1,4 +1,3 @@
-/** Shared agent-run usage selection for OpenAI-compatible Gateway endpoints. */
 import {
   hasNonzeroUsage,
   normalizeUsage,
@@ -11,12 +10,12 @@ type AgentRunUsageMeta = {
   lastCallUsage?: UsageLike;
 };
 
-/** Prefer a nonzero aggregate snapshot, then the latest model-call snapshot. */
+/** An explicit aggregate report owns completeness; legacy counters may use the last call. */
 export function resolveAgentRunUsage(result: unknown): NormalizedUsage | undefined {
   const agentMeta = (result as { meta?: { agentMeta?: AgentRunUsageMeta } } | null)?.meta
     ?.agentMeta;
   const aggregate = normalizeUsage(agentMeta?.usage);
-  if (hasNonzeroUsage(aggregate)) {
+  if (aggregate?.usageReport || hasNonzeroUsage(aggregate)) {
     return aggregate;
   }
   const lastCall = normalizeUsage(agentMeta?.lastCallUsage);

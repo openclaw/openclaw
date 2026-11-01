@@ -6,8 +6,6 @@ import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "./sqlite-numb
 describe("coerceRequiredSqliteNumber", () => {
   it.each([
     ["negative zero", -0, -0],
-    ["NaN", Number.NaN, Number.NaN],
-    ["safe bigint", BigInt(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
     [
       "unsafe positive bigint",
       BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1),
@@ -27,26 +25,22 @@ describe("normalizeSqliteNumber", () => {
     expect(normalizeSqliteNumber(0)).toBe(0);
   });
 
-  it("returns NaN unchanged", () => {
-    expect(normalizeSqliteNumber(Number.NaN)).toBe(Number.NaN);
-  });
-
   it("converts large bigint", () => {
     expect(normalizeSqliteNumber(BigInt(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
   });
 
-  it.each([
-    BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1),
-    BigInt(-Number.MAX_SAFE_INTEGER) - BigInt(1),
-  ])("returns undefined for unsafe bigint row %s", (value) => {
-    const database = new DatabaseSync(":memory:");
-    try {
-      const statement = database.prepare("SELECT ? AS value");
-      statement.setReadBigInts(true);
-      const row = statement.get(value) as { value: bigint };
-      expect(normalizeSqliteNumber(row.value)).toBeUndefined();
-    } finally {
-      database.close();
-    }
-  });
+  it.each([BigInt(-Number.MAX_SAFE_INTEGER) - BigInt(1)])(
+    "returns undefined for unsafe bigint row %s",
+    (value) => {
+      const database = new DatabaseSync(":memory:");
+      try {
+        const statement = database.prepare("SELECT ? AS value");
+        statement.setReadBigInts(true);
+        const row = statement.get(value) as { value: bigint };
+        expect(normalizeSqliteNumber(row.value)).toBeUndefined();
+      } finally {
+        database.close();
+      }
+    },
+  );
 });

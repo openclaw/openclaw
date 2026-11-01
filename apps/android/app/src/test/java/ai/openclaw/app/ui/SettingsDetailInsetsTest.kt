@@ -27,8 +27,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -616,7 +614,13 @@ class SettingsDetailInsetsTest {
 
   @Test
   @Config(qualifiers = "w320dp-h800dp-mdpi")
-  fun appearanceSwatchesKeepAccessibleTouchTargetsInANarrowWindow() {
+  fun appearanceSwatchesKeepAccessibleTouchTargetsInANarrowWindow() = verifyAppearanceSwatches()
+
+  @Test
+  @Config(qualifiers = "w393dp-h800dp-mdpi")
+  fun appearanceSwatchesKeepTheirSizeInAWiderWindow() = verifyAppearanceSwatches()
+
+  private fun verifyAppearanceSwatches() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     app
       .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
@@ -645,6 +649,9 @@ class SettingsDetailInsetsTest {
       accents.forEach { accent ->
         val swatch = composeRule.onNodeWithContentDescription(appearanceAccentSwatchDescription(accent))
         swatch.assertIsDisplayed()
+        val bounds = swatch.fetchSemanticsNode().boundsInRoot
+        assertEquals("Accent layout must remain 48dp wide", 48 * density, bounds.width, 1f)
+        assertEquals("Accent layout must remain 48dp high", 48 * density, bounds.height, 1f)
         val touchBounds = swatch.fetchSemanticsNode().touchBoundsInRoot
         assertTrue("Accent target must remain at least 48dp wide: $touchBounds", touchBounds.width >= 48 * density - 1)
         assertTrue("Accent target must remain at least 48dp high: $touchBounds", touchBounds.height >= 48 * density - 1)
@@ -1082,7 +1089,7 @@ class SettingsDetailInsetsTest {
                 drawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
                 drawerContent = {},
               ) {
-                SettingsDetailFrame(title = "Gateway", subtitle = "", icon = Icons.Default.Settings, onBack = {}) {
+                SettingsDetailFrame(route = SettingsRoute.Gateway, title = "Gateway", subtitle = "", onBack = {}) {
                   repeat(20) { index -> ClawTextField("Field $index", {}, "") }
                   ClawTextField("Unsubmitted draft", {}, "Password", modifier = Modifier.testTag("last-field"))
                   ClawPrimaryButton(text = "Save", onClick = {})

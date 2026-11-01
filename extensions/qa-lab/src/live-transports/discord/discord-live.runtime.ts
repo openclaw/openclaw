@@ -7,7 +7,6 @@ import {
   handleDiscordMessageAction,
   requestDiscord as requestDiscordLive,
 } from "@openclaw/discord/api.js";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -17,7 +16,7 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
-import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
+import { waitForLiveQaChannelAccount } from "../shared/live-channel-status.js";
 import { requireLiveQaEnv } from "../shared/live-credential-env.js";
 import { createDiscordQaEndpointFetcher } from "./discord-live.endpoint.js";
 import {
@@ -114,7 +113,6 @@ type DiscordStatusReactionTimeline = {
   scenarioTitle: string;
   seenSequence: string[];
   snapshots: DiscordReactionSnapshot[];
-  triggerMessageId: string;
 };
 
 type DiscordThreadReplyAttachmentEvidence = {
@@ -322,16 +320,8 @@ function validateDiscordQaRuntimeEnv(runtimeEnv: DiscordQaRuntimeEnv, prefix: st
 
 export function parseDiscordQaCredentialPayload(payload: unknown): DiscordQaRuntimeEnv {
   const parsed = discordQaCredentialPayloadSchema.parse(payload);
-  const runtimeEnv = {
-    guildId: parsed.guildId,
-    channelId: parsed.channelId,
-    driverBotToken: parsed.driverBotToken,
-    sutBotToken: parsed.sutBotToken,
-    sutApplicationId: parsed.sutApplicationId,
-    ...(parsed.voiceChannelId ? { voiceChannelId: parsed.voiceChannelId } : {}),
-  };
-  validateDiscordQaRuntimeEnv(runtimeEnv, "Discord credential payload");
-  return runtimeEnv;
+  validateDiscordQaRuntimeEnv(parsed, "Discord credential payload");
+  return parsed;
 }
 
 export function buildDiscordQaConfig(
@@ -638,21 +628,6 @@ export async function waitForDiscordMessageDeleted(params: {
   );
 }
 
-async function listChannelMessagesAfter(params: {
-  token: string;
-  channelId: string;
-  afterSnowflake: string;
-}) {
-  const query = new URLSearchParams({
-    after: params.afterSnowflake,
-    limit: "50",
-  });
-  return await requestDiscord<DiscordMessage[]>(
-    `/channels/${params.channelId}/messages?${query.toString()}`,
-    params.token,
-  );
-}
-
 export function computeDiscordRttMs(triggerTimestamp?: string, replyTimestamp?: string) {
   if (!triggerTimestamp || !replyTimestamp) {
     return undefined;
@@ -764,7 +739,6 @@ export async function observeStatusReactionTimeline(params: {
     scenarioTitle: params.scenarioTitle,
     seenSequence,
     snapshots,
-    triggerMessageId: params.messageId,
   } satisfies DiscordStatusReactionTimeline;
 }
 
@@ -780,20 +754,15 @@ export async function pollChannelMessages(params: {
   afterSnowflake: string;
   timeoutMs: number;
   predicate: (message: DiscordObservedMessage) => boolean;
-  observedMessages: DiscordObservedMessage[];
-  observationScenarioId: string;
-  observationScenarioTitle: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
 }) {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
   while (Date.now() - startedAt < params.timeoutMs) {
-    const messages = await listChannelMessagesAfter({
-      token: params.token,
-      channelId: params.channelId,
-      afterSnowflake,
-    });
+    const query = new URLSearchParams({ after: afterSnowflake, limit: "50" });
+    const messages = await requestDiscord<DiscordMessage[]>(
+      `/channels/${params.channelId}/messages?${query.toString()}`,
+      params.token,
+    );
     const sorted = messages
       .filter((message) => isDiscordSnowflake(message.id))
       .toSorted((a, b) => compareDiscordSnowflakes(a.id, b.id));
@@ -803,18 +772,8 @@ export async function pollChannelMessages(params: {
       if (!normalized) {
         continue;
       }
-      const matchedScenario = params.predicate(normalized);
-      const observedMessage: DiscordObservedMessage = {
-        ...normalized,
-        scenarioId: params.observationScenarioId,
-        scenarioTitle: params.observationScenarioTitle,
-        matchedScenario,
-        triggerMessageId: params.triggerMessageId,
-        triggerTimestamp: params.triggerTimestamp,
-      };
-      params.observedMessages.push(observedMessage);
-      if (matchedScenario) {
-        return { message: observedMessage, afterSnowflake };
+      if (params.predicate(normalized)) {
+        return { message: normalized, afterSnowflake };
       }
     }
     await sleep(1_000);
@@ -946,8 +905,6 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
       outputDir: params.outputDir,
     });
     return {
-      id: params.scenario.id,
-      title: params.scenario.title,
       status,
       details:
         status === "pass"
@@ -974,25 +931,21 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
 }
 
 export async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
-  const startedAt = Date.now();
-  let lastStatus: ChannelAccountSnapshot | undefined;
-  while (Date.now() - startedAt < 45_000) {
-    try {
-      const accounts = await readLiveQaChannelAccounts(gateway, "discord");
-      const match = accounts.find((entry) => entry.accountId === accountId);
-      lastStatus = match;
-      if (match?.running && match.connected === true && match.restartPending !== true) {
-        return;
-      }
-    } catch {
-      // retry
-    }
-    await sleep(500);
-  }
-  const details = lastStatus
-    ? ` (last status: running=${String(lastStatus.running)} connected=${String(lastStatus.connected)} restartPending=${String(lastStatus.restartPending)} lastConnectedAt=${String(lastStatus.lastConnectedAt)} lastError=${lastStatus.lastError ?? "null"} lastDisconnect=${JSON.stringify(lastStatus.lastDisconnect)})`
-    : "";
-  throw new Error(`discord account "${accountId}" did not become connected${details}`);
+  await waitForLiveQaChannelAccount({
+    gateway,
+    channel: "discord",
+    accountId,
+    timeoutMs: 45_000,
+    pollMs: 500,
+    isReady: (status) =>
+      Boolean(status.running && status.connected === true && status.restartPending !== true),
+    describeTimeout: (lastStatus) => {
+      const details = lastStatus
+        ? ` (last status: running=${String(lastStatus.running)} connected=${String(lastStatus.connected)} restartPending=${String(lastStatus.restartPending)} lastConnectedAt=${String(lastStatus.lastConnectedAt)} lastError=${lastStatus.lastError ?? "null"} lastDisconnect=${JSON.stringify(lastStatus.lastDisconnect)})`
+        : "";
+      return `discord account "${accountId}" did not become connected${details}`;
+    },
+  });
 }
 
 export function matchesDiscordScenarioReply(params: {

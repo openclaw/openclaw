@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
-import { hasErrnoCode, isErrno } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath, isErrno } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { packageActivationIdentity } from "./package-update-activation-paths.js";
@@ -33,10 +33,10 @@ export async function runPnpmPreflightProbe(params: {
   env?: NodeJS.ProcessEnv;
   name?: string;
   cwd?: string;
-}): Promise<{
-  result: Awaited<ReturnType<CommandRunner>> | null;
-  failedStep: UpdateStepResult | null;
-}> {
+}): Promise<
+  | { result: Awaited<ReturnType<CommandRunner>>; failedStep: null }
+  | { result: null; failedStep: UpdateStepResult }
+> {
   const startedAt = Date.now();
   const argv = [params.installTarget.command, ...params.args];
   const probeCwd = params.cwd ?? params.installTarget.globalRoot ?? undefined;
@@ -132,7 +132,7 @@ export async function validatePnpmIsolatedUpdate(params: {
   }
 
   const rootProbe = await runPnpmPreflightProbe({ ...params, args: ["root", "-g"] });
-  if (rootProbe.failedStep || !rootProbe.result) {
+  if (rootProbe.failedStep) {
     return {
       globalBinDir: null,
       failedStep: rootProbe.failedStep,
@@ -281,12 +281,9 @@ export async function checkGlobalPackageUpdateAdmission(
         ? []
         : stagedBinDir === undefined
           ? undefined
-          : await fs.readdir(stagedBinDir).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return [];
-              }
-              throw error;
-            });
+          : await fs
+              .readdir(stagedBinDir)
+              .catch((error: unknown) => ignoreMissingPath(error) ?? []);
       for (const name of resolvePackageUpdateLauncherNames(packageName, entries)) {
         const launcher = path.join(layout.binDir, name);
         if (fsSync.lstatSync(launcher, { throwIfNoEntry: false })) {

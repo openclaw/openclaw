@@ -9,6 +9,7 @@ import {
 } from "../config/model-provider-config.js";
 import {
   getResolvedConfigEnvSecretRef,
+  hasUnresolvedConfigPath,
   resolveConfigSecretRef,
 } from "../config/resolution-facts.js";
 import {
@@ -120,6 +121,7 @@ export function resolveProviderConfigSecretInput(
     : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
   return {
+    path,
     providerConfig: resolveMergedModelProviderConfig(cfg, provider),
     resolvedEnvRef,
     ref: entry
@@ -143,17 +145,8 @@ export function getCustomProviderApiKey(
   if (!ref) {
     return normalizeOptionalSecretInput(providerConfig?.apiKey);
   }
-  if (ref.source === "env") {
-    const envId = ref.id.trim();
-    return envId || NON_ENV_SECRETREF_MARKER;
-  }
-  return NON_ENV_SECRETREF_MARKER;
+  return (ref.source === "env" && ref.id.trim()) || NON_ENV_SECRETREF_MARKER;
 }
-
-type ResolvedCustomProviderApiKey = {
-  apiKey: string;
-  source: string;
-};
 
 /** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
@@ -161,7 +154,10 @@ export function resolveUsableCustomProviderApiKey(params: {
   provider: string;
   env?: NodeJS.ProcessEnv;
   secretSentinels?: boolean;
-}): ResolvedCustomProviderApiKey | null {
+}): {
+  apiKey: string;
+  source: string;
+} | null {
   const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
   const { providerConfig: customProviderConfig, ref: apiKeyRef } = input;
   if (apiKeyRef) {
@@ -215,7 +211,6 @@ export function resolveUsableCustomProviderApiKey(params: {
   }
   if (
     customProviderConfig &&
-    isCustomLocalProviderConfig(customProviderConfig) &&
     (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
     customProviderConfig.baseUrl &&
     isLocalAuthProviderBaseUrl(customProviderConfig.baseUrl)
@@ -248,14 +243,23 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-/** True when configured or prepared route facts prove a local no-auth provider. */
+/** True when configured or prepared route facts prove a no-auth provider. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
   route?: { api?: string | null; baseUrl?: unknown };
 }): boolean {
   const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  const route = params.route ?? {
+    api: params.modelApi ?? providerConfig?.api,
+    baseUrl: providerConfig?.baseUrl,
+  };
+  // Only this adapter clears the SDK-generated bearer header for the marker.
+  if (authOverride === "none") {
+    return route.api === "openai-completions" && typeof route.baseUrl === "string";
+  }
   if (authOverride && authOverride !== "api-key") {
     return false;
   }
@@ -265,9 +269,8 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   ) {
     return false;
   }
-  const route = params.route ?? providerConfig;
   return (
-    typeof route?.api === "string" &&
+    typeof route.api === "string" &&
     route.api.trim().length > 0 &&
     typeof route.baseUrl === "string" &&
     isLocalAuthProviderBaseUrl(route.baseUrl)
@@ -280,7 +283,13 @@ export function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveMergedModelProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "none"
+  ) {
     return auth;
   }
   return undefined;
@@ -372,7 +381,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 }
 
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
-export function canUseProfileAsProviderEntryApiKey(params: {
+function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
@@ -381,14 +390,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   if (!isBearerProfileCredential(params.credential)) {
     return false;
   }
-  if (
-    isStoredCredentialCompatibleWithAuthProvider({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      provider: params.provider,
-      credential: params.credential,
-    })
-  ) {
+  if (isStoredCredentialCompatibleWithAuthProvider(params)) {
     return true;
   }
   // Split-provider entries may intentionally point at the same upstream endpoint
@@ -591,13 +593,8 @@ export function assertInlineProviderApiKeyUsable(params: {
 }
 
 function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
-  return (
-    typeof providerConfig.baseUrl === "string" &&
-    providerConfig.baseUrl.trim().length > 0 &&
-    typeof providerConfig.api === "string" &&
-    providerConfig.api.trim().length > 0 &&
-    Array.isArray(providerConfig.models) &&
-    providerConfig.models.length > 0
+  return Boolean(
+    providerConfig.baseUrl?.trim() && providerConfig.api?.trim() && providerConfig.models?.length,
   );
 }
 
@@ -675,7 +672,11 @@ export function resolveRuntimeProviderConfigApiKeyAuth(params: {
   sourceConfig: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | undefined {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  if (hasUnresolvedConfigPath(params.cfg, input.path)) {
+    return undefined;
+  }
+  const { providerConfig, ref } = input;
   const sourceRef = resolveProviderConfigSecretInput(params.sourceConfig, params.provider).ref;
   // Prepared Ref values are opaque bytes, not authored markers or copy/paste input.
   // Legacy metadata markers without a source Ref still use literal validation.

@@ -55,6 +55,24 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
   );
 }
 
+export async function resolveCdpWebSocketDiscovery(
+  cdpUrl: string,
+  readWebSocketUrl: (discoveryUrl: string) => Promise<string | undefined>,
+): Promise<{ url: string; discovered: boolean } | null> {
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    return { url: cdpUrl, discovered: false };
+  }
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const advertisedUrl = await readWebSocketUrl(discoveryUrl);
+  if (advertisedUrl) {
+    return { url: normalizeCdpWsUrl(advertisedUrl, discoveryUrl), discovered: true };
+  }
+  // Bare WebSocket endpoints can be directly usable without HTTP discovery.
+  return isWebSocketUrl(cdpUrl) ? { url: cdpUrl, discovered: false } : null;
+}
+
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
 export function scopeCdpPolicyToConfiguredEndpoint(
   cdpUrl: string,
@@ -239,25 +257,6 @@ function canonicalBrowserWebSocketIdentity(url: string): string {
   return `${canonicalCdpAuthority(parsed, parsed.protocol)}/devtools/browser/${pathMatch[1]}`;
 }
 
-/** Build restart-stable hashes without retaining endpoint credentials. */
-function createCdpOwnershipFingerprints(params: {
-  profileName: string;
-  cdpUrl: string;
-  browserWebSocketUrl: string;
-}): {
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
-} {
-  return {
-    profileFingerprint: fingerprintCdpIdentity(
-      JSON.stringify([params.profileName, canonicalCdpProfileIdentity(params.cdpUrl)]),
-    ),
-    browserInstanceFingerprint: fingerprintCdpIdentity(
-      canonicalBrowserWebSocketIdentity(params.browserWebSocketUrl),
-    ),
-  };
-}
-
 type CdpTabOwnershipParams = {
   profileName: string;
   cdpUrl: string;
@@ -309,11 +308,13 @@ async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Pro
       ownership: {
         status: "durable",
         nativeTargetId: params.nativeTargetId,
-        ...createCdpOwnershipFingerprints({
-          profileName: params.profileName,
-          cdpUrl: params.cdpUrl,
-          browserWebSocketUrl: advertisedWebSocketUrl,
-        }),
+        /** Build restart-stable hashes without retaining endpoint credentials. */
+        profileFingerprint: fingerprintCdpIdentity(
+          JSON.stringify([params.profileName, canonicalCdpProfileIdentity(params.cdpUrl)]),
+        ),
+        browserInstanceFingerprint: fingerprintCdpIdentity(
+          canonicalBrowserWebSocketIdentity(advertisedWebSocketUrl),
+        ),
       },
       browserWebSocketUrl,
       browserWebSocketLookup: pinned?.lookup,

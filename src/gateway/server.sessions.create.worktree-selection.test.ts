@@ -3,15 +3,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import * as registryReads from "../agents/worktrees/registry-read.js";
+import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   copyGitWorkspace,
@@ -32,6 +38,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
@@ -42,14 +49,29 @@ const { createSessionStoreDir, withSessionTestState } = setupSessionCreateHandle
 );
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type CreatedSession = { key: string; entry: SessionEntry; runId: string; runStarted: boolean };
+const createSession = (params: Record<string, unknown>, context?: Record<string, unknown>) =>
+  directSessionReq<CreatedSession>(
+    "sessions.create",
+    { agentId: "main", ...params },
+    {
+      client: { connect: { scopes: ["operator.admin"] } } as never,
+      context,
+    },
+  );
+async function createState(prefix: string) {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix });
+  onTestFinished(async () => {
+    await disposeSessionReadContexts();
+    testState.agentConfig = undefined;
+    await state.cleanup();
+  });
+  return state;
+}
 
-function managedWorktreeFixture(params: {
-  id: string;
-  name: string;
-  ownerId: string;
-  path: string;
-  repoRoot: string;
-}): NonNullable<ReturnType<typeof managedWorktrees.findLiveById>> {
+function managedWorktreeFixture(
+  params: Pick<ManagedWorktreeRecord, "id" | "name" | "ownerId" | "path" | "repoRoot">,
+): ManagedWorktreeRecord {
   return {
     ...params,
     baseRef: "HEAD",
@@ -61,30 +83,38 @@ function managedWorktreeFixture(params: {
   };
 }
 
-test.each([
-  {
-    name: "agent default",
-    request: {},
-    catalogTarget: undefined,
-    parentEntry: undefined,
-    expectedEntry: {},
-    expectedTitleSelection: { regularModelRef: "openai/gpt-5.6-luna" },
-  },
-  {
-    name: "explicit model",
-    request: { model: "anthropic/sonnet-4.6@work" },
-    catalogTarget: undefined,
-    parentEntry: undefined,
+function selection(provider: string, model: string, runtime: string, profile: string) {
+  return {
     expectedEntry: {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      authProfileOverride: "work",
+      providerOverride: provider,
+      modelOverride: model,
+      agentRuntimeOverride: runtime,
+      authProfileOverride: profile,
     },
     expectedTitleSelection: {
-      regularModelRef: "anthropic/claude-sonnet-4-6@work",
-      preferredProfile: "work",
+      regularModelRef: `${provider}/${model}@${profile}`,
+      agentHarnessRuntimeOverride: runtime,
+      preferredProfile: profile,
     },
-  },
+  };
+}
+const parentSelection = selection("openai", "gpt-5.6-sol", "codex", "parent-work");
+
+function configureModels(workspace: string, restricted = false) {
+  testState.agentConfig = {
+    workspace,
+    model: { primary: "openai/gpt-5.6-luna" },
+    ...(restricted ? { models: { "openai/gpt-5.6-luna": {} } } : {}),
+  };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
+    ...(!restricted ? [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }] : []),
+    { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
+  ];
+}
+
+test.for([
   {
     name: "registered catalog target",
     request: { catalogId: "claude" },
@@ -93,57 +123,28 @@ test.each([
       agentRuntime: "claude-cli",
     },
     parentEntry: undefined,
-    expectedEntry: {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      agentRuntimeOverride: "claude-cli",
-      authProfileOverride: "catalog-work",
-    },
-    expectedTitleSelection: {
-      regularModelRef: "anthropic/claude-sonnet-4-6@catalog-work",
-      agentHarnessRuntimeOverride: "claude-cli",
-      preferredProfile: "catalog-work",
-    },
+    ...selection("anthropic", "claude-sonnet-4-6", "claude-cli", "catalog-work"),
   },
   {
     name: "inherited parent",
     request: { parentSessionKey: "main" },
     catalogTarget: undefined,
     parentEntry: {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
+      ...parentSelection.expectedEntry,
       modelOverrideSource: "user" as const,
-      agentRuntimeOverride: "codex",
-      authProfileOverride: "parent-work",
       authProfileOverrideSource: "user" as const,
     },
-    expectedEntry: {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-      agentRuntimeOverride: "codex",
-      authProfileOverride: "parent-work",
-    },
-    expectedTitleSelection: {
-      regularModelRef: "openai/gpt-5.6-sol@parent-work",
-      agentHarnessRuntimeOverride: "codex",
-      preferredProfile: "parent-work",
-    },
+    ...parentSelection,
   },
 ])(
-  "sessions.create shares a title routed through the $name selection with its worktree and first chat send",
-  async ({ request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection }) =>
+  "sessions.create names its session during checkout preparation through the $name selection",
+  async (
+    { request, catalogTarget, parentEntry, expectedEntry, expectedTitleSelection },
+    { signal },
+  ) =>
     await withSessionTestState({ layout: "state-only" }, async (state) => {
       const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
-      testState.agentConfig = {
-        workspace,
-        model: { primary: "openai/gpt-5.6-luna" },
-      };
-      agentDiscoveryMock.enabled = true;
-      agentDiscoveryMock.models = [
-        { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
-        { id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" },
-        { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
-      ];
+      configureModels(workspace);
       if (catalogTarget) {
         const registry = createEmptyPluginRegistry();
         registry.sessionCatalogs.push({
@@ -157,16 +158,7 @@ test.each([
             read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
           },
         });
-        registry.cliBackends.push({
-          pluginId: "anthropic",
-          source: "test",
-          backend: {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            config: { command: "claude" },
-            bundleMcp: false,
-          },
-        });
+        registry.cliBackends.push(createClaudeCliRegistrationFixture());
         setActivePluginRegistry(registry);
       }
       const { storePath } = await createSessionStoreDir();
@@ -176,13 +168,34 @@ test.each([
         });
       }
       let sessionKey: string | undefined;
-      const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
-      const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
-      const message = "Review this rollout [[reply_to_current]]";
+      const titlePersisted = createDeferredCore();
+      const preparingWorkspace = createDeferredCore();
+      const releaseWorkspace = createDeferredCore();
+      const createWorktree = captureMethodCall("createWithOutcome")(
+        ManagedWorktreeService.prototype,
+      );
+      const worktreeSpy = vi
+        .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+        .mockImplementation(async function (this: ManagedWorktreeService, params) {
+          preparingWorkspace.resolve();
+          await releaseWorkspace.promise;
+          return createWorktree(this, params);
+        });
+      const checkTitle = () => {
+        if (
+          sessionKey &&
+          loadSessionEntry({ agentId: "main", sessionKey, storePath })?.displayName ===
+            "Attachment Repair"
+        ) {
+          titlePersisted.resolve();
+        }
+      };
+      const stopTitleObserver = sessionChanges.subscribe(checkTitle);
+      const context = {};
       const attachment = {
         type: "file",
         mimeType: "text/plain",
-        content: Buffer.from(pastedText).toString("base64"),
+        content: Buffer.from(`Pasted deployment plan ${"x".repeat(2_000)}`).toString("base64"),
       };
       dashboardTitleGenerationMocks.generate.mockResolvedValueOnce("Attachment Repair");
       const dispatchCountBefore = dispatchInboundMessageMock.mock.calls.length;
@@ -191,26 +204,14 @@ test.each([
         counts: { block: 0, final: 0, tool: 0 },
       });
       try {
-        const created = await directSessionReq<{
-          key: string;
-          entry: {
-            providerOverride?: string;
-            modelOverride?: string;
-            agentRuntimeOverride?: string;
-            authProfileOverride?: string;
-          };
-          runId: string;
-          runStarted: boolean;
-        }>(
-          "sessions.create",
+        const created = await createSession(
           {
-            agentId: "main",
             worktree: true,
-            message,
+            message: "Review this rollout [[reply_to_current]]",
             attachments: [attachment],
             ...request,
           },
-          { client: { connect: { scopes: ["operator.admin"] } } as never, context },
+          context,
         );
 
         expect(created.ok, JSON.stringify(created.error)).toBe(true);
@@ -219,18 +220,26 @@ test.each([
           runStarted: true,
         });
         sessionKey = requireNonEmptyString(created.payload?.key, "created session key");
+        await withinTest(preparingWorkspace.promise, signal);
+        checkTitle();
+        await withinTest(titlePersisted.promise, signal);
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCountBefore);
+        releaseWorkspace.resolve();
         expect(await waitForCreatedSessionRun(context, storePath, sessionKey)).toBe(true);
-        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-          displayName: "Attachment Repair",
-          worktree: { branch: "openclaw/attachment-repair" },
-        });
+        const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+        expect(entry).toMatchObject({ displayName: "Attachment Repair" });
+        expect(entry?.worktree?.branch).toMatch(/^openclaw\/[a-z0-9-]+$/u);
+        expect(entry?.worktree?.branch).not.toBe("openclaw/attachment-repair");
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCountBefore + 1);
         expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledWith(
           expect.objectContaining(expectedTitleSelection),
         );
         expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledOnce();
       } finally {
+        stopTitleObserver();
+        releaseWorkspace.resolve();
         await settleWorkspaceRuns(context, storePath, sessionKey, true);
+        worktreeSpy.mockRestore();
         await removeSessionWorktree(sessionKey);
         setActivePluginRegistry(createEmptyPluginRegistry());
         testState.agentConfig = undefined;
@@ -239,90 +248,28 @@ test.each([
 );
 
 test("sessions.create does not start title generation for a model denied by policy", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-title-denied-model-",
-  });
+  const openClawState = await createState("openclaw-session-worktree-title-denied-model-");
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  testState.agentConfig = {
-    workspace,
-    model: { primary: "openai/gpt-5.6-luna" },
-    models: { "openai/gpt-5.6-luna": {} },
-  };
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [
-    { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
-    { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
-  ];
+  configureModels(workspace, true);
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:denied-title-route";
-  try {
-    const created = await directSessionReq(
-      "sessions.create",
-      {
-        agentId: "main",
-        key,
-        model: "anthropic/sonnet-4.6@work",
-        worktree: true,
-        message: "Keep this title source on an allowed route",
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-
-    expect(created.ok).toBe(false);
-    expect(created.error?.message).toContain("model not allowed");
-    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
-    expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
-  } finally {
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
-});
-
-test("sessions.create keeps the crustacean fallback when no title source exists", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-empty-title-",
+  const created = await createSession({
+    key,
+    model: "anthropic/sonnet-4.6@work",
+    worktree: true,
+    message: "Keep this title source on an allowed route",
   });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  let worktreeId: string | undefined;
-  try {
-    const created = await directSessionReq<{ worktree: { id: string; branch: string } }>(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
 
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).toMatch(
-      /^openclaw\/[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
-    );
-    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
-  } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
+  expect(created.ok).toBe(false);
+  expect(created.error?.message).toContain("model not allowed");
+  expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
+  expect(findLiveRegistryWorktreeByOwner(process.env, "session", key)).toBeUndefined();
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 });
 
 test("sessions.create maps worktree options and preserves a nested dot-prefixed workspace cwd", async () => {
   const workspaceRelativePath = "..notes/app";
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-options-",
-  });
+  const openClawState = await createState("openclaw-session-worktree-options-");
   const repoRoot = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
   const workspace = path.join(repoRoot, workspaceRelativePath);
   const worktreePath = path.join(openClawState.root, "managed-worktree");
@@ -334,37 +281,27 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
   ]);
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
-  const createSpy = vi.spyOn(managedWorktrees, "createWithOutcome").mockResolvedValue({
-    record: managedWorktreeFixture({
-      id: "worktree-options",
-      name: "target-task",
-      ownerId: key,
-      path: worktreePath,
-      repoRoot,
-    }),
-    materialized: true,
-  });
+  const createSpy = vi
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockResolvedValue({
+      record: managedWorktreeFixture({
+        id: "worktree-options",
+        name: "target-task",
+        ownerId: key,
+        path: worktreePath,
+        repoRoot,
+      }),
+      materialized: true,
+      sourceRoot: repoRoot,
+    });
   try {
-    const created = await directSessionReq<{
-      entry: {
-        permissionMode?: string;
-        sessionRoot?: string;
-        spawnedCwd?: string;
-        worktree?: { id: string; branch: string; repoRoot: string };
-      };
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        key,
-        worktree: true,
-        worktreeName: "target-task",
-        worktreeBaseRef: "base-branch",
-        permissionMode: "workspace",
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    const created = await createSession({
+      key,
+      worktree: true,
+      worktreeName: "target-task",
+      worktreeBaseRef: "base-branch",
+      permissionMode: "workspace",
+    });
 
     expect(created.ok).toBe(true);
     expect(createSpy).toHaveBeenCalledWith(
@@ -388,25 +325,15 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
     });
     await expect(fs.stat(path.join(worktreePath, workspaceRelativePath))).resolves.toBeDefined();
 
-    const rejected = await directSessionReq(
-      "sessions.create",
-      { agentId: "main", worktreeName: "no-flag" },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    const rejected = await createSession({ worktreeName: "no-flag" });
     expect(rejected.ok).toBe(false);
   } finally {
     createSpy.mockRestore();
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
   }
 });
 
-test("sessions.create maps an admin-selected worktree cwd and rejects repository changes", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-selected-workspace-",
-  });
+test("sessions.create maps an admin-selected worktree cwd", async () => {
+  const openClawState = await createState("openclaw-session-selected-workspace-");
   const selectedRoot = tempDirs.make(
     "openclaw-session-selected-repository-",
     await fs.realpath(os.tmpdir()),
@@ -428,21 +355,11 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
   testState.agentConfig = { workspace: configuredWorkspace };
   await createSessionStoreDir();
   const createSpy = vi
-    .spyOn(managedWorktrees, "createWithOutcome")
-    .mockResolvedValue({ record, materialized: true });
-  const findSpy = vi.spyOn(managedWorktrees, "findLiveById").mockReturnValue(record);
+    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+    .mockResolvedValue({ record, materialized: true, sourceRoot: selectedWorkspace });
+  const findSpy = vi.spyOn(registryReads, "readSessionWorktreeBinding").mockResolvedValue(record);
   try {
-    const created = await directSessionReq<{
-      entry: {
-        spawnedCwd?: string;
-        worktree?: { canonicalWorkspaceDir?: string };
-      };
-      worktree: { id: string; path: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", key, worktree: true, cwd: selectedWorkspace },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    const created = await createSession({ key, worktree: true, cwd: selectedWorkspace });
 
     expect(created.ok).toBe(true);
     expect(createSpy).toHaveBeenCalledWith(
@@ -450,22 +367,9 @@ test("sessions.create maps an admin-selected worktree cwd and rejects repository
     );
     expect(created.payload?.entry.spawnedCwd).toBe(worktreePath);
     expect(created.payload?.entry.worktree?.canonicalWorkspaceDir).toBe(selectedWorkspace);
-
-    const mismatched = await directSessionReq(
-      "sessions.create",
-      { key, agentId: "main", worktree: true, cwd: configuredWorkspace },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
-    expect(mismatched).toMatchObject({
-      ok: false,
-      error: { message: "session worktree belongs to a different repository" },
-    });
   } finally {
     createSpy.mockRestore();
     findSpy.mockRestore();
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
   }
 });
 

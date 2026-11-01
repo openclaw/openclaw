@@ -31,7 +31,6 @@ export async function textToSpeechTelephony(params: {
         timeoutMs: params.timeoutMs,
         target: "telephony",
         logLabel: "TTS telephony",
-        requireTelephony: true,
         selectOperation: ({ resolvedProvider }) => {
           const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
             typeof resolvedProvider.provider.synthesizeTelephony

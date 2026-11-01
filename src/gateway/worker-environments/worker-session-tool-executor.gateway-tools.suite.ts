@@ -59,7 +59,7 @@ export function registerWorkerGatewayToolExecutionTests(
             tools: [
               {
                 name: "worker_probe",
-                label: "Worker probe",
+                label: "Worker check",
                 description: "Synthetic Gateway-owned effect",
                 parameters: Type.Object({ value: Type.String() }),
                 execute: effect,

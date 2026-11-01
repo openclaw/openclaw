@@ -1,17 +1,16 @@
-import type { ChildProcess } from "node:child_process";
-import fs from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
 import {
   assertSameCompactionPayload,
   assertSameReliabilityState,
-  formatReliabilityStderr,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
+import {
+  readReliabilitySidecarBytes,
+  waitForReliabilitySidecars,
+} from "./sqlite-reliability-sidecars.js";
 
 type CompactionTarget = {
   identity: SnapshotDatabaseIdentity;
@@ -24,17 +23,6 @@ const COMPACTION_WORKER_PATH = fileURLToPath(
 const COMPACTION_TIMEOUT_MS = 120_000;
 const MIN_ACTIVE_SIDECAR_BYTES = 1024 * 1024;
 
-function fileSize(filePath: string): number {
-  try {
-    return fs.statSync(filePath).size;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
-  }
-}
-
 function workerArgs(target: CompactionTarget): string[] {
   if (target.identity.role === "global") {
     return ["global", target.path, ""];
@@ -43,30 +31,6 @@ function workerArgs(target: CompactionTarget): string[] {
     return ["agent", target.path, target.identity.agentId];
   }
   throw new Error(`unsupported reliability target role: ${target.identity.role}`);
-}
-
-async function waitForActiveVacuum(params: {
-  child: ChildProcess;
-  databasePath: string;
-  readStderr: () => string;
-}): Promise<{ journalBytes: number; walBytes: number }> {
-  const deadline = Date.now() + COMPACTION_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const journalBytes = fileSize(`${params.databasePath}-journal`);
-    const walBytes = fileSize(`${params.databasePath}-wal`);
-    if (journalBytes >= MIN_ACTIVE_SIDECAR_BYTES || walBytes >= MIN_ACTIVE_SIDECAR_BYTES) {
-      return { journalBytes, walBytes };
-    }
-    if (params.child.exitCode !== null || params.child.signalCode !== null) {
-      throw new Error(
-        `SQLite compaction completed before interruption evidence was observed.${formatReliabilityStderr(params.readStderr())}`,
-      );
-    }
-    await delay(2);
-  }
-  throw new Error(
-    `SQLite compaction did not produce ${MIN_ACTIVE_SIDECAR_BYTES} bytes of active journal evidence within 120 seconds.`,
-  );
 }
 
 export async function runVacuumInterruptionProof(params: {
@@ -78,7 +42,7 @@ export async function runVacuumInterruptionProof(params: {
   readPayload: () => CompactionPayloadProof;
   recoverAndVerifyDatabase: () => ReliabilityStateProof;
   target: CompactionTarget;
-}): Promise<ReliabilityReport["maintenanceProof"]["vacuumInterruption"]> {
+}) {
   const worker = startReliabilityCrashWorker(COMPACTION_WORKER_PATH, workerArgs(params.target), {
     label: "SQLite compaction worker",
     env: params.env,
@@ -87,10 +51,15 @@ export async function runVacuumInterruptionProof(params: {
 
   try {
     await worker.waitForReady();
-    const observed = await waitForActiveVacuum({
+    const observed = await waitForReliabilitySidecars({
       child,
       databasePath: params.target.path,
       readStderr,
+      ready: ({ journalBytes, walBytes }) =>
+        journalBytes >= MIN_ACTIVE_SIDECAR_BYTES || walBytes >= MIN_ACTIVE_SIDECAR_BYTES,
+      timeoutMs: COMPACTION_TIMEOUT_MS,
+      exitMessage: "SQLite compaction completed before interruption evidence was observed.",
+      timeoutMessage: `SQLite compaction did not produce ${MIN_ACTIVE_SIDECAR_BYTES} bytes of active journal evidence within 120 seconds.`,
     });
     const exit = await worker.crash();
 
@@ -108,8 +77,8 @@ export async function runVacuumInterruptionProof(params: {
       params.expectedPayload,
       "vacuum crash recovery",
     );
-    const journalBytesAfterRecovery = fileSize(`${params.target.path}-journal`);
-    const walBytesAfterRecovery = fileSize(`${params.target.path}-wal`);
+    const { journalBytes: journalBytesAfterRecovery, walBytes: walBytesAfterRecovery } =
+      readReliabilitySidecarBytes(params.target.path);
     if (journalBytesAfterRecovery !== 0 || walBytesAfterRecovery !== 0) {
       throw new Error(
         `SQLite recovery left active compaction sidecars: journal=${journalBytesAfterRecovery} wal=${walBytesAfterRecovery}`,

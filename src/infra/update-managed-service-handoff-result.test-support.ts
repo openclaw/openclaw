@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ManagedHandoffTempDirTracker } from "./update-managed-service-handoff-artifacts.test-support.js";
 import type {
   ManagedServiceManagerBoundaryOptions,
   ManagedServiceManagerBoundaryResult,
@@ -14,7 +15,7 @@ export function registerManagedTerminalResultTests(
   ) => Promise<ManagedServiceManagerBoundaryResult>,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
-  tempDirs: Set<string>,
+  tempDirs: ManagedHandoffTempDirTracker,
 ): void {
   itUnix.each(["ready", "unready"] as const)(
     "finishes a cancelled handoff ledger when recovery is %s without a Gateway boot",
@@ -35,14 +36,12 @@ export function registerManagedTerminalResultTests(
       });
       expect(run?.verification.booted).toBeUndefined();
       expect(run?.downtimeMs).toEqual(gatewayHealth === "ready" ? expect.any(Number) : null);
-      expect(run?.steps).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            step: "service-stop",
-            status: "completed",
-            startedAtMs: expect.any(Number),
-          }),
-        ]),
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "service-stop",
+          status: "completed",
+          startedAtMs: expect.any(Number),
+        }),
       );
     },
   );

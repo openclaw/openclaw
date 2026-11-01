@@ -27,13 +27,12 @@ Non-token durations in use (document when adding new ones):
 
 Defined in `ui/src/styles/base.css`:
 
-| Token           | Curve                               | Use                                                     |
-| --------------- | ----------------------------------- | ------------------------------------------------------- |
-| `--ease-out`    | `cubic-bezier(0.16, 1, 0.3, 1)`     | Most enter/expand transitions — fast start, smooth land |
-| `--ease-in-out` | `cubic-bezier(0.4, 0, 0.2, 1)`      | Elements that travel across screen (slides, drawers)    |
-| `--ease-spring` | `cubic-bezier(0.34, 1.56, 0.64, 1)` | Playful/tactile: button press, badge pop, icon bounce   |
+| Token           | Curve                           | Use                                                     |
+| --------------- | ------------------------------- | ------------------------------------------------------- |
+| `--ease-out`    | `cubic-bezier(0.16, 1, 0.3, 1)` | Most enter/expand transitions — fast start, smooth land |
+| `--ease-in-out` | `cubic-bezier(0.4, 0, 0.2, 1)`  | Elements that travel across screen (slides, drawers)    |
 
-**Default rule of thumb:** Use `--ease-out` unless the element explicitly moves from point A to point B (use `--ease-in-out`) or needs a bouncy feel (use `--ease-spring`).
+**Default rule of thumb:** Use `--ease-out` unless the element explicitly moves from point A to point B (use `--ease-in-out`).
 
 ---
 

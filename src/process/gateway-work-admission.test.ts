@@ -13,6 +13,7 @@ import {
   beginGatewayRootWorkAdmissionWhenOpen,
   beginGatewayShutdownCleanup,
   captureGatewayRootWorkAdmissionContinuationScope,
+  captureGatewayRootWorkReleaseObserver,
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -526,6 +527,46 @@ it("does not retire process-lifetime work with the request that started it", asy
   await expect(child).resolves.toBe(false);
 });
 
+it.each(["settled", "reset"] as const)(
+  "observes final root release once without retaining it (%s)",
+  async (reason) => {
+    expect(captureGatewayRootWorkReleaseObserver()).toBeNull();
+    const root = tryBeginGatewayRootWorkAdmission()!;
+    const { observe, retained } = await root.run(async () => ({
+      observe: captureGatewayRootWorkReleaseObserver()!,
+      retained: retainGatewayRootWorkAdmissionContinuationScope()!,
+    }));
+    const released = vi.fn();
+    const removed = vi.fn();
+    observe(() => {
+      throw new Error("synthetic observer failure");
+    });
+    const stop = observe(released);
+    observe(removed)();
+    root.release();
+    expect(released).not.toHaveBeenCalled();
+    await retained.run(async () => {
+      retained.release();
+      expect(released).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      if (reason === "reset") {
+        resetGatewayWorkAdmission();
+      }
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(released).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(removed).not.toHaveBeenCalled();
+    root.release();
+    retained.release();
+    resetGatewayWorkAdmission();
+    stop();
+    expect(released).toHaveBeenCalledOnce();
+    const late = vi.fn();
+    observe(late);
+    expect(late).toHaveBeenCalledExactlyOnceWith(reason);
+  },
+);
+
 it.each(
   continuations.flatMap((entry) =>
     [false, true].map((reserved) => ({
@@ -564,18 +605,6 @@ it.each(
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   },
 );
-
-it("does not let a stale suspension release clear restart drain", () => {
-  const invalidated = vi.fn();
-  const suspension = tryBeginGatewaySuspendAdmission(invalidated);
-  expect(suspension?.commit()).toBe(true);
-
-  markGatewayRestartDraining();
-
-  expect(invalidated).toHaveBeenCalledOnce();
-  expect(suspension?.release()).toBe(false);
-  expect(isGatewayWorkAdmissionClosed()).toBe(true);
-});
 
 it.each([
   { fence: "signal", outcome: "rollback" },

@@ -1,15 +1,25 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
+import { PreparedModelRuntimeRecoveryError } from "./prepared-model-runtime-admission-errors.js";
+import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
+import {
+  capturePreparedModelRuntimeRefreshError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
+import {
+  PreparedModelRuntimeClosedError,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   normalizePreparedModelRuntimeInput,
   ownerKey,
+  resolveConfiguredOwner,
 } from "./prepared-model-runtime.owner.js";
 import { releasePreparedPluginPublication } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
@@ -17,8 +27,10 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeRefreshOptions,
+  PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
 
+const CATALOG_RECOVERY_DEMAND_COOLDOWN_MS = 5_000;
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 export function refreshCommittedProviderCatalogs(
@@ -28,8 +40,12 @@ export function refreshCommittedProviderCatalogs(
     if (owner.provenance !== "configured" || owner.pending || owner.needsRefresh) {
       continue;
     }
+    owner.catalogRecovery = undefined;
     void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
-      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+      if (
+        !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
+        !(error instanceof PreparedModelRuntimeClosedError)
+      ) {
         log.warn(`provider catalog refresh failed: ${formatErrorMessage(error)}`);
       }
     });
@@ -100,6 +116,7 @@ export function listConfiguredRefreshInputs(
       options.defaultWorkspaceDir,
       options.allowGatewaySubagentBinding,
       preservedWorkspaceByAgentDir,
+      options.pluginMetadataSnapshot,
     ).map(normalizePreparedModelRuntimeInput),
   );
 }
@@ -134,7 +151,7 @@ export function updateOwnersForScopedRefresh(
     owner.generation += 1;
     retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
-    owner.refreshError = staleError;
+    owner.refreshError = capturePreparedModelRuntimeRefreshError(staleError);
     if (options.clearPending) {
       owner.pending = undefined;
     }
@@ -148,30 +165,27 @@ export function updateOwnersForScopedRefresh(
   retiredPublications.forEach(releasePreparedPluginPublication);
 }
 
-/** Keeps a requested scope only when every retained owner has identical prepared dependencies. */
+/** Includes unfinished or changed owners without replacing unrelated prepared generations. */
 export function resolveSafeRefreshAgentIds(
   config: OpenClawConfig,
   options: PreparedModelRuntimeRefreshOptions,
   owners: Map<string, PreparedModelRuntimeOwner>,
 ): ReadonlySet<string> | undefined {
-  const requested = options.agentIds;
-  if (!requested) {
+  if (!options.agentIds) {
     return undefined;
   }
+  const agentIds = new Set(options.agentIds);
   const inputs = new Map(
     listConfiguredRefreshInputs(config, options, owners).flatMap((input) =>
       input.agentId ? [[input.agentId, input] as const] : [],
     ),
   );
   for (const owner of owners.values()) {
-    if (
-      owner.provenance !== "configured" ||
-      !owner.input.agentId ||
-      requested.has(owner.input.agentId)
-    ) {
+    if (owner.provenance !== "configured" || !owner.input.agentId) {
       continue;
     }
     const input = inputs.get(owner.input.agentId);
+    inputs.delete(owner.input.agentId);
     if (
       !input ||
       !owner.snapshot ||
@@ -181,24 +195,32 @@ export function resolveSafeRefreshAgentIds(
         owner.snapshot.metadataSnapshot !== options.pluginMetadataSnapshot) ||
       ownerKey({ ...owner.input, config: input.config }) !== ownerKey(input)
     ) {
-      return undefined;
+      agentIds.add(owner.input.agentId);
     }
   }
-  return requested;
+  for (const agentId of inputs.keys()) {
+    agentIds.add(agentId);
+  }
+  return agentIds;
 }
 
-/** A retired Gateway lender cannot leave a live configured publication without a successor. */
-export function createPreparedModelRuntimePluginRecovery(
-  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
-  canRecover: () => boolean,
+/** Recovery operations share configured owners and the lifecycle's existing publication barrier. */
+export function createPreparedModelRuntimeRecovery(host: {
+  owners: Map<string, PreparedModelRuntimeOwner>;
+  canRecover: () => boolean;
+  getReplacement: () => PreparedModelRuntimeReplacement | undefined;
+  getAdmissionReplacement: () => PreparedModelRuntimeReplacement | undefined;
+  captureLifetime: () => () => void;
   publish: (
-    config: () => OpenClawConfig,
+    config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
     options: PreparedModelRuntimeRefreshOptions,
-  ) => Promise<void>,
-) {
-  return (owner: PreparedModelRuntimeOwner): void => {
+  ) => Promise<void>;
+}) {
+  const { owners, publish } = host;
+  function recoverPlugin(owner: PreparedModelRuntimeOwner): void {
     if (
-      !canRecover() ||
+      !host.canRecover() ||
+      host.getReplacement() ||
       owner.provenance !== "configured" ||
       owner.pending ||
       owners.get(ownerKey(owner.input)) !== owner
@@ -219,17 +241,11 @@ export function createPreparedModelRuntimePluginRecovery(
         }
       }
     });
-  };
-}
+  }
 
-/** A failed shared catalog isolate retires its borrowers through the publication owner. */
-export function createPreparedModelRuntimeCatalogRecovery(
-  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
-  publish: (config: OpenClawConfig, options: PreparedModelRuntimeRefreshOptions) => Promise<void>,
-) {
-  return async (
+  async function recoverCatalog(
     borrowers: readonly { agentDir: string; isCurrent: () => boolean }[],
-  ): Promise<void> => {
+  ): Promise<void> {
     const failed = new Map(
       borrowers
         .filter((borrower) => borrower.isCurrent())
@@ -250,13 +266,141 @@ export function createPreparedModelRuntimeCatalogRecovery(
     }
     // Owner inputs include config-only advances that the failed catalog's captured plan does not.
     // The existing publication queue fences old snapshots and retains live service registrations.
-    await publish(first.input.config, {
-      catalogMode: "static",
-      allowGatewaySubagentBinding: true,
-      agentIds: new Set(
-        affected.flatMap((owner) => (owner.input.agentId ? [owner.input.agentId] : [])),
-      ),
-      pluginMetadataSnapshot: first.snapshot.metadataSnapshot,
-    });
+    try {
+      await publish(first.input.config, {
+        catalogMode: "static",
+        allowGatewaySubagentBinding: true,
+        agentIds: new Set(
+          affected.flatMap((owner) => (owner.input.agentId ? [owner.input.agentId] : [])),
+        ),
+        pluginMetadataSnapshot: first.snapshot.metadataSnapshot,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        !(error instanceof PreparedModelRuntimePublicationSupersededError)
+      ) {
+        const refreshError = capturePreparedModelRuntimeRefreshError(error);
+        const recovery = { error: refreshError, scheduledAttempted: false, retryAfter: 0 };
+        for (const owner of affected) {
+          if (owners.get(ownerKey(owner.input)) === owner && owner.refreshError === refreshError) {
+            owner.catalogRecovery = recovery;
+          }
+        }
+      }
+      throw error;
+    }
+  }
+
+  /** Rechecks failed publications using the existing publication barrier. */
+  async function ensureGatewayPreparedModelRuntimeReady({
+    agentId,
+    demand = "interactive",
+    abortSignal,
+  }: {
+    agentId: string;
+    demand?: "interactive" | "scheduled";
+    abortSignal?: AbortSignal;
+  }): Promise<void> {
+    if (abortSignal?.aborted) {
+      throw createAbortError("Prepared reply dispatch admission aborted", {
+        cause: abortSignal.reason,
+      });
+    }
+    if (!host.canRecover()) {
+      return;
+    }
+    const owner = resolveConfiguredOwner(host.owners, { agentId, agentDir: ".", config: {} });
+    const recovery = owner?.catalogRecovery;
+    if (!owner || !recovery) {
+      return;
+    }
+    const assertLifetime = host.captureLifetime();
+    if (recovery.pending) {
+      assertPreparedModelRuntimeAdmissionCanWait();
+      if (demand === "scheduled") {
+        recovery.scheduledAttempted = true;
+      }
+      await racePromiseWithAbortSignal(recovery.pending, abortSignal);
+      assertLifetime();
+      return;
+    }
+    const replacement = host.getAdmissionReplacement();
+    if (replacement && !replacement.degraded) {
+      assertPreparedModelRuntimeAdmissionCanWait();
+      const joinsRecovery = recovery.replacementGateId === replacement.gateId;
+      // A publication for another scope must not spend this failure's scheduled opportunity.
+      if (demand === "scheduled" && joinsRecovery) {
+        recovery.scheduledAttempted = true;
+      }
+      await racePromiseWithAbortSignal(replacement.promise, abortSignal);
+      assertLifetime();
+      if (joinsRecovery) {
+        return;
+      }
+      return await ensureGatewayPreparedModelRuntimeReady({ agentId, demand, abortSignal });
+    }
+    if (
+      !owner.needsRefresh ||
+      owner.refreshError !== recovery.error ||
+      (demand === "scheduled" && recovery.scheduledAttempted)
+    ) {
+      return;
+    }
+    if (Date.now() < recovery.retryAfter) {
+      throw new PreparedModelRuntimeRecoveryError(agentId, "backoff", recovery.retryAfter, {
+        cause: recovery.error,
+      });
+    }
+    assertPreparedModelRuntimeAdmissionCanWait(owner);
+    if (demand === "scheduled") {
+      recovery.scheduledAttempted = true;
+    }
+    const affected = [...host.owners.values()].filter(
+      (candidate) => candidate.catalogRecovery === recovery,
+    );
+    const publication = host
+      .publish(owner.input.config, {
+        catalogMode: owner.catalogMode,
+        allowGatewaySubagentBinding: owner.input.allowGatewaySubagentBinding,
+        agentIds: new Set(affected.flatMap((candidate) => candidate.input.agentId ?? [])),
+        pluginMetadataSnapshot: owner.snapshot?.metadataSnapshot,
+        isPublicationCurrent: () =>
+          host.canRecover() && host.owners.get(ownerKey(owner.input)) === owner,
+      })
+      .catch((error: unknown) => {
+        if (
+          error instanceof Error &&
+          !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
+          host.owners.get(ownerKey(owner.input)) === owner &&
+          owner.catalogRecovery === recovery &&
+          owner.refreshError === capturePreparedModelRuntimeRefreshError(error)
+        ) {
+          recovery.error = owner.refreshError;
+          recovery.retryAfter = Date.now() + CATALOG_RECOVERY_DEMAND_COOLDOWN_MS;
+          throw new PreparedModelRuntimeRecoveryError(
+            agentId,
+            "attempt-failed",
+            recovery.retryAfter,
+            { cause: error },
+          );
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (recovery.pending === publication) {
+          recovery.pending = undefined;
+        }
+      });
+    recovery.pending = publication;
+    recovery.replacementGateId = host.getReplacement()?.gateId;
+    await racePromiseWithAbortSignal(publication, abortSignal);
+    assertLifetime();
+  }
+
+  return {
+    ensureReady: ensureGatewayPreparedModelRuntimeReady,
+    recoverCatalog,
+    recoverPlugin,
   };
 }

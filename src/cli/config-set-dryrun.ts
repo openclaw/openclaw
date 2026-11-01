@@ -1,19 +1,16 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatConfigFilePath } from "../config/logging.js";
 import { info } from "../globals.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
 
-// Shared dry-run result contract for `openclaw config set` validation-only paths.
-/** Config-set input mode that produced the simulated operation. */
 export type ConfigSetDryRunInputMode = "value" | "json" | "builder" | "unset";
 
-/** One validation error found during config-set dry-run processing. */
 export type ConfigSetDryRunError = {
   kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict";
   message: string;
   ref?: string;
 };
 
-/** Dry-run summary returned by config-set command handlers and tests. */
 export type ConfigSetDryRunResult = {
   ok: boolean;
   operations: number;
@@ -30,9 +27,18 @@ export type ConfigSetDryRunResult = {
 };
 
 export class ConfigSetDryRunValidationError extends Error {
-  constructor(readonly result: ConfigSetDryRunResult) {
-    super("config set dry-run validation failed");
+  readonly humanOutput: string;
+  constructor(
+    readonly result: ConfigSetDryRunResult,
+    human = false,
+  ) {
+    const humanOutput = formatDryRunFailureMessage({
+      errors: result.errors ?? [],
+      skippedExecRefs: result.skippedExecRefs,
+    });
+    super(human ? humanOutput : "config set dry-run validation failed");
     this.name = "ConfigSetDryRunValidationError";
+    this.humanOutput = humanOutput;
   }
 }
 
@@ -42,15 +48,7 @@ export function printConfigDryRunResult(
   json?: boolean,
 ): void {
   if (!result.ok) {
-    if (json) {
-      throw new ConfigSetDryRunValidationError(result);
-    }
-    throw new Error(
-      formatDryRunFailureMessage({
-        errors: result.errors ?? [],
-        skippedExecRefs: result.skippedExecRefs,
-      }),
-    );
+    throw new ConfigSetDryRunValidationError(result, !json);
   }
   if (json) {
     writeRuntimeJson(runtime, result);
@@ -68,7 +66,7 @@ export function printConfigDryRunResult(
   }
   runtime.log(
     info(
-      `Dry run successful: ${result.operations} update(s) validated against ${shortenHomePath(result.configPath)}.`,
+      terminalText`Dry run successful: ${result.operations} update(s) validated against ${formatConfigFilePath(result.configPath)}.`,
     ),
   );
 }
@@ -85,11 +83,11 @@ function formatDryRunFailureMessage(params: {
   const schemaErrors = params.errors.filter((error) => error.kind === "schema");
   const resolveErrors = params.errors.filter((error) => error.kind === "resolvability");
   const modelErrors = params.errors.filter((error) => error.kind === "model");
-  const lines: string[] = missingPathErrors.map((error) => error.message);
+  const lines: string[] = missingPathErrors.map((error) => terminalText`${error.message}`);
   if (schemaErrors.length > 0) {
     lines.push(
       "Dry run failed: config schema validation failed.",
-      ...schemaErrors.map((error) => `- ${error.message}`),
+      ...schemaErrors.map((error) => terminalText`- ${error.message}`),
     );
   }
   if (resolveErrors.length > 0) {
@@ -97,7 +95,7 @@ function formatDryRunFailureMessage(params: {
       `Dry run failed: ${resolveErrors.length} SecretRef assignment(s) could not be resolved.`,
       ...resolveErrors
         .slice(0, 5)
-        .map((error) => `- ${error.ref ?? "<unknown-ref>"} -> ${error.message}`),
+        .map((error) => terminalText`- ${error.ref ?? "<unknown-ref>"} -> ${error.message}`),
     );
     if (resolveErrors.length > 5) {
       lines.push(`- ... ${resolveErrors.length - 5} more`);
@@ -106,7 +104,7 @@ function formatDryRunFailureMessage(params: {
   if (modelErrors.length > 0) {
     lines.push(
       "Dry run failed: model reference validation failed.",
-      ...modelErrors.map((error) => `- ${error.message}`),
+      ...modelErrors.map((error) => terminalText`- ${error.message}`),
     );
   }
   if (params.skippedExecRefs > 0) {

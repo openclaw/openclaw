@@ -27,7 +27,6 @@ type ActiveSkillEnvEntry = {
  */
 const activeSkillEnvEntries = new Map<string, ActiveSkillEnvEntry>();
 
-/** Returns a snapshot of env var keys currently injected by skill overrides. */
 export function getActiveSkillEnvKeysCore(): ReadonlySet<string> {
   return new Set(activeSkillEnvEntries.keys());
 }
@@ -209,7 +208,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       config,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
-      skillKey: resolveSkillKey(entry.skill, entry),
+      skillKey: resolveSkillKey(entry),
     });
   }
 

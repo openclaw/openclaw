@@ -19,7 +19,6 @@ function registerTransportTtsCommand<T>(
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
-          supported: ["local", "gateway"],
           defaultTransport,
         });
         return run(opts, transport);
@@ -48,12 +47,9 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       if (opts.model && !modelRef.provider) {
         throw new Error("TTS model overrides must use the form <provider/model>.");
       }
-      const provider = normalizeSpeechProviderId(
-        typeof opts.provider === "string" && opts.provider.trim()
-          ? opts.provider.trim()
-          : modelRef.provider,
-      );
+      const providerInput = typeof opts.provider === "string" ? opts.provider.trim() : "";
       const modelProvider = normalizeSpeechProviderId(modelRef.provider);
+      const provider = providerInput ? normalizeSpeechProviderId(providerInput) : modelProvider;
       if (provider && modelProvider && provider !== modelProvider) {
         throw new Error("TTS --provider must match the provider in --model.");
       }

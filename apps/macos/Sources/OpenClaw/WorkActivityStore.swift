@@ -54,7 +54,9 @@ final class WorkActivityStore {
         } else {
             // Job ended (done/error/aborted/etc). Clear everything for this session.
             self.clearTool(sessionKey: sessionKey)
-            self.clearJob(sessionKey: sessionKey)
+            if self.jobs.removeValue(forKey: sessionKey) != nil {
+                self.didClearActivity(sessionKey: sessionKey)
+            }
         }
     }
 
@@ -65,7 +67,8 @@ final class WorkActivityStore {
         meta: String?,
         args: [String: OpenClawProtocol.AnyCodable]?)
     {
-        let toolKind = Self.mapToolKind(name)
+        let displayCall = ToolDisplayRegistry.displayCall(name: name, args: args.map { AnyCodable($0) })
+        let toolKind = Self.mapToolKind(displayCall.name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
         if phase.lowercased() == "start" {
             self.lastToolUpdatedAt = Date()
@@ -100,9 +103,7 @@ final class WorkActivityStore {
 
     private func updateCurrentSession(with activity: Activity) {
         // Main session preempts immediately.
-        if activity.role == .main {
-            self.currentSessionKey = activity.sessionKey
-        } else if self.currentSessionKey == nil || !self.isActive(sessionKey: self.currentSessionKey!) {
+        if activity.role == .main || self.currentSessionKey.map(self.isActive(sessionKey:)) != true {
             self.currentSessionKey = activity.sessionKey
         }
         self.refreshDerivedState()
@@ -117,11 +118,6 @@ final class WorkActivityStore {
             self.pickNextSession()
         }
         self.refreshDerivedState()
-    }
-
-    private func clearJob(sessionKey: String) {
-        guard self.jobs.removeValue(forKey: sessionKey) != nil else { return }
-        self.didClearActivity(sessionKey: sessionKey)
     }
 
     private func clearTool(sessionKey: String) {

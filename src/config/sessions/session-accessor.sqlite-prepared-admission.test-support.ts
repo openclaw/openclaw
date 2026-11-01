@@ -2,7 +2,6 @@ import type { ChildProcess } from "node:child_process";
 import type { Worker } from "node:worker_threads";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import { getOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -10,6 +9,8 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 
 export function holdReclamationAdmission(databasePath: string) {
@@ -38,13 +39,17 @@ export function holdReclamationAdmission(databasePath: string) {
             }
             return execute({
               ...params,
-              withWriteAdmission: async (performWrite, diagnostics) => {
-                return params.withWriteAdmission(async (...admissionArgs) => {
-                  if (!admissionArgs[0]) {
-                    await pause();
-                  }
-                  return performWrite(...admissionArgs);
-                }, diagnostics);
+              withWriteAdmission: async (performWrite, diagnostics, operation) => {
+                return params.withWriteAdmission(
+                  async (...admissionArgs) => {
+                    if (!admissionArgs[0]) {
+                      await pause();
+                    }
+                    return performWrite(...admissionArgs);
+                  },
+                  diagnostics,
+                  operation,
+                );
               },
             });
           });
@@ -96,7 +101,6 @@ type PreparedAdmissionContext = {
   releases: Array<() => void>;
   own: <T>(promise: Promise<T>) => Promise<T>;
 };
-const realOpen = sqlite.openNodeSqliteDatabase;
 const realIntegrity = integrity.assertSqliteIntegrityInWorker;
 
 export function observePreparedAdmission(
@@ -151,24 +155,8 @@ export function observePreparedAdmission(
       }),
     );
   };
-  vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
-    const database = realOpen(pathname, options);
-    if (pathname !== databasePath || options?.readOnly) {
-      return database;
-    }
-    const prepare = database.prepare.bind(database);
-    database.prepare = (sql) => {
-      const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
-        const all = statement.all.bind(statement);
-        statement.all = () => {
-          parentChecks += 1;
-          return all();
-        };
-      }
-      return statement;
-    };
-    return database;
+  observeNativeSqliteIntegrityChecks(databasePath, () => {
+    parentChecks += 1;
   });
   vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation(async (...args) => {
     if (args[0] !== databasePath) {
@@ -254,7 +242,7 @@ export function observePreparedWorkerAdmission({
   let heldWorker: Worker | undefined;
   let heldCompleted = false;
   hooks.worker = (worker, owner) => {
-    if (owner === "reclamation") {
+    if (owner !== "other") {
       workers.push(worker);
     }
   };
@@ -291,6 +279,7 @@ export function observePreparedWorkerAdmission({
     async expectHealthy(expected: Record<PreparedIntegrityOwner, number>) {
       expectParentHealthy();
       await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      await closeOpenClawStateDatabaseAsync();
       expect(checking).toEqual(expected);
       expect(checked).toEqual(expected);
       expect(Atomics.load(new Int32Array(counts), 0)).toBe(

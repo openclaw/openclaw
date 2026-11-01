@@ -1,18 +1,12 @@
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
 } from "../state/agent-database-admission.js";
 import { handleGatewayRequest } from "./server-methods.js";
-
-function moduleNotFoundError(filePath: string): Error {
-  return Object.assign(new Error(`Cannot find module '${filePath}'`), {
-    code: "ERR_MODULE_NOT_FOUND",
-    url: pathToFileURL(filePath).href,
-  });
-}
+import { moduleNotFoundError } from "./stale-install.test-support.js";
 
 async function dispatchThrowingHandler(error: Error, respond = vi.fn()) {
   await handleGatewayRequest({
@@ -20,7 +14,7 @@ async function dispatchThrowingHandler(error: Error, respond = vi.fn()) {
     respond,
     client: null,
     isWebchatConnect: () => false,
-    context: {} as never,
+    context: { getRuntimeConfig: () => ({}) } as never,
     extraHandlers: {
       "test.stale-install": async () => {
         throw error;
@@ -28,6 +22,14 @@ async function dispatchThrowingHandler(error: Error, respond = vi.fn()) {
     },
   });
   return respond;
+}
+
+function expectUnavailable(respond: ReturnType<typeof vi.fn>, error: object) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code: "UNAVAILABLE", ...error }),
+  );
 }
 
 describe("gateway stale install errors", () => {
@@ -39,10 +41,8 @@ describe("gateway stale install errors", () => {
     "turns an own runtime %s into restart guidance",
     async (code) => {
       vi.stubEnv("OPENCLAW_PROFILE", "sd1");
-      const missingChunk = path.join(
-        path.dirname(fileURLToPath(import.meta.url)),
-        "../../dist",
-        "missing-own-chunk.js",
+      const missingChunk = fileURLToPath(
+        new URL("../../dist/missing-own-chunk.js", import.meta.url),
       );
       const error =
         code === "ENOENT"
@@ -54,28 +54,19 @@ describe("gateway stale install errors", () => {
           : moduleNotFoundError(missingChunk);
       const respond = await dispatchThrowingHandler(error);
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          retryable: false,
-          message: expect.stringContaining("openclaw --profile sd1 gateway restart"),
-          details: {
-            code: "STALE_INSTALL",
-            restartCommand: "openclaw --profile sd1 gateway restart",
-          },
-        }),
-      );
+      expectUnavailable(respond, {
+        retryable: false,
+        message: expect.stringContaining("openclaw --profile sd1 gateway restart"),
+        details: {
+          code: "STALE_INSTALL",
+          restartCommand: "openclaw --profile sd1 gateway restart",
+        },
+      });
     },
   );
 
   it("does not rewrite a missing module outside the OpenClaw install", async () => {
-    const outsideInstall = path.join(
-      path.parse(process.cwd()).root,
-      "outside-openclaw",
-      "missing.js",
-    );
+    const outsideInstall = path.join(path.parse(process.cwd()).root, "outside-openclaw/missing.js");
     const error = moduleNotFoundError(outsideInstall);
     const respond = vi.fn();
 
@@ -92,14 +83,5 @@ it("returns a thrown pending admission as a retryable RPC response", async () =>
     pending: true,
   });
   const respond = await dispatchThrowingHandler(new AgentDatabaseAdmissionError(refusal));
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "UNAVAILABLE",
-      details: refusal,
-      retryable: true,
-      retryAfterMs: 250,
-    }),
-  );
+  expectUnavailable(respond, { details: refusal, retryable: true, retryAfterMs: 250 });
 });

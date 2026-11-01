@@ -77,7 +77,7 @@ const profilesSchema = z.object({
     z.object({
       id: z.string(),
       mergedInto: z.string().nullable(),
-      githubIdentity: z.object({ login: z.string() }).nullable(),
+      githubIdentity: z.object({ host: z.string().optional(), login: z.string() }).nullable(),
     }),
   ),
 });
@@ -95,7 +95,11 @@ function resolveOwner(
   const logins = new Set(aliases.map((alias) => alias.toLowerCase()));
   const owners = new Set<string>();
   for (const profile of profiles) {
-    if (!profile.githubIdentity || !logins.has(profile.githubIdentity.login.toLowerCase())) {
+    if (
+      !profile.githubIdentity ||
+      (profile.githubIdentity.host ?? "github.com") !== "github.com" ||
+      !logins.has(profile.githubIdentity.login.toLowerCase())
+    ) {
       continue;
     }
     let canonical: Profile | undefined = profile;

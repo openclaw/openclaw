@@ -1,13 +1,12 @@
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
-import { finishCronRun } from "./run-history.js";
-import { STARTUP_INTERRUPTED_ERROR } from "./startup-run-repair.js";
 import { emit, type CronServiceState } from "./state.js";
 
-export async function emitInterruptedCronRun(
+export function emitInterruptedCronRun(
   state: CronServiceState,
   interrupted: InterruptedStartupRun,
-): Promise<void> {
+): void {
   const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);
   const event = {
     jobId: interrupted.jobId,
@@ -20,10 +19,10 @@ export async function emitInterruptedCronRun(
     deliveryStatus: "unknown",
     deliveryError: STARTUP_INTERRUPTED_ERROR,
     failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
+    runId: interrupted.runId,
     runAtMs: interrupted.runAtMs,
     durationMs: interrupted.durationMs,
     nextRunAtMs: job?.state.nextRunAtMs,
   } as const;
-  await finishCronRun(state, { taskRunId: interrupted.taskRunId, job, event });
   emit(state, event);
 }

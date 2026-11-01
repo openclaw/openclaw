@@ -64,7 +64,6 @@ import {
   type QaSuiteResult,
   type QaSuiteRunParams,
   type QaSuiteScenarioResult,
-  type QaSuiteSummaryJson,
   writeQaSuiteProgress,
 } from "./suite.js";
 import * as dockerBatch from "./test-file-scenario-docker-batch.js";
@@ -151,9 +150,10 @@ function createQaPartitionEvidenceOwner(params: {
     generatedAt: new Date().toISOString(),
     evidenceMode: params.evidenceMode,
   });
-  const initial = createQaEvidenceInvocation(params);
-  const scheduledIds = new Set(initial.anchors.map((anchor) => anchor.id));
-  let current = initial.snapshot(options());
+  const invocation = createQaEvidenceInvocation(params);
+  const scheduledAnchors = invocation.anchors;
+  const scheduledIds = new Set(scheduledAnchors.map((anchor) => anchor.id));
+  let current = invocation.snapshot(options());
   let active = false;
   const parentFailures = new Map<number, string>();
   const rawRowOrder = new Map<string, number>();
@@ -170,21 +170,12 @@ function createQaPartitionEvidenceOwner(params: {
       return { entry, order: rawRowOrder.get(key)! };
     });
   };
-  const restore = () =>
-    createQaEvidenceInvocation({
-      ...params,
-      anchors: resolveQaEvidenceContainment(current.occurrences, current.entries).rootInstances,
-      continuation: current,
-    });
   const receive = (summary: QaEvidenceSummaryV3Json) => {
     const anchors = resolveQaEvidenceContainment(
       summary.occurrences,
       summary.entries,
     ).rootInstances;
-    if (
-      JSON.stringify(anchors.map((item) => item.id)) !==
-      JSON.stringify(initial.anchors.map((item) => item.id))
-    ) {
+    if (JSON.stringify(anchors.map((item) => item.id)) !== JSON.stringify([...scheduledIds])) {
       throw new Error("partition evidence replaced its scheduled instances");
     }
     const child = createQaEvidenceInvocation({
@@ -192,19 +183,17 @@ function createQaPartitionEvidenceOwner(params: {
       anchors,
       continuation: summary,
     });
-    const next = restore();
     for (const [index, anchor] of anchors.entries()) {
       const input = child.childInput(index);
-      next.importChild(index, input);
+      invocation.importChild(index, input);
       if (anchor.scenario?.kind === "instance") {
-        next.select(index, anchor.scenario.resultOccurrenceId);
+        invocation.select(index, anchor.scenario.resultOccurrenceId);
       }
     }
-    current = next.snapshot(options());
+    current = invocation.snapshot(options());
     orderedRows(current.entries);
   };
   const failure = (details: string, final: boolean, status: "fail" | "blocked" = "fail") => {
-    const invocation = restore();
     const diagnostics = buildQaSuiteEvidenceSummary({
       artifactPaths: [],
       // This diagnostic identifies the requested lane, not a connected transport.
@@ -263,7 +252,7 @@ function createQaPartitionEvidenceOwner(params: {
   ) => {
     receive(evidence);
     const selectedIds = new Set(
-      restore().anchors.flatMap((anchor) =>
+      invocation.anchors.flatMap((anchor) =>
         anchor.scenario?.kind === "instance" && anchor.scenario.resultOccurrenceId !== null
           ? [anchor.scenario.resultOccurrenceId]
           : [],
@@ -276,7 +265,6 @@ function createQaPartitionEvidenceOwner(params: {
     ) {
       throw new Error("partition result does not match its selected observation");
     }
-    const invocation = restore();
     const remaining = [...results];
     const normalized: QaUnifiedPartitionResult["scenarioResults"] = [];
     const startedInstances = new Set(
@@ -348,11 +336,11 @@ function createQaPartitionEvidenceOwner(params: {
     return normalized;
   };
   return {
-    anchors: initial.anchors,
+    anchors: scheduledAnchors,
     input() {
       active = true;
       return {
-        evidenceAnchors: restore().anchors,
+        evidenceAnchors: invocation.anchors,
         evidenceContinuation: current,
         onEvidence: receive,
       };
@@ -390,11 +378,9 @@ function createQaPartitionEvidenceOwner(params: {
 }
 
 function summarizeQaEvidenceChannel(
-  summaries: readonly QaEvidenceSummaryJson[],
+  summary: QaEvidenceSummaryJson,
 ): { id?: string; driver: QaTransportDriver } | undefined {
-  const channels = summaries.flatMap((summary) =>
-    summary.entries.map((entry) => entry.execution?.channel),
-  );
+  const channels = summary.entries.map((entry) => entry.execution?.channel);
   const first = channels[0];
   if (
     !first?.driver ||
@@ -672,12 +658,10 @@ async function runWeightedUnifiedPartitionTasks(
   let activeWeight = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
     let firstError: Error | undefined;
-    let finished = false;
     const finishIfSettled = () => {
-      if (finished || activeWeight > 0) {
+      if (activeWeight > 0) {
         return;
       }
-      finished = true;
       if (firstError) {
         reject(firstError);
         return;
@@ -710,26 +694,25 @@ async function runWeightedUnifiedPartitionTasks(
         if (task.exclusiveKey) {
           activeExclusiveKeys.add(task.exclusiveKey);
         }
+        const settle = () => {
+          activeWeight -= taskWeight;
+          if (task.exclusiveKey) {
+            activeExclusiveKeys.delete(task.exclusiveKey);
+          }
+          if (firstError || pending.length === 0) {
+            finishIfSettled();
+          } else {
+            launch();
+          }
+        };
         task.run().then(
           (result) => {
             results[index] = result;
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            if (pending.length === 0 && activeWeight === 0) {
-              finishIfSettled();
-              return;
-            }
-            launch();
+            settle();
           },
           (error: unknown) => {
             firstError = error instanceof Error ? error : new Error(String(error));
-            activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
-            finishIfSettled();
+            settle();
           },
         );
       }
@@ -791,53 +774,6 @@ function testFileScenarioResultToSuiteScenario(
       },
     ],
   };
-}
-
-async function writeUnifiedQaSuiteArtifacts(params: {
-  alternateModel: string;
-  channel?: string;
-  channelDriver?: QaTransportDriver;
-  concurrency: number;
-  evidence: QaEvidenceSummaryJson;
-  fastMode: boolean;
-  finishedAt: Date;
-  outputDir: string;
-  primaryModel: string;
-  providerMode: ReturnType<typeof normalizeQaProviderMode>;
-  runtimePair: QaSuiteRunParams["runtimePair"];
-  scenarioIds: readonly string[];
-  scenarios: readonly QaSuiteScenarioResult[];
-  startedAt: Date;
-}) {
-  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  const reportPath = path.join(params.outputDir, "qa-suite-report.md");
-  const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
-  const report = renderQaMarkdownReport({
-    title: "OpenClaw QA Scenario Suite",
-    finishedAt: params.finishedAt,
-    scenarios: [...params.scenarios],
-    startedAt: params.startedAt,
-  });
-  const summary = buildQaSuiteSummaryJson({
-    ...params,
-    scenarios: [...params.scenarios],
-  }) satisfies QaSuiteSummaryJson;
-  await publishQaSuiteArtifactFiles({
-    outputDir: params.outputDir,
-    files: [
-      { filePath: evidencePath, content: `${JSON.stringify(params.evidence, null, 2)}\n` },
-      { filePath: reportPath, content: report },
-      { filePath: summaryPath, content: `${JSON.stringify(summary, null, 2)}\n` },
-    ],
-  });
-  return {
-    evidencePath,
-    outputDir: params.outputDir,
-    report,
-    reportPath,
-    scenarios: [...params.scenarios],
-    summaryPath,
-  } satisfies QaUnifiedSuiteResult;
 }
 
 async function runUnifiedQaSuite(params: {
@@ -1245,9 +1181,7 @@ async function runUnifiedQaSuite(params: {
       testFilePartitionTasks.push(createTestFilePartitionTask(concurrentTestFileScenariosByKind));
     }
   }
-  const scriptScenarios = params.plan.testFileScenariosByKind
-    .get("script")
-    ?.filter((scenario) => scenario.execution.kind === "script");
+  const scriptScenarios = params.plan.testFileScenariosByKind.get("script");
   if (scriptScenarios?.length) {
     const isParallelSafeScript = (scenario: QaTestFileScenario) =>
       scenario.execution.kind === "script" && scenario.execution.parallelSafe === true;
@@ -1415,7 +1349,7 @@ async function runUnifiedQaSuite(params: {
       ),
     ],
   };
-  const channel = summarizeQaEvidenceChannel([evidence]);
+  const channel = summarizeQaEvidenceChannel(evidence);
   const resultsByOccurrence = new Map(
     partitionResults.flatMap((partition) =>
       partition.scenarioResults.map(({ result }) => [result.evidenceOccurrenceId, result] as const),
@@ -1432,7 +1366,7 @@ async function runUnifiedQaSuite(params: {
     }
     return [result];
   });
-  const unifiedResult = await writeUnifiedQaSuiteArtifacts({
+  const artifactParams = {
     alternateModel,
     channel: channel?.id,
     channelDriver: channel?.driver,
@@ -1447,7 +1381,36 @@ async function runUnifiedQaSuite(params: {
     scenarioIds: params.plan.scenarios.map((scenario) => scenario.id),
     scenarios,
     startedAt,
+  };
+  const evidencePath = path.join(artifactParams.outputDir, QA_EVIDENCE_FILENAME);
+  const reportPath = path.join(artifactParams.outputDir, "qa-suite-report.md");
+  const summaryPath = path.join(artifactParams.outputDir, "qa-suite-summary.json");
+  const report = renderQaMarkdownReport({
+    title: "OpenClaw QA Scenario Suite",
+    finishedAt: artifactParams.finishedAt,
+    scenarios: [...artifactParams.scenarios],
+    startedAt: artifactParams.startedAt,
   });
+  const summary = buildQaSuiteSummaryJson({
+    ...artifactParams,
+    scenarios: [...artifactParams.scenarios],
+  });
+  await publishQaSuiteArtifactFiles({
+    outputDir: artifactParams.outputDir,
+    files: [
+      { filePath: evidencePath, content: `${JSON.stringify(artifactParams.evidence, null, 2)}\n` },
+      { filePath: reportPath, content: report },
+      { filePath: summaryPath, content: `${JSON.stringify(summary, null, 2)}\n` },
+    ],
+  });
+  const unifiedResult = {
+    evidencePath,
+    outputDir: artifactParams.outputDir,
+    report,
+    reportPath,
+    scenarios: [...artifactParams.scenarios],
+    summaryPath,
+  } satisfies QaUnifiedSuiteResult;
   const resultsByIndex = new Map<number, QaSuiteScenarioResult[]>();
   for (const { scenarioIndex, result } of progressEntries(
     partitionResults.flatMap((partition) => partition.scenarioResults),
@@ -1482,8 +1445,7 @@ async function runUnifiedQaSuite(params: {
   };
 }
 
-export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
-  const runParams = args[0];
+export async function runQaSuite(runParams?: QaSuiteRunParams): Promise<QaSuiteRuntimeResult> {
   rejectRemovedQaChannelDriverSelection(runParams);
   const plan = await resolveSuiteExecutionPlan(runParams);
   if (plan.kind === "unified") {
@@ -1555,11 +1517,8 @@ export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteR
   };
 }
 
-export async function runQaFlowSuiteFromRuntime(
-  ...args: [QaSuiteRunParams?]
-): Promise<QaSuiteResult> {
-  return await (
-    await loadQaFlowSuiteRuntime()
-  )(args[0]);
+export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
+  const runFlowSuite = await loadQaFlowSuiteRuntime();
+  return runFlowSuite(params);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

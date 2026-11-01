@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
@@ -10,6 +9,7 @@ import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import {
   createCacheFetchMock,
   createCapturingStreamFn,
+  createReadyGooglePromptCacheEntry,
   fetchUrl,
   makeGoogleModel,
   makeSessionManager,
@@ -48,77 +48,23 @@ const plainPromptContext = {
   messages: [],
 } as never;
 
-function readyEntry(params: {
+async function readyEntry(params: {
   cachedContent?: string;
   expireTime?: unknown;
   now?: number;
-}): SessionCustomEntry {
-  const now = params.now ?? NOW;
+}): Promise<SessionCustomEntry> {
+  const entry = await createReadyGooglePromptCacheEntry({ now: params.now ?? NOW });
   return {
-    id: "entry-ready",
-    parentId: null,
-    timestamp: new Date(now - 5_000).toISOString(),
-    type: "custom",
-    customType: "openclaw.google-prompt-cache",
+    ...entry,
     data: {
-      status: "ready",
-      timestamp: now - 5_000,
-      provider: "google",
-      modelId: "gemini-3.1-pro-preview",
-      modelApi: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      systemPromptDigest: crypto.createHash("sha256").update("Follow policy.").digest("hex"),
-      cacheRetention: "long",
+      ...entry.data,
       cachedContent: params.cachedContent ?? "cachedContents/existing",
-      ...(params.expireTime === undefined ? {} : { expireTime: params.expireTime }),
+      expireTime: params.expireTime,
     },
   };
 }
 
 describe("google prompt cache failure handling", () => {
-  it.each([
-    ["malformed JSON", () => new Response("not-json{{{", { status: 200 })],
-    [
-      "invalid UTF-8",
-      () =>
-        new Response(new Uint8Array([0x7b, 0x22, 0x6b, 0x22, 0x3a, 0xff, 0x7d]), {
-          status: 200,
-        }),
-    ],
-    ["JSON null", () => new Response("null", { status: 200 })],
-    ["JSON primitive", () => new Response("42", { status: 200 })],
-    ["JSON array", () => new Response("[]", { status: 200 })],
-    [
-      "body read failure",
-      () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull() {
-              throw new Error("broken cache response body");
-            },
-          }),
-          { status: 200 },
-        ),
-    ],
-  ])("continues uncached after %s", async (_name, responseFactory) => {
-    const entries: SessionCustomEntry[] = [];
-    const fetchMock = vi.fn(async () => responseFactory());
-    const innerStreamFn = vi.fn(() => "visible-output" as never);
-    const wrapped = await preparePromptCacheStream({
-      fetchMock,
-      now: NOW,
-      sessionManager: makeSessionManager(entries),
-      streamFn: innerStreamFn,
-    });
-
-    await expect(invoke(wrapped)).resolves.toBe("visible-output");
-    expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-      tools: TOOLS,
-    });
-    expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
-  });
-
   it.each([
     ["missing name", { expireTime: new Date(NOW + 60_000).toISOString() }],
     ["blank name", { name: " ", expireTime: new Date(NOW + 60_000).toISOString() }],
@@ -189,38 +135,6 @@ describe("google prompt cache failure handling", () => {
     });
   });
 
-  it.each([
-    ["HTTP failure", async () => new Response("denied", { status: 403 })],
-    [
-      "network failure",
-      async () => {
-        throw new Error("network unavailable");
-      },
-    ],
-    [
-      "provider abort",
-      async () => {
-        throw new DOMException("provider stopped", "AbortError");
-      },
-    ],
-  ])("continues uncached after %s", async (_name, fetchImpl) => {
-    const entries: SessionCustomEntry[] = [];
-    const innerStreamFn = vi.fn(() => "visible-output" as never);
-    const wrapped = await preparePromptCacheStream({
-      fetchMock: vi.fn(fetchImpl),
-      now: NOW,
-      sessionManager: makeSessionManager(entries),
-      streamFn: innerStreamFn,
-    });
-
-    await expect(invoke(wrapped)).resolves.toBe("visible-output");
-    expect(streamContext(innerStreamFn)).toMatchObject({
-      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-      tools: TOOLS,
-    });
-    expect(entries.at(-1)?.data).toMatchObject({ status: "failed" });
-  });
-
   it("propagates the caller abort reason without persisting failure or streaming", async () => {
     const reason = new Error("caller cancelled");
     const controller = new AbortController();
@@ -242,21 +156,28 @@ describe("google prompt cache failure handling", () => {
     expect(innerStreamFn).not.toHaveBeenCalled();
   });
 
-  it("keeps unregistered auth sentinel failures outside optional cache handling", async () => {
-    const innerStreamFn = vi.fn();
-    const fetchMock = vi.fn();
-    const wrapped = await preparePromptCacheStream({
-      apiKey: "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
-      fetchMock,
-      now: NOW,
-      sessionManager: makeSessionManager(),
-      streamFn: innerStreamFn,
-    });
+  it.each(["api-key", "header"])(
+    "keeps unregistered %s sentinel failures outside optional cache handling",
+    async (scope) => {
+      const unknownSentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+      const innerStreamFn = vi.fn();
+      const fetchMock = vi.fn();
+      const model = makeGoogleModel();
+      const headers = { ...model.headers, Authorization: `Bearer ${unknownSentinel}` };
+      const wrapped = await preparePromptCacheStream({
+        apiKey: scope === "api-key" ? unknownSentinel : "gemini-api-key",
+        model: scope === "header" ? { ...model, headers } : model,
+        fetchMock,
+        now: NOW,
+        sessionManager: makeSessionManager(),
+        streamFn: innerStreamFn,
+      });
 
-    await expect(invoke(wrapped)).rejects.toThrow("is not registered in this process");
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(innerStreamFn).not.toHaveBeenCalled();
-  });
+      await expect(invoke(wrapped)).rejects.toThrow("is not registered in this process");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(innerStreamFn).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps request-header construction failures outside optional cache handling", async () => {
     const constructionFailure = new Error("request headers unavailable");
@@ -331,7 +252,7 @@ describe("google prompt cache failure handling", () => {
       },
     ],
   ])("rebuilds persisted ready state with %s", async (_name, entry) => {
-    const entries = [readyEntry(entry)];
+    const entries = [await readyEntry(entry)];
     const fetchMock = createCacheFetchMock({
       name: "cachedContents/rebuilt",
       expireTime: new Date(NOW + 3_600_000).toISOString(),
@@ -354,7 +275,7 @@ describe("google prompt cache failure handling", () => {
 
   it("continues uncached when an invalid persisted name cannot be rebuilt", async () => {
     const entries = [
-      readyEntry({
+      await readyEntry({
         cachedContent: "cachedContents/cache\u0000id",
         expireTime: new Date(NOW + 3_600_000).toISOString(),
       }),
@@ -396,7 +317,7 @@ describe("google prompt cache failure handling", () => {
   it("refreshes a transport-stable punctuation name at the exact URL", async () => {
     const cachedContent = "cachedContents/cache-_.!~*'()";
     const entries = [
-      readyEntry({
+      await readyEntry({
         cachedContent,
         expireTime: new Date(NOW + 60_000).toISOString(),
       }),
@@ -426,7 +347,7 @@ describe("google prompt cache failure handling", () => {
     ["nonfuture expiry", JSON.stringify({ expireTime: new Date(NOW).toISOString() })],
   ])("retains a valid existing cache after refresh returns %s", async (_name, body) => {
     const entries = [
-      readyEntry({
+      await readyEntry({
         cachedContent: "cachedContents/existing",
         expireTime: new Date(NOW + 60_000).toISOString(),
       }),

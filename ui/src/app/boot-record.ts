@@ -1,14 +1,14 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { notifyListeners, registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SessionGroupSettings } from "../lib/sessions/custom-groups.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 const BOOT_RECORD_MAX_BYTES = 64 * 1024;
 const BOOT_RECORD_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-let bootRecordGeneration = 0;
 type BootRecordChange = {
   scope?: string;
   external?: true;
@@ -125,8 +125,7 @@ function isBootRecord(value: unknown): value is BootRecord {
       (group: unknown) =>
         isRecord(group) && typeof group.name === "string" && typeof group.position === "number",
     ) &&
-    Array.isArray(value.sectionOrder) &&
-    value.sectionOrder.every((section: unknown) => typeof section === "string")
+    isStringArray(value.sectionOrder)
   );
 }
 
@@ -172,20 +171,16 @@ export function readBootRecord(
   }
   try {
     storage?.removeItem(key);
-  } catch {}
+  } catch {
+    // Invalid boot data is already rejected; storage eviction is best effort.
+  }
   return null;
 }
 
 /** Cancel an owned publication without deleting a peer’s persisted admission. */
 export function retirePendingBootRecord(scope: string | undefined, owner: BootRecordOwner): void {
-  if (
-    pending &&
-    pending.record.scope === scope &&
-    sameBootRecordOwner(bootRecordOwner(pending.record), owner)
-  ) {
-    pending = undefined;
-    clearTimeout(timer);
-    timer = undefined;
+  if (pending && pending.scope === scope && sameBootRecordOwner(bootRecordOwner(pending), owner)) {
+    cancelPendingBootRecord();
   }
 }
 
@@ -202,7 +197,9 @@ function removeOwnedBootRecord(scope: string | undefined, owner: BootRecordOwner
     ) {
       storage?.removeItem(key);
     }
-  } catch {}
+  } catch {
+    // Optional boot-cache cleanup must not interrupt connection recovery.
+  }
 }
 
 export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void {
@@ -212,7 +209,7 @@ export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void 
     notifyBootRecordChange({ scope, retiredOwner: owner });
     return;
   }
-  bootRecordGeneration += 1;
+  cancelPendingBootRecord();
   notifyBootRecordChange({ scope });
   try {
     const storage = getSafeLocalStorage();
@@ -229,7 +226,9 @@ export function clearBootRecords(scope?: string, owner?: BootRecordOwner): void 
         storage.removeItem(key);
       }
     }
-  } catch {}
+  } catch {
+    // In-memory admission is retired even when persisted cleanup is unavailable.
+  }
 }
 
 /** One projection of the admitted boot record for local reads/writes only. */
@@ -262,17 +261,20 @@ export function readOfflineStorageScope(host: {
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;
-let pending: { record: BootRecord; generation: number } | undefined;
+let pending: BootRecord | undefined;
 
-function flushBootRecord(): void {
+function cancelPendingBootRecord(): void {
+  pending = undefined;
   clearTimeout(timer);
   timer = undefined;
-  const write = pending;
-  pending = undefined;
-  if (!write || write.generation !== bootRecordGeneration) {
+}
+
+function flushBootRecord(): void {
+  const record = pending;
+  cancelPendingBootRecord();
+  if (!record) {
     return;
   }
-  const { record } = write;
   const storage = getSafeLocalStorage();
   const key = BOOT_RECORD_PREFIX + record.scope;
   try {
@@ -290,11 +292,9 @@ function flushBootRecord(): void {
     const json = JSON.stringify({ ...record, agents });
     if (new TextEncoder().encode(json).length > BOOT_RECORD_MAX_BYTES) {
       removeOwnedBootRecord(record.scope, bootRecordOwner(record));
-    } else {
-      storage?.setItem(key, json);
-      if (storage?.getItem(key) === json) {
-        notifyBootRecordChange({ scope: record.scope, replacement: bootRecordOwner(record) });
-      }
+    } else if (storage) {
+      storage.setItem(key, json);
+      notifyBootRecordChange({ scope: record.scope, replacement: bootRecordOwner(record) });
     }
   } catch {
     removeOwnedBootRecord(record.scope, bootRecordOwner(record));
@@ -303,7 +303,7 @@ function flushBootRecord(): void {
 
 export function persistBootRecord(record: BootRecord): void {
   clearTimeout(timer);
-  pending = { record, generation: bootRecordGeneration };
+  pending = record;
   timer = setTimeout(flushBootRecord, 500);
 }
 
@@ -313,7 +313,8 @@ if (
   typeof document !== "undefined" &&
   typeof document.addEventListener === "function"
 ) {
-  window.addEventListener("storage", (event) => {
+  // The document owns these listeners, including across BFCache pagehide/pageshow.
+  listen(window, "storage", (event) => {
     if (event.key !== null && !event.key.startsWith(BOOT_RECORD_PREFIX)) {
       return;
     }
@@ -326,17 +327,16 @@ if (
     // Replacement data never admits an account. Each consumer compares its own
     // owner; same-account tabs keep their live connection and pending publication.
     if (
-      (!scope || pending?.record.scope === scope) &&
-      (!retiredOwner ||
-        (pending && sameBootRecordOwner(retiredOwner, bootRecordOwner(pending.record)))) &&
-      !sameBootRecordOwner(replacement, pending ? bootRecordOwner(pending.record) : undefined)
+      (!scope || pending?.scope === scope) &&
+      (!retiredOwner || (pending && sameBootRecordOwner(retiredOwner, bootRecordOwner(pending)))) &&
+      !sameBootRecordOwner(replacement, pending ? bootRecordOwner(pending) : undefined)
     ) {
-      bootRecordGeneration += 1;
+      cancelPendingBootRecord();
     }
     notifyBootRecordChange({ scope, external: true, replacement, retiredOwner });
   });
-  window.addEventListener("pagehide", flushBootRecord);
-  document.addEventListener("visibilitychange", () => {
+  listen(window, "pagehide", flushBootRecord);
+  listen(document, "visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushBootRecord();
     }

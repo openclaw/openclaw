@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -20,14 +20,22 @@ import { queryWorkerEnvironmentStore, readWorkerEnvironmentFacts } from "./store
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
 // Synchronous fault injection must remain in the transaction or callback under test.
-export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDatabase) {
-  return createPlacementTurnClaimOps({
+export function createPlacementTurnClaimFixtureOps(
+  database: OpenClawStateDatabase,
+  instanceId: string = randomUUID(),
+) {
+  const operations = createPlacementTurnClaimOps({
     path: database.path,
-    instanceId: randomUUID(),
+    instanceId,
     now: Date.now,
     read: () => database.db,
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
   });
+  return {
+    ...operations,
+    claimTurn: (input: Parameters<typeof operations.claimTurn>[0]) =>
+      operations.claimTurn(input).claim,
+  };
 }
 
 export async function advancePlacementFixtureToActive(
@@ -98,7 +106,7 @@ type PlacementEnvironmentFixture = Pick<
 > &
   Partial<WorkerEnvironmentRecord>;
 
-export function publishWorkerEnvironmentFixture(db: DatabaseSync, environmentId: string): void {
+export function publishWorkerEnvironmentFixture(db: EngineConnection, environmentId: string): void {
   const owner = workerEnvironmentProjections.get(requireOpenClawStateDatabaseIdentity({ db }));
   if (!owner?.active) {
     return;
@@ -138,6 +146,9 @@ export function writePlacementEnvironmentFixture(
       environment.leaseId === undefined
         ? `lease:${environment.environmentId}`
         : environment.leaseId,
+    resource_receipt_json: environment.resourceReceipt
+      ? JSON.stringify(environment.resourceReceipt)
+      : null,
     node_setup_id: environment.nodeSetupId ?? null,
     node_device_id: environment.nodeDeviceId ?? null,
     shared_host: environment.sharedHost == null ? null : Number(environment.sharedHost),
@@ -193,6 +204,9 @@ export function writePlacementEnvironmentFixture(
                 ? { node_device_id: environment.nodeDeviceId }
                 : {}),
               ...(environment.leaseId !== undefined ? { lease_id: values.lease_id } : {}),
+              ...(environment.resourceReceipt !== undefined
+                ? { resource_receipt_json: values.resource_receipt_json }
+                : {}),
               ...(environment.sharedHost !== undefined ? { shared_host: values.shared_host } : {}),
               ...(environment.sshEndpoint !== undefined
                 ? {

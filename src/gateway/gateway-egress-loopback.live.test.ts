@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -14,6 +11,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { writeToolCallResponse } from "./gateway-provider-fixture.test-support.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
 const describeLive = isLiveTestEnabled() ? describe : describe.skip;
@@ -93,7 +91,6 @@ function createConfig(url: string): OpenClawConfig {
     secrets: { egressProxy: { enabled: true } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,
@@ -195,29 +192,7 @@ async function startFixture() {
       arguments: JSON.stringify({ command }),
       status: "completed",
     };
-    writeOpenAiResponsesSse(response, [
-      {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { ...item, status: "in_progress", arguments: "" },
-      },
-      {
-        type: "response.function_call_arguments.done",
-        item_id: item.id,
-        output_index: 0,
-        arguments: item.arguments,
-      },
-      { type: "response.output_item.done", output_index: 0, item },
-      {
-        type: "response.completed",
-        response: {
-          id: "resp_egress_call",
-          status: "completed",
-          output: [item],
-          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-        },
-      },
-    ]);
+    writeToolCallResponse(response, item, "resp_egress_call", 1, 1);
   }
 
   return {

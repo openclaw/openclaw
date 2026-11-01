@@ -57,6 +57,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     | "emitPrepStageSummary"
     | "prepStages"
     | "sandbox"
+    | "sandboxRuntime"
     | "sandboxSessionKey"
     | "sessionAgentId"
   >;

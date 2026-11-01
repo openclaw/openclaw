@@ -31,7 +31,11 @@ output projection, and process status, use [`openclaw agent exec`](/cli/agent#ag
     openclaw agent --agent ops --message-file ./task.md
     ```
 
-    Reads a valid UTF-8 file as the agent message body.
+    Reads a valid UTF-8 file as the agent message body. To pipe a prompt:
+
+    ```bash
+    cat task.md | openclaw agent --agent ops --message-file -
+    ```
 
   </Step>
 
@@ -70,7 +74,7 @@ output projection, and process status, use [`openclaw agent exec`](/cli/agent#ag
 | Flag                        | Description                                                          |
 | --------------------------- | -------------------------------------------------------------------- |
 | `--message <text>`          | Inline message to send                                               |
-| `--message-file <path>`     | Read the message from a valid UTF-8 file (max 4 MiB)                 |
+| `--message-file <path>`     | Read valid UTF-8 from a file, or `-` for stdin (max 4 MiB)           |
 | `--to <dest>`               | Derive session key from a target (phone, chat id)                    |
 | `--session-key <key>`       | Use an explicit session key                                          |
 | `--agent <id>`              | Target a configured agent (uses its `main` session)                  |
@@ -91,16 +95,17 @@ output projection, and process status, use [`openclaw agent exec`](/cli/agent#ag
 
 - By default, the CLI goes **through the Gateway**. Add `--local` to force the
   embedded runtime on the current machine.
-- Pass exactly one of `--message` or `--message-file`. File messages preserve
-  multiline content after removing an optional UTF-8 BOM. Files larger than
-  4 MiB are rejected before dispatch.
+- Pass exactly one of `--message` or `--message-file`. Exact `--message-file -`
+  reads stdin; use `./-` or an absolute path for a file named `-`. File and stdin
+  messages preserve multiline content after removing an optional UTF-8 BOM.
+  Invalid UTF-8, empty prompts, and input larger than 4 MiB are rejected before dispatch.
 - After transient handshake retries, a Gateway timeout or closed connection
   fails the command with a stderr hint; the CLI never silently reruns the turn
   embedded. The Gateway may still finish an accepted turn, so verify Gateway
   and session state before retrying or rerunning with `--local`.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`). With `--agent`,
-  `--channel`, and `--to` together, routing follows the channel's canonical
+  `--channel`, and `--to` together, routing follows the channel's resolved
   recipient and `session.dmScope`. Stable outbound-only identities use a
   provider-owned session isolated from the agent's main session.
 - `--session-key` selects an explicit key. Agent-prefixed keys must use

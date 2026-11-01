@@ -191,7 +191,7 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
     }
   });
 
-  it("preserves legacy state precedence for secondary agents without moving the default workspace", async () => {
+  it("uses canonical workspaces even when only the legacy state directory exists", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-state-"));
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, support: {} } } };
     const env = { HOME: home };
@@ -200,7 +200,7 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
     try {
       await fs.mkdir(legacy);
       expect(resolveMemoryHostAgentWorkspaceDir(cfg, "support", env)).toBe(
-        path.join(legacy, "workspace-support"),
+        path.join(current, "workspace-support"),
       );
       expect(resolveMemoryHostAgentWorkspaceDir(cfg, "main", env)).toBe(
         path.join(current, "workspace"),
@@ -302,11 +302,26 @@ describe("normalizeConfiguredMemoryExtraPaths", () => {
         { path: " notes ", pattern: " runbooks/**/*.md " },
         { path: "notes", pattern: "runbooks/**/*.md" },
         { path: "notes", pattern: "decisions/**/*.md" },
+        { path: "reference", evergreen: true },
+        { path: "archive", pattern: "**/*.md", evergreen: true },
       ]),
     ).toEqual([
       "notes",
       { path: "notes", pattern: "runbooks/**/*.md" },
       { path: "notes", pattern: "decisions/**/*.md" },
+      { path: "reference", evergreen: true },
+      { path: "archive", pattern: "**/*.md", evergreen: true },
     ]);
+  });
+
+  it("lets the last duplicate path policy win", () => {
+    expect(
+      normalizeConfiguredMemoryExtraPaths([
+        "notes",
+        { path: "notes", evergreen: true },
+        { path: "archive", evergreen: true },
+        "archive",
+      ]),
+    ).toEqual([{ path: "notes", evergreen: true }, "archive"]);
   });
 });

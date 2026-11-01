@@ -102,7 +102,6 @@ export async function ensureConfiguredAcpBindingSession(params: {
     }
 
     if (resolution.kind !== "none") {
-      params.assertActive?.();
       await acpManager.closeSession({
         ...(params.assertActive ? { assertActive: params.assertActive } : {}),
         cfg: params.cfg,
@@ -163,6 +162,6 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
   }
   return {
     ok: false,
-    error: ensured.error ?? "unknown error",
+    error: ensured.error,
   };
 }

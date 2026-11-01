@@ -79,9 +79,9 @@ openclaw-chat-sources {
   object-fit: contain;
 }
 .chat-source-popover {
-  --max-width: min(340px, calc(100vw - 24px));
+  --oc-overlay-max-width: min(340px, calc(100vw - 24px));
 }
-.chat-source-popover::part(body) {
+.chat-source-popover.oc-popover {
   padding: 14px 16px;
   background: var(--card);
 }

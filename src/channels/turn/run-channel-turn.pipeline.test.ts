@@ -6,13 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
-import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import type { DispatchReplyWithBufferedBlockDispatcher as Dispatch } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { getReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
-import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
-import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import { runPreparedChannelTurn } from "./execution.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
 import {
@@ -22,12 +19,12 @@ import {
   createReplyDispatchReceipt,
   expectDispatched,
 } from "./run-channel-turn.delivery.test-helpers.js";
-import type { AssembledChannelTurn, PreparedChannelTurn } from "./types.js";
+import * as fixture from "./turn-state.test-support.js";
+import type { AssembledChannelTurn, ChannelTurnLogEvent } from "./types.js";
 
 const subsystemWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   const makeLogger = (subsystem: string): import("../../logging/subsystem.js").SubsystemLogger => ({
     subsystem,
     isEnabled: () => true,
@@ -41,115 +38,61 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
     child: (name: string) => makeLogger(`${subsystem}/${name}`),
   });
   return {
-    ...actual,
+    ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
     createSubsystemLogger: makeLogger,
   };
 });
 
-const {
-  emitMessageSent,
-  getGlobalHookRunner,
-  createMessageSentEmitter,
-  readRecentUserAssistantTextForSession,
-} = channelTurnMocks;
+const { emitMessageSent, readRecentUserAssistantTextForSession: readRecent } = channelTurnMocks;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;
 function dispatchTestAssembledTurn(overrides: Partial<AssembledChannelTurn>) {
-  return dispatchAssembledChannelTurn({
-    cfg: {},
-    agentId: "main",
-    storePath,
-    channel: "feishu",
-    routeSessionKey: "agent:main:feishu:peer",
-    ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
-    recordInboundSession: createRecordInboundSession(),
-    dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
-    delivery: { deliver: async () => ({ visibleReplySent: true }) },
-    ...overrides,
-  });
+  return dispatchAssembledChannelTurn(
+    fixture.assembledTurn(storePath, {
+      channel: "feishu",
+      ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
+      delivery: { deliver: async () => ({ visibleReplySent: true }) },
+      ...overrides,
+    }),
+  );
 }
-
-function runTestPreparedChannelTurn<TDispatchResult>(
-  params: Pick<PreparedChannelTurn<TDispatchResult>, "runDispatch" | "log" | "messageId">,
+function runDelivery(
+  delivery: AssembledChannelTurn["delivery"],
+  dispatch = createDispatch(),
+  overrides: Partial<AssembledChannelTurn> = {},
 ) {
-  return runPreparedChannelTurn({
-    channel: "test",
-    routeSessionKey: "agent:main:test:peer",
-    storePath,
-    ctxPayload: createCtx(),
-    recordInboundSession: createRecordInboundSession(),
-    ...params,
+  return dispatchTestAssembledTurn({
+    ...overrides,
+    dispatchReplyWithBufferedBlockDispatcher: dispatch,
+    delivery: { observeMessageSent: true, ...delivery },
   });
 }
 
 describe("channel turn pipeline", () => {
   beforeEach(() => {
     storePath = path.join(tempDirs.make("openclaw-channel-turn-pipeline-"), "sessions.json");
-    vi.clearAllMocks();
-    outboundMessageIdentities.clear();
-    resetDiagnosticEventsForTest();
-    resetLogger();
-    setLoggerOverride({ level: "info" });
-    createMessageSentEmitter.mockImplementation(() => ({
-      emitMessageSent,
-      hasMessageSentHooks: true,
-    }));
-    getGlobalHookRunner.mockReturnValue(null);
-    readRecentUserAssistantTextForSession.mockResolvedValue([]);
+    fixture.resetTurnState();
+    readRecent.mockResolvedValue([]);
   });
 
-  afterEach(() => {
-    setLoggerOverride(null);
-    resetLogger();
-  });
-
-  it("forwards adoption to the assembled dispatcher after recording", async () => {
-    const events: string[] = [];
-    const onAdopted = vi.fn(async () => {
-      events.push("adopted");
-    });
-    const turnAdoptionLifecycle = { onAdopted };
-    const dispatch = vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
-      events.push("dispatch");
-      expect(params.replyOptions?.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
-      await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
-      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-    });
-
-    const result = await dispatchTestAssembledTurn({
-      recordInboundSession: createRecordInboundSession(events),
-      dispatchReplyWithBufferedBlockDispatcher: dispatch,
-      turnAdoptionLifecycle,
-    });
-
-    expectDispatched(result);
-    expect(events).toEqual(["record", "dispatch", "adopted"]);
-    expect(onAdopted).toHaveBeenCalledOnce();
-  });
+  afterEach(fixture.resetTurnLogger);
 
   it("does not emit a second failure when a post-send observer throws", async () => {
     const observerError = new Error("observer failed");
     const onError = vi.fn();
 
     await expect(
-      dispatchTestAssembledTurn({
-        delivery: {
-          observeMessageSent: true,
-          deliver: async () => ({ messageIds: ["om-visible"], visibleReplySent: true }),
-          onDelivered: () => {
-            throw observerError;
-          },
-          onError,
+      runDelivery({
+        deliver: async () => ({ messageIds: ["om-visible"], visibleReplySent: true }),
+        onDelivered: () => {
+          throw observerError;
         },
+        onError,
       }),
     ).rejects.toBe(observerError);
 
-    expect(emitMessageSent).toHaveBeenCalledExactlyOnceWith({
-      success: true,
-      content: "reply",
-      messageId: "om-visible",
-    });
+    fixture.expectMessagesSent(["reply", "om-visible"]);
     expect(onError).not.toHaveBeenCalled();
     expect(observerError).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   });
@@ -161,34 +104,32 @@ describe("channel turn pipeline", () => {
       cause: new Error("provider rejected edit"),
     });
     const onError = vi.fn();
-    const dispatch = vi.fn(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "requested final" }, { kind: "final" });
+    const dispatch = vi.fn<Dispatch>(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "requested final" }, fixture.finalInfo);
       expect(catchSpy).toHaveBeenCalledOnce();
       rejectFinalization(finalizationError);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-    }) as DispatchReplyWithBufferedBlockDispatcher;
+      return fixture.finalDispatch();
+    });
 
     await expect(
-      dispatchTestAssembledTurn({
-        dispatchReplyWithBufferedBlockDispatcher: dispatch,
-        delivery: {
-          observeMessageSent: true,
+      runDelivery(
+        {
           deliver: async () => ({ visibleReplySent: false, finalization }),
           onError,
         },
-      }),
+        dispatch,
+      ),
     ).rejects.toBe(finalizationError);
 
-    expect(emitMessageSent).toHaveBeenCalledExactlyOnceWith({
-      success: false,
-      content: "requested final",
-      error: "final edit failed | provider rejected edit",
-      messageId: undefined,
-    });
-    expect(onError).toHaveBeenCalledExactlyOnceWith(finalizationError, { kind: "final" });
+    fixture.expectMessagesSent([
+      "requested final",
+      undefined,
+      "final edit failed | provider rejected edit",
+    ]);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(finalizationError, fixture.finalInfo);
   });
 
   it("preserves the visible partial error over other finalization and dispatch failures", async () => {
@@ -207,150 +148,117 @@ describe("channel turn pipeline", () => {
       .fn()
       .mockResolvedValueOnce({ visibleReplySent: false, finalization: firstFinalization })
       .mockResolvedValueOnce({ visibleReplySent: false, finalization: secondFinalization });
-    const dispatch = vi.fn(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "first requested" }, { kind: "final" });
-      await params.dispatcherOptions.deliver({ text: "second requested" }, { kind: "final" });
+    const dispatch = vi.fn<Dispatch>(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "first requested" }, fixture.finalInfo);
+      await dispatcherOptions.deliver({ text: "second requested" }, fixture.finalInfo);
       rejectFirst(firstError);
       rejectSecond(partialError);
       throw new Error("stream close failed");
-    }) as DispatchReplyWithBufferedBlockDispatcher;
-
-    await expect(
-      dispatchTestAssembledTurn({
-        dispatchReplyWithBufferedBlockDispatcher: dispatch,
-        delivery: { observeMessageSent: true, deliver },
-      }),
-    ).rejects.toBe(partialError);
-
-    expect(emitMessageSent).toHaveBeenCalledTimes(2);
-    expect(emitMessageSent).toHaveBeenNthCalledWith(1, {
-      success: false,
-      content: "first requested",
-      error: "first finalization failed",
-      messageId: undefined,
     });
-    expect(emitMessageSent).toHaveBeenNthCalledWith(2, {
-      success: false,
-      content: "accepted second preview",
-      error: "second finalization failed",
-      messageId: "om-second-preview",
-    });
+
+    await expect(runDelivery({ deliver }, dispatch)).rejects.toBe(partialError);
+
+    fixture.expectMessagesSent(
+      ["first requested", undefined, "first finalization failed"],
+      ["accepted second preview", "om-second-preview", "second finalization failed"],
+    );
   });
 
   it("suppresses message_sent when the adapter proves provider dispatch never began", async () => {
-    const dispatch = vi.fn(async (params) => {
+    const dispatch = vi.fn<Dispatch>(async ({ dispatcherOptions }) => {
       try {
-        await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
+        await dispatcherOptions.deliver({ ...fixture.reply }, fixture.finalInfo);
       } catch {
         // The buffered dispatcher already owns delivery-error reporting.
       }
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-    }) as DispatchReplyWithBufferedBlockDispatcher;
+    });
 
-    await dispatchTestAssembledTurn({
-      dispatchReplyWithBufferedBlockDispatcher: dispatch,
-      delivery: {
-        observeMessageSent: true,
+    await runDelivery(
+      {
         deliver: async () => {
           throw new PlatformMessageNotDispatchedError("local media load failed", {
             cause: new Error("missing file"),
           });
         },
       },
-    });
+      dispatch,
+    );
 
     expect(emitMessageSent).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "settles visible replies after suppression (observer throws: %s)",
-    async (observerThrows) => {
-      const observerError = new Error("suppression observer failed");
-      const finalized = {
-        visibleReplySent: true,
-        messageIds: ["om-public"],
-        content: "public reply",
+  it("settles visible replies even when a suppression observer throws", async () => {
+    const observerError = new Error("suppression observer failed");
+    const finalized = {
+      visibleReplySent: true,
+      messageIds: ["om-public"],
+      content: "public reply",
+    };
+    const deliver = vi.fn(async () => ({
+      visibleReplySent: false,
+      finalization: Promise.resolve(finalized),
+    }));
+    const onDelivered = vi.fn<NonNullable<AssembledChannelTurn["delivery"]["onDelivered"]>>(
+      (payload) => {
+        if (payload.text === "private reply") {
+          throw observerError;
+        }
+      },
+    );
+    const dispatch = vi.fn<Dispatch>(async ({ dispatcherOptions }) => {
+      const dispatcher = createReplyDispatcher(dispatcherOptions);
+      expect(dispatcher.sendFinalReply({ text: "private reply" })).toBe(false);
+      expect(dispatcher.sendFinalReply({ text: "public reply" })).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      return {
+        queuedFinal: dispatcher.getQueuedCounts().final > 0,
+        counts: dispatcher.getQueuedCounts(),
       };
-      const deliver = vi.fn(async () => ({
-        visibleReplySent: false,
-        finalization: Promise.resolve(finalized),
-      }));
-      const onDelivered = vi.fn<NonNullable<AssembledChannelTurn["delivery"]["onDelivered"]>>(
-        (payload) => {
-          if (observerThrows && payload.text === "private reply") {
-            throw observerError;
-          }
-        },
-      );
-      const dispatch = vi.fn(async (params) => {
-        const dispatcher = createReplyDispatcher(params.dispatcherOptions);
-        expect(dispatcher.sendFinalReply({ text: "private reply" })).toBe(false);
-        expect(dispatcher.sendFinalReply({ text: "public reply" })).toBe(true);
-        dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-        return {
-          queuedFinal: dispatcher.getQueuedCounts().final > 0,
-          counts: dispatcher.getQueuedCounts(),
-        };
-      }) as DispatchReplyWithBufferedBlockDispatcher;
+    });
 
-      const turn = dispatchTestAssembledTurn({
-        channel: "test",
-        routeSessionKey: "agent:main:test:peer",
-        ctxPayload: createCtx(),
-        dispatchReplyWithBufferedBlockDispatcher: dispatch,
-        delivery: { deliver, onDelivered, observeMessageSent: true },
-        replyPipeline: {
-          transformReplyPayload: (payload) => (payload.text === "private reply" ? null : payload),
-        },
-      });
+    const turn = runDelivery({ deliver, onDelivered }, dispatch, {
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      ctxPayload: createCtx(),
+      replyPipeline: {
+        transformReplyPayload: (payload) => (payload.text === "private reply" ? null : payload),
+      },
+    });
 
-      if (observerThrows) {
-        await expect(turn).rejects.toBe(observerError);
-      } else {
-        const result = await turn;
-        expectDispatched(result);
-        expect(result.dispatchResult).toMatchObject({
-          queuedFinal: true,
-          counts: { tool: 0, block: 0, final: 1 },
-        });
-      }
+    await expect(turn).rejects.toBe(observerError);
 
-      expect(deliver).toHaveBeenCalledExactlyOnceWith({ text: "public reply" }, { kind: "final" });
-      expect(onDelivered).toHaveBeenCalledWith(
-        { text: "private reply" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "channel_transform" },
-        },
-      );
-      expect(onDelivered).toHaveBeenCalledWith(
-        { text: "public reply" },
-        { kind: "final" },
-        expect.objectContaining(finalized),
-      );
-      expect(emitMessageSent).toHaveBeenCalledExactlyOnceWith({
-        success: true,
-        content: "public reply",
-        messageId: "om-public",
-      });
-    },
-  );
+    expect(deliver).toHaveBeenCalledExactlyOnceWith({ text: "public reply" }, fixture.finalInfo);
+    expect(onDelivered).toHaveBeenCalledWith({ text: "private reply" }, fixture.finalInfo, {
+      visibleReplySent: false,
+      suppression: { reason: "channel_transform" },
+    });
+    expect(onDelivered).toHaveBeenCalledWith(
+      { text: "public reply" },
+      fixture.finalInfo,
+      expect.objectContaining(finalized),
+    );
+    fixture.expectMessagesSent(["public reply", "om-public"]);
+  });
 
   it("can record a target session without changing the command dispatch session", async () => {
     const log = vi.fn();
     const events: string[] = [];
     const recordInboundSession = createRecordInboundSession(events);
-    const dispatch = vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
-      expect(params.ctx).not.toHaveProperty("SystemEventSessionKey");
-      expect(params.ctx.SessionKey).toBe(commandSessionKey);
-      expect(getReplySystemEventContext({ ...params.replyOptions })?.sessionKey).toBe(
-        routeSessionKey,
-      );
+    const onAdopted = vi.fn(async () => {
+      events.push("adopted");
+    });
+    const turnAdoptionLifecycle = { onAdopted };
+    const dispatch = vi.fn<Dispatch>(async ({ ctx, replyOptions, dispatcherOptions }) => {
+      expect(ctx).not.toHaveProperty("SystemEventSessionKey");
+      expect(ctx.SessionKey).toBe(commandSessionKey);
+      expect(getReplySystemEventContext({ ...replyOptions })?.sessionKey).toBe(routeSessionKey);
       events.push("dispatch");
-      await params.dispatcherOptions.deliver({ text: "reply" }, { kind: "final" });
-      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      expect(replyOptions?.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
+      await replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      await dispatcherOptions.deliver({ ...fixture.reply }, fixture.finalInfo);
+      return fixture.finalDispatch();
     });
     const routeSessionKey = "agent:main:telegram:group:42";
     const commandSessionKey = "agent:main:command:telegram:42";
@@ -367,6 +275,7 @@ describe("channel turn pipeline", () => {
       }),
       recordInboundSession,
       dispatchReplyWithBufferedBlockDispatcher: dispatch,
+      turnAdoptionLifecycle,
       record: { sessionKey: targetSessionKey },
       log,
       afterRecord: async () => {
@@ -375,21 +284,19 @@ describe("channel turn pipeline", () => {
     });
 
     expectDispatched(result);
-    expect(events).toEqual(["record", "afterRecord", "dispatch"]);
+    expect(events).toEqual(["record", "afterRecord", "dispatch", "adopted"]);
     expect(log).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
     );
-    expect(result.routeSessionKey).toBe(routeSessionKey);
-    expect(result.ctxPayload.SessionKey).toBe(commandSessionKey);
+    expect(result).toMatchObject({
+      routeSessionKey,
+      ctxPayload: { SessionKey: commandSessionKey },
+    });
     expect(recordInboundSession).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: targetSessionKey }),
     );
-    expect(readRecentUserAssistantTextForSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        sessionKey: targetSessionKey,
-        storePath,
-      }),
+    expect(readRecent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", sessionKey: targetSessionKey, storePath }),
     );
   });
 
@@ -407,40 +314,36 @@ describe("channel turn pipeline", () => {
     expect(historyMap.get("room")).toStrictEqual([]);
   });
 
-  it("attributes the zero-count warn line with the dispatch's processed outcome", async () => {
-    const log = vi.fn();
-    const runDispatch = vi.fn(async () => {
-      noteDispatchProcessedOutcome({ outcome: "skipped", reason: "duplicate" });
-      return {
-        queuedFinal: true,
-        counts: { tool: 0, block: 0, final: 1 },
-        settledReceipt: createReplyDispatchReceipt({ final: { deliveredNotVisible: 1 } }),
-      };
-    });
-
-    const result = await runTestPreparedChannelTurn({
-      runDispatch,
+  it("keeps zero-visible diagnostic attribution internal", async () => {
+    const log = vi.fn<(event: ChannelTurnLogEvent) => void>();
+    const result = await runPreparedChannelTurn({
+      ...fixture.turnContext(storePath),
       log,
       messageId: "msg-zero-cause",
+      runDispatch: async () => {
+        noteDispatchProcessedOutcome({ outcome: "skipped", reason: "duplicate" });
+        return {
+          ...fixture.finalDispatch(),
+          settledReceipt: createReplyDispatchReceipt({ final: { deliveredNotVisible: 1 } }),
+        };
+      },
     });
 
     expectDispatched(result);
     expect(subsystemWarn).toHaveBeenCalledWith(expect.stringContaining("messageId=msg-zero-cause"));
     expect(subsystemWarn).toHaveBeenCalledWith(expect.stringContaining("cause=skipped:duplicate"));
-    // The channel log event is a plugin contract; the attribution must stay out of it.
     const warning = log.mock.calls
-      .map(([event]) => event as Record<string, unknown>)
+      .map(([event]) => event)
       .find((event) => event.reason === "zero-count-visible-dispatch");
     expect(warning).toBeDefined();
     expect(warning).not.toHaveProperty("cause");
   });
 
-  it.each([
-    { label: "observed delivery", signal: { observedReplyDelivery: true } },
-    { label: "deferred steer", signal: { deferredToActiveRun: "steer" } },
-  ] as const)("does not warn for $label with zero queued counts", async ({ signal }) => {
+  it("does not warn for a steer deferred to the active run", async () => {
     const log = vi.fn();
-    const result = await runTestPreparedChannelTurn({
+    const signal = { deferredToActiveRun: "steer" } as const;
+    const result = await runPreparedChannelTurn({
+      ...fixture.turnContext(storePath),
       log,
       messageId: "msg-zero",
       runDispatch: async () => ({

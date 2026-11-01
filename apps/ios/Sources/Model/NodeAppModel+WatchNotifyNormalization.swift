@@ -2,6 +2,12 @@ import Foundation
 import OpenClawKit
 
 extension NodeAppModel {
+    private static let watchRiskPriorities: [(risk: OpenClawWatchRisk, priority: OpenClawNotificationPriority)] = [
+        (.low, .passive),
+        (.medium, .active),
+        (.high, .timeSensitive),
+    ]
+
     static func normalizeWatchNotifyParams(_ params: OpenClawWatchNotifyParams) -> OpenClawWatchNotifyParams {
         var normalized = params
         normalized.title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -11,8 +17,8 @@ extension NodeAppModel {
         normalized.gatewayStableID = self.trimmedOrNil(params.gatewayStableID)
         normalized.kind = self.trimmedOrNil(params.kind)
         normalized.details = self.trimmedOrNil(params.details)
-        normalized.priority = self.normalizedWatchPriority(params.priority, risk: params.risk)
-        normalized.risk = self.normalizedWatchRisk(params.risk, priority: normalized.priority)
+        normalized.priority = params.priority ?? self.watchRiskPriorities.first { $0.risk == params.risk }?.priority
+        normalized.risk = params.risk ?? self.watchRiskPriorities.first { $0.priority == normalized.priority }?.risk
 
         let normalizedActions = self.normalizeWatchActions(
             params.actions,
@@ -46,55 +52,23 @@ extension NodeAppModel {
         }
 
         let normalizedKind = kind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if normalizedKind.contains("approval") || normalizedKind.contains("approve") {
-            return [
+        let actions: [OpenClawWatchAction] = if normalizedKind.contains("approval") || normalizedKind
+            .contains("approve")
+        {
+            [
                 OpenClawWatchAction(id: "approve", label: "Approve"),
                 OpenClawWatchAction(id: "decline", label: "Decline", style: "destructive"),
-                OpenClawWatchAction(id: "open_phone", label: "Open iPhone"),
-                OpenClawWatchAction(id: "escalate", label: "Escalate"),
+            ]
+        } else {
+            [
+                OpenClawWatchAction(id: "done", label: "Done"),
+                OpenClawWatchAction(id: "snooze_10m", label: "Snooze 10m"),
             ]
         }
-
-        return [
-            OpenClawWatchAction(id: "done", label: "Done"),
-            OpenClawWatchAction(id: "snooze_10m", label: "Snooze 10m"),
+        return actions + [
             OpenClawWatchAction(id: "open_phone", label: "Open iPhone"),
             OpenClawWatchAction(id: "escalate", label: "Escalate"),
         ]
-    }
-
-    static func normalizedWatchRisk(
-        _ risk: OpenClawWatchRisk?,
-        priority: OpenClawNotificationPriority?) -> OpenClawWatchRisk?
-    {
-        if let risk { return risk }
-        switch priority {
-        case .passive:
-            return .low
-        case .active:
-            return .medium
-        case .timeSensitive:
-            return .high
-        case nil:
-            return nil
-        }
-    }
-
-    static func normalizedWatchPriority(
-        _ priority: OpenClawNotificationPriority?,
-        risk: OpenClawWatchRisk?) -> OpenClawNotificationPriority?
-    {
-        if let priority { return priority }
-        switch risk {
-        case .low:
-            return .passive
-        case .medium:
-            return .active
-        case .high:
-            return .timeSensitive
-        case nil:
-            return nil
-        }
     }
 
     static func trimmedOrNil(_ value: String?) -> String? {

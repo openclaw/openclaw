@@ -20,27 +20,31 @@ import { projectTranscriptEntryMessage } from "./session-transcript-entry-messag
 import { resolveSessionTranscriptResetArchiveCandidatesAsync } from "./session-transcript-files.fs.js";
 import {
   assertArchiveTranscriptSource,
+  prepareSessionTranscriptIndex,
   readIndexedTranscriptEntries,
   readSessionTranscriptIndex,
   selectArchiveTranscriptEntries,
+  type IndexedTranscriptEntry,
   type MaterializedTranscriptEntry,
   type SessionTranscriptIndex,
 } from "./session-transcript-index.fs.js";
 import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessageByIdResult,
-  ReadSessionMessagesAsyncOptions,
   ReadSessionMessagesResult,
+  SessionTranscriptSourcePageOptions,
+  SessionTranscriptSourceSnapshot,
 } from "./session-transcript-read.types.js";
 import {
   MAX_TRANSCRIPT_PARSE_LINE_BYTES,
   parseTranscriptRecord,
 } from "./session-transcript-record-parser.js";
+import {
+  SOURCE_PAGE_MAX_BYTES,
+  SOURCE_PAGE_MAX_MESSAGES,
+} from "./session-transcript-source-pages.js";
 
-export type {
-  ReadRecentSessionMessagesOptions,
-  ReadSessionMessagesAsyncOptions,
-} from "./session-transcript-read.types.js";
+export type { ReadRecentSessionMessagesOptions } from "./session-transcript-read.types.js";
 
 type ReadSessionMessagesPageOptions = {
   offset: number;
@@ -176,23 +180,81 @@ export class ArchivedTranscriptReader {
     return null;
   }
 
-  async read(opts: ReadSessionMessagesAsyncOptions): Promise<ReadSessionMessagesResult> {
-    if (opts.mode === "recent") {
-      const snapshot = await this.readRecentWithStats(opts);
-      return { messages: snapshot.messages, transcriptPath: snapshot.transcriptPath };
-    }
-    const filePath = await this.resolvePath();
+  async readSourcePage(
+    opts: SessionTranscriptSourcePageOptions,
+    snapshot: SessionTranscriptSourceSnapshot,
+  ): Promise<ReadSessionMessagesResult> {
+    const cursor = opts.cursor?.kind === "archive" ? opts.cursor : undefined;
+    const filePath = cursor?.path ?? (await this.resolvePath());
+    const nextBranch =
+      opts.includeOffPathMessages && snapshot.indexedSeq >= 0
+        ? { kind: "off-path" as const, snapshot, position: -1, messageSeq: snapshot.totalMessages }
+        : undefined;
     if (!filePath) {
-      return { messages: [] };
+      return { messages: [], nextCursor: nextBranch };
     }
-    const index = await readSessionTranscriptIndex(filePath, this.scope.sessionId);
+    const prepared = await prepareSessionTranscriptIndex(filePath, this.scope.sessionId);
+    if (cursor && prepared?.displaySource !== cursor.source) {
+      throw new Error("Transcript archive changed during source pagination; retry the read");
+    }
+    const start = cursor?.position ?? 0;
+    if (prepared && !prepared.index) {
+      return {
+        messages: [],
+        transcriptPath: filePath,
+        nextCursor: {
+          kind: "archive",
+          snapshot,
+          position: start,
+          messageSeq: 0,
+          path: filePath,
+          source: prepared.displaySource,
+        },
+      };
+    }
+    const index = prepared?.index;
+    const messageIds = opts.messageIds && new Set(opts.messageIds);
+    const selected: IndexedTranscriptEntry[] = [];
+    let end = start;
+    let bytes = 0;
+    if (index) {
+      while (end < index.entries.length && selected.length < SOURCE_PAGE_MAX_MESSAGES) {
+        const entry = index.entries[end]!;
+        // ID-less legacy rows can carry the projected ID inside message metadata.
+        if (
+          messageIds &&
+          (messageIds.size === 0 || (entry.rawId !== undefined && !messageIds.has(entry.rawId)))
+        ) {
+          end++;
+          continue;
+        }
+        const size = entry.length;
+        if (bytes + size > SOURCE_PAGE_MAX_BYTES) {
+          break;
+        }
+        bytes += size;
+        selected.push(entry);
+        end++;
+      }
+    }
     return {
       messages: index
         ? (
-            await readIndexedTranscriptEntries(filePath, index, index.entries, this.scope.sessionId)
+            await readIndexedTranscriptEntries(filePath, index, selected, this.scope.sessionId)
           ).flatMap(indexedTranscriptEntryToMessages)
         : [],
       transcriptPath: filePath,
+      nextCursor:
+        index && end < index.entries.length
+          ? {
+              kind: "archive",
+              snapshot,
+              position: end,
+              messageSeq: 0,
+              path: filePath,
+              source: index.displaySource,
+            }
+          : nextBranch,
     };
   }
 

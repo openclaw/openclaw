@@ -14,7 +14,7 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { sleep } from "../utils/sleep.js";
+import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 import {
   EXIT_STDIO_GRACE_MS,
   hasChildProcessExited,
@@ -55,15 +55,14 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { setProcessTimeout } from "./process-deadline.js";
 import { BrokerChild } from "./spawn-broker/child.js";
-
-const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
-const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
 export type CommandOptions = {
+  executionIntent?: ProcessExecutionIntent;
   timeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
@@ -124,6 +123,14 @@ export async function runCommandBuffersWithTimeout(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<BufferSpawnResult> {
   return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false, true);
+}
+
+/** Retain raw bytes with UTF-8 capture boundaries, independent of the Windows console page. */
+export async function runUtf8CommandBuffersWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<BufferSpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true, true);
 }
 
 async function runCommandWithOutputEncoding(
@@ -234,6 +241,7 @@ async function runCommandWithOutputEncoding(
   let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
+    executionIntent: options.executionIntent,
     buffer: false,
     cancelSignal: cancelController.signal,
     inheritScopeCancellation: false,
@@ -466,7 +474,7 @@ async function runCommandWithOutputEncoding(
         if (removedBytes === entry.buffer.byteLength) {
           combinedTailChunks.splice(index, 1);
         } else {
-          entry.buffer = Buffer.from(entry.buffer.subarray(removedBytes));
+          entry.buffer = copyOwnedBuffer(entry.buffer.subarray(removedBytes));
         }
         combinedCapturedBytes -= removedBytes;
         combinedCapturedBytesByStream[entry.stream] -= removedBytes;
@@ -624,25 +632,6 @@ async function runCommandWithOutputEncoding(
     !result.isCanceled &&
     !result.isMaxBuffer &&
     !result.isTerminated;
-  if (isCauseLessWindowsShimResult) {
-    // A patched Windows runtime can populate exitCode shortly after close.
-    // Settle that state before the shim fallback can infer a clean exit.
-    for (
-      let elapsedMs = 0;
-      elapsedMs < WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS;
-      elapsedMs += WINDOWS_CLOSE_STATE_POLL_MS
-    ) {
-      if (
-        childExitState?.code != null ||
-        childExitState?.signal != null ||
-        nodeChild.exitCode != null ||
-        nodeChild.signalCode != null
-      ) {
-        break;
-      }
-      await sleep(WINDOWS_CLOSE_STATE_POLL_MS);
-    }
-  }
   if (
     result.failed &&
     !termination &&

@@ -8,6 +8,9 @@ const enSidebarAttention = {
       limited: "This browser has limited access.",
       guidance:
         "This browser has limited access. Manage it with openclaw devices on the Gateway or from Devices on an admin browser.",
+      roleGuidance:
+        "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
+      roleState: "Access follows your role",
       status: "Limited access",
       inboxState: "Administrator access required",
       showDetails: "Show limited access details",
@@ -64,15 +67,11 @@ const enSidebarAttention = {
     outbox: {
       conversation: "Conversation",
       failed: "Your message wasn’t sent",
-      unconfirmed: "Your message may not have arrived",
+      held: "Your message needs review",
       commandFailed: "Your command failed",
-      commandUnconfirmed: "Your command may not have run",
       review: "Review in chat",
       reviewShort: "Review",
       reviewHint: "Open the conversation to review it before trying again.",
-      checkBeforeRetry: "Open the conversation to check whether it arrived before trying again.",
-      checkCommandBeforeRetry:
-        "The command may already have run. Review the conversation before retrying.",
       offline: "Offline",
       offlineHint: "Offline: reconnect before retrying.",
     },

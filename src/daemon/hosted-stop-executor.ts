@@ -74,17 +74,16 @@ export async function prepareHostedStopExecutor(params: {
       return;
     }
     output += data.toString();
-    if (output.length > 128) {
+    if (
+      output.length > 128 ||
+      (output.endsWith("\n") &&
+        (!/^[1-9]\d*\n$/.test(output) || Number(output.trim()) !== child.pid))
+    ) {
       readiness.reject(new Error("Native stop executor returned invalid readiness"));
       cancel();
       return;
     }
     if (output.endsWith("\n")) {
-      if (!/^[1-9]\d*\n$/.test(output) || Number(output.trim()) !== child.pid) {
-        readiness.reject(new Error("Native stop executor returned invalid readiness"));
-        cancel();
-        return;
-      }
       ready = true;
       clearTimeout(timeout);
       readiness.resolve(Number(output.trim()));

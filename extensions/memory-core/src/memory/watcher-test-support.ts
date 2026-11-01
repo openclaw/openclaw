@@ -13,6 +13,7 @@ export function createMemoryObservationHarness() {
     root: ObservationRoot;
     options: WatchOptions;
     subscription: WatchSubscription;
+    setScopes: ReturnType<typeof vi.fn<WatchSubscription["setScopes"]>>;
     close: ReturnType<typeof vi.fn<() => Promise<void>>>;
     dirty: (changes?: WatchInvalidation["changes"], reason?: WatchInvalidation["reason"]) => void;
     health: (facts: Partial<WatchHealth>) => void;
@@ -32,20 +33,22 @@ export function createMemoryObservationHarness() {
         health = { ...health, state: "closed", directories: 0 };
         return closeBarrier ?? Promise.resolve();
       });
+      const setScopes = vi.fn<WatchSubscription["setScopes"]>(async (scopes) => {
+        options.scopes = scopes;
+      });
       const subscription: WatchSubscription = {
         ready: Promise.resolve(),
         close,
         [Symbol.asyncDispose]: close,
         health: () => health,
         reconcile: vi.fn(async () => undefined),
-        setScopes: vi.fn(async (scopes) => {
-          options.scopes = scopes;
-        }),
+        setScopes,
       };
       observations.push({
         root: authority,
         options,
         subscription,
+        setScopes,
         close,
         dirty: (changes, reason = "event") => {
           if (health.state !== "closed") {

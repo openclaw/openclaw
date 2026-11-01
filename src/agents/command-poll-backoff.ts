@@ -6,10 +6,6 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 
 const BACKOFF_SCHEDULE_MS = [5000, 10000, 30000, 60000];
 
-/**
- * Record a command poll and return suggested retry delay.
- * @returns Suggested delay in milliseconds before next poll
- */
 export function recordCommandPoll(
   state: SessionState,
   commandId: string,
@@ -27,18 +23,14 @@ export function resetCommandPollCount(state: SessionState, commandId: string): v
   state.commandPollCounts?.delete(commandId);
 }
 
-/**
- * Prune stale command poll records (older than 1 hour).
- * Call periodically to prevent memory bloat.
- */
-export function pruneStaleCommandPollsCore(state: SessionState, maxAgeMs = 3600000): void {
+export function pruneStaleCommandPollsCore(state: SessionState): void {
   if (!state.commandPollCounts) {
     return;
   }
 
   const now = Date.now();
   for (const [commandId, data] of state.commandPollCounts.entries()) {
-    if (now - data.lastPollAt > maxAgeMs) {
+    if (now - data.lastPollAt > 3600000) {
       state.commandPollCounts.delete(commandId);
     }
   }

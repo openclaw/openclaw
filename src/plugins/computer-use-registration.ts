@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import {
   COMPUTER_EXECUTION_ID_PATTERN,
   type ComputerUseCapabilityDescriptor,
@@ -170,15 +171,7 @@ export function registerComputerUseProvider(
           availabilityStop,
           closeExecution(undefined, "node-host-stop"),
         ]);
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "computer provider shutdown failed");
-        }
+        throwIfSettledRejected(results, "computer provider shutdown failed");
       };
     },
     onDisconnect: async () => await closeExecution(undefined, "gateway-disconnect"),

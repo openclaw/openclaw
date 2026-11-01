@@ -82,10 +82,7 @@ function requiredString(value: unknown, field: string): string {
   );
 }
 
-function inspectMattermostIngressEvent(rawEvent: string): {
-  eventId: string;
-  laneKey: string;
-} | null {
+function inspectMattermostIngressEvent(rawEvent: string) {
   const envelope = parseRawObject(rawEvent, "Mattermost WebSocket event");
   if (envelope.event !== "posted") {
     return null;
@@ -108,37 +105,6 @@ function inspectMattermostIngressEvent(rawEvent: string): {
   return { eventId, laneKey: `channel:${channelId}` };
 }
 
-function parseClaimedEvent(
-  rawEvent: string,
-  eventId: string,
-): {
-  post: MattermostIngressPost;
-  payload: MattermostEventPayload;
-} {
-  const payload = parseMattermostEventPayload(rawEvent);
-  if (!payload || payload.event !== "posted") {
-    throw new MattermostIngressPermanentError(
-      "invalid-event",
-      `Mattermost ingress row ${eventId} is not a posted event.`,
-    );
-  }
-  const post = parseMattermostPost(payload.data?.post);
-  // Channel id may live on the post, the event data, or the broadcast — the
-  // durable inspector accepted all three, so the claim-side check must too.
-  const claimedChannelId =
-    post?.channel_id?.trim() ||
-    payload.data?.channel_id?.trim() ||
-    payload.broadcast?.channel_id?.trim();
-  const senderId = post?.user_id?.trim();
-  if (!post || post.id !== eventId || !senderId || !claimedChannelId) {
-    throw new MattermostIngressPermanentError(
-      "invalid-event",
-      `Mattermost ingress row ${eventId} has invalid post identity.`,
-    );
-  }
-  return { post: { ...post, user_id: senderId }, payload };
-}
-
 function resolveMattermostIngressNonRetryableFailure(error: unknown) {
   if (error instanceof MattermostIngressPermanentError) {
     return { reason: error.reason, message: error.message };
@@ -149,12 +115,6 @@ function resolveMattermostIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-type MattermostIngressMonitor = {
-  receive: (rawEvent: string) => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 export function createMattermostIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<MattermostIngressPayload>;
@@ -163,7 +123,7 @@ export function createMattermostIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): MattermostIngressMonitor {
+}) {
   const monitor = createChannelIngressMonitor<
     string,
     Omit<MattermostIngressPayload, "version">,
@@ -194,18 +154,35 @@ export function createMattermostIngressMonitor(options: {
         ),
     },
     deliver: async (rawEvent, lifecycle, claim) => {
-      const { post, payload } = parseClaimedEvent(rawEvent, claim.id);
-      return await options.dispatch(post, payload, lifecycle);
+      const payload = parseMattermostEventPayload(rawEvent);
+      if (!payload || payload.event !== "posted") {
+        throw new MattermostIngressPermanentError(
+          "invalid-event",
+          `Mattermost ingress row ${claim.id} is not a posted event.`,
+        );
+      }
+      const post = parseMattermostPost(payload.data?.post);
+      // Channel id may live on the post, the event data, or the broadcast — the
+      // durable inspector accepted all three, so the claim-side check must too.
+      const claimedChannelId =
+        post?.channel_id?.trim() ||
+        payload.data?.channel_id?.trim() ||
+        payload.broadcast?.channel_id?.trim();
+      const senderId = post?.user_id?.trim();
+      if (!post || post.id !== claim.id || !senderId || !claimedChannelId) {
+        throw new MattermostIngressPermanentError(
+          "invalid-event",
+          `Mattermost ingress row ${claim.id} has invalid post identity.`,
+        );
+      }
+      return await options.dispatch({ ...post, user_id: senderId }, payload, lifecycle);
     },
     pollIntervalMs: options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
-    // Preserve Mattermost's existing one-drain-at-a-time delivery cycle.
-    waitForDeliveryIdleBeforeRepump: true,
     retention: "standard",
     drain: {
+      deferredLaneOccupancy: "release",
       resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`mattermost ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
@@ -216,7 +193,7 @@ export function createMattermostIngressMonitor(options: {
   monitor.start();
 
   return {
-    receive: async (rawEvent) => {
+    receive: async (rawEvent: string) => {
       try {
         await monitor.admit(rawEvent);
       } catch (error) {

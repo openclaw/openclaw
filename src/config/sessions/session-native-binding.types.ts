@@ -1,5 +1,6 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { PluginStateNativeBindingPlan } from "../../plugin-state/plugin-state-native-binding.types.js";
+import type { PluginStateCommitReceipt } from "../../plugin-state/plugin-state-publication.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type {
@@ -20,7 +21,16 @@ export type SessionNativeBindingParticipants = {
 };
 
 export type SessionNativeBindingDeletion = SessionNativeBindingParticipants & {
-  plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" }>;
+  plan: Extract<
+    SqliteSessionReclamationPlan,
+    {
+      kind:
+        | "entry"
+        | "lifecycle-artifacts"
+        | "maintenance-finalize"
+        | "lifecycle-projection-commit";
+    }
+  >;
 };
 
 export type SessionNativeBindingReceipt = {
@@ -28,12 +38,16 @@ export type SessionNativeBindingReceipt = {
   operationId: string;
   agent: "pending" | "committed" | "rolled-back";
   bindings: ("pending" | "absent" | "deleted" | "restored")[];
+  pluginState?: PluginStateCommitReceipt | { kind: "unknown"; identity: string | symbol };
   receipt?: SessionEntryPatchReceipt;
   compensationFailure?: OpenClawStateWorkerErrorPayload;
 };
 
 export type SessionNativeBindingCandidate = {
   kind: "session-native-binding-deletion";
-  result: Extract<SqliteSessionReclamationResult, { kind: "entry" }>;
+  result: Extract<
+    SqliteSessionReclamationResult,
+    { kind: SessionNativeBindingDeletion["plan"]["kind"] }
+  >;
   publication?: SessionEntryReplacementPublication;
 };

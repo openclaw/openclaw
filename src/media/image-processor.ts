@@ -19,8 +19,9 @@ import type {
 
 const pool = new WorkerTaskPool<ImageProcessorRequest, ImageProcessorReply>({
   workerUrl: resolveRuntimeProcessEntrypointUrl("imageProcessor"),
-  // Each Photon instance retains a WASM heap; serialize transforms rather than multiply decodes.
-  maxWorkers: 1,
+  // Bound simultaneous WASM heaps, then release burst capacity while retaining the first worker.
+  maxWorkers: 2,
+  burstIdleTimeoutMs: 5_000,
   sharedCompute: true,
 });
 

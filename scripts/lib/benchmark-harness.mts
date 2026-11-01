@@ -214,16 +214,21 @@ export function runBenchmarkJobs<TJob, TResult>(
   });
 }
 
+export function writeBenchmarkJson(report: unknown, output: string) {
+  const json = `${JSON.stringify(report, null, 2)}\n`;
+  fs.mkdirSync(path.dirname(path.resolve(output)), { recursive: true });
+  fs.writeFileSync(output, json);
+  return json;
+}
+
 export function emitBenchmarkReport<T>(
   report: T,
   options: BenchmarkCliOptions,
   renderLines: (report: T) => string[],
 ) {
-  const json = `${JSON.stringify(report, null, 2)}\n`;
-  if (options.output) {
-    fs.mkdirSync(path.dirname(path.resolve(options.output)), { recursive: true });
-    fs.writeFileSync(options.output, json);
-  }
+  const json = options.output
+    ? writeBenchmarkJson(report, options.output)
+    : `${JSON.stringify(report, null, 2)}\n`;
   if (options.json) {
     process.stdout.write(json);
     return;

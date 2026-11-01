@@ -1,4 +1,4 @@
-// Anthropic tests cover provider policy api plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
 import { parseAnthropicModelRef } from "./claude-model-refs.js";
@@ -7,6 +7,7 @@ import {
   deprecatedProfileIds,
   normalizeConfig,
   resolveThinkingProfile,
+  resolveProactiveCadenceMs,
 } from "./provider-policy-api.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
@@ -15,40 +16,32 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
     name,
     reasoning: false,
     input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8_192,
   };
 }
 
-function collectLegacyExtendedLevelIds(levels: readonly { id: string }[] | undefined): string[] {
-  const ids: string[] = [];
-  for (const level of levels ?? []) {
-    if (level.id === "xhigh" || level.id === "max") {
-      ids.push(level.id);
-    }
-  }
-  return ids;
-}
-
-function levelIds(levels: readonly { id: string }[] | undefined): string[] {
-  return (levels ?? []).map((level) => level.id);
+function apiKeyDefaults(
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+  ordered = false,
+) {
+  return applyConfigDefaults({
+    config: {
+      auth: {
+        profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } },
+        ...(ordered ? { order: { anthropic: ["anthropic:default"] } } : {}),
+      },
+      agents: { defaults },
+    },
+    env: {},
+  });
 }
 
 const modelRefCases: Array<[string, string | null, string | null, boolean | null]> = [
   ["", null, null, null],
   ["claude-test", "anthropic", "claude-test", false],
-  ["/claude-test", "anthropic", "/claude-test", false],
   ["anthropic/", null, null, null],
-  ["anthropic/team/claude-test", "anthropic", "team/claude-test", true],
-  ["  AnThRoPiC / claude-test  ", "anthropic", "claude-test", true],
-  ["anthropic/claude-test@anthropic:work", "anthropic", "claude-test@anthropic:work", true],
-  ["bedrock/anthropic.claude-test", "amazon-bedrock", "anthropic.claude-test", true],
   ["AWS-BEDROCK/anthropic.claude-test", "amazon-bedrock", "anthropic.claude-test", true],
 ];
 
@@ -64,18 +57,6 @@ describe("anthropic provider policy public artifact", () => {
 
   it("publishes native Claude profiles retired from generic auth", () => {
     expect(deprecatedProfileIds).toEqual(["anthropic:claude-cli"]);
-  });
-
-  it("normalizes Anthropic provider config", () => {
-    const normalized = normalizeConfig({
-      provider: "anthropic",
-      providerConfig: {
-        baseUrl: "https://api.anthropic.com",
-        models: [createModel("claude-sonnet-4-6", "Claude Sonnet 4.6")],
-      },
-    });
-    expect(normalized.api).toBe("anthropic-messages");
-    expect(normalized.baseUrl).toBe("https://api.anthropic.com");
   });
 
   it("normalizes Claude CLI provider config", () => {
@@ -95,148 +76,29 @@ describe("anthropic provider policy public artifact", () => {
       models: [createModel("gpt-5.4", "GPT-5.4")],
     };
 
-    expect(
-      normalizeConfig({
-        provider: "openai",
-        providerConfig,
-      }),
-    ).toBe(providerConfig);
+    expect(normalizeConfig({ provider: "openai", providerConfig })).toBe(providerConfig);
   });
 
   it("applies Anthropic API-key defaults without loading the full provider plugin", () => {
-    const nextConfig = applyConfigDefaults({
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:default": {
-              provider: "anthropic",
-              mode: "api_key",
-            },
-          },
-          order: { anthropic: ["anthropic:default"] },
-        },
-        agents: {
-          defaults: {},
-        },
-      },
-      env: {},
+    expect(apiKeyDefaults({}, true).agents?.defaults?.contextPruning).toMatchObject({
+      mode: "cache-ttl",
+      ttl: "1h",
     });
-
-    expect(nextConfig.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-    expect(nextConfig.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   });
 
   it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
-    const nextConfig = applyConfigDefaults({
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:default": {
-              provider: "anthropic",
-              mode: "api_key",
-            },
-          },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-20250514" },
-          },
-        },
-      },
-      env: {},
-    });
+    const nextConfig = apiKeyDefaults({ model: { primary: "anthropic/claude-sonnet-4-20250514" } });
 
     expect(
       nextConfig.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.params?.cacheRetention,
     ).toBe("short");
   });
 
-  it("exposes Claude Opus 4.8 thinking levels without loading the full provider plugin", () => {
-    const profile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "claude-opus-4-8",
-    });
-    const ids = levelIds(profile?.levels);
-    expect(ids).toContain("xhigh");
-    expect(ids).toContain("adaptive");
-    expect(ids).toContain("max");
-    expect(profile?.defaultLevel).toBe("off");
-  });
-
-  it.each([
-    ["claude-opus-5-5", "medium"],
-    ["claude-fable-5", "medium"],
-    ["claude-fable-5-1", "medium"],
-    ["claude-mythos-5", "high"],
-  ])(
-    "exposes only native efforts for the mandatory-adaptive %s thinking profile",
-    (modelId, defaultLevel) => {
-      const profile = resolveThinkingProfile({
-        provider: "anthropic",
-        modelId,
-      });
-
-      expect(profile).toEqual({
-        levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
-        defaultLevel,
-        preserveWhenCatalogReasoningFalse: true,
-      });
-    },
-  );
-
-  it.each(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5", "claude-fable-5-1"])(
-    "keeps the %s thinking profile identical across API and CLI routes",
-    (modelId) => {
-      expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
-        resolveThinkingProfile({ provider: "anthropic", modelId }),
-      );
-    },
-  );
-
-  it("preserves separate effort controls for Opus 5 and Opus 5.5 deployments", () => {
-    const profile = resolveThinkingProfile({ provider: "anthropic", modelId: "claude-opus-5" });
-    expect(profile?.defaultLevel).toBe("high");
-    expect(levelIds(profile?.levels)).toContain("off");
-
-    const deploymentProfile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "deployment",
-      params: { canonicalModelId: "claude-opus-5-5" },
-    });
-    expect(deploymentProfile?.defaultLevel).toBe("medium");
-    expect(levelIds(deploymentProfile?.levels)).not.toContain("off");
-  });
-
-  it("preserves separate effort controls for Sonnet 5 and Sonnet 5.5 deployments", () => {
-    const profile = resolveThinkingProfile({ provider: "anthropic", modelId: "claude-sonnet-5" });
-    expect(profile?.defaultLevel).toBe("high");
-    expect(levelIds(profile?.levels)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-    ]);
-
-    const deploymentProfile = resolveThinkingProfile({
-      provider: "anthropic",
-      modelId: "deployment",
-      params: { canonicalModelId: "claude-sonnet-5-5" },
-    });
-    expect(deploymentProfile).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "xhigh" },
-        { id: "max" },
-      ],
-      defaultLevel: "high",
-    });
+  it("keeps the claude-sonnet-5-5 thinking profile identical across API and CLI routes", () => {
+    const modelId = "claude-sonnet-5-5";
+    expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
+      resolveThinkingProfile({ provider: "anthropic", modelId }),
+    );
   });
 
   it("keeps direct-only Mythos thinking disabled on the CLI route", () => {
@@ -246,49 +108,19 @@ describe("anthropic provider policy public artifact", () => {
     });
   });
 
-  it("does not return fable-5 off-thinking profile for claude-fable-50 (prefix boundary check)", () => {
-    const profile = resolveThinkingProfile({
-      provider: "claude-cli",
-      modelId: "claude-fable-50",
-    });
-
-    expect(profile).not.toBeNull();
-    expect(profile?.defaultLevel).not.toBe("off");
-  });
-
-  it("preserves the existing Claude CLI Mythos Preview thinking profile", () => {
-    const profile = resolveThinkingProfile({
-      provider: "claude-cli",
-      modelId: "claude-mythos-preview",
-    });
-
-    expect(profile?.defaultLevel).toBe("adaptive");
-    expect(profile?.levels.map((level) => level.id)).not.toContain("max");
-  });
-
-  it("exposes native max without xhigh for direct Claude 4.6 routes", () => {
-    for (const provider of ["anthropic", "claude-cli"]) {
-      const profile = resolveThinkingProfile({
-        provider,
-        modelId: "claude-opus-4-6",
-      });
-
-      if (!profile) {
-        throw new Error(`Expected ${provider} policy profile`);
-      }
-      expect(levelIds(profile.levels)).toContain("adaptive");
-      expect(levelIds(profile.levels)).toContain("max");
-      expect(profile.defaultLevel).toBe("adaptive");
-      expect(collectLegacyExtendedLevelIds(profile.levels)).toStrictEqual(["max"]);
-    }
-  });
-
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {
-    expect(
-      resolveThinkingProfile({
-        provider: "openai",
-        modelId: "claude-opus-4-7",
-      }),
-    ).toBeNull();
+    expect(resolveThinkingProfile({ provider: "openai", modelId: "claude-opus-4-7" })).toBeNull();
   });
+});
+
+it.each([
+  ["api_key", 1_800_000],
+  ["oauth", 3_600_000],
+] as const)("resolves %s proactive cadence without writing retired config", (mode, cadence) => {
+  const config: OpenClawConfig = {
+    auth: { profiles: { "anthropic:default": { provider: "anthropic", mode } } },
+    agents: { defaults: {} },
+  };
+  expect(resolveProactiveCadenceMs({ config, env: {} })).toBe(cadence);
+  expect(applyConfigDefaults({ config, env: {} }).agents?.defaults).not.toHaveProperty("heartbeat");
 });

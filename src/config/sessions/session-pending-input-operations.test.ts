@@ -1,6 +1,7 @@
+import { serialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -9,16 +10,20 @@ import {
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import {
-  isSqliteWorkerError,
-  type SqliteWorkerOperations,
-  type SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
+import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
+import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
@@ -26,6 +31,11 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
+import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
+import { interceptPendingInputWorker } from "./session-pending-input.test-support.js";
+
+afterEach(() => resetConfigRuntimeState());
 
 const scope = {
   agentId: "main",
@@ -38,10 +48,84 @@ const message = (runId: string) => ({
   timestamp: 1,
   idempotencyKey: `${runId}:user`,
 });
+const sessionEntry = () => ({ sessionId: scope.sessionId, updatedAt: 1 });
+const ok = () => buildAgentRunTerminalOutcome({ status: "ok" });
+
+function interceptPublication(
+  phase: "transaction" | "commit",
+  intercept: (publication: Record<string, unknown>) => void,
+) {
+  return probe.admission(admission, (request, grant, callback) => {
+    const facts = request.facts;
+    if (request.stage === phase && isRecord(facts) && isRecord(facts.publication)) {
+      intercept(facts.publication);
+    }
+    callback(request, grant);
+  });
+}
+
+function makeRecorder(runId: string, storePath?: string, trackInputCompletion?: boolean) {
+  return createUserTurnTranscriptRecorder({
+    message: message(runId),
+    target: { ...scope, storePath, sessionEntry: sessionEntry() },
+    trackInputCompletion,
+  });
+}
+
+async function stageRecorder(runId: string, storePath?: string, tracked?: boolean) {
+  const recorder = makeRecorder(runId, storePath, tracked);
+  expect(await recorder.stageApproved!({ runId, assertCurrent() {} })).toBe(true);
+  return recorder;
+}
+
+it("uses legacy completion only when async completion is absent", async () => {
+  setRuntimeConfigSnapshot({});
+  const outcome = ok();
+  const legacy = vi.fn(() => outcome);
+  const recorder = {
+    ...makeRecorder("legacy"),
+    completeProcessingAsync: undefined,
+    completeProcessing: legacy,
+  };
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  const plugin = new PluginInstance("pending-input-legacy-recorder");
+  try {
+    await plugin.run(async () => {
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("completeProcessingAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+    expect(
+      await completeUserTurnProcessing(
+        { ...recorder, completeProcessingAsync: async () => undefined },
+        outcome,
+      ),
+    ).toBeUndefined();
+    await expect(
+      completeUserTurnProcessing(
+        {
+          ...recorder,
+          completeProcessingAsync: () => Promise.reject(new Error("Async completion failed")),
+        },
+        outcome,
+      ),
+    ).rejects.toThrow("Async completion failed");
+    expect(legacy).toHaveBeenCalledTimes(2);
+  } finally {
+    warning.mockRestore();
+    await plugin.dispose();
+  }
+});
 
 function createFixture() {
+  setRuntimeConfigSnapshot({});
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
-  writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+  writeSessionEntry(database, scope.sessionKey, sessionEntry());
+  const rows = (table: string, columns = "*") =>
+    database.db.prepare(`SELECT ${columns} FROM ${table}`).all();
   return {
     database,
     stage: async (runId: string, assertCurrent = () => {}, trackCompletion = false) =>
@@ -54,98 +138,209 @@ function createFixture() {
         }),
         "Expected accepted input custody",
       ),
-    pending: () =>
-      database.db
-        .prepare("SELECT run_id, state, request_hash FROM session_pending_inputs ORDER BY seq")
-        .all(),
+    pending: () => rows("session_pending_inputs ORDER BY seq", "run_id, state, request_hash"),
+    completions: () => rows("session_input_completions"),
+    rows,
   };
 }
 
-it("stages and settles an agent user-turn recorder without caller-thread SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = createFixture();
-    const recorder = createUserTurnTranscriptRecorder({
-      message: message("completed"),
-      trackInputCompletion: true,
-      target: {
-        ...scope,
-        storePath: fixture.database.path,
-        sessionEntry: { sessionId: scope.sessionId, updatedAt: 1 },
-      },
+function withFixture(run: (fixture: ReturnType<typeof createFixture>) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, () => run(createFixture()));
+}
+
+it("supports synchronous recorder completion during compatibility", () =>
+  withFixture(async ({ pending, rows }) => {
+    const recorder = await stageRecorder("host-legacy", undefined, true);
+    const outcome = ok();
+    expect(recorder.completeProcessing!(outcome)).toEqual(outcome);
+    expect(recorder.getProcessingCompletion!()).toEqual(outcome);
+    expect(rows("session_input_completions", "outcome_json")).toEqual([
+      { outcome_json: JSON.stringify(outcome) },
+    ]);
+    expect(pending()).toEqual([]);
+    expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+    await recorder.waitForPendingInputSettlement!();
+  }));
+
+it("reads current membership at staging admission and rejects a replaced session", () =>
+  withFixture(async ({ database }) => {
+    ensureSessionPendingInputsSchema(database.db);
+    const identity = {
+      ...scope,
+      idempotencyKey: "cohort:user",
+      runId: "cohort",
+      requestHash: "cohort-hash",
+      lifecycleGeneration: "cohort-generation",
+      authorityAgentId: "main",
+    };
+    const expected = readPendingInput(database, {
+      ...identity,
+      kind: "stage",
+      trackCompletion: false,
     });
+    if (expected.kind !== "stage") {
+      throw new Error("Expected staging snapshot");
+    }
+    const input: PendingInputMutation = {
+      ...identity,
+      kind: "stage",
+      expected,
+      trackCompletion: false,
+      inputId: "cohort-input",
+      messageJson: JSON.stringify(message("cohort")),
+    };
+    database.db
+      .prepare(
+        "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(scope.sessionKey, "new-member", "owner", 2);
+    const admissions: unknown[] = [];
+    const mutate = () =>
+      mutatePendingInput(
+        input,
+        {
+          admit: (stage, facts) => {
+            if (stage === "transaction") {
+              admissions.push(facts);
+            }
+          },
+          writeTransaction: (_label, _owner, run) =>
+            runOpenClawAgentWriteTransaction(run, { agentId: "main" }),
+        },
+        () => {},
+      );
+    expect(mutate().stagedInput).toMatchObject({ input_id: "cohort-input", state: "queued" });
+    expect(admissions).toMatchObject([
+      {
+        authority: {
+          entry: { sessionId: scope.sessionId },
+          members: [{ identityId: "new-member" }],
+        },
+      },
+    ]);
+    writeSessionEntry(database, scope.sessionKey, {
+      sessionId: "replacement-session",
+      updatedAt: 2,
+    });
+    expect(mutate).toThrow("no longer owns the admitted session");
+  }));
+
+it("stages and settles user turns without caller-thread SQL or duplicate receipt replies", () =>
+  withFixture(async ({ database, pending, rows }) => {
+    const recorder = makeRecorder("completed", database.path, true);
     let cancelled: SessionPendingInputReceipt | undefined;
+    const replyBytes = new Map<string, number[]>();
+    const replies = interceptPendingInputWorker((worker) => ({
+      execute: async (command, options) => {
+        const result = await worker.execute(command, options);
+        if (command.type === "session.pendingInputs.mutate" && isRecord(command.input)) {
+          const kind = String(command.input.kind);
+          replyBytes.set(kind, [...(replyBytes.get(kind) ?? []), serialize(result).byteLength]);
+        }
+        return result;
+      },
+    }));
     const sql = observeHostDataSql();
     try {
-      expect(await recorder.stageApproved?.({ runId: "completed", assertCurrent: () => {} })).toBe(
-        true,
-      );
+      expect(await recorder.stageApproved?.({ runId: "completed", assertCurrent() {} })).toBe(true);
       expect(sql.queries).toEqual([]);
-      const cancelledReceipt = await fixture.stage("cancelled");
-      cancelled = cancelledReceipt;
-      const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-      expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
+      cancelled = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "cancelled",
+          message: { ...message("cancelled"), content: "Synthetic input. ".repeat(2048) },
+          assertCurrent() {},
+        }),
+        "Expected accepted input custody",
+      );
+      const outcome = ok();
+      expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
       recorder.finishPendingInput?.("interrupted");
-      cancelledReceipt.finish("cancelled");
-      expect(() => cancelledReceipt.run(() => {})).toThrow(SessionPendingInputCustodyError);
-      await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelledReceipt.settled?.()]);
+      cancelled.finish("cancelled");
+      expect(() => cancelled?.run(() => {})).toThrow(SessionPendingInputCustodyError);
+      await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled.settled?.()]);
       expect(sql.queries).toEqual([]);
+      expect([...replyBytes.keys()].toSorted()).toEqual(["complete", "finish", "stage"]);
+      for (const sizes of replyBytes.values()) {
+        expect(Math.max(...sizes)).toBeLessThan(32);
+      }
     } finally {
       sql.restore();
       recorder.finishPendingInput?.("interrupted");
       cancelled?.finish("interrupted");
       await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled?.settled?.()]);
+      replies.mockRestore();
     }
-    expect(fixture.pending()).toEqual([
-      expect.objectContaining({ run_id: "cancelled", state: "cancelled" }),
+    expect(pending()).toMatchObject([{ run_id: "cancelled", state: "cancelled" }]);
+    expect(rows("session_input_completions", "run_id, succeeded")).toEqual([
+      { run_id: "completed", succeeded: 1 },
     ]);
-    expect(
-      fixture.database.db.prepare("SELECT run_id, succeeded FROM session_input_completions").all(),
-    ).toEqual([{ run_id: "completed", succeeded: 1 }]);
-  });
-});
+  }));
 
-it("retains cancellation disposition custody while accepted processing completion is waiting", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = createFixture();
-    const receipt = await fixture.stage("cancelling", () => {}, true);
+it.each(["cancelled", "consumed", "failed"] as const)(
+  "reports a withdrawn input only after confirmed cancellation: %s",
+  (result) =>
+    withFixture(async ({ database, pending: readPending }) => {
+      const recorder = await stageRecorder(result, database.path);
+      const pending = expectDefined(
+        (await listSessionPendingInputs(scope)).items[0],
+        "Expected accepted input",
+      );
+      expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
+      if (result === "consumed") {
+        await recorder.persistApproved();
+        expect(recorder.isPendingInputConsumed?.()).toBe(true);
+      }
+      const spy = interceptPublication("commit", ({ receipt }) => {
+        if (result === "failed" && isRecord(receipt) && receipt.operation === "finish") {
+          throw new Error("Synthetic cancellation commit refused");
+        }
+      });
+      try {
+        recorder.finishPendingInput?.("cancelled");
+        expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
+        if (result === "failed") {
+          await expect(recorder.waitForPendingInputSettlement?.()).rejects.toThrow(
+            "Synthetic cancellation commit refused",
+          );
+        } else {
+          await recorder.waitForPendingInputSettlement?.();
+        }
+        expect(readWithdrawnUserTurnInputId(recorder)).toBe(
+          result === "cancelled" ? pending.id : undefined,
+        );
+        expect(readPending()).toMatchObject(
+          result === "consumed"
+            ? []
+            : [{ run_id: result, state: result === "failed" ? "queued" : "cancelled" }],
+        );
+      } finally {
+        spy.mockRestore();
+        recorder.finishPendingInput?.("interrupted");
+        await Promise.allSettled([recorder.waitForPendingInputSettlement?.()]);
+      }
+    }),
+);
+
+it("retains cancellation custody while completion waits", ({ signal }) =>
+  withFixture(async ({ stage }) => {
+    const receipt = await stage("cancelling", () => {}, true);
     await listSessionPendingInputs(scope);
     const entered = createDeferred();
     const release = createDeferred();
-    const original = workerStore.runSqliteWorkerStoreOperation;
-    const spy = vi
-      .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-      .mockImplementation(
-        <Operations extends SqliteWorkerOperations, T>(
-          target: SqliteWorkerStore<Operations>,
-          operation: (worker: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-          stateContext?: Parameters<typeof original>[2],
-          assertCurrent?: Parameters<typeof original>[3],
-          createAdmission?: Parameters<typeof original>[4],
-        ) =>
-          original(
-            target,
-            (worker) =>
-              operation({
-                execute: async (command, options) => {
-                  if (
-                    command.type === "session.pendingInputs.mutate" &&
-                    isRecord(command.input) &&
-                    command.input.kind === "complete"
-                  ) {
-                    entered.resolve();
-                    await release.promise;
-                  }
-                  return worker.execute(command, options);
-                },
-              }),
-            stateContext,
-            assertCurrent,
-            createAdmission,
-          ),
-      );
+    const spy = interceptPendingInputWorker((worker) => ({
+      execute: async (command, options) => {
+        if (
+          command.type === "session.pendingInputs.mutate" &&
+          isRecord(command.input) &&
+          command.input.kind === "complete"
+        ) {
+          entered.resolve();
+          await release.promise;
+        }
+        return worker.execute(command, options);
+      },
+    }));
     const outcome = buildAgentRunTerminalOutcome({
       status: "error",
       error: "Synthetic retryable provider failure",
@@ -173,207 +368,149 @@ it("retains cancellation disposition custody while accepted processing completio
       receipt.finish("cancelled");
       await Promise.allSettled([completion, receipt.settled?.()]);
     }
-  });
-});
+  }));
 
 it.each(["transaction", "commit"] as const)(
-  "refuses a staging grant when the run ends at %s without publishing input custody",
-  async (phase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fixture = createFixture();
+  "refuses staging custody when the run ends at %s",
+  (phase) =>
+    withFixture(async ({ stage, pending }) => {
       let current = true;
       let revoked = false;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          createAdmission((request, grant) => {
-            const facts = request.facts;
-            if (
-              request.stage === phase &&
-              isRecord(facts) &&
-              isRecord(facts.publication) &&
-              facts.publication.kind === "pending-input-settlement-custody"
-            ) {
-              current = false;
-              revoked = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const spy = interceptPublication(phase, ({ kind }) => {
+        if (kind === "pending-input-settlement-custody") {
+          current = false;
+          revoked = true;
+        }
+      });
       try {
         await expect(
-          fixture.stage("ended", () => {
+          stage("ended", () => {
             if (!current) {
               throw new SessionPendingInputCustodyError("Synthetic run ended during admission");
             }
           }),
         ).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
         expect(revoked).toBe(true);
-        expect(fixture.pending()).toEqual([]);
+        expect(pending()).toEqual([]);
       } finally {
         spy.mockRestore();
       }
-    });
-  },
+    }),
 );
 
-it("rejects a worker-side request-hash mismatch with the original custody error class", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = createFixture();
-    const receipt = await fixture.stage("hash-bound", () => {}, true);
-    const original = fixture.pending();
+it("preserves custody errors for worker-side request-hash mismatches", () =>
+  withFixture(async ({ database, stage, pending, completions }) => {
+    const receipt = await stage("hash-bound", () => {}, true);
+    const original = pending();
     const originalHash = original[0]?.request_hash;
-    fixture.database.db
+    database.db
       .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
       .run("another-request", receipt.inputId);
     try {
-      await expect(
-        receipt.completeAsync?.(buildAgentRunTerminalOutcome({ status: "ok" })),
-      ).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
-      expect(fixture.database.db.prepare("SELECT * FROM session_input_completions").all()).toEqual(
-        [],
+      await expect(receipt.completeAsync?.(ok())).rejects.toBeInstanceOf(
+        SessionPendingInputCustodyError,
       );
-      expect(fixture.pending()).toEqual([{ ...original[0], request_hash: "another-request" }]);
+      expect(completions()).toEqual([]);
+      expect(pending()).toEqual([{ ...original[0], request_hash: "another-request" }]);
     } finally {
-      fixture.database.db
+      database.db
         .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
         .run(originalHash ?? null, receipt.inputId);
       receipt.finish("interrupted");
       await expect(receipt.settled?.()).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
     }
-  });
-});
+  }));
 
-it("refuses processing completion when the admitted lifecycle changes during the worker wait", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const fixture = createFixture();
-    const receipt = await fixture.stage("stale-lifecycle", () => {}, true);
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
+it("refuses completion after a lifecycle change during the worker wait", () =>
+  withFixture(async ({ stage, completions }) => {
+    const receipt = await stage("stale-lifecycle", () => {}, true);
     let rotated = false;
-    const spy = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        createAdmission((request, grant) => {
-          const facts = request.facts;
-          if (
-            request.stage === "transaction" &&
-            isRecord(facts) &&
-            isRecord(facts.publication) &&
-            isRecord(facts.publication.receipt) &&
-            facts.publication.receipt.operation === "complete"
-          ) {
-            rotateAgentEventLifecycleGeneration();
-            rotated = true;
-          }
-          callback(request, grant);
-        }, attachment),
-      );
+    const spy = interceptPublication("transaction", ({ receipt: publicationReceipt }) => {
+      if (isRecord(publicationReceipt) && publicationReceipt.operation === "complete") {
+        rotateAgentEventLifecycleGeneration();
+        rotated = true;
+      }
+    });
     try {
-      await expect(
-        receipt.completeAsync?.(buildAgentRunTerminalOutcome({ status: "ok" })),
-      ).rejects.toThrow();
+      await expect(receipt.completeAsync?.(ok())).rejects.toThrow();
       expect(rotated).toBe(true);
-      expect(fixture.database.db.prepare("SELECT * FROM session_input_completions").all()).toEqual(
-        [],
-      );
+      expect(completions()).toEqual([]);
     } finally {
       spy.mockRestore();
       receipt.finish("interrupted");
       await expect(receipt.settled?.()).rejects.toThrow();
     }
-  });
-});
+  }));
 
-it.each(["lost reply", "unknown settlement"] as const)(
+it.each(["lost reply", "unknown settlement", "independent committed write"] as const)(
   "settles staging with %s without replaying its native write",
-  async (fault) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const fixture = createFixture();
-      const original = workerStore.runSqliteWorkerStoreOperation;
+  (fault) =>
+    withFixture(async ({ stage, pending }) => {
       let executions = 0;
       let restoreSettlement: (() => void) | undefined;
-      const spy = vi
-        .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-        .mockImplementation(
-          <Operations extends SqliteWorkerOperations, T>(
-            target: SqliteWorkerStore<Operations>,
-            operation: (worker: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-            stateContext?: Parameters<typeof original>[2],
-            assertCurrent?: Parameters<typeof original>[3],
-            createAdmission?: Parameters<typeof original>[4],
-          ) => {
-            let staging = false;
-            let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-            return original(
-              target,
-              (worker) =>
-                operation({
-                  execute: async (command, options) => {
-                    staging =
-                      command.type === "session.pendingInputs.mutate" &&
-                      isRecord(command.input) &&
-                      command.input.kind === "stage";
-                    const result = await worker.execute(command, options);
-                    if (!staging) {
-                      return result;
-                    }
-                    executions++;
-                    expect(nativeAdmission?.committed).toMatchObject({
-                      facts: { kind: "pending-input-settlement", operation: "stage" },
-                    });
-                    expect(nativeAdmission?.settlement?.kind).toBe("completed");
-                    if (fault === "unknown settlement") {
-                      const observed = expectDefined(nativeAdmission, "Expected native admission");
-                      const settlement = vi
-                        .spyOn(observed, "settlement", "get")
-                        .mockReturnValue({ ...observed.settlement, kind: "unknown" });
-                      restoreSettlement = () => settlement.mockRestore();
-                    }
-                    throw new Error("Synthetic staging reply lost after native write");
-                  },
-                }),
-              stateContext,
-              assertCurrent,
-              createAdmission &&
-                ((retained) => {
-                  const owned = createAdmission(retained);
-                  if (staging) {
-                    nativeAdmission = owned.admission;
-                  }
-                  return owned;
-                }),
-            );
+      const spy = interceptPendingInputWorker((worker, context) => {
+        let staging = false;
+        let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+        context.onAdmission = (value) => {
+          if (staging) {
+            nativeAdmission = value;
+          }
+        };
+        return {
+          execute: async (command, options) => {
+            staging =
+              command.type === "session.pendingInputs.mutate" &&
+              isRecord(command.input) &&
+              command.input.kind === "stage";
+            const result = await worker.execute(command, options);
+            if (!staging) {
+              return result;
+            }
+            executions++;
+            expect(nativeAdmission).toMatchObject({
+              committed: { facts: { kind: "pending-input-settlement", operation: "stage" } },
+              settlement: { kind: "completed" },
+            });
+            if (fault === "independent committed write") {
+              runOpenClawAgentWriteTransaction(
+                (database) =>
+                  writeSessionEntry(database, "agent:main:independent-input", {
+                    sessionId: "independent-input",
+                    updatedAt: 2,
+                  }),
+                { agentId: scope.agentId },
+              );
+              return result;
+            }
+            if (fault === "unknown settlement") {
+              const observed = expectDefined(nativeAdmission, "Expected native admission");
+              const settlement = vi
+                .spyOn(observed, "settlement", "get")
+                .mockReturnValue({ ...observed.settlement, kind: "unknown" });
+              restoreSettlement = () => settlement.mockRestore();
+            }
+            throw new Error("Synthetic staging reply lost after native write");
           },
-        );
+        };
+      });
       let receipt: SessionPendingInputReceipt | undefined;
       try {
-        const result = await fixture.stage("lost-result").then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
-        expect(executions).toBe(1);
-        expect(fixture.pending()).toEqual([
-          expect.objectContaining({ run_id: "lost-result", state: "queued" }),
-        ]);
+        const result = stage("lost-result");
         if (fault === "unknown settlement") {
-          expect(result.ok).toBe(false);
-          if (!result.ok) {
-            expect(isSqliteWorkerError(result.error, "outcome-unknown")).toBe(true);
-          }
+          await expect(result).rejects.toSatisfy((error: unknown) =>
+            isSqliteWorkerError(error, "outcome-unknown"),
+          );
         } else {
-          expect(result.ok).toBe(true);
-          if (result.ok) {
-            receipt = result.value;
-            expect(receipt.run(() => "admitted once")).toBe("admitted once");
-          }
+          receipt = await result;
+          expect(receipt.run(() => "admitted once")).toBe("admitted once");
         }
+        expect(executions).toBe(1);
+        expect(pending()).toMatchObject([{ run_id: "lost-result", state: "queued" }]);
       } finally {
         restoreSettlement?.();
         spy.mockRestore();
         receipt?.finish("interrupted");
         await receipt?.settled?.();
       }
-    });
-  },
+    }),
 );

@@ -194,8 +194,8 @@ export function buildWhatsAppQaConfig(
   const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
   if (params.overrides?.actions) {
     tools = {
-      ...baseCfg.tools,
-      alsoAllow: uniqueStrings([...(baseCfg.tools?.alsoAllow ?? []), "message"]),
+      ...tools,
+      alsoAllow: uniqueStrings([...(tools?.alsoAllow ?? []), "message"]),
     };
   }
   const messagesConfig = {

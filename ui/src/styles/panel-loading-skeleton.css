@@ -1,0 +1,284 @@
+openclaw-panel-loading-skeleton {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  padding: 14px;
+  color: var(--muted);
+
+  &[compact] {
+    min-height: 0;
+    padding: 8px;
+  }
+
+  &[data-panel-skeleton="desktop"] {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .desktop-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    text-align: center;
+    font-size: 13px;
+  }
+
+  .desktop-spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--border);
+    border-top-color: var(--muted);
+    border-radius: 50%;
+    animation: panel-skeleton-spin 1s linear infinite;
+  }
+
+  &[overlay] {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    min-height: 0;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    pointer-events: none;
+  }
+
+  &[compact] .viewport,
+  &[compact] .terminal,
+  &[compact] .discussion-frame {
+    min-height: 72px;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  /* Unported shadow-root parents cannot inherit the shared shimmer styles. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--skeleton-base, var(--bg-muted));
+    border-radius: var(--radius-md);
+  }
+
+  .skeleton::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 25%,
+      var(--skeleton-highlight, var(--bg-hover)) 50%,
+      transparent 75%
+    );
+    content: "";
+    transform: translateX(-100%);
+    animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+    will-change: transform;
+  }
+
+  .line {
+    height: 10px;
+  }
+
+  .short {
+    width: 36%;
+  }
+
+  .medium {
+    width: 62%;
+  }
+
+  .long {
+    width: 88%;
+  }
+
+  .row,
+  .toolbar,
+  .bubble,
+  .summary {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .rows,
+  .conversation,
+  .code {
+    display: grid;
+    gap: 12px;
+  }
+
+  .toolbar {
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+
+  .icon {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    border-radius: 5px;
+  }
+
+  .copy {
+    display: grid;
+    flex: 1;
+    gap: 6px;
+  }
+
+  .meta {
+    height: 7px;
+    width: 28%;
+  }
+
+  .viewport {
+    min-height: 220px;
+    border-radius: 8px;
+  }
+
+  .address {
+    height: 28px;
+    flex: 1;
+    border-radius: 7px;
+  }
+
+  .button {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+  }
+
+  .summary {
+    margin-bottom: 16px;
+  }
+
+  .pill {
+    width: 64px;
+    height: 24px;
+    border-radius: 999px;
+  }
+
+  .file-heading {
+    height: 30px;
+    margin-bottom: 14px;
+  }
+
+  .code .line {
+    height: 9px;
+    border-radius: 3px;
+  }
+
+  .terminal {
+    display: grid;
+    gap: 11px;
+    padding: 12px;
+    min-height: 220px;
+    align-content: start;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg) 76%, transparent);
+  }
+
+  .bubble {
+    width: 82%;
+    min-height: 58px;
+    padding: 12px;
+    align-items: flex-start;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-muted) 76%, transparent);
+  }
+
+  .bubble.user {
+    width: 58%;
+    margin-left: auto;
+  }
+
+  .discussion-frame {
+    min-height: 280px;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  /* Mirrors board.css: a 38px tab strip over a 12-column grid with 56px rows,
+       so the placeholder occupies the same footprint as the widgets it precedes. */
+  .board-tabs {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    min-height: 38px;
+    margin-bottom: 12px;
+    padding: 0 13px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tab {
+    width: 64px;
+    height: 10px;
+    border-radius: 5px;
+  }
+
+  .board-grid {
+    container-type: inline-size;
+    display: grid;
+    gap: 12px;
+    grid-auto-rows: 56px;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+
+  .widget {
+    display: grid;
+    grid-template-rows: 38px minmax(0, 1fr);
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  @container (max-width: 560px) {
+    .widget {
+      grid-column: 1 / -1 !important;
+    }
+  }
+
+  .widget-bar {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .widget-body {
+    display: grid;
+    gap: 10px;
+    align-content: start;
+    padding: 12px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .desktop-spinner,
+    .skeleton::after {
+      animation: none;
+    }
+  }
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes panel-skeleton-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

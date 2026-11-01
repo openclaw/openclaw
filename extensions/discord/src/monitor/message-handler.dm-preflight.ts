@@ -25,13 +25,7 @@ export async function resolveDiscordDmPreflightAccess(params: {
   resolvedAccountId: string;
   allowNameMatching: boolean;
   conversationId: string;
-}): Promise<{
-  commandAuthorized: boolean;
-  resolveChannelIngress: (
-    contextBinding: ChannelIngressContextBinding,
-    conversation?: { parentId?: string; threadId?: string },
-  ) => ReturnType<typeof resolveDiscordDmCommandAccess>;
-} | null> {
+}) {
   if (params.dmPolicy === "disabled") {
     logVerbose("discord: drop dm (dmPolicy: disabled)");
     return null;
@@ -42,9 +36,11 @@ export async function resolveDiscordDmPreflightAccess(params: {
       isDirectMessage: true,
       userId: params.author.id,
     }) ?? `user:${params.author.id}`;
-  const directBindingRecord = (await loadConversationRuntime())
+  const directBindingRecord = await (
+    await loadConversationRuntime()
+  )
     .getSessionBindingService()
-    .resolveByConversation({
+    .resolveByConversationAsync({
       channel: "discord",
       accountId: params.preflight.accountId,
       conversationId: directBindingConversationId,

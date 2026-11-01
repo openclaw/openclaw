@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
 } from "../config/port-defaults.js";
@@ -61,6 +60,8 @@ export { parseBrowserHttpUrl as parseHttpUrl };
 export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profiles"> & {
   headlessSource?: "config" | "default";
   profiles: Record<string, BrowserProfileConfig>;
+  /** Explicit policy, including {}, suppresses request-scoped preview defaults. */
+  ssrfPolicyConfigured?: boolean;
   /** Default loopback port for extension-driver relay servers. */
   extensionRelayDefaultPort: number;
   /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
@@ -96,7 +97,7 @@ type ManagedBrowserHeadlessMode = {
 
 type ManagedBrowserMissingDisplayError = {
   message: string;
-  headlessSource: Exclude<ManagedBrowserHeadlessSource, "linux-display-fallback">;
+  headlessSource: ManagedBrowserHeadlessSource;
 };
 
 export type ManagedBrowserHeadlessOptions = {
@@ -206,8 +207,8 @@ function resolveExtensionRelayPorts(
   // allocation so an extension relay cannot bind another profile's listener.
   const reservedPorts = new Set(
     Object.values(profiles)
-      .map((profile) => profile.cdpPort)
-      .filter((port): port is number => typeof port === "number"),
+      .flatMap((profile) => [profile.cdpPort, Number(URL.parse(profile.cdpUrl ?? "")?.port)])
+      .filter((port): port is number => typeof port === "number" && port > 0),
   );
   const ports: Record<string, number> = {};
   const minimumPort = defaultPort - EXTENSION_RELAY_PORT_OFFSET;
@@ -257,7 +258,7 @@ export function resolveBrowserConfig(
   rootConfig?: OpenClawConfig,
 ): ResolvedBrowserConfig {
   const gatewayPort = resolveGatewayPort(rootConfig);
-  const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
+  const controlPort = deriveDefaultBrowserControlPort(gatewayPort);
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
 
@@ -318,7 +319,7 @@ export function resolveBrowserConfig(
     actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
-    headless: cfg?.headless === true,
+    headless: cfg?.headless ?? true,
     headlessSource: typeof cfg?.headless === "boolean" ? "config" : "default",
     noSandbox: cfg?.noSandbox === true,
     attachOnly: cfg?.attachOnly === true,
@@ -326,6 +327,7 @@ export function resolveBrowserConfig(
     profiles,
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),
     ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
+    ssrfPolicyConfigured: cfg?.ssrfPolicy !== undefined,
     extraArgs,
     extensionRelayDefaultPort: controlPort + EXTENSION_RELAY_PORT_OFFSET,
     extensionRelayPorts: resolveExtensionRelayPorts(
@@ -407,7 +409,7 @@ export function resolveProfile(
   }
 
   if (driver === "existing-session") {
-    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs) ?? undefined;
+    const mcpArgs = normalizeOptionalTrimmedStringList(profile.mcpArgs);
     const existingSessionCdp = normalizeExistingSessionCdpUrl(
       normalizeChromeMcpOptions({ ...profile, mcpArgs }).browserUrl,
       profileName,
@@ -421,7 +423,7 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs,
-      headless,
+      headless: headlessSource === "default" ? false : headless,
       headlessSource,
       attachOnly: true,
     };
@@ -466,7 +468,11 @@ export function resolveProfile(
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    headless,
+    headless:
+      headlessSource === "default" &&
+      (!isLoopbackHost(cdpHost) || (profile.attachOnly ?? resolved.attachOnly))
+        ? false
+        : headless,
     headlessSource,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
   };
@@ -486,7 +492,6 @@ export function resolveManagedBrowserHeadlessMode(
   }
 
   const env = params.env ?? process.env;
-  const platform = params.platform ?? process.platform;
   const envHeadless = parseBooleanValue(env[BROWSER_HEADLESS_ENV_KEY]);
   if (envHeadless !== undefined) {
     return { headless: envHeadless, source: "env" };
@@ -495,10 +500,6 @@ export function resolveManagedBrowserHeadlessMode(
   const profileHeadlessSource = profile.headlessSource ?? "default";
   if (profileHeadlessSource !== "default") {
     return { headless: profile.headless, source: profileHeadlessSource };
-  }
-
-  if (platform === "linux" && !hasLinuxDisplay(env)) {
-    return { headless: true, source: "linux-display-fallback" };
   }
 
   return { headless: resolved.headless, source: "default" };
@@ -523,7 +524,7 @@ export function getManagedBrowserMissingDisplayError(
     env,
     platform,
   });
-  if (mode.headless || mode.source === "linux-display-fallback") {
+  if (mode.headless) {
     return null;
   }
 

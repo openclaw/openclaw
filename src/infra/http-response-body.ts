@@ -14,12 +14,6 @@ export async function cancelUnreadResponseBody(response: Response | undefined): 
   }
 }
 
-type ReadResponsePrefixResult = {
-  materializeBuffer: () => Buffer;
-  size: number;
-  truncated: boolean;
-};
-
 export type ReadResponseTextPrefixOptions = {
   signal?: AbortSignal;
   chunkTimeoutMs?: number;
@@ -34,7 +28,7 @@ async function readResponsePrefix(
   maxBytes: number,
   stopAtLimit: boolean,
   options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponsePrefixResult> {
+) {
   if (!Number.isFinite(maxBytes) || maxBytes < 0) {
     throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
   }
@@ -46,32 +40,23 @@ async function readResponsePrefix(
     throw error;
   }
   const body = response.body;
-  if (!body || typeof body.getReader !== "function") {
-    return await withResponseBodyTimeout({
-      timeoutMs,
-      onTimeout: options?.onTimeout,
-      signal: options?.signal,
-      cancel: async (error) => await body?.cancel(error),
-      read: async () => {
-        const fallback = Buffer.from(await response.arrayBuffer());
-        const truncated = fallback.length > maxBytes;
-        return {
-          materializeBuffer: () => (truncated ? fallback.subarray(0, maxBytes) : fallback),
-          size: fallback.length,
-          truncated,
-        };
-      },
-    });
-  }
-
-  const reader = body.getReader();
+  const reader = body && typeof body.getReader === "function" ? body.getReader() : undefined;
   try {
     return await withResponseBodyTimeout({
       timeoutMs,
       onTimeout: options?.onTimeout,
       signal: options?.signal,
-      cancel: async (error) => await reader.cancel(error),
+      cancel: async (error) => await (reader ?? body)?.cancel(error),
       read: async () => {
+        if (!reader) {
+          const fallback = Buffer.from(await response.arrayBuffer());
+          const truncated = fallback.length > maxBytes;
+          return {
+            materializeBuffer: () => (truncated ? fallback.subarray(0, maxBytes) : fallback),
+            size: fallback.length,
+            truncated,
+          };
+        }
         const chunks: Uint8Array[] = [];
         const result = await withResponseBodyIdleTimeout(
           reader,
@@ -102,22 +87,16 @@ async function readResponsePrefix(
       },
     });
   } finally {
-    reader.releaseLock();
+    reader?.releaseLock();
   }
 }
-
-type ReadResponseTextPrefixResult = {
-  text: string;
-  size: number;
-  truncated: boolean;
-};
 
 /** Reads and decodes a bounded text prefix while cancelling unread overflow. */
 export async function readResponseTextPrefix(
   response: Response,
   maxBytes: number,
   options?: ReadResponseTextPrefixOptions,
-): Promise<ReadResponseTextPrefixResult> {
+) {
   const prefix = await readResponsePrefix(response, maxBytes, true, options);
   return {
     text: decodeTextPrefix(prefix.materializeBuffer(), { truncated: prefix.truncated }),

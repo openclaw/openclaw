@@ -4,13 +4,11 @@ import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isMissingPathError } from "../infra/errno.js";
-import {
-  hasCompletedLegacyAgentDirMigration,
-  resolveLegacyStandaloneAgentDir,
-} from "../infra/state-migrations.agent-dir-receipt.js";
+import { hasCompletedLegacyAgentDirMigration } from "../infra/state-migrations.agent-dir-receipt.js";
+import { resolveLegacyProfileMigrationExceptions } from "../infra/state-migrations.profile-scope.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-lifecycle.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-owner-read.js";
 import {
   listAgentIds,
   resolveEffectiveAgentDir,
@@ -94,9 +92,14 @@ export function resolveInstallAgentDir(
     if (explicit !== undefined) {
       return select(explicit, "explicit");
     }
-    const legacyDir = resolveLegacyStandaloneAgentDir(homedir);
+    const { standaloneAgent: legacyDir } = resolveLegacyProfileMigrationExceptions({
+      env: read().env,
+      homedir,
+      configuredAgentDir: target,
+    });
     try {
       if (
+        legacyDir &&
         !isUpdateRehearsalReadOnlyPath(legacyDir, read().env) &&
         fs.readdirSync(legacyDir).length > 0 &&
         (!target || !hasCompletedLegacyAgentDirMigration(legacyDir, target))

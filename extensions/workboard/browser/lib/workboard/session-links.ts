@@ -1,15 +1,15 @@
-import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
+import { workboardHost } from "../../host.ts";
 import { isActiveWorkboardCard } from "./card-state.ts";
 import type { WorkboardCard } from "./types.ts";
 
 // These reserved names exist per agent; a saved card key alone cannot identify one.
 export function isReservedSessionKey(sessionKey: string): boolean {
-  const key = normalizeSessionKeyForUiComparison(sessionKey);
+  const key = workboardHost().sessions.normalizeKey(sessionKey);
   return key === "global" || key === "unknown";
 }
 
 function workboardSessionLookupKeys(sessionKey: string): string[] {
-  const key = normalizeSessionKeyForUiComparison(sessionKey);
+  const key = workboardHost().sessions.normalizeKey(sessionKey);
   if (!key) {
     return [];
   }
@@ -26,7 +26,7 @@ export function workboardSessionKeyMatches(
   return Boolean(
     candidate &&
     workboardSessionLookupKeys(candidate).includes(
-      normalizeSessionKeyForUiComparison(linkedSessionKey),
+      workboardHost().sessions.normalizeKey(linkedSessionKey),
     ),
   );
 }
@@ -39,7 +39,7 @@ function cardSessionKeys(card: WorkboardCard): string[] {
     ...(card.events?.map((event) => event.sessionKey) ?? []),
   ]
     .filter((key): key is string => typeof key === "string")
-    .map(normalizeSessionKeyForUiComparison)
+    .map((key) => workboardHost().sessions.normalizeKey(key))
     .filter(Boolean);
 }
 
@@ -59,7 +59,7 @@ export function findWorkboardSessionCard(
   }
   // A local session tail cannot establish its agent owner. Provisional link
   // resolution belongs to session-resolution; this lookup needs recorded identity.
-  const key = normalizeSessionKeyForUiComparison(sessionKey);
+  const key = workboardHost().sessions.normalizeKey(sessionKey);
   let selected: WorkboardCard | null = null;
   for (const card of cards) {
     if (

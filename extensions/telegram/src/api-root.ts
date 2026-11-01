@@ -33,21 +33,15 @@ export function hasTelegramBotEndpointApiRoot(apiRoot: unknown): boolean {
   return Boolean(last && isTelegramBotEndpointSegment(last));
 }
 
-function readRequestUrl(input: unknown): string | null {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (input instanceof Request) {
-    return input.url;
-  }
-  return null;
-}
-
 export function extractTelegramApiMethod(input: unknown): string | null {
-  const url = readRequestUrl(input);
+  const url =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input instanceof Request
+          ? input.url
+          : null;
   const segments = URL.parse(url ?? "")
     ?.pathname.split("/")
     .filter(Boolean);

@@ -15,14 +15,13 @@ export type SkillConfig = Omit<NonNullable<SkillsSchemaInput["entries"]>[string]
   apiKey?: SecretInput;
 };
 
-/** Autonomous and approval settings for generated skill proposals. */
+/** Skill Workshop autonomous learning settings. */
 export type SkillsWorkshopConfig = NonNullable<SkillsSchemaInput["workshop"]>;
 
 export type SkillsWorkshopAutonomousMode = NonNullable<
   NonNullable<SkillsWorkshopConfig["autonomous"]>["mode"]
 >;
 
-/** Top-level skills config block in openclaw config. */
 export type SkillsConfig = Omit<SkillsSchemaInput, "entries"> & {
   entries?: Record<string, SkillConfig>;
 };

@@ -13,7 +13,7 @@ The named live and E2E shards the release live/E2E child runs, and what each sha
 
 The release live/E2E child keeps broad native `pnpm test:live` coverage, but it runs it as named shards through `scripts/test-live-shard.mjs` instead of one serial job:
 
-- `native-live-src-agents` and `native-live-src-agents-zai-coding`
+- `native-live-src-agents` (agents, decisions, LLM, and skills) and `native-live-src-agents-zai-coding`
 - `native-live-src-gateway-core`
 - provider-filtered `native-live-src-gateway-profiles` jobs
 - `native-live-src-gateway-backends`

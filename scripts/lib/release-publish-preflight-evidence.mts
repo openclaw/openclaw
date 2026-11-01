@@ -7,6 +7,7 @@ import {
   resolveFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   verifyReleasePreflightToolingIdentity,
+  verifyNpmPreflightPublicationLineage,
 } from "../npm-preflight-tooling-identity.mjs";
 import { validatePreparedCorePackages } from "../npm-prepared-bundle.mjs";
 import { validateNpmPreflightDistTag } from "../openclaw-npm-extended-stable-release.mjs";
@@ -531,7 +532,7 @@ function readPreflightArchive(repo: string, artifact: PublishPreflightRecord) {
   });
 }
 
-export function validatePublishPreflightNpm(
+export async function validatePublishPreflightNpm(
   options: {
     repo: string;
     tag: string;
@@ -599,13 +600,19 @@ export function validatePublishPreflightNpm(
       "Npm preflight must come from main, the active protected branch, or a verified protected tag.",
     );
   }
-  const comparison = requirePreflightRecord(
-    preflightApi(runGh, repo, `compare/${sha}...${options.toolingSha}?per_page=1`),
-    "preflight tooling ancestry",
-  );
-  if (comparison.status !== "ahead" && comparison.status !== "identical") {
-    throw new Error("Npm preflight tooling is not on the selected publisher lineage.");
-  }
+  await verifyNpmPreflightPublicationLineage({
+    manifest: qualified ? options.fullManifest : undefined,
+    repository: repo,
+    sourceSha: options.targetSha,
+    toolingSha: sha,
+    publisherSha: options.toolingSha,
+    producerRunId,
+    producerRunAttempt: String(run.run_attempt),
+    runGh,
+    publisherFullRef: options.workflowRef.startsWith("release-publish/")
+      ? "refs/tags/" + options.workflowRef
+      : "refs/heads/" + options.workflowRef,
+  });
   let manifest = context.npmManifest;
   let manifestSha256: string | undefined;
   let files: Map<string, Buffer>;

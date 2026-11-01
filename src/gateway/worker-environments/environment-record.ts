@@ -2,6 +2,7 @@ import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protoco
 import type {
   WorkerDesktopEndpoint,
   WorkerProfile,
+  WorkerResourceReceipt,
   WorkerSshEndpoint,
 } from "../../plugins/capability-provider.types.js";
 import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
@@ -35,13 +36,14 @@ export type PreparedEnvironmentSelection = WorkerSessionPlacementDispatchIdentit
   nodeDeviceId: string;
   leaseId: string;
   bundleHash: string;
-  assertCurrent: () => void;
+  assertCurrent: import("./placement-authorization.js").WorkerPlacementAuthorization;
 };
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerProfile;
   preparation: WorkerEnvironmentPreparation | null;
   provisionOperationId: string;
+  resourceReceipt: WorkerResourceReceipt | null;
   nodeSetupId: string | null;
   nodeDeviceId: string | null;
   sharedHost: boolean | null;

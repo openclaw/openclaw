@@ -12,6 +12,8 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import {
   assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
@@ -19,6 +21,11 @@ import {
   type CliStartupExecutionMode,
   cliStartupMemoryMetric,
 } from "./lib/cli-startup-memory-contract.mts";
+import {
+  formatMs,
+  parseCliArgs,
+  summarizeNumbers as summarizeGatewayBenchNumbers,
+} from "./lib/gateway-bench-runtime.ts";
 import {
   inspectManagedProcessGroup,
   terminateManagedChild,
@@ -71,26 +78,7 @@ type SampleMemory = {
   error?: string;
 };
 
-type CaseRuns = {
-  warmupSamples: Sample[];
-  samples: Sample[];
-};
-
-type SummaryStats = {
-  avg: number;
-  p50: number;
-  p95: number;
-  min: number;
-  max: number;
-};
-
-type CaseSummary = {
-  sampleCount: number;
-  durationMs: SummaryStats;
-  firstOutputMs: SummaryStats | null;
-  maxRssMb: SummaryStats | null;
-  exitSummary: string;
-};
+type CaseSummary = ReturnType<typeof summarizeSamples>;
 
 type SuiteResult = {
   entry: string;
@@ -124,18 +112,6 @@ type CaseDelta = {
   durationAvgDeltaPct: number;
   maxRssAvgDeltaMb: number | null;
   maxRssAvgDeltaPct: number | null;
-};
-
-type BenchmarkComparison = {
-  baseline: string;
-  candidate: string;
-  deltas: CaseDelta[];
-};
-
-type BenchmarkComparisonResult = {
-  baseline: SuiteResult;
-  candidate: SuiteResult;
-  comparison: BenchmarkComparison;
 };
 
 type CliOptions = {
@@ -456,30 +432,11 @@ const COMMAND_CASES: readonly CommandCase[] = [
 ] as const;
 
 function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): Map<string, string[]> {
-  const flags = new Map<string, string[]>();
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = expectDefined(argv[index], `CLI benchmark argument at index ${index}`);
-    if (VALUE_FLAGS.has(arg)) {
-      if (arg !== "--case" && flags.has(arg)) {
-        throw new Error(`${arg} was provided more than once`);
-      }
-      const value = argv[index + 1];
-      if (!value || value.startsWith("-")) {
-        throw new Error(`${arg} requires a value`);
-      }
-      const values = flags.get(arg) ?? [];
-      values.push(value);
-      flags.set(arg, values);
-      index += 1;
-      continue;
-    }
-    if (BOOLEAN_FLAGS.has(arg)) {
-      flags.set(arg, []);
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return flags;
+  return parseCliArgs(argv, {
+    booleanFlags: BOOLEAN_FLAGS,
+    repeatableValueFlags: new Set(["--case"]),
+    valueFlags: VALUE_FLAGS,
+  });
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -567,27 +524,18 @@ function resolveCases(options: { presets: string[]; caseIds: string[] }): Comman
   );
 }
 
-function summarizeNumbers(values: number[]): SummaryStats {
-  const sorted = values.toSorted((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return {
-    avg: values.length > 0 ? total / values.length : 0,
-    p50:
-      sorted.length === 0
-        ? 0
-        : sorted.length % 2 === 0
-          ? (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
-              expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
-            2
-          : expectDefined(sorted[mid], "middle CLI benchmark sample"),
-    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
-    min: values.length > 0 ? Math.min(...values) : 0,
-    max: values.length > 0 ? Math.max(...values) : 0,
+function summarizeNumbers(values: number[]) {
+  const { avg, p50, p95, min, max } = summarizeGatewayBenchNumbers(values) ?? {
+    avg: 0,
+    p50: 0,
+    p95: 0,
+    min: 0,
+    max: 0,
   };
+  return { avg, p50, p95, min, max };
 }
 
-function summarizeSamples(samples: Sample[]): CaseSummary {
+function summarizeSamples(samples: Sample[]) {
   const durations = summarizeNumbers(samples.map((sample) => sample.ms));
   const firstOutputValues = samples
     .map((sample) => sample.firstOutputMs)
@@ -602,10 +550,6 @@ function summarizeSamples(samples: Sample[]): CaseSummary {
     maxRssMb: rssValues.length > 0 ? summarizeNumbers(rssValues) : null,
     exitSummary: collectExitSummary(samples),
   };
-}
-
-function formatMs(value: number): string {
-  return `${value.toFixed(1)}ms`;
 }
 
 function formatMb(value: number): string {
@@ -819,20 +763,8 @@ function memoryInvocationEntries(entry: string): string[] {
   return entries;
 }
 
-function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: string }): string[] {
-  const flags: string[] = [];
-  if (options.cpuProfDir) {
-    flags.push("--cpu-prof", "--cpu-prof-dir", options.cpuProfDir);
-  }
-  if (options.heapProfDir) {
-    flags.push("--heap-prof", "--heap-prof-dir", options.heapProfDir);
-  }
-  return flags;
-}
-
-function appendLimited(current: string, chunk: Buffer | string, maxLength: number): string {
-  const next = current + String(chunk);
-  return next.length > maxLength ? next.slice(next.length - maxLength) : next;
+function appendLimited(current: string, chunk: Buffer | string): string {
+  return (current + String(chunk)).slice(-32 * 1024 * 1024);
 }
 
 async function runSample(params: {
@@ -874,10 +806,8 @@ async function runSample(params: {
       : []),
     "--import",
     pathToFileURL(rssHookPath).href,
-    ...buildCpuOrHeapFlags({
-      cpuProfDir: params.cpuProfDir,
-      heapProfDir: params.heapProfDir,
-    }),
+    ...(params.cpuProfDir ? ["--cpu-prof", "--cpu-prof-dir", params.cpuProfDir] : []),
+    ...(params.heapProfDir ? ["--heap-prof", "--heap-prof-dir", params.heapProfDir] : []),
     params.entry,
     ...params.commandCase.args,
   ];
@@ -890,7 +820,6 @@ async function runSample(params: {
   let timedOut = false;
   let forceKillAt: number | null = null;
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
-  const maxOutputLength = 32 * 1024 * 1024;
   const memoryDirectory = params.runtimeRss
     ? mkdtempSync(path.join(path.dirname(params.rssHookPath), "sample-"))
     : undefined;
@@ -898,11 +827,7 @@ async function runSample(params: {
   try {
     return await new Promise<Sample>((resolve) => {
       const sampleEnv = {
-        HOME: runRoot,
-        USERPROFILE: runRoot,
-        OPENCLAW_HOME: runRoot,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
+        ...createBuildSmokeEnv(runRoot, {}),
         OPENCLAW_HIDE_BANNER: "1",
         NO_COLOR: "1",
         FORCE_COLOR: "0",
@@ -987,19 +912,15 @@ async function runSample(params: {
 
       proc.stdout?.on("data", (chunk) => {
         markFirstOutput();
-        stdout = appendLimited(stdout, chunk, maxOutputLength);
+        stdout = appendLimited(stdout, chunk);
       });
       proc.stderr?.on("data", (chunk) => {
         markFirstOutput();
-        stderr = appendLimited(stderr, chunk, maxOutputLength);
+        stderr = appendLimited(stderr, chunk);
       });
       proc.once("error", (error) => {
         clearTimeout(timeout);
-        stderr = appendLimited(
-          stderr,
-          error instanceof Error ? error.message : String(error),
-          maxOutputLength,
-        );
+        stderr = appendLimited(stderr, error instanceof Error ? error.message : String(error));
         finish({
           exitCode: null,
           signal: null,
@@ -1099,7 +1020,7 @@ async function runCase(params: {
   cpuProfDir?: string;
   heapProfDir?: string;
   rssHookPath: string;
-}): Promise<CaseRuns> {
+}) {
   const warmupSamples: Sample[] = [];
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
@@ -1354,28 +1275,6 @@ function readBenchmarkReport(filePath: string): BenchmarkReport {
   return JSON.parse(readFileSync(filePath, "utf8")) as BenchmarkReport;
 }
 
-function writeJsonOutput(filePath: string, value: unknown): void {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function readBenchmarkComparison(
-  baselinePath: string,
-  candidatePath: string,
-): BenchmarkComparisonResult {
-  const baseline = readBenchmarkReport(baselinePath);
-  const candidate = readBenchmarkReport(candidatePath);
-  return {
-    baseline: baseline.primary,
-    candidate: candidate.primary,
-    comparison: {
-      baseline: baselinePath,
-      candidate: candidatePath,
-      deltas: buildCaseDeltas(baseline.primary, candidate.primary),
-    },
-  };
-}
-
 async function main(): Promise<void> {
   const flags = validateCliArgs();
   if (flags.has("--help")) {
@@ -1397,12 +1296,15 @@ async function main(): Promise<void> {
     if (!options.compareBaseline || !options.compareCandidate) {
       throw new Error("--compare-baseline and --compare-candidate must be provided together");
     }
-    const { baseline, candidate, comparison } = readBenchmarkComparison(
-      options.compareBaseline,
-      options.compareCandidate,
-    );
+    const baseline = readBenchmarkReport(options.compareBaseline).primary;
+    const candidate = readBenchmarkReport(options.compareCandidate).primary;
+    const comparison = {
+      baseline: options.compareBaseline,
+      candidate: options.compareCandidate,
+      deltas: buildCaseDeltas(baseline, candidate),
+    };
     if (options.output) {
-      writeJsonOutput(options.output, comparison);
+      writeBenchmarkJson(comparison, options.output);
     }
     if (options.json) {
       console.log(JSON.stringify(comparison, null, 2));
@@ -1445,7 +1347,7 @@ async function main(): Promise<void> {
     ];
 
     if (options.output) {
-      writeJsonOutput(options.output, report);
+      writeBenchmarkJson(report, options.output);
     }
 
     if (options.json) {

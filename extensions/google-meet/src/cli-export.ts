@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listGoogleMeetCalendarEvents, type GoogleMeetCalendarLookupResult } from "./calendar.js";
 import {
   formatDuration,
@@ -16,43 +17,13 @@ import type {
   GoogleMeetLatestConferenceRecordResult,
 } from "./meet-api.js";
 
-function appendArtifactSummary(
-  lines: string[],
-  entry: GoogleMeetArtifactsResult["artifacts"][number],
-): void {
-  if (entry.smartNotesError) {
-    lines.push(`smart notes warning: ${entry.smartNotesError}`);
-  }
-  for (const recording of entry.recordings) {
-    lines.push(`- recording: ${recording.name}`);
-  }
-  for (const transcript of entry.transcripts) {
-    lines.push(`- transcript: ${transcript.name}`);
-    if (transcript.documentTextError) {
-      lines.push(`- transcript document body warning: ${transcript.documentTextError}`);
-    }
-  }
-  for (const transcriptEntries of entry.transcriptEntries) {
-    if (transcriptEntries.entriesError) {
-      lines.push(
-        `- transcript entries warning: ${transcriptEntries.transcript}: ${transcriptEntries.entriesError}`,
-      );
-    }
-  }
-  for (const smartNote of entry.smartNotes) {
-    lines.push(`- smart note: ${smartNote.name}`);
-    if (smartNote.documentTextError) {
-      lines.push(`- smart note document body warning: ${smartNote.documentTextError}`);
-    }
-  }
-}
-
-export function renderAttendance(
-  result: GoogleMeetAttendanceResult,
+function createReport(
+  title: string,
+  result: Pick<GoogleMeetArtifactsResult, "input" | "space" | "conferenceRecords">,
   format: "summary" | "markdown",
-): string {
+) {
   const markdown = format === "markdown";
-  const lines: string[] = markdown ? ["# Google Meet Attendance"] : [];
+  const lines: string[] = markdown ? [`# Google Meet ${title}`] : [];
   const field = (label: string, value: string | number) => {
     lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
   };
@@ -66,6 +37,14 @@ export function renderAttendance(
     lines.push("");
   }
   field("Conference records", result.conferenceRecords.length);
+  return { markdown, lines, field };
+}
+
+export function renderAttendance(
+  result: GoogleMeetAttendanceResult,
+  format: "summary" | "markdown",
+): string {
+  const { markdown, lines, field } = createReport("Attendance", result, format);
   field("Attendance rows", result.attendance.length);
   for (const row of result.attendance) {
     const identity = row.displayName || row.user || row.participant;
@@ -159,21 +138,7 @@ export function renderArtifacts(
   result: GoogleMeetArtifactsResult,
   format: "summary" | "markdown",
 ): string {
-  const markdown = format === "markdown";
-  const lines: string[] = markdown ? ["# Google Meet Artifacts"] : [];
-  const field = (label: string, value: string | number) => {
-    lines.push(`${markdown ? label : label.toLowerCase()}: ${value}`);
-  };
-  if (result.input) {
-    field("Input", result.input);
-  }
-  if (result.space) {
-    field("Space", result.space.name);
-  }
-  if (markdown) {
-    lines.push("");
-  }
-  field("Conference records", result.conferenceRecords.length);
+  const { markdown, lines, field } = createReport("Artifacts", result, format);
   for (const entry of result.artifacts) {
     lines.push("", `${markdown ? "##" : "record:"} ${entry.conferenceRecord.name}`);
     field("Started", formatOptional(entry.conferenceRecord.startTime));
@@ -190,7 +155,31 @@ export function renderArtifacts(
     );
     field("Smart notes", entry.smartNotes.length);
     if (!markdown) {
-      appendArtifactSummary(lines, entry);
+      if (entry.smartNotesError) {
+        lines.push(`smart notes warning: ${entry.smartNotesError}`);
+      }
+      for (const recording of entry.recordings) {
+        lines.push(`- recording: ${recording.name}`);
+      }
+      for (const transcript of entry.transcripts) {
+        lines.push(`- transcript: ${transcript.name}`);
+        if (transcript.documentTextError) {
+          lines.push(`- transcript document body warning: ${transcript.documentTextError}`);
+        }
+      }
+      for (const transcriptEntries of entry.transcriptEntries) {
+        if (transcriptEntries.entriesError) {
+          lines.push(
+            `- transcript entries warning: ${transcriptEntries.transcript}: ${transcriptEntries.entriesError}`,
+          );
+        }
+      }
+      for (const smartNote of entry.smartNotes) {
+        lines.push(`- smart note: ${smartNote.name}`);
+        if (smartNote.documentTextError) {
+          lines.push(`- smart note document body warning: ${smartNote.documentTextError}`);
+        }
+      }
       continue;
     }
     const warnings = collectGoogleMeetArtifactWarnings({
@@ -390,16 +379,25 @@ export function buildGoogleMeetExportManifest(params: {
   calendarEvent?: GoogleMeetCalendarLookupResult;
   zipFile?: string;
 }) {
-  const transcriptEntryCount = params.artifacts.artifacts.reduce(
-    (count, entry) =>
-      count +
-      entry.transcriptEntries.reduce(
-        (entryCount, transcript) => entryCount + transcript.entries.length,
-        0,
-      ),
-    0,
-  );
   const warnings = collectGoogleMeetArtifactWarnings(params.artifacts);
+  const counts = {
+    conferenceRecords: params.artifacts.conferenceRecords.length,
+    artifacts: params.artifacts.artifacts.length,
+    attendanceRows: params.attendance.attendance.length,
+    recordings: 0,
+    transcripts: 0,
+    transcriptEntries: 0,
+    smartNotes: 0,
+    warnings: warnings.length,
+  };
+  for (const entry of params.artifacts.artifacts) {
+    counts.recordings += entry.recordings.length;
+    counts.transcripts += entry.transcripts.length;
+    counts.smartNotes += entry.smartNotes.length;
+    for (const transcript of entry.transcriptEntries) {
+      counts.transcriptEntries += transcript.entries.length;
+    }
+  }
   return {
     generatedAt: new Date().toISOString(),
     ...(params.request ? { request: params.request } : {}),
@@ -409,25 +407,7 @@ export function buildGoogleMeetExportManifest(params: {
       ...(params.artifacts.input ? { artifacts: params.artifacts.input } : {}),
       ...(params.attendance.input ? { attendance: params.attendance.input } : {}),
     },
-    counts: {
-      conferenceRecords: params.artifacts.conferenceRecords.length,
-      artifacts: params.artifacts.artifacts.length,
-      attendanceRows: params.attendance.attendance.length,
-      recordings: params.artifacts.artifacts.reduce(
-        (count, entry) => count + entry.recordings.length,
-        0,
-      ),
-      transcripts: params.artifacts.artifacts.reduce(
-        (count, entry) => count + entry.transcripts.length,
-        0,
-      ),
-      transcriptEntries: transcriptEntryCount,
-      smartNotes: params.artifacts.artifacts.reduce(
-        (count, entry) => count + entry.smartNotes.length,
-        0,
-      ),
-      warnings: warnings.length,
-    },
+    counts,
     conferenceRecords: params.artifacts.conferenceRecords.map((record) => record.name),
     files: params.files,
     ...(params.zipFile ? { zipFile: params.zipFile } : {}),
@@ -444,10 +424,6 @@ export function googleMeetExportFileNames(): string[] {
     "attendance.json",
     "manifest.json",
   ];
-}
-
-function defaultExportDirectory(): string {
-  return `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 }
 
 async function publishMeetExportFile(outputPath: string, content: string | Buffer): Promise<void> {
@@ -470,7 +446,9 @@ export async function writeMeetExportBundle(params: {
   tokenSource?: "cached-access-token" | "refresh-token";
   calendarEvent?: GoogleMeetCalendarLookupResult;
 }): Promise<{ outputDir: string; files: string[]; zipFile?: string }> {
-  const outputDir = params.outputDir?.trim() || defaultExportDirectory();
+  const outputDir =
+    readNonBlankString(params.outputDir) ??
+    `google-meet-export-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   await fsp.mkdir(outputDir, { recursive: true });
   let zipOutputDir = outputDir;
   if (params.zip) {

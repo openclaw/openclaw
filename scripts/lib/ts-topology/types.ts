@@ -1,23 +1,15 @@
-import type { Checker, Project } from "typescript/unstable/sync";
+import type { Checker, Project } from "typescript/sync";
 
 export type UsageBucket = "internal" | "production" | "test";
 
-export type ConsumerScope =
-  | "src"
-  | "extension"
-  | "package"
-  | "app"
-  | "ui"
-  | "script"
-  | "test"
-  | "other";
-
-export type TopologyReportName =
-  | "public-surface-usage"
-  | "owner-map"
-  | "single-owner-shared"
-  | "unused-public-surface"
-  | "consumer-topology";
+export const TOPOLOGY_REPORT_NAMES = [
+  "public-surface-usage",
+  "owner-map",
+  "single-owner-shared",
+  "unused-public-surface",
+  "consumer-topology",
+] as const;
+export type TopologyReportName = (typeof TOPOLOGY_REPORT_NAMES)[number];
 
 export type SymbolKind =
   | "function"
@@ -77,11 +69,7 @@ export type TopologyScope = {
   id: string;
   description: string;
   entrypoints: PublicEntrypoint[];
-  importFilter: (specifier: string) => boolean;
-  classifyUsageBucket: (relPath: string) => UsageBucket;
-  ownerForPath: (relPath: string) => string | null;
-  extensionForPath: (relPath: string) => string | null;
-  packageOwnerForPath: (relPath: string) => string | null;
+  internalRoots: string[];
 };
 
 export type RankedCandidates = {

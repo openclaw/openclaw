@@ -63,7 +63,11 @@ export function createControlUiMockResponses(
     return undefined;
   }
 
-  function applyAgentModel(method: string, value: unknown): unknown {
+  function applyAgentModel(method: string, response: unknown): unknown {
+    const value =
+      method === "agents.list" && isRecord(response)
+        ? { sessionPlacement: {}, ...response }
+        : response;
     if (!input.agentModel || !isRecord(value)) {
       return value;
     }
@@ -84,6 +88,12 @@ export function createControlUiMockResponses(
       return applyAgentsList(value);
     }
     return value;
+  }
+
+  function applySessionPlacement(params: unknown, response: Record<string, unknown>) {
+    return isRecord(params) && params.includeSessionPlacement === true
+      ? { sessionPlacement: {}, ...response }
+      : response;
   }
 
   function valuesEqual(actual: unknown, expected: unknown): boolean {
@@ -196,6 +206,28 @@ export function createControlUiMockResponses(
     };
   }
 
+  /** Static transcript overrides also serve the startup read inside a subscription. */
+  function historyTranscript(): Record<string, unknown> {
+    const configured = input.methodResponses["chat.history"];
+    if (!isRecord(configured) || responseCases(configured) || responseSequence(configured)) {
+      return {};
+    }
+    const transcript: Record<string, unknown> = {};
+    for (const field of [
+      "messages",
+      "activity",
+      "sessionId",
+      "sessionInfo",
+      "inFlightRun",
+      "thinkingLevel",
+    ]) {
+      if (Object.hasOwn(configured, field)) {
+        transcript[field] = configured[field];
+      }
+    }
+    return transcript;
+  }
+
   function scopedSearchResponse(
     params: Record<string, unknown>,
     response: Record<string, unknown>,
@@ -281,10 +313,13 @@ export function createControlUiMockResponses(
     select: configuredResponse,
     startupPending,
     applyAgentModel,
+    applySessionPlacement,
     sessionList: sessionListResponse,
+    historyTranscript,
     cases: responseCases,
     sequence: responseSequence,
     matches: paramsMatch,
+    matchesExact: valuesEqual,
     search: scopedSearchResponse,
     resetSequence: (method: string) => methodResponseSequenceIndexes.delete(method),
   };

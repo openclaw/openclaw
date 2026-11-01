@@ -6,25 +6,24 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 type TurnModelSelectionSource =
   | "locked"
   | "explicit"
-  | "heartbeat"
   | "session"
   | "parent"
   | "channel"
   | "default";
 
 export type TurnModelSelectionVerdict = ModelRef & { source: TurnModelSelectionSource };
-export type TurnModelSelectionPath = "reply" | "status" | "harness" | "command";
+type TurnModelSelectionPath = "reply" | "status" | "harness" | "command";
 
 export const TURN_MODEL_DEFAULT_REF = { provider: "openai", model: "default-model" } as const;
 export const TURN_MODEL_CHANNEL_REF = {
   provider: "anthropic",
   model: "channel-model",
 } as const;
-export const TURN_MODEL_SESSION_REF = { provider: "google", model: "session-model" } as const;
+const TURN_MODEL_SESSION_REF = { provider: "google", model: "session-model" } as const;
 const TURN_MODEL_PARENT_REF = { provider: "xai", model: "parent-model" } as const;
 export const TURN_MODEL_OVERRIDE_REF = { provider: "mistral", model: "turn-model" } as const;
 const TURN_MODEL_LOCKED_REF = { provider: "cohere", model: "locked-model" } as const;
-export const TURN_MODEL_PERSISTED_CHANNEL_REF = {
+const TURN_MODEL_PERSISTED_CHANNEL_REF = {
   provider: "anthropic",
   model: "persisted-channel-model",
 } as const;
@@ -32,7 +31,7 @@ export const TURN_MODEL_LIVE_CHANNEL_REF = {
   provider: "google",
   model: "live-channel-model",
 } as const;
-export const TURN_MODEL_PERSISTED_PEER_REF = {
+const TURN_MODEL_PERSISTED_PEER_REF = {
   provider: "xai",
   model: "persisted-peer-model",
 } as const;
@@ -54,7 +53,7 @@ const SOURCE_BY_REF = new Map<string, TurnModelSelectionSource>([
   [turnModelRefLabel(TURN_MODEL_CHANNEL_REF), "channel"],
   [turnModelRefLabel(TURN_MODEL_SESSION_REF), "session"],
   [turnModelRefLabel(TURN_MODEL_PARENT_REF), "parent"],
-  [turnModelRefLabel(TURN_MODEL_OVERRIDE_REF), "heartbeat"],
+  [turnModelRefLabel(TURN_MODEL_OVERRIDE_REF), "explicit"],
   [turnModelRefLabel(TURN_MODEL_LOCKED_REF), "locked"],
   [turnModelRefLabel(TURN_MODEL_PERSISTED_CHANNEL_REF), "channel"],
   [turnModelRefLabel(TURN_MODEL_LIVE_CHANNEL_REF), "channel"],
@@ -121,7 +120,7 @@ export type TurnModelDifferentialFixture = {
   child: SessionEntry;
   parent?: { key: string; entry: SessionEntry };
   modelByChannel?: Record<string, Record<string, string>>;
-  heartbeat?: boolean;
+  turnModelOverride?: boolean;
   locked?: boolean;
   expected: Record<TurnModelSelectionPath, TurnModelSelectionVerdict>;
 };
@@ -168,11 +167,11 @@ export const TURN_MODEL_DIFFERENTIAL_FIXTURES: TurnModelDifferentialFixture[] = 
     },
   },
   {
-    name: "heartbeat or explicit turn override",
+    name: "explicit turn override",
     ctx: { Provider: "telegram", Surface: "telegram", ChatType: "group" },
     child: createTurnModelEntry({ channel: "telegram", chatType: "group", groupId: "room" }),
     modelByChannel: { telegram: { "*": turnModelRefLabel(TURN_MODEL_CHANNEL_REF) } },
-    heartbeat: true,
+    turnModelOverride: true,
     expected: {
       reply: turnModelVerdict(TURN_MODEL_OVERRIDE_REF),
       status: turnModelVerdict(TURN_MODEL_OVERRIDE_REF),

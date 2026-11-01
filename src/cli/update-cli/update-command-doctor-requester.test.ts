@@ -19,6 +19,7 @@ import {
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -45,10 +46,11 @@ it.each([
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
       await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", type: "module", version: "2026.9.4" }),
-      );
+      await writeFixtureJson(path.join(root, "package.json"), {
+        name: "openclaw",
+        type: "module",
+        version: "2026.9.4",
+      });
       await fs.writeFile(path.join(root, "dist", "index.js"), "");
       const owner = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
       const marker = path.join(root, "doctor-ran");
@@ -62,11 +64,11 @@ it.each([
       // Wait for parent admission and decode UTF-8 across pipe chunks.
       process.stdin.setEncoding("utf8");
       let raw=""; for await (const chunk of process.stdin) raw+=chunk;
-      if(raw) fs.writeFileSync(${JSON.stringify(received)},"received");
+      if(raw) fs.writeFileSync(${JSON.stringify(received)},raw);
       const input=JSON.parse(raw);
       await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
         fence.assertCurrent();
-        ${fault === "migrated" ? `const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(${JSON.stringify(resolveOpenClawStateSqlitePath(env))});db.exec(${JSON.stringify(`BEGIN IMMEDIATE; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary'; COMMIT;`)});db.close();` : ""}
+        ${fault === "migrated" ? `const {DatabaseSync}=await import('node:sqlite');const db=new DatabaseSync(${JSON.stringify(resolveOpenClawStateSqlitePath(env))});db.exec(${JSON.stringify(`BEGIN IMMEDIATE; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary'; INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1); COMMIT;`)});db.close();` : ""}
         fs.writeFileSync(${JSON.stringify(marker)},"owned");
       });
     `,
@@ -82,26 +84,23 @@ it.each([
         senderId: "100000000000000001",
       };
       linkUserChannelIdentity(ada.id, identity, identityOptions);
-      await fs.writeFile(
-        env.OPENCLAW_CONFIG_PATH,
-        JSON.stringify({
-          plugins: { enabled: false },
-          gateway: {
-            auth: {
-              identityScopes: {
-                "ada@example.test": ["operator.admin"],
-                "grace@example.test": ["operator.admin"],
-              },
-            },
-            roles: {
-              default: "admin",
-              definitions: {
-                admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-              },
+      await writeFixtureJson(env.OPENCLAW_CONFIG_PATH, {
+        plugins: { enabled: false },
+        gateway: {
+          auth: {
+            identityScopes: {
+              "ada@example.test": ["operator.admin"],
+              "grace@example.test": ["operator.admin"],
             },
           },
-        }),
-      );
+          roles: {
+            default: "admin",
+            definitions: {
+              admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+            },
+          },
+        },
+      });
       const requesterAuthority = await createManagedUpdateRequesterAuthority(
         {
           channel: identity.channelId,
@@ -133,6 +132,7 @@ it.each([
       });
       const params = executionParams(kind);
       params.root = root;
+      params.opts.fullIntegrityCheck = true;
       params.opts.run = {
         runId,
         env,
@@ -148,7 +148,10 @@ it.each([
         doctorConfigWrites: true,
       });
       const runUpdate = async (
-        options: Pick<Parameters<typeof runPackageUpdateDoctor>[0], "getDoctorContext"> & {
+        options: Pick<
+          Parameters<typeof runPackageUpdateDoctor>[0],
+          "getDoctorContext" | "fullIntegrityCheck"
+        > & {
           validateCandidate?: (root: string) => Promise<unknown>;
         },
       ) => {
@@ -159,6 +162,7 @@ it.each([
           progress: {},
           managedServiceEnv: env,
           getDoctorContext: options.getDoctorContext,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         });
         return {
           ...successfulUpdate,
@@ -184,7 +188,24 @@ it.each([
           steps: [{ name: "openclaw doctor", exitCode: 0 }],
         });
         expect(await fs.readFile(marker, "utf8")).toBe("owned");
-        expect(requesterAuthority.isCurrent).toThrow(/newer schema version/);
+        expect(JSON.parse(await fs.readFile(received, "utf8"))).toMatchObject({
+          fullIntegrityCheck: true,
+        });
+        // Retained authority consumes admitted facts; a fresh runtime owns schema refusal.
+        const readerUrl = pathToFileURL(path.resolve("src/state/openclaw-state-db.ts"));
+        const admission = await runChild(
+          [
+            process.execPath,
+            "--import",
+            pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+            "--input-type=module",
+            "-e",
+            `const {openOpenClawStateDatabase}=await import(${JSON.stringify(readerUrl.href)});openOpenClawStateDatabase({env:${JSON.stringify(env)}});`,
+          ],
+          { timeoutMs: 20_000, killProcessTree: true },
+        );
+        expect(admission.code).not.toBe(0);
+        expect(admission.stderr).toMatch(/newer schema version/);
       }
       expect(reachedSpawn).toBe(true);
       expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });

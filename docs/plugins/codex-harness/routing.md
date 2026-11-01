@@ -2,7 +2,7 @@
 summary: "Choose which OpenAI routes select Codex and shape the deployment around them"
 read_when:
   - You need to know which model refs select the Codex runtime
-  - You want a fail-closed Codex requirement
+  - You want to require Codex for execution
   - You are configuring a mixed-provider fleet
 title: "Codex routing and deployment"
 sidebarTitle: "Routing and deployment"
@@ -22,7 +22,7 @@ attached with native settings preserved retain their native effort.
 
 Keep provider refs and runtime policy separate:
 
-- Use `openai/gpt-*` for canonical OpenAI model selection. The prefix alone
+- Use `openai/gpt-*` for standard OpenAI model selection. The prefix alone
   never selects Codex.
 - With runtime unset or `auto`, only an exact official HTTPS Platform Responses
   or ChatGPT Responses route with no authored provider request override may
@@ -30,7 +30,7 @@ Keep provider refs and runtime policy separate:
   not count as authored request params.
 - Do not use legacy Codex GPT refs in config; run `openclaw doctor --fix` to
   repair legacy refs and stale session route pins.
-- `agentRuntime.id: "codex"` makes Codex a fail-closed requirement for a
+- `agentRuntime.id: "codex"` makes Codex a required runtime for a
   compatible route. It does not make an incompatible effective route compatible.
 - `agentRuntime.id: "openclaw"` opts a provider or model into the embedded
   OpenClaw runtime when that is intentional.
@@ -60,7 +60,7 @@ Keep provider refs and runtime policy separate:
 | Use case                                        | Configure                                                                                                            | Verify                                  | Notes                                                      |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------- |
 | Eligible OpenAI route with native Codex runtime | Exact official HTTPS Responses/ChatGPT route with no authored provider request override, plus enabled `codex` plugin | `/status` shows `Runtime: OpenAI Codex` | Valid Fast runtime controls do not disqualify this path    |
-| Fail closed if Codex is unavailable             | Provider or model `agentRuntime.id: "codex"`                                                                         | Missing harness fails the turn          | Authored request overrides may still use declared fallback |
+| Stop execution if Codex is unavailable          | Provider or model `agentRuntime.id: "codex"`                                                                         | Missing harness fails the turn          | Authored request overrides may still use declared fallback |
 | Direct OpenAI API-key traffic through OpenClaw  | Provider or model `agentRuntime.id: "openclaw"` and normal OpenAI auth                                               | `/status` shows OpenClaw runtime        | Use only when OpenClaw is intentional                      |
 | Legacy config                                   | legacy Codex GPT refs                                                                                                | `openclaw doctor --fix` rewrites it     | Do not write new config this way                           |
 | ACP/acpx Codex adapter                          | ACP `sessions_spawn({ runtime: "acp" })`                                                                             | ACP task/session status                 | Separate from native Codex harness                         |
@@ -174,13 +174,15 @@ Configure a Claude `main` agent and add a named Codex agent:
 }
 ```
 
-This explicit fleet has no default agent; target `main` or `codex` with a session, `--agent`, or binding. The `main` agent uses its normal provider path. The `codex` agent uses Codex app-server when its effective OpenAI route remains compatible; add explicit model-scoped `agentRuntime.id: "codex"` when that should be a fail-closed requirement.
+This explicit fleet has no default agent; target `main` or `codex` with a session, `--agent`, or binding. The `main` agent uses its normal provider path. The `codex` agent uses Codex app-server when its effective OpenAI route remains compatible; add explicit model-scoped `agentRuntime.id: "codex"` when Codex should be required.
 
-### Fail-closed Codex deployment
+<a id="fail-closed-codex-deployment" />
+
+### Require Codex for deployment
 
 An eligible exact official HTTPS OpenAI route can resolve to Codex when the
-bundled plugin is available. Add explicit runtime policy for a written
-fail-closed rule:
+bundled plugin is available. Add explicit runtime policy for a configured
+requirement to use Codex:
 
 ```json5
 {

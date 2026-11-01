@@ -1,17 +1,18 @@
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { SESSION_PARTICIPANTS_TABLE } from "./openclaw-agent-db-contract.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { sessionParticipantsSchemaSql } from "./openclaw-agent-schema-history.js";
 
-export function sessionParticipantsSchemaSql(): string {
-  return extractSqliteTableSchema(OPENCLAW_AGENT_SCHEMA_SQL, SESSION_PARTICIPANTS_TABLE, {
-    endMarker: "CREATE TABLE IF NOT EXISTS session_key_contract (",
-    includeEndMarker: false,
-    errorMessage: "OpenClaw session participant schema markers are missing.",
-  });
+export { sessionParticipantsSchemaSql } from "./openclaw-agent-schema-history.js";
+
+const ensureNativeSessionParticipantsSchema = createSqliteSchemaEnsurer(
+  sessionParticipantsSchemaSql,
+  { tables: [SESSION_PARTICIPANTS_TABLE] },
+);
+
+export function ensureSessionParticipantsSchema(database: EngineConnection): void {
+  // PostgreSQL admits the complete agent schema, including participants, at open.
+  if (!isPostgresSqlConnection(database)) {
+    ensureNativeSessionParticipantsSchema(database);
+  }
 }
-
-export const {
-  ensure: ensureSessionParticipantsSchema,
-  recordCommitted: confirmSessionParticipantsSchemaEnsured,
-} = createSqliteSchemaEnsurer(sessionParticipantsSchemaSql);

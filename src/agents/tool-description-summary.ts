@@ -86,7 +86,6 @@ export function summarizeToolDescriptionText(params: {
 export function describeToolForVerbose(params: {
   rawDescription?: string | null;
   fallback: string;
-  maxLen?: number;
 }): string {
   const raw = normalizeOptionalString(params.rawDescription) ?? "";
   if (!raw) {
@@ -110,7 +109,7 @@ export function describeToolForVerbose(params: {
     }
     keptLength += trimmed.length + (kept.length > 0 ? 1 : 0);
     kept.push(trimmed);
-    if (keptLength >= (params.maxLen ?? 320)) {
+    if (keptLength >= 320) {
       break;
     }
   }
@@ -119,6 +118,5 @@ export function describeToolForVerbose(params: {
   if (!normalized) {
     return params.fallback;
   }
-  const maxLen = params.maxLen ?? 320;
-  return truncateSummary(normalized, maxLen, Math.floor(maxLen / 2));
+  return truncateSummary(normalized, 320, 160);
 }

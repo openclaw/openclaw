@@ -74,11 +74,21 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   people?: SessionPerson[];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  /** Earliest activeMinutes boundary among visible candidates, before person filters/pagination. */
+  activityExpiresAt?: number;
   /** Window-wide statistics and caller-defined activity buckets, before pagination. */
   activityPulse?: SessionActivityPulse;
   /** Canonical profile selected by the person-association filter. */
   involvingProfileId?: string;
   defaults: TDefaults;
+  /** Response-local display facts referenced by rows that opted into sharing. */
+  sharedFacts?: Partial<TRow>[];
+  /** Opaque identity of the authorized row vector, independent of list facets. */
+  rowsRevision?: string;
+  /** Only the rows are omitted; counts, defaults and facets remain current. */
+  rowsUnchanged?: true;
+  /** Complete window indexes into the base rows followed by this response's changed rows. */
+  rowsDelta?: { baseRevision: string; order: number[] };
   sessions: TRow[];
 };
 

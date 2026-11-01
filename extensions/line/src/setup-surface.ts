@@ -138,7 +138,7 @@ export const lineSetupWizard: ChannelSetupWizard = {
     includeStatusLine: true,
     resolveConfigured: ({ cfg, accountId }) =>
       isLineConfigured(cfg, accountId ?? resolveDefaultLineAccountId(cfg)),
-    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length}`],
   }),
   introNote: {
     title: t("wizard.line.messagingApiTitle"),

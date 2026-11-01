@@ -1,4 +1,6 @@
+import util from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -38,27 +40,8 @@ export type SubsystemLogger = {
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
-const inspectValue: ((value: unknown) => string) | null = (() => {
-  try {
-    const inspect = process.getBuiltinModule?.("util").inspect;
-    return typeof inspect === "function" ? inspect : null;
-  } catch {
-    return null;
-  }
-})();
-
 function formatRuntimeArg(arg: unknown): string {
-  if (typeof arg === "string") {
-    return arg;
-  }
-  if (inspectValue) {
-    return inspectValue(arg);
-  }
-  try {
-    return JSON.stringify(arg);
-  } catch {
-    return String(arg);
-  }
+  return typeof arg === "string" ? arg : util.inspect(arg);
 }
 
 function isRichConsoleEnv(): boolean {
@@ -71,19 +54,6 @@ function isRichConsoleEnv(): boolean {
 
 // Chalk caches style builders per instance; select between fixed levels on each message.
 const consoleColors: [ChalkInstance?, ChalkInstance?] = [];
-
-function getColorForConsole(): ChalkInstance {
-  const hasForceColor =
-    typeof process.env.FORCE_COLOR === "string" &&
-    process.env.FORCE_COLOR.trim().length > 0 &&
-    process.env.FORCE_COLOR.trim() !== "0";
-  const level =
-    hasForceColor ||
-    (!process.env.NO_COLOR && (process.stdout.isTTY || process.stderr.isTTY || isRichConsoleEnv()))
-      ? 1
-      : 0;
-  return (consoleColors[level] ??= new Chalk({ level }));
-}
 
 const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] as const;
 const SUBSYSTEM_COLOR_OVERRIDES = new Map<string, (typeof SUBSYSTEM_COLORS)[number]>([
@@ -157,7 +127,6 @@ function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  // Common duplication when a message manually includes the subsystem tag.
   if (message.startsWith("[")) {
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {
@@ -191,7 +160,17 @@ function createConsoleLineFormatter(subsystem: string) {
   const prefix = `[${displaySubsystem}]`;
   const prefixColor = pickSubsystemColor(displaySubsystem);
   return (level: LogLevel, message: string, style: "pretty" | "compact"): string => {
-    const color = getColorForConsole();
+    const hasForceColor =
+      typeof process.env.FORCE_COLOR === "string" &&
+      process.env.FORCE_COLOR.trim().length > 0 &&
+      process.env.FORCE_COLOR.trim() !== "0";
+    const colorLevel =
+      hasForceColor ||
+      (!process.env.NO_COLOR &&
+        (process.stdout.isTTY || process.stderr.isTTY || isRichConsoleEnv()))
+        ? 1
+        : 0;
+    const color = (consoleColors[colorLevel] ??= new Chalk({ level: colorLevel }));
     const levelColor =
       level === "error" || level === "fatal"
         ? color.red
@@ -281,13 +260,21 @@ function formatConsoleMetaValue(value: unknown): string | undefined {
   return JSON.stringify(value);
 }
 
-/** Keeps an Error's message, which a JSON round-trip would otherwise reduce to `{}`. */
-function prepareConsoleMetaRecord(meta: Record<string, unknown>): Record<string, unknown> {
+/** Preserve native error diagnostics before any sink reduces non-enumerable fields to `{}`. */
+function prepareLogMetaRecord(
+  meta: Record<string, unknown>,
+  stackHeadOnly = false,
+): Record<string, unknown> {
   let prepared: Record<string, unknown> | undefined;
   for (const [key, value] of Object.entries(meta)) {
     if (value instanceof Error) {
       prepared ??= { ...meta };
-      prepared[key] = value.message;
+      prepared[key] = {
+        name: value.name,
+        message: value.message,
+        errorCode: extractErrorCode(value),
+        stack: stackHeadOnly ? value.stack?.split("\n").slice(0, 6).join("\n") : value.stack,
+      };
     }
   }
   return prepared ?? meta;
@@ -308,7 +295,7 @@ function prepareConsoleMetaRecord(meta: Record<string, unknown>): Record<string,
 function formatConsoleMeta(meta: Record<string, unknown>): string {
   let redacted: Record<string, unknown>;
   try {
-    redacted = redactLogRecordForTransport(prepareConsoleMetaRecord(meta), { format: "console" });
+    redacted = redactLogRecordForTransport(meta);
   } catch {
     // A record this sink cannot serialize must not cost the console its message.
     // The file log and `openclaw logs --json` remain the full-fidelity record.
@@ -360,7 +347,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     if (
       level === "error" ||
       level === "fatal" ||
-      (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("log.record"))
+      (level !== "info" &&
+        areDiagnosticsEnabledForProcess() &&
+        hasInternalDiagnosticEventInterest("log.record"))
     ) {
       return fileChild;
     }
@@ -375,6 +364,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
+      meta?.consoleMessage !== false &&
       isLogLevelEnabled(level, consoleSettings.level) &&
       shouldLogSubsystemToConsole(resolvedSubsystem);
     const fileEnabled = isFileLogLevelEnabled(level);
@@ -383,14 +373,14 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     }
     let consoleMessageOverride: string | undefined;
     let fileMeta = meta;
+    let consoleFields = meta;
     if (meta && Object.keys(meta).length > 0) {
-      const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
-        consoleMessage?: unknown;
-      };
+      const { consoleMessage, ...rest } = meta;
       if (typeof consoleMessage === "string") {
         consoleMessageOverride = consoleMessage;
       }
-      fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
+      fileMeta = Object.keys(rest).length > 0 ? prepareLogMetaRecord(rest) : undefined;
+      consoleFields = fileMeta && consoleEnabled ? prepareLogMetaRecord(rest, true) : undefined;
     }
     if (fileEnabled) {
       logToFile(getFileLogger(level), level, message, fileMeta);
@@ -404,9 +394,9 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     const consoleMeta =
       consoleSettings.style !== "json" &&
       consoleMessageOverride === undefined &&
-      fileMeta &&
+      consoleFields &&
       CONSOLE_META_LEVELS.has(level)
-        ? formatConsoleMeta(fileMeta)
+        ? formatConsoleMeta(consoleFields)
         : "";
     const consoleMessage =
       consoleMessageOverride ?? (consoleMeta ? `${message} ${consoleMeta}` : message);
@@ -415,7 +405,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         level,
         suppressProbeMessages,
         message: consoleMessage,
-        meta: fileMeta,
+        meta: consoleFields,
       })
     ) {
       return;
@@ -423,7 +413,12 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     writeConsoleLine(
       level,
       consoleSettings.style === "json"
-        ? formatJsonConsoleLine({ level, subsystem: resolvedSubsystem, message, meta: fileMeta })
+        ? formatJsonConsoleLine({
+            level,
+            subsystem: resolvedSubsystem,
+            message,
+            meta: consoleFields,
+          })
         : (formatConsoleLine ??= createConsoleLineFormatter(resolvedSubsystem))(
             level,
             consoleMessage,
@@ -509,16 +504,22 @@ export function runtimeForLogger(
 ): OutputRuntimeEnv {
   return {
     log(...args) {
-      logger.info(args.map(formatRuntimeArg).join(" ").trim());
+      if (logger.isEnabled("info")) {
+        logger.info(args.map(formatRuntimeArg).join(" ").trim());
+      }
     },
     error(...args) {
-      logger.error(args.map(formatRuntimeArg).join(" ").trim());
+      if (logger.isEnabled("error")) {
+        logger.error(args.map(formatRuntimeArg).join(" ").trim());
+      }
     },
     writeStdout(value) {
       logger.info(value);
     },
     writeJson(value: unknown, space = 2) {
-      logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined));
+      if (logger.isEnabled("info")) {
+        logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined));
+      }
     },
     exit,
   };

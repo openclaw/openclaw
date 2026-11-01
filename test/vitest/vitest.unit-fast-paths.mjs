@@ -1,5 +1,4 @@
 // Unit-fast test discovery and classification helpers for fast local routing.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isAgentsCoreIsolatedTestFile } from "./vitest.agents-paths.mjs";
@@ -12,6 +11,7 @@ import {
 } from "./vitest.gateway-server-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
+import { getRepositoryFileInventory } from "./vitest.ui-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
@@ -76,19 +76,13 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/internal.test.ts",
   "packages/memory-host-sdk/src/host/post-json.test.ts",
   "src/acp/client.test.ts",
-  "src/acp/control-plane/manager.failover.test.ts",
   "src/acp/control-plane/manager.runtime-config.test.ts",
   "src/acp/control-plane/manager.runtime-handles.test.ts",
   "src/acp/control-plane/manager.turn-results.test.ts",
   "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
-  "src/acp/translator.stop-reason.test.ts",
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
-  "src/acp/translator.final-snapshots.test.ts",
-  "src/acp/translator.prompt-size.test.ts",
-  "src/acp/translator.session-config.test.ts",
-  "src/acp/translator.session-setup.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "src/system-agent/assistant.configured.test.ts",
   "src/system-agent/system-agent.test.ts",
@@ -107,13 +101,12 @@ export const forcedUnitFastTestFiles = [
   "src/mcp/openclaw-tools-serve.test.ts",
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
+  "src/node-host/invoke-system-run-plan.cwd.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
-  "src/talk/agent-consult-runtime.test.ts",
-  "src/security/audit-config-basics.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.sync.test.ts",
   "src/security/audit-sandbox-docker-config.test.ts",
@@ -132,12 +125,10 @@ export const forcedUnitFastTestFiles = [
   "src/trajectory/metadata.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
   "src/tts/tts.test.ts",
-  "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",
-  "src/test-utils/openclaw-test-state.test.ts",
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",
@@ -151,6 +142,8 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  // This family proof belongs to the PostgreSQL conformance owner.
+  "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
   // Planner inventory proofs retain their tooling timing and worker policy
@@ -184,9 +177,9 @@ const ownerRoutedUnitTestPatterns = [
   // mocks live in a shared helper.
   // Completion custody tests use real session/task SQLite and process-scoped state cleanup.
   "src/agents/agent-harness-completion-delivery.test.ts",
-  "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  "src/agents/agent-command.operator-direct-root.test.ts",
   // Source plugin workers retain the agent runtime owner after test extraction.
   "src/agents/code-mode-quickjs.integration.test.ts",
   "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
@@ -196,7 +189,6 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/openai-transport-stream.*.test.ts",
   // Split transport suites install module mocks through their shared harness.
   "src/agents/provider-transport-fetch.*.test.ts",
-  "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
@@ -226,7 +218,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/proxy-capture/runtime.test.ts",
     "src/plugins/install.npm-spec.test.ts",
     "src/plugins/contracts/**/*.test.ts",
-    "src/pairing/pairing-store.test.ts",
     "src/plugin-sdk/browser-subpaths.test.ts",
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",
@@ -282,12 +273,13 @@ const disqualifyingPatterns = [
   },
   {
     code: "runtime-singleton-state",
-    pattern: /\b(?:setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
+    pattern:
+      /\b(?:drainGlobalSingletonLifecycleState|setActivePluginRegistry|resetPluginRuntimeStateForTest|reset.*ForTest)\s*\(/u,
   },
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|prepared-model-runtime\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {
@@ -369,59 +361,52 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
-function collectRepoTestFilesFromGit(cwd) {
-  // Planning, fast-lane includes, and scoped exclusions share this inventory.
-  // New working-tree tests must be present so explicit targets cannot become empty lanes.
-  const result = spawnSync(
-    "git",
-    [
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      "src",
-      "packages",
-      "test",
-    ],
-    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
-  );
-  if (result.error || result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\0")
-    .map(normalizeRepoPath)
-    .filter((file) => file.endsWith(".test.ts"));
-}
-
-function collectRepoTestFiles(cwd) {
-  const normalizedCwd = normalizeRepoPath(cwd);
-  const cached = walkedTestFilesByCwd.get(normalizedCwd);
+function collectRepoTestFiles(cwd, selected) {
+  const key = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached = walkedTestFilesByCwd.get(key);
   if (cached) {
     return cached;
   }
-  const files =
-    collectRepoTestFilesFromGit(cwd) ??
-    ["src", "packages", "test"]
-      .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-      .map((file) => normalizeRepoPath(path.relative(cwd, file)));
-  walkedTestFilesByCwd.set(normalizedCwd, files);
+  const roots = ["src/", "packages/", "test/"];
+  let inventory = new Set();
+  // A single glob per root filters non-test files before Git checks deleted-file
+  // metadata, while retaining untracked tests and each root's directory prefix.
+  for (const scope of selected ? [selected] : roots.map((root) => [`${root}**/*.test.ts`])) {
+    const files = getRepositoryFileInventory(cwd, scope, selected ? "literal" : "glob");
+    if (!files) {
+      inventory = null;
+      break;
+    }
+    for (const file of files) {
+      inventory.add(file);
+    }
+  }
+  const files = inventory
+    ? [...inventory]
+        .map(normalizeRepoPath)
+        .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
+    : selected?.every((file) => file.endsWith(".test.ts"))
+      ? selected
+      : roots
+          .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+          .map((file) => normalizeRepoPath(path.relative(cwd, file)));
+  walkedTestFilesByCwd.set(key, files);
   return files;
 }
 
 const unitFastCandidateInventoryByCwd = new Map();
 
-function collectUnitFastCandidateInventory(cwd) {
-  const cacheKey = normalizeRepoPath(cwd);
-  const cached = unitFastCandidateInventoryByCwd.get(cacheKey);
+function collectUnitFastCandidateInventory(cwd, selected) {
+  const cacheKey = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached =
+    unitFastCandidateInventoryByCwd.get(JSON.stringify([normalizeRepoPath(cwd), undefined])) ??
+    unitFastCandidateInventoryByCwd.get(cacheKey);
   if (cached) {
     return cached;
   }
   const inventory = [
     ...new Set([
-      ...collectRepoTestFiles(cwd),
+      ...collectRepoTestFiles(cwd, selected),
       ...unitFastCandidateExactFiles,
       ...forcedUnitFastTestFiles,
     ]),
@@ -473,7 +458,7 @@ function matchesCompiledInclude(file, compiledPatterns) {
   );
 }
 
-export function classifyUnitFastTestFileContent(source) {
+function classifyUnitFastTestFileContent(source) {
   const reasons = [];
   for (const { code, pattern } of disqualifyingPatterns) {
     if (pattern.test(source)) {
@@ -613,8 +598,21 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
     return [];
   }
   const compiledPatterns = prepareGlobPatterns(patterns);
+  const directories = [...new Set(patterns.map(directoryPrefixForGlob))];
+  const candidates = patterns.every(
+    (pattern) => pattern.endsWith(".test.ts") && literalGlobPrefix(pattern) === pattern,
+  )
+    ? collectUnitFastCandidateInventory(cwd, patterns)
+    : directories.every(Boolean)
+      ? [
+          ...new Set(
+            // Git applies --deleted's metadata filter early only for one pathspec.
+            directories.flatMap((directory) => collectUnitFastCandidateInventory(cwd, [directory])),
+          ),
+        ]
+      : collectUnitFastCandidateInventory(cwd);
 
-  const files = collectUnitFastCandidateInventory(cwd)
+  const files = candidates
     .filter((file) => {
       return (
         isFileWithinScope(file, dir) &&
@@ -690,7 +688,7 @@ function getUnitFastTestFileAnalysis(file) {
   // Exact routing must not analyze every source before admitting one test.
   // Retain inventory membership, including ignored-file and forced-owner rules.
   return isUnitFastCandidateFile(normalized) &&
-    collectUnitFastCandidateInventory(cwd).includes(normalized)
+    collectUnitFastCandidateInventory(cwd, [normalized]).includes(normalized)
     ? analyzeUnitFastTestFile(cwd, normalized)
     : undefined;
 }

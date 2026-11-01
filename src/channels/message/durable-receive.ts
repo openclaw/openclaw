@@ -10,7 +10,6 @@ type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = Omit<
   "channelId" | "accountId" | "queueName" | "laneKey"
 >;
 
-/** Accept result for a new or duplicate inbound platform event. */
 type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -31,7 +30,6 @@ type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> 
       >;
     };
 
-/** Durable receive journal facade used by channel receive pipelines. */
 type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> = {
   accept(
     id: string,
@@ -55,7 +53,6 @@ function normalizeDurableInboundReceiveId(id: string): string {
   return normalized;
 }
 
-/** Adapts the shared channel ingress queue to the durable receive journal API. */
 export function createDurableInboundReceiveJournalFromQueue<
   TPayload,
   TMetadata = unknown,
@@ -109,22 +106,24 @@ export function createDurableInboundReceiveJournalFromQueue<
       return await options.queue.listPending({ limit: "all" });
     },
     complete: async (id, completeOptions) => {
-      await options.queue.complete(normalizeDurableInboundReceiveId(id), {
+      const eventId = normalizeDurableInboundReceiveId(id);
+      await options.queue.complete(eventId, {
         ...(completeOptions?.metadata === undefined ? {} : { metadata: completeOptions.metadata }),
         ...(completeOptions?.completedAt === undefined
           ? {}
           : { completedAt: completeOptions.completedAt }),
       });
-      await prune(normalizeDurableInboundReceiveId(id));
+      await prune(eventId);
     },
     release: async (id, releaseOptions) => {
-      const released = await options.queue.release(normalizeDurableInboundReceiveId(id), {
+      const eventId = normalizeDurableInboundReceiveId(id);
+      const released = await options.queue.release(eventId, {
         ...(releaseOptions?.lastError === undefined ? {} : { lastError: releaseOptions.lastError }),
         ...(releaseOptions?.releasedAt === undefined
           ? {}
           : { releasedAt: releaseOptions.releasedAt }),
       });
-      await prune(normalizeDurableInboundReceiveId(id));
+      await prune(eventId);
       return released;
     },
     deletePending: async (id) => {

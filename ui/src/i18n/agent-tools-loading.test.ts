@@ -4,15 +4,15 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 const loadI18n = useLazyEnglishTest();
 
 it.each([
-  { surface: "tool panel", load: () => import("../pages/agents/panels-tools-skills.ts") },
-  { surface: "skills panel", load: () => import("../pages/agents/panels-skills.ts") },
+  { surface: "tool panel", load: () => import("../pages/agents/panels-tools-skills.tsx") },
+  { surface: "skills panel", load: () => import("../pages/agents/panels-skills.tsx") },
 ])("loads agent tool fallback copy with the $surface, preserving GitHub copy", async ({ load }) => {
   const { en, manager } = await loadI18n({ agentTools: { title: "Werkzeugzugriff" } });
   const agentTools = en.agentTools;
   expect(agentTools.disableAll).toBeUndefined();
 
-  const { registerGitHubEnglish } = await import("./locales/en-github.ts");
-  registerGitHubEnglish();
+  const { registerGitHubConnectionsEnglish } = await import("./locales/en-github-connections.ts");
+  registerGitHubConnectionsEnglish();
   await manager.setLocale("de");
   await load();
 
@@ -22,7 +22,7 @@ it.each([
   expect(manager.t("agentTools.previewTitle")).toBe("Tool preview");
   expect(manager.t("agentTools.githubVerify")).toBe("Verify");
 
-  registerGitHubEnglish();
+  registerGitHubConnectionsEnglish();
   expect(en.agentTools).toBe(agentTools);
   expect(manager.t("agentTools.disableAll")).toBe("Disable All");
 });

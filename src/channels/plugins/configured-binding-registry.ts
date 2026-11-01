@@ -15,14 +15,13 @@ import { resolveCompiledBindingRegistry } from "./configured-binding-compiler.js
 import type { ChannelConfiguredBindingMatch } from "./types.adapters.js";
 
 function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
-  const trimmed = (match ?? "").trim();
-  if (!trimmed) {
+  if (!match) {
     return actual === DEFAULT_ACCOUNT_ID ? 2 : 0;
   }
-  if (trimmed === "*") {
+  if (match === "*") {
     return 1;
   }
-  return normalizeAccountId(trimmed) === actual ? 2 : 0;
+  return normalizeAccountId(match) === actual ? 2 : 0;
 }
 
 /** Compile plugin binding rules before publishing a config or plugin generation. */
@@ -42,12 +41,7 @@ export function resolveConfiguredBindingRecord(params: {
 }): ConfiguredBindingRecordResolution | null {
   const resolved = resolveConfiguredBinding({
     cfg: params.cfg,
-    conversation: {
-      channel: params.channel,
-      accountId: params.accountId,
-      conversationId: params.conversationId,
-      parentConversationId: params.parentConversationId,
-    },
+    conversation: params,
   });
   return resolved ? { record: resolved.record, statefulTarget: resolved.statefulTarget } : null;
 }
@@ -131,11 +125,10 @@ export function resolveConfiguredBindingRecordBySessionKey(params: {
     return null;
   }
   const parsed = parseConfiguredAcpSessionKey(sessionKey);
-  const channel = parsed && normalizeOptionalLowercaseString(parsed.channel);
-  if (!parsed || !channel) {
+  if (!parsed) {
     return null;
   }
-  const rules = registry.get(channel);
+  const rules = registry.get(parsed.channel);
   if (!rules) {
     return null;
   }
@@ -147,7 +140,7 @@ export function resolveConfiguredBindingRecordBySessionKey(params: {
     }
     // Wildcard rules derive their target session key from the parsed account.
     const materializedTarget = rule.targetFactory.materialize({
-      accountId: normalizeAccountId(parsed.accountId),
+      accountId: parsed.accountId,
       conversation: rule.target,
     });
     if (materializedTarget.record.targetSessionKey === sessionKey) {

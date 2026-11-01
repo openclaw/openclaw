@@ -25,8 +25,7 @@ struct Semver: Comparable, CustomStringConvertible {
               let minor = Int(parts[1])
         else { return nil }
         // Strip prerelease suffix (e.g., "11-4" → "11", "5-beta.1" → "5")
-        let patchRaw = String(parts[2])
-        guard let patchToken = patchRaw.split(whereSeparator: { $0 == "-" || $0 == "+" }).first,
+        guard let patchToken = parts[2].split(whereSeparator: { $0 == "-" || $0 == "+" }).first,
               let patchNumeric = Int(patchToken)
         else {
             return nil
@@ -151,12 +150,7 @@ enum GatewayEnvironment {
         if BundledRuntime.isBundledApp {
             do {
                 _ = try BundledRuntime.resolve(bundle: .main)
-                return GatewayEnvironmentStatus(
-                    kind: .ok,
-                    nodeVersion: nil,
-                    gatewayVersion: self.appVersionString(),
-                    requiredGateway: self.appVersionString(),
-                    message: "Bundled Bun runtime; Gateway \(self.appVersionString() ?? "unknown")")
+                return try await self.checkBundledRuntime()
             } catch {
                 return GatewayEnvironmentStatus(
                     kind: .error(error.localizedDescription),
@@ -170,14 +164,94 @@ enum GatewayEnvironment {
         return await self.resolveEnvironment(searchPaths: searchPaths)
     }
 
+    private static func checkBundledRuntime() async throws -> GatewayEnvironmentStatus {
+        let expected = self.appVersionString()
+        let runtime = try BundledRuntime.seeded()
+        guard let arguments = GatewayLaunchAgentManager.launchdProgramArguments() else {
+            throw GatewayHostingError(message: "The installed Gateway service command could not be inspected.")
+        }
+        let serviceCLI = GatewayLaunchAgentManager.installedServiceCLI()
+        guard arguments.isEmpty || serviceCLI != nil else {
+            throw GatewayHostingError(message: "The installed Gateway service command could not be inspected.")
+        }
+        // Service pins are concrete build paths and can lag behind runtime/current.
+        // Probe their owner before considering the terminal shim's selected seed.
+        let cli = serviceCLI ?? runtime.map {
+            GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: $0.cliCommand, sqliteLibrary: $0.sqliteLibrary.path)
+        }
+        let status: CLIInstaller.Status = if let cli {
+            await CLIInstaller.managedStatus(
+                expectedVersion: expected, installedCLI: cli, usesBundledRuntime: false)
+        } else {
+            .missing(location: "")
+        }
+        let seedMatchesBundle = runtime.map { (try? BundledRuntime.resolve(root: $0.root, bundle: .main)) != nil }
+            ?? false
+        let pending = PostAppUpdateReceiptStore.pending(currentVersion: expected)
+        // The primary hello belongs to a remote Gateway in remote mode, not this local companion.
+        let connection = await GatewayConnection.shared.connectionSummary()
+        let connectedVersion = CommandResolver.connectionModeIsRemote() ? nil : connection.gatewayVersion
+        return self.bundledEnvironmentStatus(
+            installed: status,
+            expected: expected,
+            connectedVersion: connectedVersion,
+            seedMatchesBundle: seedMatchesBundle,
+            recoveryPending: pending.map { $0.coreUpdatePending || $0.hasPendingRuntimeMigration } ?? false)
+    }
+
+    static func bundledEnvironmentStatus(
+        installed: CLIInstaller.Status,
+        expected: String?,
+        connectedVersion: String?,
+        seedMatchesBundle: Bool,
+        recoveryPending: Bool) -> GatewayEnvironmentStatus
+    {
+        let installedVersion: String? = switch installed {
+        case let .ready(_, version): version
+        case let .incompatible(_, found, _): found
+        case .missing, .unusable: nil
+        }
+        let version = connectedVersion ?? installedVersion
+        let newerGateway = if let version, let expected {
+            CLIInstallPrompter.isManagedUpgrade(found: expected, required: version)
+        } else {
+            false
+        }
+        let kind: GatewayEnvironmentKind
+        let message: String
+        if let version, let expected,
+           !Semver.satisfiesExpectedGatewayVersion(installed: version, expected: expected)
+        {
+            kind = .incompatible(found: version, required: expected)
+            message = """
+            Gateway version \(version) is incompatible with app \(expected);
+            open Connection settings to update or set up the Gateway.
+            """
+        } else if case .missing = installed {
+            kind = .missingGateway
+            message = "The bundled Gateway has not been prepared."
+        } else if !installed.isReady || recoveryPending || (!newerGateway && !seedMatchesBundle) {
+            message = "The managed runtime does not match the updated Mac app."
+            kind = .error(message)
+        } else {
+            kind = .ok
+            message = "Bundled Bun runtime; Gateway \(version ?? "unknown")"
+        }
+        return GatewayEnvironmentStatus(
+            kind: kind,
+            nodeVersion: nil,
+            gatewayVersion: version,
+            requiredGateway: expected,
+            message: message)
+    }
+
     private static func resolveEnvironment(searchPaths: [String]) async -> GatewayEnvironmentStatus {
         let start = Date()
         defer {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning("gateway env check slow (\(elapsedMs, privacy: .public)ms)")
-            } else {
-                self.logger.debug("gateway env check ok (\(elapsedMs, privacy: .public)ms)")
             }
         }
         let expectedString = self.expectedGatewayVersionString()
@@ -276,43 +350,15 @@ enum GatewayEnvironment {
     }
 
     private static func readGatewayVersion(binary: String, searchPaths: [String]) async -> String? {
-        let start = Date()
-        do {
-            let result = try await BoundedProcess.run(
-                path: binary,
-                arguments: ["--version"],
-                environment: ["PATH": searchPaths.joined(separator: ":")],
-                timeout: CommandResolver.versionProbeTimeout)
-            guard result.terminationStatus == 0 else { return nil }
-            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-            if elapsedMs > 500 {
-                self.logger.warning(
-                    """
-                    gateway --version slow (\(elapsedMs, privacy: .public)ms) \
-                    bin=\(binary, privacy: .public)
-                    """)
-            } else {
-                self.logger.debug(
-                    """
-                    gateway --version ok (\(elapsedMs, privacy: .public)ms) \
-                    bin=\(binary, privacy: .public)
-                    """)
-            }
-            let raw = String(data: result.output, encoding: .utf8)
-            guard let normalized = self.normalizeGatewayVersionOutput(raw),
-                  Semver.parse(normalized) != nil
-            else { return nil }
-            return normalized
-        } catch {
-            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-            self.logger.error(
-                """
-                gateway --version failed (\(elapsedMs, privacy: .public)ms) \
-                bin=\(binary, privacy: .public) \
-                err=\(error.localizedDescription, privacy: .public)
-                """)
-            return nil
-        }
+        let raw = await ExecutableVersionProbe.read(
+            binary: binary,
+            pathEnv: searchPaths.joined(separator: ":"),
+            logger: self.logger,
+            label: "gateway")
+        guard let normalized = self.normalizeGatewayVersionOutput(raw),
+              Semver.parse(normalized) != nil
+        else { return nil }
+        return normalized
     }
 
     private static func readLocalGatewayVersion(projectRoot: URL) -> String? {

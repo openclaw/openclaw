@@ -6,10 +6,12 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, type ModelRef } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "../prepared-model-runtime.capture.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
@@ -18,17 +20,10 @@ import {
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import { mergeModelMediaInput } from "./model.compat.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
+import { resolveConfiguredProviderConfig } from "./model.configured-overrides.js";
+import { type ProviderRuntimeHooks, resolveRuntimeHooks } from "./model.provider-hooks.js";
 import {
-  applyConfiguredProviderOverrides,
-  resolveConfiguredProviderConfig,
-} from "./model.configured-overrides.js";
-import {
-  normalizeResolvedModel,
-  type ProviderRuntimeHooks,
-  resolveRuntimeHooks,
-} from "./model.provider-hooks.js";
-import {
+  normalizeConfiguredProviderModel,
   normalizeProviderModelRef,
   resolveDynamicModelAuthProfile,
   resolveExplicitModelWithRegistry,
@@ -40,8 +35,6 @@ import {
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
 } from "./model.static-catalog.js";
-
-export { resolveModelWithRegistry } from "./model.registry-resolution.js";
 
 type AsyncModelResolutionOptions = {
   assertCurrent?: () => void;
@@ -76,31 +69,6 @@ export function createEmptyAgentDiscoveryStores(): {
   return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
 }
 
-function resolvePreparedAgentSnapshot(
-  resolvedAgentDir: string,
-  cfg: OpenClawConfig | undefined,
-  explicitWorkspaceDir: string | undefined,
-  derivedWorkspaceDir: string | undefined,
-  agentId: string | undefined,
-): ReturnType<typeof getPreparedModelRuntimeSnapshot> {
-  const base = {
-    ...(agentId ? { agentId } : {}),
-    agentDir: resolvedAgentDir,
-    config: cfg ?? {},
-    inheritedAuthDir: resolveLegacyInheritedAuthDir(cfg ?? {}),
-  };
-  const published = getPreparedModelRuntimeSnapshot({
-    ...base,
-    ...(explicitWorkspaceDir ? { workspaceDir: explicitWorkspaceDir } : {}),
-  });
-  if (published || explicitWorkspaceDir || !derivedWorkspaceDir) {
-    return published;
-  }
-  // Standalone runs publish an exact workspace owner. Gateway owners may instead carry an
-  // authoritative launch workspace, which the workspace-free lookup above resolves by agent.
-  return getPreparedModelRuntimeSnapshot({ ...base, workspaceDir: derivedWorkspaceDir });
-}
-
 type ModelResolution = {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
@@ -128,33 +96,36 @@ export async function resolveModelAsync(
     options?.workspaceDir,
     options?.agentId,
   );
-  const explicitPreparedRuntime = options?.preparedModelRuntime;
-  const needsPreparedSnapshot =
-    !explicitPreparedRuntime &&
+  let preparedModelRuntime = options?.preparedModelRuntime;
+  if (
+    !preparedModelRuntime &&
     !options?.skipAgentDiscovery &&
-    (!options?.authStorage || !options?.modelRegistry);
-  const publishedSnapshot = needsPreparedSnapshot
-    ? resolvePreparedAgentSnapshot(
-        resolvedAgentDir,
-        cfg,
-        options?.workspaceDir,
-        derivedWorkspaceDir,
-        options?.agentId,
-      )
-    : undefined;
-  const preparedSnapshot =
-    publishedSnapshot ??
-    (needsPreparedSnapshot
-      ? await loadPreparedModelRuntimeSnapshot({
-          ...(options?.agentId ? { agentId: options.agentId } : {}),
-          agentDir: resolvedAgentDir,
-          config: cfg ?? {},
-          inheritedAuthDir: resolveLegacyInheritedAuthDir(cfg ?? {}),
-          ...(derivedWorkspaceDir ? { workspaceDir: derivedWorkspaceDir } : {}),
-        })
-      : undefined);
+    (!options?.authStorage || !options?.modelRegistry)
+  ) {
+    const snapshotParams = {
+      ...(options?.agentId ? { agentId: options.agentId } : {}),
+      agentDir: resolvedAgentDir,
+      config: cfg ?? {},
+      inheritedAuthDir: resolveLegacyInheritedAuthDir(cfg ?? {}),
+    };
+    preparedModelRuntime = getPreparedModelRuntimeSnapshot({
+      ...snapshotParams,
+      ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+    });
+    if (!preparedModelRuntime && !options?.workspaceDir && derivedWorkspaceDir) {
+      // Standalone runs publish an exact workspace owner. Gateway owners may instead carry an
+      // authoritative launch workspace, which the workspace-free lookup above resolves by agent.
+      preparedModelRuntime = getPreparedModelRuntimeSnapshot({
+        ...snapshotParams,
+        workspaceDir: derivedWorkspaceDir,
+      });
+    }
+    preparedModelRuntime ??= await loadPreparedModelRuntimeSnapshot({
+      ...snapshotParams,
+      ...(derivedWorkspaceDir ? { workspaceDir: derivedWorkspaceDir } : {}),
+    });
+  }
   // Route-projected cfg owns transport/auth; the snapshot contributes generation facts only.
-  const preparedModelRuntime = explicitPreparedRuntime ?? preparedSnapshot;
   const resolve = async () => {
     options?.assertCurrent?.();
     const workspaceDir =
@@ -174,6 +145,22 @@ export async function resolveModelAsync(
       modelRegistry ??= options?.authStorage
         ? stores.modelRegistry.fork(authStorage)
         : stores.modelRegistry;
+    }
+    const matchesSelectedModel = (entry: { provider: string; id: string }) =>
+      entry.provider === normalizedRef.provider && entry.id === normalizedRef.model;
+    const declared = preparedModelRuntime?.modelCatalog.entries.find(matchesSelectedModel);
+    // An admitted grant replaces static support only for its own physical route.
+    const captured =
+      preparedModelRuntime &&
+      readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
+        (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
+      );
+    if ((captured?.inference?.chat ?? declared?.inference?.chat) === false) {
+      return {
+        error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
+        authStorage,
+        modelRegistry,
+      };
     }
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
@@ -263,7 +250,7 @@ export async function resolveModelAsync(
       if (!catalogModel) {
         return undefined;
       }
-      const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
+      return normalizeConfiguredProviderModel({
         ...registryParams,
         discoveredModel: catalogModel,
         providerConfig,
@@ -271,13 +258,6 @@ export async function resolveModelAsync(
         preferDiscoveredModelMetadata: true,
         preferDiscoveredTransport: options?.preferBundledStaticCatalogTransport,
         staticCatalogModel: catalogModel,
-      });
-      if (!overriddenStaticCatalogModel) {
-        return undefined;
-      }
-      return normalizeResolvedModel({
-        ...registryParams,
-        model: overriddenStaticCatalogModel,
       });
     };
     const resolveDynamicAttempt = async () => {
@@ -320,7 +300,7 @@ export async function resolveModelAsync(
     if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
       model = await resolveStaticCatalogFallbackModel();
       options?.assertCurrent?.();
-      model ??= buildConfiguredFallbackModel({
+      model ??= normalizeConfiguredProviderModel({
         ...registryParams,
         providerMetadataOwners: preparedMetadataSnapshot?.owners,
       });

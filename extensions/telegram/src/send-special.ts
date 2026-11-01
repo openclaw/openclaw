@@ -62,7 +62,7 @@ export async function sendStickerTelegram(
         messageThreadId: opts.messageThreadId,
         replyToMessageId: opts.replyToMessageId,
       },
-      request: { kind: "nonIdempotent", useApiErrorLogging: false },
+      useApiErrorLogging: false,
     });
     const stickerParams =
       Object.keys(prepared.threadParams).length > 0 ? prepared.threadParams : undefined;
@@ -104,7 +104,6 @@ export async function sendPollTelegram(
         messageThreadId: opts.messageThreadId,
         replyToMessageId: opts.replyToMessageId,
       },
-      request: { kind: "nonIdempotent" },
     });
 
     const normalizedPoll = normalizePollInput(poll, { maxOptions: 12 });

@@ -1,5 +1,4 @@
 /**
- * Shared runtime tool policy normalization.
  *
  * Keeps aliases, groups, profile expansion, and prefix matching consistent across allow/deny paths.
  */
@@ -13,6 +12,8 @@ export type { ToolProfileId } from "./tool-catalog.js";
 const TOOL_NAME_ALIASES = new Map<string, string>([
   ["bash", "exec"],
   ["apply-patch", "apply_patch"],
+  // v2026.10.1 policies must still govern the renamed Tool Search dispatcher.
+  ["tool_call", "dispatch_action"],
   // Permanent scheduler-tool alias (owner decision, RFC 0026), like bash -> exec.
   ["cron", "automations"],
 ]);
@@ -22,7 +23,6 @@ type ToolAllowlistWithIntersection = readonly string[] & {
   [TOOL_ALLOWLIST_INTERSECTION]?: readonly string[][];
 };
 
-/** Core tool groups exposed to allow/deny policy config. */
 const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
 /**
@@ -48,9 +48,17 @@ export function readToolAllowlistIntersection(
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
 
-/** Refusal for a tool that keeps its schema but sits outside the run's execution allowlist. */
-export const TOOL_EXECUTION_GATED_MESSAGE =
-  "Unavailable in this run. Continue with the tools permitted by the run's instructions.";
+/**
+ * Normal (non-error) result for a tool that keeps its schema but sits outside the run's
+ * execution allowlist. Background runs treat it as guidance, never as a run failure.
+ */
+export function formatToolExecutionGatedMessage(
+  toolName: string,
+  allowNames: readonly string[],
+): string {
+  const allowed = allowNames.length > 0 ? allowNames.join(", ") : "the tools named in your task";
+  return `${toolName} is not available in this background run. Use ${allowed} instead; do not retry ${toolName}.`;
+}
 
 export function isToolExecutionAllowed(allowNames: readonly string[], toolName: string): boolean {
   const target = normalizeToolPolicyName(toolName);
@@ -63,13 +71,11 @@ export function createToolExecutionMatcher(allowNames: readonly string[]) {
   return (toolName: string) => allowed.has(normalizeToolPolicyName(toolName));
 }
 
-/** Normalizes a tool name or alias to the policy id used for matching. */
 export function normalizeToolPolicyName(name: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return TOOL_NAME_ALIASES.get(normalized) ?? normalized;
 }
 
-/** Checks whether an in-progress prefix can still resolve to an allowed tool or alias. */
 export function couldNormalizeToolNamePrefixToAllowedTool(
   prefix: string,
   allowedToolNames: Set<string>,
@@ -122,7 +128,6 @@ export function normalizeToolList(list?: string[]) {
   return list.map(normalizeToolPolicyName).filter(Boolean);
 }
 
-/** Expands named tool groups into concrete tool ids. */
 export function expandToolGroups(list?: string[]) {
   const normalized = normalizeToolList(list);
   const expanded: string[] = [];

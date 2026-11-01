@@ -25,6 +25,7 @@ OpenClaw targets **WCAG 2.1 AA**. This checklist applies to every UI component â
 - [ ] All interactive elements have a visible `:focus-visible` style
 - [ ] Use `--focus-ring` box-shadow pattern from `base.css` â€” do not remove the outline without replacing it
 - [ ] Never use `outline: none` alone; replace with `box-shadow: var(--focus-ring)` and `outline: none`
+- [ ] Box shadows are not painted in forced-colors mode; when a box shadow is the only focus cue, add `outline: 2px solid Highlight` inside `@media (forced-colors: active)`
 
 ```css
 /* Correct pattern */

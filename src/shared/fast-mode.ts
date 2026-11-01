@@ -56,12 +56,7 @@ export function resolveFastModeForElapsed(params: {
   startedAtMs: number;
   fastAutoOnSeconds?: number;
   nowMs?: number;
-}): {
-  mode: FastMode | undefined;
-  enabled: boolean;
-  elapsedSeconds: number;
-  fastAutoOnSeconds: number;
-} {
+}) {
   const nowMs = params.nowMs ?? Date.now();
   const elapsedMs = Math.max(0, nowMs - params.startedAtMs);
   const fastAutoOnSeconds =

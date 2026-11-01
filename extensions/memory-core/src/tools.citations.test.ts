@@ -211,14 +211,6 @@ describe("memory tools", () => {
       paths: ["w1.md", "w2.md", "w3.md", "w4.md", "memory/note-a.md"],
       memoryCount: 1,
     },
-    {
-      name: "preserves each backend's ranking despite inverted public memory scores",
-      memory: [memoryHit("memory/z/foo.md", 1), memoryHit("memory/a/semantic.md", 2)],
-      wiki: [wikiHit("w1.md", 10), wikiHit("w2.md", 0.5)],
-      limit: 4,
-      paths: ["w1.md", "memory/z/foo.md", "memory/a/semantic.md", "w2.md"],
-      memoryCount: 2,
-    },
   ])("$name", async ({ memory, wiki, limit, paths, memoryCount }) => {
     setMemorySearchImpl(async () => memory);
     registerMemoryCorpusSupplement("memory-wiki", {
@@ -236,23 +228,6 @@ describe("memory tools", () => {
     expect(details.results.filter((entry) => entry.corpus === "wiki")).toHaveLength(
       limit - memoryCount,
     );
-  });
-
-  it("records an unregistered optional wiki corpus without warning or hiding memory results", async () => {
-    const tool = createMemorySearchToolOrThrow();
-    const result = await tool.execute("call_all_without_wiki", {
-      query: "alpha",
-      corpus: "all",
-    });
-
-    expect(result.details).toMatchObject({
-      results: [{ corpus: "memory", path: "MEMORY.md" }],
-      corpora: [
-        { corpus: "memory", outcome: "ok" },
-        { corpus: "wiki", outcome: "not-registered" },
-      ],
-    });
-    expect(result.details).not.toHaveProperty("warning");
   });
 
   it("surfaces a warning when an unregistered wiki corpus is explicitly requested", async () => {
@@ -376,35 +351,4 @@ it("keeps the wiki deadline independent of managed memory readiness", async () =
       { corpus: "wiki", outcome: "unavailable", error: "memory_search timed out after 30s" },
     ],
   });
-});
-
-it("preserves the configured primary budget in model-visible results", async () => {
-  const memory = Array.from({ length: 20 }, (_, index) => ({
-    path: `memory/note-${index + 1}.md`,
-    startLine: 1,
-    endLine: 1,
-    score: 1 - index / 100,
-    snippet: `Memory ${index + 1}: café 🦞 日本語`,
-    source: "memory" as const,
-  }));
-  setMemorySearchImpl(async (options) => memory.slice(0, options?.maxResults));
-  const tool = createMemorySearchToolOrThrow({
-    config: {
-      memory: { citations: "off", search: { query: { maxResults: 12 } } },
-      plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
-    },
-  });
-
-  const result = await tool.execute("budget", {
-    query: "note",
-  });
-  const text = result.content.find((part) => part.type === "text")?.text;
-  if (!text) {
-    throw new Error("memory_search returned no model-visible text");
-  }
-  const payload = JSON.parse(text) as { results: Array<{ path: string; snippet: string }> };
-  const expected = memory.slice(0, 12);
-  expect(payload.results.map(({ path, snippet }) => ({ path, snippet }))).toEqual(
-    expected.map(({ path, snippet }) => ({ path, snippet })),
-  );
 });

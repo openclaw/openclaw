@@ -4,20 +4,23 @@ import { getGatewayNativeApprovalRuntime } from "../../infra/approval-gateway-ru
 import { hasActiveNativeApprovalRoute } from "../../infra/approval-native-route-coordinator.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";
 
-export function shouldSuppressLocalExecApprovalPrompt(params: {
+export async function shouldSuppressLocalExecApprovalPromptAsync(params: {
   channel?: string | null;
   cfg: OpenClawConfig;
   accountId?: string | null;
   payload: ReplyPayload;
-}): boolean {
+}): Promise<boolean> {
   const channel = params.channel ? normalizeChannelId(params.channel) : null;
   if (!channel) {
     return false;
   }
   // Native-route state is process-local and transient. Pass it as a hint so the
   // channel owns the UX decision without duplicating route lookup logic.
+  const outbound = getChannelPlugin(channel)?.outbound;
+  const hook =
+    outbound?.shouldSuppressLocalPayloadPromptAsync ?? outbound?.shouldSuppressLocalPayloadPrompt;
   return (
-    getChannelPlugin(channel)?.outbound?.shouldSuppressLocalPayloadPrompt?.({
+    (await hook?.({
       cfg: params.cfg,
       accountId: params.accountId,
       payload: params.payload,
@@ -29,6 +32,6 @@ export function shouldSuppressLocalExecApprovalPrompt(params: {
           { channel, accountId: params.accountId, approvalKind: "exec" },
         ),
       },
-    }) ?? false
+    })) ?? false
   );
 }

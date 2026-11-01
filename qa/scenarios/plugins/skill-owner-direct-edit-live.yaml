@@ -8,7 +8,7 @@ scenario:
       - plugins.activation-skills
     secondary:
       - channels.qa-channel-outbound
-  objective: Verify a live model changes a user-owned workspace skill in place when its owner asks in chat, instead of refusing or only filing a Workshop proposal.
+  objective: Verify a live model changes a user-owned workspace skill in place when its owner asks in chat, instead of refusing or copying it into the Workshop.
   gatewayConfigPatch:
     commands:
       ownerAllowFrom: [qa-channel:alice]
@@ -17,10 +17,10 @@ scenario:
     - The skill file now carries the requested marker and no longer carries the old one.
     - The agent confirms the change in chat, naming the new marker.
   docsRefs:
-    - docs/tools/skill-workshop/how-it-works.md
+    - docs/tools/skill-workshop.md
   codeRefs:
     - src/agents/skill-workshop-prompt.ts
-    - src/agents/tools/skill-workshop-tool-description.ts
+    - src/agents/tools/skill-workshop-tool.ts
   execution:
     kind: flow
     summary: Seed a workspace skill, ask a live model to change it, and read the skill file afterward.

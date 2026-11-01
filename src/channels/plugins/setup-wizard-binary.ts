@@ -9,9 +9,6 @@ import type {
 type SetupTextInputParams = Parameters<NonNullable<ChannelSetupWizardTextInput["currentValue"]>>[0];
 type SetupStatusParams = Parameters<NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>>[0];
 
-/**
- * Creates setup status resolvers for channels backed by a required local binary.
- */
 export function createDetectedBinaryStatus(params: {
   channelLabel: string;
   binaryLabel: string;
@@ -64,9 +61,6 @@ export function createDetectedBinaryStatus(params: {
   };
 }
 
-/**
- * Creates a setup text input that records or reuses a CLI path.
- */
 export function createCliPathTextInput(params: {
   inputKey: ChannelSetupWizardTextInput["inputKey"];
   message: string;
@@ -85,28 +79,6 @@ export function createCliPathTextInput(params: {
     applyCurrentValue: true,
     ...(params.helpTitle ? { helpTitle: params.helpTitle } : {}),
     ...(params.helpLines ? { helpLines: params.helpLines } : {}),
-  };
-}
-
-/**
- * Creates delegated status resolvers backed by a lazily loaded setup wizard.
- */
-export function createDelegatedSetupWizardStatusResolvers(
-  loadWizard: () => Promise<ChannelSetupWizard>,
-): Pick<
-  ChannelSetupWizardStatus,
-  "resolveStatusLines" | "resolveSelectionHint" | "resolveQuickstartScore"
-> {
-  return {
-    async resolveStatusLines(params) {
-      return (await loadWizard()).status.resolveStatusLines?.(params) ?? [];
-    },
-    async resolveSelectionHint(params) {
-      return await (await loadWizard()).status.resolveSelectionHint?.(params);
-    },
-    async resolveQuickstartScore(params) {
-      return await (await loadWizard()).status.resolveQuickstartScore?.(params);
-    },
   };
 }
 

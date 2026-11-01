@@ -1,4 +1,5 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
+import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -6,6 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import type {
   LegacyMemoryReadResult,
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
   MemoryOriginClass,
   MemoryReadResult,
   MemorySearchManager,
@@ -112,9 +115,14 @@ export type MemoryPromptSectionParams = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /** Host-resolved repository identity for this run; the plugin owns any memory-format guidance. */
+  projectKey?: string;
 };
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
+
+/** Provider-owned /learn guidance for the tools tool policy leaves this turn; [] when it cannot learn. */
+export type MemoryLearnGuidanceBuilder = (params: { availableTools: Set<string> }) => string[];
 
 export type MemoryPromptSectionPreparer = (
   params: MemoryPromptSectionParams,
@@ -127,6 +135,7 @@ export type PreparedMemoryPromptSection = Readonly<{
     agentId?: string;
     agentSessionKey?: string;
     sandboxed: boolean;
+    projectKey?: string;
   }>;
   lines: readonly string[];
 }>;
@@ -197,15 +206,11 @@ export type MemoryPromptPreparationRegistration = {
   prepare: MemoryPromptSectionPreparer;
 };
 
-/**
- * A file-persistence flush plan with its resolved timing. Its shape is unchanged from earlier
- * releases, so existing producers and readers keep compiling and behaving the same.
- */
+/** A file-persistence flush plan with its resolved timing. */
 export type MemoryFlushPlan = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
-  model?: string;
   prompt: string;
   systemPrompt: string;
   relativePath: string;
@@ -219,17 +224,16 @@ type MemoryFlushPlanTiming = Pick<
 
 /**
  * A file plan as a resolver may return it: omitted timing fields are filled by the host, and
- * defined ones deliberately override it. A file plan without a model keeps the session's model.
+ * defined ones deliberately override it.
  */
 export type MemoryFlushFilePlanDraft = Omit<MemoryFlushPlan, keyof MemoryFlushPlanTiming> &
   Partial<MemoryFlushPlanTiming> & { persistenceToolNames?: never; lookupToolNames?: never };
 
 /**
- * Tool persistence for the selected memory slot owner. The host fills omitted timing and the
- * configured flush model; defined values deliberately override them.
+ * Tool persistence for the selected memory slot owner. The host fills omitted timing;
+ * defined values deliberately override it.
  */
 export type MemoryFlushToolsPlan = Partial<MemoryFlushPlanTiming> & {
-  model?: string;
   prompt: string;
   systemPrompt: string;
   /** Absent on every tools plan; a tools plan never names a workspace file. */
@@ -245,7 +249,7 @@ type MemoryFlushPlanResolverParams = {
   contextWindowTokens?: number;
 };
 
-/** Resolves a complete file flush plan; its contract is unchanged from earlier releases. */
+/** Resolves a complete file flush plan. */
 export type MemoryFlushPlanResolver = (
   params: MemoryFlushPlanResolverParams,
 ) => MemoryFlushPlan | null;
@@ -267,6 +271,8 @@ export type RegisteredMemorySearchManager = Omit<MemorySearchManager, "readFile"
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
+  /** CLI search and recall recording run under the same plugin instance. */
+  searchForCli?(params: MemoryCliSearchParams): Promise<MemoryCliSearchResult>;
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -358,6 +364,10 @@ export type MemoryPluginCapability = {
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */
   supportsPrivateTranscriptRecall?: boolean;
+  /** Tools a /learn turn may use to persist lessons; the host checks them against tool policy. */
+  learnToolNames?: readonly string[];
+  /** Guidance appended to /learn when some learnToolNames are available. */
+  learnGuidanceBuilder?: MemoryLearnGuidanceBuilder;
 };
 
 export type MemoryPluginCapabilityRegistration = {
@@ -371,12 +381,10 @@ export type MemoryPluginCapabilityRegistration = {
   memorySlotSelected?: boolean;
 };
 
-export type SessionDiscussionState = "none" | "available" | "open";
-export type SessionDiscussionInfo = {
-  state: SessionDiscussionState;
-  embedUrl?: string;
-  openUrl?: string;
-};
+export type {
+  SessionDiscussionInfo,
+  SessionDiscussionState,
+} from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 
 export type SessionDiscussionProvider = {
   id: string;

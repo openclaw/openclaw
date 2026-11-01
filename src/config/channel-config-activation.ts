@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-/** Returns a channel config object when `channels.<id>` is present and object-shaped. */
 export function resolveChannelConfigRecord(
   cfg: OpenClawConfig,
   channelId: string,
@@ -21,7 +20,6 @@ export function hasMeaningfulChannelConfig(value: unknown, channelId?: string): 
   );
 }
 
-/** Checks whether a shallow channel config contains activation-relevant values. */
 export function hasMeaningfulChannelConfigShallow(value: unknown, channelId?: string): boolean {
   return (
     (isRecord(value) && value.enabled === true) || hasMeaningfulChannelConfig(value, channelId)
@@ -30,10 +28,13 @@ export function hasMeaningfulChannelConfigShallow(value: unknown, channelId?: st
 
 /** Channel configuration can admit bundled plugin capabilities through an allowlist. */
 export function resolveChannelConfigActivationFacts(config: OpenClawConfig): string[] {
-  return Object.keys(config.channels ?? {})
-    .filter((channelId) => {
-      const channel = resolveChannelConfigRecord(config, channelId);
-      return channel?.enabled !== false && hasMeaningfulChannelConfigShallow(channel, channelId);
-    })
-    .toSorted();
+  return (
+    Object.keys(config.channels ?? {})
+      .filter((channelId) => {
+        const channel = resolveChannelConfigRecord(config, channelId);
+        return channel?.enabled !== false && hasMeaningfulChannelConfigShallow(channel, channelId);
+      })
+      // oxlint-disable-next-line unicorn/no-array-sort -- filter created a private array.
+      .sort()
+  );
 }

@@ -10,8 +10,11 @@ export function resolveWorkshopSkillsDir(
   return path.join(resolveAgentDir(config, agentId, env), "workshop-skills");
 }
 
-export function resolveWorkshopWatchRoots(config?: OpenClawConfig, agentId?: string) {
-  return config && agentId
-    ? [{ path: resolveWorkshopSkillsDir(config, agentId), source: "openclaw-workshop" }]
-    : [];
+/** Drafts a background review proposed instead of changing skills; discovery never loads them. */
+export function resolveWorkshopDraftsDir(
+  config: OpenClawConfig,
+  agentId: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return path.join(resolveWorkshopSkillsDir(config, agentId, env), ".drafts");
 }

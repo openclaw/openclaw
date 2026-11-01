@@ -7,6 +7,7 @@ import type { WorkerSessionPlacementProjection } from "./placement-read-projecti
 import type { WithPreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementIdentity, WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
+import type { WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export type WorkerPlacementRecoveryAdmission = (
@@ -15,12 +16,14 @@ export type WorkerPlacementRecoveryAdmission = (
 ) => Promise<boolean>;
 
 export type PlacementRecoveryDeps = {
+  isShuttingDown?: () => boolean;
   placements: WorkerDispatchPlacementStore;
   environments: Pick<
     WorkerDispatchEnvironmentService,
     | "get"
-    | "fenceWorkerTurnForRecovery"
     | "destroy"
+    | "reclaim"
+    | "fenceWorkerTurnForRecovery"
     | "startTunnel"
     | "stopTunnel"
     | "reconcileEnvironment"
@@ -38,6 +41,10 @@ export type PlacementRecoveryDeps = {
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   prepareGatewayMove?: (
-    params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
+    params: WorkerSessionPlacementIdentity & {
+      assertCurrent: () => void;
+      quiescence?: WorkerWorkspaceQuiescence;
+      diskResult?: WorkerSessionTurnClaim;
+    },
   ) => Promise<void>;
 };

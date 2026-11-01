@@ -1,4 +1,3 @@
-/** macOS LaunchAgent installer, runtime inspection, and lifecycle controls. */
 export { isLaunchctlNotLoaded } from "./launchd-exec.js";
 export { installLaunchAgent, stageLaunchAgent, uninstallLaunchAgent } from "./launchd-install.js";
 export {

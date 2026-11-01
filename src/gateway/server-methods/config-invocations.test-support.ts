@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export async function invokeConfigPatch(args: {
   raw: unknown;
@@ -25,9 +26,11 @@ export async function invokeConfigPatch(args: {
 export function startConfigWrite(
   method: "config.patch" | "config.apply",
   args: { raw: unknown; baseHash?: string },
+  overrides?: Partial<GatewayRequestHandlerOptions>,
 ) {
   const harness = createConfigHandlerHarness({
     method,
+    ...(overrides ? { overrides } : {}),
     params: {
       raw: JSON.stringify(args.raw),
       ...(args.baseHash ? { baseHash: args.baseHash } : {}),
@@ -38,15 +41,6 @@ export function startConfigWrite(
     `configHandlers["${method}"] test invariant`,
   );
   return { harness, operation: handler(harness.options) };
-}
-
-export async function invokeConfigSchema() {
-  const harness = createConfigHandlerHarness({ method: "config.schema" });
-  await expectDefined(
-    configHandlers["config.schema"],
-    'configHandlers["config.schema"] test invariant',
-  )(harness.options);
-  return harness;
 }
 
 export async function invokeConfigOpenFile() {
