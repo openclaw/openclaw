@@ -15,7 +15,7 @@ import type {
   EnvironmentsAdoptSuggestedProfileParams,
 } from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
-import type { LogsTailParams } from "./schema/logs-chat.js";
+import type { ChatInterruptParams, LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
@@ -71,6 +71,7 @@ export type GatewayCoreRequestParams = {
   "conversations.turn": AgentSchema.ConversationTurnParams;
   "conversations.turn.cancel": AgentSchema.ConversationTurnCancelParams;
   "logs.tail": LogsTailParams;
+  "chat.interrupt": ChatInterruptParams;
   "mentions.list": HumanMentionsSchema.MentionsListParams;
   "mentions.dismiss": HumanMentionsSchema.MentionsDismissParams;
   "portal.close": PortalSchema.PortalCloseParams;

@@ -24,6 +24,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["board.widget.grant", { fields: ["sessionKey"], required: true }],
   ["board.widget.put", { fields: ["sessionKey"], required: true }],
   ["chat.abort", { fields: ["sessionKey"], required: true }],
+  ["chat.interrupt", { fields: ["sessionKey"], required: true }],
   ["chat.inject", { fields: ["sessionKey"], required: true }],
   ["chat.send", { fields: ["sessionKey"], required: true, runStart: true, mayCreate: true }],
   ["mcp.app.onboard", { fields: ["sessionKey"], required: true, runStart: true }],

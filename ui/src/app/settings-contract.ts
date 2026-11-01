@@ -1,4 +1,5 @@
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { CHAT_FOLLOW_UP_MODES } from "../../../packages/gateway-protocol/src/schema/chat-follow-up-preferences.ts";
 import {
   normalizeUiAppearancePreference,
   type TabIconPreference,
@@ -30,7 +31,6 @@ function normalizeChoice<T extends string>(
 
 export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
 
-const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 
 export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");

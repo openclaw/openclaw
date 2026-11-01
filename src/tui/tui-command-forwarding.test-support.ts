@@ -14,6 +14,9 @@ export function registerTuiCommandForwardingTests() {
     { command: "/model default", local: true },
     { command: "/usage cost", local: false },
     { command: "/queue:followup", local: false },
+    { command: "/followupmode interrupt", local: false },
+    { command: "/interrupt list", local: false },
+    { command: "/interrupt original-input-id", local: false },
   ])("forwards $command without applying a client-side setting", async ({ command, local }) => {
     const h = createHarness({
       opts: { local },

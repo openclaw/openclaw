@@ -122,6 +122,7 @@ export type ChatPageHost = ChatHost &
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
+    interruptQueuedChatMessage: (id: string) => Promise<void>;
     moveQueuedChatMessage: (id: string, targetId: string) => void;
     editQueuedChatMessage: (id: string) => void;
     updateQueuedChatMessageEdit: (draftText: string, mentions?: readonly HumanMention[]) => void;

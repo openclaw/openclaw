@@ -246,6 +246,10 @@ export const validateChatAbortParams = createProtocolValidator(
   S.ChatAbortParamsSchema,
   Checks.isChatAbortParams,
 );
+export const validateChatInterruptParams = createProtocolValidator(
+  S.ChatInterruptParamsSchema,
+  Checks.isChatInterruptParams,
+);
 export const validateChatInjectParams = createProtocolValidator(
   S.ChatInjectParamsSchema,
   Checks.isChatInjectParams,

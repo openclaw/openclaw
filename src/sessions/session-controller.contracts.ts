@@ -524,6 +524,8 @@ export type SessionControllerInput = {
   readonly sourceTurnId?: string;
   protocolRunId?: string;
   policy: Readonly<QueueSettings>;
+  /** A later explicit queued-input control wins over preparation of its original send. */
+  modeOverride?: "interrupt";
   mailbox: SessionControllerMailbox;
   readonly custody: SessionControllerSourceCustody;
   readonly settlement: ReturnType<typeof createDeferredCore<void>>;

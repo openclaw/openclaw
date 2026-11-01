@@ -25,7 +25,7 @@ import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
 import { cachedChatAssistantIdentity } from "./chat-avatar.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
-import { cancelPendingQueuedChatInput } from "./chat-history-actions.ts";
+import { cancelPendingQueuedChatInput, interruptChatQueueInput } from "./chat-history-actions.ts";
 import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
@@ -380,6 +380,7 @@ export function createPageState(
   };
   state.retryQueuedChatMessage = (id) => retryQueuedChatMessage(state, id);
   state.steerQueuedChatMessage = (id) => steerQueuedChatMessage(state, id);
+  state.interruptQueuedChatMessage = (id) => interruptChatQueueInput(state, id);
   state.moveQueuedChatMessage = (id, targetId) => {
     moveQueuedChatMessage(state, id, targetId);
   };

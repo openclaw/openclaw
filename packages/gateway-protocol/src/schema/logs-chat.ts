@@ -418,6 +418,21 @@ export const ChatSendParamsSchema = closedObject({
 });
 
 /** Cancels the active or named run for a chat session. */
+export const ChatInterruptParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: NonEmptyString,
+});
+
+export type ChatInterruptParams = Static<typeof ChatInterruptParamsSchema>;
+export const ChatInterruptResultSchema = closedObject({
+  status: Type.Union([Type.Literal("queued"), Type.Literal("not_queued")]),
+  runId: NonEmptyString,
+  cancellationRequested: Type.Boolean(),
+});
+export type ChatInterruptResult = Static<typeof ChatInterruptResultSchema>;
+
 export const ChatAbortParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),

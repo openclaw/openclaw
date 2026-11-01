@@ -36,6 +36,7 @@ export type LocalRunState = {
     summaryLines: string[];
   };
   queuedAfter?: QueuedSessionRun;
+  queueSelectionChanged: ReturnType<typeof createDeferredCore<void>>;
   promise?: Promise<void>;
   queuedRunReady: Promise<void>;
   markQueuedRunReady: () => void;
@@ -65,6 +66,7 @@ export function createLocalRunState(
     lifecycleEnded: false,
     registered: false,
     queuedRunReady: readiness.promise,
+    queueSelectionChanged: createDeferredCore(),
     markQueuedRunReady: readiness.resolve,
   };
   controller.signal.addEventListener(
@@ -111,14 +113,14 @@ export async function waitForLocalRunShutdown(promises: Promise<void>[]): Promis
   return await settlesWithin(Promise.allSettled(promises), timeoutMs);
 }
 
-export async function waitForQueuedLocalRun(
+async function waitForLocalPredecessorSettlement(
   previousRun: QueuedSessionRun,
   runId: string,
 ): Promise<void> {
   await previousRun.run.queuedRunReady;
   if (previousRun.run.controller.signal.aborted && previousRun.run.queuedAfter) {
     // Preserve canceled-slot ancestry and the live run's bounded maintenance wait.
-    return await waitForQueuedLocalRun(previousRun.run.queuedAfter, runId);
+    return await waitForLocalPredecessorSettlement(previousRun.run.queuedAfter, runId);
   }
   if (!previousRun.run.finishing && !previousRun.run.lifecycleEnded) {
     await previousRun.promise;
@@ -129,6 +131,20 @@ export async function waitForQueuedLocalRun(
     throw new Error(
       `timed out waiting for previous local run to finish post-turn maintenance for ${runId}`,
     );
+  }
+}
+
+/** A queued control may change the predecessor, never the accepted run or payload. */
+export async function waitForQueuedLocalRun(run: LocalRunState, runId: string): Promise<void> {
+  while (run.queuedAfter) {
+    const previous = run.queuedAfter;
+    await Promise.race([
+      waitForLocalPredecessorSettlement(previous, runId),
+      run.queueSelectionChanged.promise,
+    ]);
+    if (run.queuedAfter === previous) {
+      return;
+    }
   }
 }
 

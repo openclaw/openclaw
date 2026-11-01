@@ -60,6 +60,7 @@ import {
   formatActiveGoalContext,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
+import { resolvePersonalQueueMode } from "./queue/personal-mode.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
@@ -287,6 +288,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const effectiveResetTriggered = resetTriggered || softResetTriggered;
   const sourceInput = readReplySourceInput(opts);
   if (sourceInput) {
+    const personalMode = await resolvePersonalQueueMode(
+      opts?.internalEventExecution || opts?.scheduledAutomation
+        ? undefined
+        : opts?.operatorAuthority?.profileId,
+    );
     const policy = useFastReplyRuntime
       ? { mode: "collect" as const, debounceMs: 0, cap: 1, dropPolicy: "summarize" as const }
       : resolveQueueSettings({
@@ -295,6 +301,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           sessionEntry,
           inlineMode: effectiveQueueMode,
           inlineOptions: params.perMessageQueueOptions,
+          personalMode,
         });
     updateSessionControllerSourcePolicy(sourceInput, {
       ...policy,

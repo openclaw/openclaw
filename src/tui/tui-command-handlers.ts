@@ -43,6 +43,7 @@ import {
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
 } from "./tui-session-projection.js";
+import { createSharedCommandHandlers } from "./tui-shared-command-handlers.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import {
   acceptPendingSubmit,
@@ -595,15 +596,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await sendMessage(raw);
       }
     },
-    btw: async (args, raw) => {
-      if (args) {
-        await sendMessage(raw);
-      } else {
-        chatLog.addSystem("Usage: /btw <side question>");
-      }
-    },
-    queue: async (_args, raw) => await sendMessage(raw),
-    followup: async (_args, raw) => await sendMessage(raw),
+    ...createSharedCommandHandlers(
+      (text) => sendMessage(text),
+      (text) => chatLog.addSystem(text),
+    ),
     openclaw: (args) => {
       chatLog.addSystem(
         args ? `returning to OpenClaw with request: ${args}` : "returning to OpenClaw",

@@ -357,6 +357,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           description={
             <>
               {followUpDescription()} {followUpProvenance()}
+              <div>{t("chat.followUpModeHint")}</div>
             </>
           }
           control={
@@ -379,6 +380,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
                   },
                   { value: "steer", label: t("chat.followUpModeSteer") },
                   { value: "queue", label: t("chat.followUpModeQueue") },
+                  { value: "interrupt", label: t("chat.followUpModeInterrupt") },
                 ]}
               />
               {props.chatFollowUpModeOverridden ? (

@@ -80,7 +80,6 @@ import {
   moveQueuedChatMessage,
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
-  steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
@@ -3609,52 +3608,6 @@ describe("handleSendChat", () => {
 
     expect(host.chatQueue).toHaveLength(0);
     expect(host.chatRunId).toBe("run-1");
-  });
-
-  it("sends a queued row through the generic outbox with only its durable steer mode", async () => {
-    const ack = createDeferred<unknown>();
-    const original = queuedMessage("queued-steer", "tighten the plan", {
-      sendRunId: "stable-steer-send",
-      sendState: "waiting-idle" as const,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-    });
-    const host = makeChatHost({
-      currentSessionId: "steer-session",
-      requestHandlers: { "chat.send": () => ack.promise },
-      chatRunId: "active-run",
-      chatQueue: [original],
-      sessionKey: original.sessionKey,
-    });
-    admitItem(host, original, host.sessionKey, original.agentId);
-
-    const sending = steerQueuedChatMessage(host, original.id);
-    await waitForFast(() => expectRpc(host.request, "chat.send"));
-
-    const payload = findRequestPayload(host.request, "chat.send", "queued steer payload");
-    expect(payload).toMatchObject({
-      sessionKey: original.sessionKey,
-      message: original.text,
-      queueMode: "steer",
-      idempotencyKey: original.sendRunId,
-    });
-    expect(payload).not.toHaveProperty("expectedRunId");
-    expect(payload).not.toHaveProperty("expectedLeafEntryId");
-    expectItems(host.chatQueue, {
-      id: original.id,
-      queueMode: "steer",
-      sendRunId: original.sendRunId,
-      sendState: "sending",
-    });
-    expectItems(loadChatComposerState(host, host.sessionKey).snapshot?.queue, {
-      id: original.id,
-      queueMode: "steer",
-      sendRunId: original.sendRunId,
-      sendState: "waiting-reconnect",
-    });
-
-    ack.resolve({ runId: original.sendRunId, status: "started" });
-    await sending;
   });
 
   it("releases queued attachment payloads once across duplicate removal", () => {

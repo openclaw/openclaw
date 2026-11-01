@@ -229,6 +229,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  onQueueInterrupt?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
   displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;

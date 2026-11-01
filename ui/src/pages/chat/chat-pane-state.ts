@@ -189,7 +189,7 @@ export function resolveChatPaneFollowUpMode(
   runtimeConfig: ApplicationContext["runtimeConfig"]["state"],
 ) {
   return resolveControlUiFollowUpMode(
-    state.settings.chatFollowUpMode,
+    state.chatQueueModeOverride ? undefined : state.settings.chatFollowUpMode,
     resolveControlUiServerQueueMode(currentDisplayRuntimeConfig(runtimeConfig), {
       configNeedsApply: runtimeConfig.configNeedsApply,
       effectiveMode: state.chatEffectiveQueueMode,

@@ -765,6 +765,11 @@ export function isChatAbortParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatAbortParamsSchema
 >;
+export function isChatInterruptParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatInterruptParamsSchema
+>;
 export function isChatInjectParams(
   value: unknown,
 ): value is import("typebox").Static<

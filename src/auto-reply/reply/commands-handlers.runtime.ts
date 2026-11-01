@@ -9,6 +9,7 @@ import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
 import { handleDashboardCommand } from "./commands-dashboard.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
+import { handleFollowupModeCommand, handleInterruptCommand } from "./commands-followup-controls.js";
 import { handleFollowupCommand } from "./commands-followup.js";
 import { handleGoalCommand } from "./commands-goal.js";
 import {
@@ -75,6 +76,8 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleDiagnosticsCommand,
     handleSteerCommand,
     handleFollowupCommand,
+    handleFollowupModeCommand,
+    handleInterruptCommand,
     handleAllowlistCommand,
     handleApproveCommandFromContext,
     handleContextCommand,

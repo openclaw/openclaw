@@ -134,10 +134,12 @@ answer replayable, and uncertainty alone does not cancel the original agent run.
 
 For mode selection, OpenClaw resolves:
 
-1. Inline or stored per-session `/queue` override.
-2. `messages.queue.byChannel.<channel>`.
-3. `messages.queue.mode`.
-4. Default `steer`.
+1. Explicit per-message mode or inline `/queue` override.
+2. Stored per-session `/queue` override.
+3. The submitting person’s personal follow-up default, when linked.
+4. `messages.queue.byChannel.<channel>`.
+5. `messages.queue.mode`.
+6. Default `steer`.
 
 For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
 
@@ -163,6 +165,40 @@ steering the active run.
 - Send `/queue <steer|followup|collect|interrupt>` as a standalone command to store the queue mode for the current session.
 - Options can be combined: `/queue collect debounce:0.5s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
+
+## Personal follow-up default
+
+Signed-in users can choose **Queue**, **Steer**, or **Interrupt & send** in
+Settings → Appearance → Chat. The choice is stored on the submitting person's
+profile and is used by Gateway clients, including the TUI and native apps, and
+by channels linked to that profile. It does not change another participant's
+default. An explicit per-message mode or session `/queue` override takes precedence.
+Unlinked senders retain the configured channel or global default.
+
+The same user-facing controls are available through the shared command catalog
+in the Gateway TUI, native text chat clients, and authorized text/native-command
+channels:
+
+- `/followupmode` shows your personal choice and explains the timing.
+- `/followupmode queue|steer|interrupt` saves your choice; `/followupmode default`
+  removes it without changing the session override.
+- `/interrupt list` shows safely queued original input IDs in the selected
+  conversation. `/interrupt <id>` interrupts and sends that retained input. It
+  does not cancel and resend its text or discard other queued messages.
+
+The offline embedded TUI also supports `/interrupt list` and `/interrupt <id>`.
+It has no linked Gateway profile, so `/followupmode` explains that limitation
+and points to the existing per-session `/queue` choice. A local collect batch
+with multiple messages has no unambiguous per-message ID and is not offered as
+an interrupt target; its custody is preserved when another input is promoted.
+
+Any authenticated Gateway client can save the same choice with
+`users.prefs.set({ entries: { "chat.followUpMode": "interrupt" } })`. Values are
+`queue`, `steer`, and `interrupt`; `null` removes the personal choice.
+
+**Interrupt & send** requests cancellation immediately. It does not prove that
+an already-running writer or tool has settled; replacement execution still
+waits for the existing writer fence. Steering does not cancel running work.
 
 ## Queued-turn cancellation
 

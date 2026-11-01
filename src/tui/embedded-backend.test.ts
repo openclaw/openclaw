@@ -26,6 +26,7 @@ import {
   registerEmbeddedQueueCapTest,
 } from "./embedded-backend.followup.test-support.js";
 import { registerEmbeddedHistoryProjectionTests } from "./embedded-backend.history.test-support.js";
+import { registerEmbeddedInterruptTests } from "./embedded-backend.interrupt.test-support.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
 import { registerEmbeddedBackendShutdownTests } from "./embedded-backend.shutdown.test-support.js";
 import {
@@ -1961,33 +1962,7 @@ describe("EmbeddedTuiBackend", () => {
 
   registerEmbeddedQueueCapTest(followupTestContext);
 
-  it("interrupts the active local run before starting its replacement", async () => {
-    const first = deferred<EmbeddedAgentResult>();
-    const firstAbortListener = vi.fn(() => {
-      first.resolve({ payloads: [{ text: "first aborted" }], meta: {} });
-    });
-    agentCommandFromIngressMock
-      .mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-        opts.abortSignal?.addEventListener("abort", firstAbortListener);
-        return first.promise;
-      })
-      .mockResolvedValueOnce({ payloads: [{ text: "replacement done" }], meta: {} });
-    loadSessionEntryMock.mockImplementation((sessionKey, opts) =>
-      localSessionEntry(sessionKey, opts, {
-        cfg: { messages: { queue: { mode: "interrupt" } } },
-      }),
-    );
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "first", "run-local-first");
-    await sendMainChat(backend, "replace it", "run-local-second");
-
-    expect(firstAbortListener).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => {
-      expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
-    });
-  });
+  registerEmbeddedInterruptTests(followupTestContext);
 
   it("does not inject local queue directives into an active run", async () => {
     const first = deferred<EmbeddedAgentResult>();

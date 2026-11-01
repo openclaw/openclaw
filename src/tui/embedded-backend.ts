@@ -113,11 +113,17 @@ import {
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
-import { enqueuePendingLocalMessage, findQueuedSessionRun } from "./embedded-local-queue.js";
+import {
+  abortLocalChatRuns,
+  abortLocalSessionRuns,
+  applyEmbeddedQueueControl,
+  enqueuePendingLocalMessage,
+  findQueuedSessionRun,
+  promotePendingLocalInput,
+} from "./embedded-local-queue.js";
 import {
   buildLocalQueuedPrompt,
   createLocalRunState,
-  isSameLocalRunScope,
   timeoutSecondsFromMs,
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
@@ -296,6 +302,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
       sessionKey: opts.sessionKey,
       agentId,
     };
+    const queueControl = applyEmbeddedQueueControl(this.runs, runScope, command);
+    if (queueControl) {
+      if (queueControl.incumbent) {
+        await this.abortChat({ ...runScope, runId: queueControl.incumbent.runId });
+      }
+      const control = createLocalRunState(runId, runScope);
+      control.buffer = queueControl.text;
+      this.emitChatTerminal(runId, control, "final");
+      return { runId };
+    }
     // Readiness awaits follow synchronous run registration, so the same owned
     // promise determines both stop admission and the next turn's queue predecessor.
     const sessionRun = findQueuedSessionRun(this.runs, runScope);
@@ -303,10 +319,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       !explicitFollowup && sessionRun !== undefined && isAbortRequestText(opts.message);
     const queuedAfter = question || stopCommand || isQueueCommand ? undefined : sessionRun;
     if (stopCommand) {
-      this.abortSessionRuns(runScope);
+      abortLocalSessionRuns(this.runs, runScope);
       return { runId };
     }
     let pendingQueue: LocalRunState["pendingQueue"];
+    let interruptPending = false;
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
       const {
@@ -371,25 +388,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
         this.scheduler.signal.throwIfAborted();
         queueSettings = { ...queueSettings, mode: "followup" };
       }
-      if (queueSettings.mode === "interrupt") {
-        this.abortSessionRuns(runScope);
-      } else {
-        const queued = enqueuePendingLocalMessage(this.runs, {
-          runScope,
-          message: opts.message,
-          settings: queueSettings,
-        });
-        if (queued.kind === "rejected") {
-          if (explicitFollowup) {
-            throw new Error("Your followup was not queued because the session queue is full.");
-          }
-          return { runId: queuedAfter.runId };
+      interruptPending = queueSettings.mode === "interrupt";
+      const queued = enqueuePendingLocalMessage(this.runs, {
+        runScope,
+        message: opts.message,
+        settings: queueSettings,
+      });
+      if (queued.kind === "rejected") {
+        if (explicitFollowup) {
+          throw new Error("Your followup was not queued because the session queue is full.");
         }
-        if (queued.kind === "handled") {
-          return { runId: queued.runId };
-        }
-        pendingQueue = queued.queue;
+        return { runId: queuedAfter.runId };
       }
+      if (queued.kind === "handled") {
+        return { runId: queued.runId };
+      }
+      pendingQueue = queued.queue;
     }
     const run = createLocalRunState(runId, {
       sessionKey: opts.sessionKey,
@@ -402,6 +416,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.runs.set(runId, run);
 
     const runPromise = (run.promise = this.runTurn(runId, run, opts));
+    if (interruptPending) {
+      const incumbent = promotePendingLocalInput(this.runs, runScope, runId);
+      if (incumbent) {
+        await this.abortChat({ ...runScope, runId: incumbent.runId });
+      }
+    }
 
     if (isQueueCommand) {
       // Queue directives are control-plane mutations. Complete them before
@@ -413,28 +433,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async abortChat(opts: { sessionKey: string; agentId?: string; runId?: string }) {
-    const runIds: string[] = [];
-    const candidates = opts.runId ? [[opts.runId, this.runs.get(opts.runId)] as const] : this.runs;
-    for (const [runId, run] of candidates) {
-      if (!run || (!opts.runId && run.question) || run.sessionKey !== opts.sessionKey) {
-        continue;
-      }
-      if (opts.sessionKey === "global") {
-        const defaultAgentId =
-          opts.agentId && run.agentId ? undefined : resolveDefaultAgentId(getRuntimeConfig());
-        const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : defaultAgentId;
-        const runAgentId = run.agentId ? normalizeAgentId(run.agentId) : defaultAgentId;
-        if (runAgentId !== requestedAgentId) {
-          continue;
-        }
-      }
-      if (!this.isAbortableRun(run)) {
-        continue;
-      }
-      run.controller.abort();
-      runIds.push(runId);
-    }
-    return { ok: true, aborted: runIds.length > 0, runIds };
+    return abortLocalChatRuns(this.runs, opts, () => resolveDefaultAgentId(getRuntimeConfig()));
   }
 
   async loadImage(opts: TuiImageRequest): Promise<TuiImageData> {
@@ -833,18 +832,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
   }
 
-  private abortSessionRuns(params: { sessionKey: string; agentId?: string }) {
-    for (const run of this.runs.values()) {
-      if (isSameLocalRunScope(run, params) && !run.question && this.isAbortableRun(run)) {
-        run.controller.abort();
-      }
-    }
-  }
-
-  private isAbortableRun(run: LocalRunState): boolean {
-    return !run.lifecycleEnded || run.promise !== undefined;
-  }
-
   private emit(event: string, payload: unknown) {
     this.onEvent?.({
       event,
@@ -1122,7 +1109,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       if (queuedAfter) {
         try {
           await Promise.race([
-            waitForQueuedLocalRun(queuedAfter, runId),
+            waitForQueuedLocalRun(run, runId),
             waitForAbortSignal(controller.signal),
           ]);
         } catch (error) {

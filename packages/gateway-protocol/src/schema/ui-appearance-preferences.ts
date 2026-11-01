@@ -3,6 +3,11 @@ import {
   normalizeBackgroundPreference,
   type BackgroundPreference,
 } from "./background-preferences.js";
+import {
+  CHAT_FOLLOW_UP_PREFERENCE_KEY,
+  normalizeChatFollowUpModePreference,
+  type ChatFollowUpMode,
+} from "./chat-follow-up-preferences.js";
 import { normalizeTabIconPreference, type TabIconPreference } from "./tab-icon.js";
 import { UI_APPEARANCE_TYPEFACE_VALUES } from "./ui-appearance-typefaces.js";
 
@@ -16,6 +21,7 @@ export const UI_APPEARANCE_PREFERENCE_KEYS = {
   fontChat: "ui.fontChat",
   background: "ui.background",
   tabIcon: "ui.tabIcon",
+  chatFollowUpMode: CHAT_FOLLOW_UP_PREFERENCE_KEY,
 } as const;
 
 export type UiAppearancePreferenceValues = {
@@ -26,6 +32,7 @@ export type UiAppearancePreferenceValues = {
   "ui.fontChat": (typeof UI_APPEARANCE_TYPEFACE_VALUES)[number];
   "ui.background": BackgroundPreference;
   "ui.tabIcon": TabIconPreference;
+  "chat.followUpMode": ChatFollowUpMode;
 };
 export type UiAppearancePreferenceKey = keyof UiAppearancePreferenceValues;
 
@@ -47,6 +54,7 @@ const normalizers: {
   "ui.fontChat": normalizeTypeface,
   "ui.background": normalizeBackgroundPreference,
   "ui.tabIcon": normalizeTabIconPreference,
+  "chat.followUpMode": normalizeChatFollowUpModePreference,
 };
 
 export function normalizeUiAppearancePreference<K extends UiAppearancePreferenceKey>(

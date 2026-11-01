@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import {
   chatQueueMovableSegments,
@@ -21,7 +22,11 @@ import type { QueuedChatSendOptions } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { flushChatQueueForEvent } from "./chat-outbox-resume.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
-import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
+import {
+  isInterruptibleQueuedMessage,
+  readQueuedMessageById,
+  updateQueuedMessage,
+} from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { deliverChatQueueItem } from "./chat-send-delivery.ts";
 import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-eligibility.ts";
@@ -36,6 +41,7 @@ import {
 export { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-outbox-resume.ts";
 
 registerChatGoalsEnglish();
+registerChatComposerEnglish();
 
 function hasAttemptedChatDelivery(entry: ChatQueueItem): boolean {
   return Boolean(
@@ -72,6 +78,29 @@ const resetRetryState = (
     sendState,
   };
 };
+
+export async function interruptQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
+  if (chatProviderReviewRow(host)?.providerReview || isInitialChatHistoryUnavailable(host)) {
+    return;
+  }
+  const original = readQueuedMessageById(host, id);
+  if (
+    !original ||
+    !isInterruptibleQueuedMessage(original) ||
+    isQueuedMessageBeingEdited(host, id)
+  ) {
+    setChatError(host, t("chat.queue.interruptUnavailable"));
+    return;
+  }
+  // Only a never-submitted browser row may change its send policy. Accepted and
+  // uncertain transport attempts keep their original identity and use Gateway control.
+  const item = updateQueuedMessage(host, id, (entry) => ({ ...entry, queueMode: "interrupt" }));
+  if (!item) {
+    setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return;
+  }
+  await retryQueuedChatMessage(host, id);
+}
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
   if (chatProviderReviewRow(host)?.providerReview || isInitialChatHistoryUnavailable(host)) {

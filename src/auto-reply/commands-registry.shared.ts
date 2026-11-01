@@ -412,6 +412,28 @@ export function buildBuiltinChatCommands(
       },
     ),
     defineBuiltinCommand(
+      "followupmode",
+      "Choose your personal queue, steer, or interrupt default.",
+      "options",
+      "standard",
+      {
+        activeRunSafe: true,
+        modelIndependent: "always",
+        ...freeformArgs("mode", "queue|steer|interrupt|default"),
+      },
+    ),
+    defineBuiltinCommand(
+      "interrupt",
+      "List queued input IDs or interrupt and send one original queued input.",
+      "management",
+      "standard",
+      {
+        activeRunSafe: true,
+        modelIndependent: "always",
+        ...freeformArgs("id", "Queued input ID, or list"),
+      },
+    ),
+    defineBuiltinCommand(
       "followup",
       "Run this message as a new turn without changing queue mode.",
       "management",

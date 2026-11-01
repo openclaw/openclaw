@@ -609,6 +609,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         sessionParticipationBlocked || providerPaused
           ? undefined
           : (id) => void state.steerQueuedChatMessage(id),
+      onQueueInterrupt:
+        sessionParticipationBlocked || providerPaused
+          ? undefined
+          : (id) => void state.interruptQueuedChatMessage(id),
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
       queuedEdit: createChatPaneQueuedEditProps(state, sessionParticipationBlocked),
       goalRecovery: chatGoalRecovery(state),

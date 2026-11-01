@@ -61,3 +61,20 @@ describe("resolveQueueSettings runtime defaults", () => {
     ).toEqual({ mode: "followup", debounceMs: 750, cap: 20, dropPolicy: "summarize" });
   });
 });
+
+it("applies personal defaults below explicit session and per-message queue choices", () => {
+  const cfg: OpenClawConfig = { messages: { queue: { mode: "followup" } } };
+  expect(resolveQueueSettings({ cfg, personalMode: "interrupt" }).mode).toBe("interrupt");
+  const sessionEntry = {
+    sessionId: "personal-default",
+    updatedAt: 1,
+    queueMode: "collect" as const,
+  };
+  expect(resolveQueueSettings({ cfg, personalMode: "interrupt", sessionEntry }).mode).toBe(
+    "collect",
+  );
+  expect(
+    resolveQueueSettings({ cfg, personalMode: "interrupt", sessionEntry, inlineMode: "steer" })
+      .mode,
+  ).toBe("steer");
+});

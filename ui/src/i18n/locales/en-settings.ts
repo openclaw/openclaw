@@ -39,6 +39,9 @@ const enSettings = {
     sendShortcutEnter: "Enter",
     followUpMode: "Follow-ups while the agent is working",
     followUpModeQueue: "Queue until the run ends",
+    followUpModeInterrupt: "Interrupt & send",
+    followUpModeHint:
+      "Queue waits for the run to finish. Steer redirects at the next model/tool boundary without canceling running work. Interrupt requests cancellation immediately; the previous writer may need to settle before the new message runs.",
     followUpModeServer: "Server default ({mode})",
     followUpModeLoading: "loading…",
     followUpModeOverriding: "Overriding server default ({mode})",

@@ -1,4 +1,7 @@
+import type { ChatInterruptResult } from "../../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
+import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -6,6 +9,7 @@ import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
 } from "../../lib/sessions/navigation.ts";
+import { showToast } from "../../lib/toast.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
@@ -14,6 +18,8 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { interruptQueuedChatMessage } from "./chat-send-actions.ts";
+import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
@@ -28,6 +34,62 @@ import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
+
+registerChatComposerEnglish();
+
+export async function interruptChatQueueInput(
+  state: ChatHost & ChatHistoryHost,
+  id: string,
+): Promise<void> {
+  if (!(await interruptPendingQueuedChatInput(state, id))) {
+    await interruptQueuedChatMessage(state, id);
+  }
+}
+
+export async function interruptPendingQueuedChatInput(
+  state: ChatHistoryHost,
+  id: string,
+): Promise<boolean> {
+  if (!id.startsWith("pending-input:")) {
+    return false;
+  }
+  const view = getChatPendingInputs(state);
+  const input = view?.queuedInputs.find(
+    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
+  );
+  const client = state.client;
+  if (!view?.sessionId || !input?.runId || !client || !state.connected) {
+    return true;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
+  try {
+    // The Gateway promotes original custody. Never use cancellation plus chat.send:
+    // a stale or uncertain receipt cannot establish that the input was not consumed.
+    const result = await client.request<ChatInterruptResult>("chat.interrupt", {
+      sessionKey: view.sessionKey,
+      agentId: view.agentId,
+      sessionId: view.sessionId,
+      runId: input.runId,
+    });
+    if (current()) {
+      showToast({
+        message: t(
+          result.status === "queued"
+            ? "chat.queue.interruptRequested"
+            : "chat.queue.interruptUnavailable",
+        ),
+        ...(result.status === "not_queued" ? { severity: "error" as const } : {}),
+      });
+      await loadChatHistory(state, { supersedeInFlight: true });
+    }
+  } catch (error) {
+    if (current()) {
+      setChatError(state, formatUiError(error));
+    }
+  }
+  return true;
+}
 
 export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string): boolean {
   const view = getChatPendingInputs(state);

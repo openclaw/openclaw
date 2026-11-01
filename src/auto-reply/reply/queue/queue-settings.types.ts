@@ -17,6 +17,7 @@ export type ResolveQueueSettingsParams = {
   channel?: string;
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
+  personalMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
   pluginDebounceMs?: number;
 };

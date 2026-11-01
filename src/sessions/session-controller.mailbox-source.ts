@@ -231,10 +231,11 @@ export function updateSessionControllerSourcePolicy(
   input.sourceAdapter?.authority?.assertCurrent();
   assertConfigurable();
   const wasInterrupt = input.policy.mode === "interrupt";
-  input.policy = Object.freeze({ ...policy });
-  if (policy.mode === "interrupt" && !wasInterrupt && !input.claim) {
+  const nextPolicy = { ...policy, mode: input.modeOverride ?? policy.mode };
+  input.policy = Object.freeze(nextPolicy);
+  if (nextPolicy.mode === "interrupt" && !wasInterrupt && !input.claim) {
     input.mailbox.priority = input;
-  } else if (policy.mode !== "interrupt" && input.mailbox.priority === input) {
+  } else if (nextPolicy.mode !== "interrupt" && input.mailbox.priority === input) {
     input.mailbox.priority = undefined;
   }
 }

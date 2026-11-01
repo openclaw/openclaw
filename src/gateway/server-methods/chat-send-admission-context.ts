@@ -4,6 +4,9 @@ import {
   type AcpSessionEntryExpectation,
 } from "../../acp/runtime/session-meta-entry.kernel.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
+import { resolveTextCommand } from "../../auto-reply/commands-registry.js";
+import { resolvePersonalQueueMode } from "../../auto-reply/reply/queue/personal-mode.js";
+import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveChatSendOriginatingRoute } from "./chat-origin-routing.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
@@ -12,16 +15,42 @@ import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export function prepareChatSendAdmissionContext(params: {
+export async function prepareChatSendAdmissionContext(params: {
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
   client: GatewayRequestHandlerOptions["client"];
+  assertCurrent?: () => void;
 }) {
   const { request, session, client } = params;
   const { p, explicitOrigin, normalizedAttachments } = request;
   const { cfg, entry, sessionKey, selectedAgent, agentId, clientRunId, resolvedSessionModel } =
     session;
+  const activeSafeControl =
+    !request.suppressCommandInterpretation &&
+    resolveTextCommand(request.inboundMessage, cfg)?.command.activeRunSafe === true;
+  const personalMode =
+    !activeSafeControl && !p.queueMode && !client?.internal?.syntheticClient
+      ? await resolvePersonalQueueMode(client?.authenticatedUserProfile?.profileId)
+      : undefined;
+  params.assertCurrent?.();
+  const originatingRoute = resolveChatSendOriginatingRoute({
+    client: request.clientInfo,
+    deliver: p.deliver,
+    entry,
+    explicitOrigin,
+    hasConnectedClient: client?.connect !== undefined,
+    mainKey: cfg.session?.mainKey,
+    sessionKey,
+  });
   return {
+    queueSettings: resolveQueueSettings({
+      cfg,
+      channel: originatingRoute.originatingChannel,
+      sessionEntry: entry,
+      // Controls own their effects; selecting a default must not itself cancel a run.
+      inlineMode: activeSafeControl ? "followup" : p.queueMode,
+      personalMode,
+    }),
     chatSendTraceAttributes: {
       runId: clientRunId,
       sessionKey,
@@ -32,15 +61,7 @@ export function prepareChatSendAdmissionContext(params: {
       hasExplicitOrigin: explicitOrigin !== undefined,
       hasConnectedClient: client?.connect !== undefined,
     },
-    originatingRoute: resolveChatSendOriginatingRoute({
-      client: request.clientInfo,
-      deliver: p.deliver,
-      entry,
-      explicitOrigin,
-      hasConnectedClient: client?.connect !== undefined,
-      mainKey: cfg.session?.mainKey,
-      sessionKey,
-    }),
+    originatingRoute,
   };
 }
 

@@ -16,7 +16,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
-import { isSteerableQueuedMessage } from "../chat-queue.ts";
+import { isInterruptibleQueuedMessage, isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
@@ -31,6 +31,7 @@ type ChatQueueProps = {
   canRemoveServerQueued?: boolean;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
+  onQueueInterrupt?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
   queuedEdit?: ChatComposerProps["queuedEdit"];
   onQueueRemove: (id: string) => void;
@@ -302,6 +303,10 @@ function ChatQueueItem(rowProps: {
     Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
     isSteerableQueuedMessage(item()) &&
     !editing();
+  const canInterrupt = () =>
+    Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueInterrupt) &&
+    isInterruptibleQueuedMessage(item()) &&
+    !editing();
   const showsSteer = () =>
     Boolean(rowProps.controls.canAbort && rowProps.controls.onQueueSteer) &&
     !editing() &&
@@ -552,6 +557,17 @@ function ChatQueueItem(rowProps: {
           ? renderDeliveryAction("retry")
           : null}
         {showsSteer() ? renderDeliveryAction("steer", !canSteer()) : null}
+        {canInterrupt() ? (
+          <button
+            type="button"
+            class="chat-queue__action chat-queue__interrupt"
+            aria-label={t("chat.queue.interruptQueuedMessage")}
+            title={t("chat.queue.interruptHint")}
+            onClick={() => rowProps.controls.onQueueInterrupt?.(item().id)}
+          >
+            <span>{t("chat.queue.interrupt")}</span>
+          </button>
+        ) : null}
         {editing() ? (
           <>
             <button

@@ -1,5 +1,9 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueDisplayItem,
+  ChatQueueItem,
+} from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   type StoredChatOutboxScope,
@@ -28,6 +32,16 @@ export function isSteerableQueuedMessage(item: ChatQueueItem): boolean {
     isMovableChatQueueItem(item) &&
     (item.sendState === undefined || item.sendState === "waiting-idle") &&
     !item.localCommandName
+  );
+}
+
+export function isInterruptibleQueuedMessage(item: ChatQueueDisplayItem): boolean {
+  return (
+    !item.intent &&
+    !item.localCommandName &&
+    (item.serverQueued
+      ? Boolean(item.pendingRunId)
+      : isSteerableQueuedMessage(item) && item.sendRequestStartedAtMs === undefined)
   );
 }
 

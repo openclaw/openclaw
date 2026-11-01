@@ -61,6 +61,7 @@ export {
   isChatPredictParams,
   isChatSendParams,
   isChatAbortParams,
+  isChatInterruptParams,
   isChatInjectParams,
   isTranscriptsListParams,
   isTranscriptsSummarizeParams,

@@ -11,6 +11,7 @@ import { runWithSessionActorStorage } from "../../config/sessions/session-actor-
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { injectGatewayAssistantMessage } from "./chat-inject.js";
+import { chatInterruptHandlers } from "./chat-interrupt-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { chatPendingInputsDismissHandlers } from "./chat-pending-inputs-dismiss-handler.js";
 import { chatPredictionHandlers } from "./chat-prediction-handler.js";
@@ -22,6 +23,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   ...chatMessageGetHandlers,
   ...chatPredictionHandlers,
   ...chatPendingInputsDismissHandlers,
+  ...chatInterruptHandlers,
   "chat.toolTitles": async ({ params, respond }) => {
     if (!assertValidParams(params, validateChatToolTitlesParams, "chat.toolTitles", respond)) {
       return;

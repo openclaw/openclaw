@@ -51,6 +51,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
+import { resolvePersonalQueueMode } from "./queue/personal-mode.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { hasPendingFollowupQueueWork } from "./queue/state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
@@ -128,6 +129,15 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const operation = sessionKey ? getSessionControllerOperation(sessionKey, target) : undefined;
     return operation ? getSessionControllerEntryForOperation(operation) : undefined;
   };
+  const personalMode =
+    !sourceInput && !useFastReplyRuntime
+      ? await resolvePersonalQueueMode(
+          opts?.internalEventExecution || opts?.scheduledAutomation
+            ? undefined
+            : opts?.operatorAuthority?.profileId,
+        )
+      : undefined;
+  assertPreparationActive();
   const resolvedQueue =
     sourceInput?.policy ??
     (useFastReplyRuntime
@@ -138,6 +148,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionEntry,
           inlineMode: effectiveQueueMode,
           inlineOptions: perMessageQueueOptions,
+          personalMode,
         }));
   const activeRunQueueMode = effectiveResetTriggered ? "interrupt" : resolvedQueue.mode;
   const prioritySource =

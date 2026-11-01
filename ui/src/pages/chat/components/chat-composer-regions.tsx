@@ -36,6 +36,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
           canRemoveServerQueued={canAct()}
           onQueueRetry={canAct() ? view.composer.onQueueRetry : undefined}
           onQueueSteer={canAct() ? view.composer.onQueueSteer : undefined}
+          onQueueInterrupt={canAct() ? view.composer.onQueueInterrupt : undefined}
           onQueueMove={view.composer.onQueueMove}
           queuedEdit={view.composer.queuedEdit}
           onQueueRemove={view.composer.onQueueRemove}

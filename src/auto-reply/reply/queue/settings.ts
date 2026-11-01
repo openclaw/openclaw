@@ -14,6 +14,7 @@ export function resolveQueueSettingsCore(params: ResolveQueueSettingsParams): Qu
   const resolvedMode =
     params.inlineMode ??
     normalizePersistedQueueMode(params.sessionEntry?.queueMode) ??
+    params.personalMode ??
     providerModeRaw ??
     queueCfg?.mode ??
     "steer";

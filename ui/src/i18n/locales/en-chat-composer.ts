@@ -201,6 +201,14 @@ const catalog = {
         "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
+      interrupt: "Interrupt & send",
+      interruptRequested:
+        "Interrupt priority set. The previous writer may still need to settle before this message runs.",
+      interruptQueuedMessage: "Interrupt & send queued message",
+      interruptHint:
+        "Request cancellation now, then run this message when the previous writer settles. Other queued messages stay queued.",
+      interruptUnavailable:
+        "This message is already being sent, consumed, or edited. Refresh the queue before choosing Interrupt & send.",
       removeQueuedMessage: "Remove queued message",
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
       reorderUnavailable: "This message holds its place and cannot be reordered",
