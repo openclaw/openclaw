@@ -223,13 +223,21 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
-      const { profileId, warning: configWarning } = await saveModelProviderApiKey({
+      const {
+        profileId,
+        warning: configWarning,
+        modelAccess,
+      } = await saveModelProviderApiKey({
         config,
         provider,
         apiKey: params.apiKey,
+        agentId: scope.agentId,
         agentDir: scope.agentDir,
         assertCurrent,
       });
+      if (modelAccess) {
+        log.info(modelAccess);
+      }
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelsAuthSetApiKeyResult = {
