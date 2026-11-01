@@ -7,6 +7,7 @@ import {
   appendSentinel,
   installHistoryObserver,
   nativeHistorySeq,
+  transcriptScrollFact,
 } from "./chat-pane-history.test-support.ts";
 import { residentPane } from "./chat-pane-resident.test-support.ts";
 
@@ -21,11 +22,7 @@ async function directionalHistoryPane(olderPages = 0) {
   appendSentinel(thread, pane);
   const observer = installHistoryObserver(false);
   const loads = vi.spyOn(pane, "loadOlderMessages");
-  const scroll = () => {
-    const event = new Event("scroll");
-    Object.defineProperty(event, "target", { value: thread });
-    pane.handleTranscriptScroll(event);
-  };
+  const scroll = () => pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -20));
   const intersect = (index = observer.construct.mock.calls.length - 1) => {
     const [notify, current] = observer.construct.mock.calls[index]!;
     notify([{ isIntersecting: true } as IntersectionObserverEntry], current);
@@ -46,7 +43,6 @@ it("does not carry exhausted upward intent into a newer admission that reopens o
     Array.from({ length: 400 }, (_, index) => index + 1),
   );
   expect(state.chatHistoryPagination.hasMore).toBe(false);
-  pane.transcriptScrollTop = 100;
   thread.scrollTop = 80;
   const before = requests.length;
   scroll();
@@ -65,13 +61,11 @@ it("does not carry exhausted upward intent into a newer admission that reopens o
   expect(state.chatMessages).toBe(admitted);
 
   const maintenance = vi.spyOn(pane.transcript, "isMaintenanceScroll", "get").mockReturnValue(true);
-  pane.transcriptScrollTop = 80;
   thread.scrollTop = 60;
   scroll();
   expect(pane.historyObserverArmed).toBe(false);
   expect(loads).not.toHaveBeenCalled();
   maintenance.mockReturnValue(false);
-  pane.transcriptScrollTop = 60;
   thread.scrollTop = 40;
   scroll();
   intersect();
@@ -83,7 +77,6 @@ it("does not carry exhausted upward intent into a newer admission that reopens o
 it("retires a valid older arm and its queued observer when newer navigation is accepted", async () => {
   const { pane, thread, requests, holdNextCursor, observer, loads, scroll, intersect, joinOlder } =
     await directionalHistoryPane(6);
-  pane.transcriptScrollTop = 100;
   thread.scrollTop = 80;
   scroll();
   expect(pane.historyObserverArmed).toBe(true);
@@ -110,7 +103,6 @@ it("retires a valid older arm and its queued observer when newer navigation is a
 it("preserves a valid older arm when newer navigation is declined", async () => {
   const { pane, thread, observer, loads, scroll, intersect, joinOlder } =
     await directionalHistoryPane();
-  pane.transcriptScrollTop = 100;
   thread.scrollTop = 80;
   scroll();
   expect(pane.historyObserverArmed).toBe(true);
@@ -125,7 +117,6 @@ it("preserves a valid older arm when newer navigation is declined", async () => 
 it("preserves a valid older arm across hide and reveal without reviving its queued observer", async () => {
   const { pane, thread, observer, loads, scroll, intersect, joinOlder } =
     await directionalHistoryPane();
-  pane.transcriptScrollTop = 100;
   thread.scrollTop = 80;
   scroll();
   expect(pane.historyObserverArmed).toBe(true);

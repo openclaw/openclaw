@@ -44,7 +44,7 @@ import { saveChatTranscriptReadingPosition } from "./chat-pane-transcript-reside
 import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
+import type { TranscriptNativeScroll } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
@@ -199,7 +199,6 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       window.clearTimeout(this.historyIntentTimer);
       this.historyIntentTimer = null;
     }
-    this.transcriptScrollTop = null;
     this.olderCursorsSeen.clear();
   }
 
@@ -241,7 +240,6 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       this.clearHistoryObserver();
       return;
     }
-    this.transcriptScrollTop ??= root.scrollTop;
     if (
       this.historyObserver &&
       this.historyObserver.root === root &&
@@ -293,32 +291,22 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
     this.historyObserver.observe(sentinel);
   }
 
-  protected handleTranscriptScroll(event: Event): void {
-    const root =
-      event.currentTarget instanceof HTMLElement
-        ? event.currentTarget
-        : event.target instanceof HTMLElement
-          ? event.target
-          : null;
-    const previousScrollTop = this.transcriptScrollTop;
-    const viewport = root ? readTranscriptViewport(root) : null;
-    if (viewport) {
-      this.transcriptScrollTop = viewport.scrollTop;
-      const renderedSessionKey = this.transcript.renderedSessionKey;
-      const stateSessionKey = this.state?.sessionKey;
-      if (
-        renderedSessionKey &&
-        stateSessionKey &&
-        areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
-      ) {
-        saveChatTranscriptReadingPosition(
-          this.paneId,
-          renderedSessionKey,
-          this.state,
-          this.transcript,
-          viewport,
-        );
-      }
+  protected handleTranscriptScroll(scroll: TranscriptNativeScroll): void {
+    const { viewport, delta, programmatic, maintenance } = scroll;
+    const renderedSessionKey = this.transcript.renderedSessionKey;
+    const stateSessionKey = this.state?.sessionKey;
+    if (
+      renderedSessionKey &&
+      stateSessionKey &&
+      areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
+    ) {
+      saveChatTranscriptReadingPosition(
+        this.paneId,
+        renderedSessionKey,
+        this.state,
+        this.transcript,
+        viewport,
+      );
     }
     // A shrinking scroll range can move the native offset to its new end.
     // Only movement away from that edge can imply reader intent without input.
@@ -328,11 +316,9 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       !this.history.loadingOlder &&
       this.hasOlderMessages() &&
       this.transcript.isPositionSettled &&
-      !this.transcript.isProgrammaticScroll &&
-      !this.transcript.isMaintenanceScroll &&
-      viewport !== null &&
-      previousScrollTop !== null &&
-      viewport.scrollTop < previousScrollTop &&
+      !programmatic &&
+      !maintenance &&
+      delta < 0 &&
       viewport.scrollTop < viewport.scrollHeight - viewport.clientHeight &&
       viewport.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
     const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
@@ -340,11 +326,9 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
       this.presented &&
       this.visuallyPresented &&
       this.transcript.isPositionSettled &&
-      !this.transcript.isProgrammaticScroll &&
-      !this.transcript.isMaintenanceScroll &&
-      viewport !== null &&
-      previousScrollTop !== null &&
-      viewport.scrollTop > previousScrollTop &&
+      !programmatic &&
+      !maintenance &&
+      delta > 0 &&
       viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <=
         CHAT_HISTORY_PREFETCH_EDGE_PX;
     if (hasDownwardIntent && this.state?.chatHistoryPagination.hasNewer) {
@@ -359,7 +343,7 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
     }
     // Preserve the normal at-bottom/new-message bookkeeping while layering
     // history-sentinel arming onto the same scroll event.
-    this.state?.handleChatScroll(event);
+    this.state?.handleChatScroll(scroll);
     if (this.state) {
       publishChatSessionProjection(this.state, getChatSessionProjection(this.state));
     }

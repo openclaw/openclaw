@@ -293,7 +293,7 @@ export function createPageState(
   state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.scrollToBottom = (options) => restoreChatHistoryTail(state, options);
-  state.handleChatScroll = (event) => handleChatScroll(state, event);
+  state.handleChatScroll = (scroll) => handleChatScroll(state, scroll);
   state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
   state.applySettings = (patch) => {

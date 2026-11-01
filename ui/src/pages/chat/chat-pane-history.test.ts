@@ -32,6 +32,7 @@ import {
   createTestChatPane,
   nativeHistoryMessage,
   nativeHistorySeq,
+  transcriptScrollFact,
 } from "./chat-pane-history.test-support.ts";
 import { applyChatPendingInputs, readChatInputRunIds } from "./chat-pending-inputs.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
@@ -361,10 +362,9 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
 
 it("keeps a failed older load blocked across a layout-induced scroll", async () => {
   const { pane, thread, request } = historyPane(Promise.reject(new Error("history unavailable")));
-  pane.transcriptScrollTop = 500;
 
   await pane.loadOlderMessages();
-  pane.handleTranscriptScroll({ currentTarget: thread, target: thread } as unknown as Event);
+  pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, 0));
 
   expect(pane.historyAutoLoadBlocked).toBe(true);
   expect(request).toHaveBeenCalledOnce();
@@ -471,10 +471,7 @@ it.each(["initial placement", "programmatic reveal"])(
       placement === "programmatic reveal",
     );
     const thread = appendChatThread(pane, { scrollTop: 80 });
-    pane.transcriptScrollTop = 100;
-    const event = new Event("scroll");
-    Object.defineProperty(event, "target", { value: thread });
-    pane.handleTranscriptScroll(event);
+    pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -20));
     expect(pane.historyObserverArmed).toBe(false);
   },
 );
@@ -485,11 +482,8 @@ it("prefetches older history from upward intent well before the top edge", async
   const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
   appendSentinel(thread, pane);
   const observer = installHistoryObserver();
-  pane.transcriptScrollTop = 900;
   thread.scrollTop = 800;
-  const event = new Event("scroll");
-  Object.defineProperty(event, "target", { value: thread });
-  pane.handleTranscriptScroll(event);
+  pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -100));
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
   expectOlderRequest(request, state.sessionKey);
   expect(observer.rootMargin()).toBe("1200px 0px 0px");

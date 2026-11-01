@@ -11,6 +11,7 @@ import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
   type TranscriptScrollObservation,
+  type TranscriptNativeScroll,
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-session.ts";
 
@@ -138,11 +139,14 @@ type OffsetOwner = {
   readonly endAnchor: TranscriptEndAnchor;
   canFollowEnd(): boolean;
   isProgrammaticScroll(): boolean;
+  isMaintenanceScroll(): boolean;
   cancelScroll(): void;
   onLayoutCorrection(before: number, after: number): void;
   invalidate(): void;
   onOffset(readerMoved: boolean): void;
   onReaderScroll(towardEnd?: boolean): void;
+  onNativeScroll?: (scroll: TranscriptNativeScroll) => void;
+  onHistoryIntent?: (event: Event) => void;
   onComposerLayout(changed: boolean): void;
 };
 
@@ -211,7 +215,7 @@ export function observeTranscriptOffset(
         }
       })
     : undefined;
-  const publishOffset = (offset: number, scrolling: boolean) => {
+  const publishOffset = (offset: number, scrolling: boolean, native = false) => {
     if (scrolling && offset !== nativeOffset && owner.state.touchActive) {
       owner.state.touchScrolling = true;
     }
@@ -225,6 +229,23 @@ export function observeTranscriptOffset(
       maintenanceRevision += 1;
     }
     const programmatic = owner.isProgrammaticScroll();
+    // Only the vendor's native delivery owns direction. Synchronization, writes
+    // and idle notifications share the generic stream but cannot imply paging.
+    if (native && element && owner.onNativeScroll) {
+      const scroll: TranscriptNativeScroll = {
+        viewport: {
+          scrollTop: offset,
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+        },
+        delta,
+        programmatic,
+        maintenance: owner.isMaintenanceScroll(),
+      };
+      // Policy and bookmark capture precede subscribers or virtualizer callbacks
+      // that can synchronously replace the resident range.
+      owner.onNativeScroll(scroll);
+    }
     if (scrolling && delta !== 0 && !programmatic) {
       if (delta > 0 && owner.canFollowEnd()) {
         owner.endAnchor.capture(element);
@@ -282,6 +303,7 @@ export function observeTranscriptOffset(
     if (owner.state.touching) {
       touchY = localTouchY(event);
       publishInput(event);
+      owner.onHistoryIntent?.(event);
       return;
     }
     touchY = undefined;
@@ -291,6 +313,7 @@ export function observeTranscriptOffset(
       owner.state.touchScrolling = false;
     }
     publishInput(event);
+    owner.onHistoryIntent?.(event);
     if (wasTouchActive !== owner.state.touchActive) {
       owner.invalidate();
     }
@@ -353,6 +376,10 @@ export function observeTranscriptOffset(
         (["ArrowDown", "PageDown", "End"].includes(event.key) ||
           (event.key === " " && !event.shiftKey)));
     publishReaderIntent(towardEnd);
+    // Keydown policy runs after the thread's delegated link handling instead.
+    if (event.type === "wheel" || event.type === "touchstart") {
+      owner.onHistoryIntent?.(event);
+    }
   };
   const moveTouch = (event: TouchEvent) => {
     const nextY = localTouchY(event);
@@ -363,6 +390,7 @@ export function observeTranscriptOffset(
     }
     touchY = nextY;
     publishInput(event);
+    owner.onHistoryIntent?.(event);
   };
   // Commit editor-induced geometry before the pane's bubble listener classifies
   // the native offset. Only the actual correction carries maintenance provenance.
@@ -383,7 +411,7 @@ export function observeTranscriptOffset(
     if (element !== owner.getScrollElement()) {
       return;
     }
-    publishOffset(offset, scrolling);
+    publishOffset(offset, scrolling, scrolling);
     // The offset observer already owns idle detection on browsers without
     // scrollend. Release touch-held history through that same lifecycle.
     if (!scrolling) {

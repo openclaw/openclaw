@@ -72,12 +72,12 @@ function createScrollHost(
 }
 
 function scroll(host: ChatScrollHost, scrollTop: number, clientHeight = 400) {
-  handleChatScroll(
-    host,
-    Object.defineProperty(new Event("scroll"), "currentTarget", {
-      value: { scrollHeight: 2000, scrollTop, clientHeight },
-    }),
-  );
+  handleChatScroll(host, {
+    viewport: { scrollHeight: 2000, scrollTop, clientHeight },
+    delta: scrollTop - host.chatLastScrollTop,
+    programmatic: host.chatIsProgrammaticScroll?.() ?? false,
+    maintenance: host.chatIsMaintenanceScroll?.() ?? false,
+  });
 }
 
 function installAnimationFrameQueue() {

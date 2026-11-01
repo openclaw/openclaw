@@ -216,6 +216,7 @@ it("preserves native wheel movement after a projection captures the reader", () 
     endAnchor: new TranscriptEndAnchor(() => {}),
     canFollowEnd: () => true,
     isProgrammaticScroll: () => false,
+    isMaintenanceScroll: () => false,
     cancelScroll: () => anchor.clear(),
     onLayoutCorrection: vi.fn(),
     invalidate: vi.fn(),

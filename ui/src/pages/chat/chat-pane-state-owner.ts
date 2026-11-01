@@ -67,6 +67,7 @@ import type { ChatSessionSharingState } from "./components/chat-session-sharing-
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
+import type { TranscriptNativeScroll } from "./components/chat-transcript-scroll-events.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   canAutoFollowChat,
@@ -452,6 +453,8 @@ export abstract class ChatPaneStateOwner {
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     hasPendingScrollCommand: () =>
       this.state !== undefined && hasPendingManualChatScroll(this.state),
+    onNativeScroll: (scroll) => this.handleTranscriptScroll(scroll),
+    onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
     onReaderScroll: (towardEnd, source) =>
       this.state && handleChatScrollTakeover(this.state, towardEnd, source),
   });
@@ -690,7 +693,6 @@ export abstract class ChatPaneStateOwner {
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
-  protected transcriptScrollTop: number | null = null;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since
   // the sentinel never scrolls out of view when nothing new renders.
@@ -753,5 +755,7 @@ export abstract class ChatPaneStateOwner {
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
   protected abstract resetOlderMessagesViewport(): void;
+  protected abstract handleTranscriptScroll(scroll: TranscriptNativeScroll): void;
+  protected abstract handleTranscriptHistoryIntent(event: Event): void;
   protected abstract syncQueuedEditRetention(): void;
 }

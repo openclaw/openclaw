@@ -44,6 +44,7 @@ function createPolicyTranscript(paneId: string) {
   const transcript = makeTranscript(() => paneId, {
     canFollowEnd: () => canAutoFollowChat(policy),
     onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+    onNativeScroll: (scroll) => handleChatScroll(policy, scroll),
   });
   return {
     policy,
@@ -97,9 +98,6 @@ function connectPolicy(
   policy.chatScrollElement = () => container;
   policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
   policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
-  const onScroll = (event: Event) => handleChatScroll(policy, event);
-  container.addEventListener("scroll", onScroll);
-  cleanups.push(() => container.removeEventListener("scroll", onScroll));
 }
 async function mountRestoration(paneId: string, height: number) {
   const flushFrames = stubAnimationFrames();
@@ -340,7 +338,7 @@ it("preserves reader policy when row measurement clamps a positive adjustment to
   };
   policy.chatScrollElement = () => container;
   policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
-  container.addEventListener("scroll", (event) => handleChatScroll(policy, event));
+  policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
   resize(container, 600);
   flushFrames();
   nativeScroll(container, total + 84 - 600);

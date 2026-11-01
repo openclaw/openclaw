@@ -324,8 +324,6 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
     }
     this.history.olderError = formatChatHistoryLoadError(error);
     this.historyAutoLoadBlocked = true;
-    // Loading-row removal must not masquerade as renewed reader input.
-    this.transcriptScrollTop = this.transcript.scrollElement?.scrollTop ?? null;
   }
 
   private stageNextHistoryPage(

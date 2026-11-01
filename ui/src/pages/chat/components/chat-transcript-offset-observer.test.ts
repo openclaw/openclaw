@@ -1,10 +1,13 @@
 /* @vitest-environment jsdom */
 import { Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { makeChatHost } from "../chat-host.test-support.ts";
+import { canAutoFollowChat, handleChatScroll } from "../scroll.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import {
   isTranscriptProgrammaticScroll,
+  isTranscriptMaintenanceScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
   TranscriptOffsetState,
@@ -76,6 +79,7 @@ it("delivers native offsets without checking end geometry when no end command is
         prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
         canFollowEnd: () => false,
         isProgrammaticScroll: () => false,
+        isMaintenanceScroll: () => false,
         cancelScroll: vi.fn(),
         onLayoutCorrection: vi.fn(),
         invalidate: vi.fn(),
@@ -130,11 +134,13 @@ function observedMaintenance(useScrollendEvent = false) {
     prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
     canFollowEnd: () => false,
     isProgrammaticScroll: programmatic,
+    isMaintenanceScroll: () => isTranscriptMaintenanceScroll(state, element),
     cancelScroll: vi.fn(),
     onLayoutCorrection: vi.fn(),
     invalidate: vi.fn(),
     onOffset: vi.fn(),
     onReaderScroll: vi.fn(),
+    onNativeScroll: vi.fn(),
     onComposerLayout: vi.fn(),
   };
   const connect = () =>
@@ -305,3 +311,65 @@ it("does not transfer a retired observer's target to its replacement", () => {
   vi.advanceTimersToNextFrame();
   expect(observed.programmatic()).toBe(false);
 });
+
+it("delivers policy only for native events, preserving generic write, sync and idle observations", () => {
+  const observed = observedMaintenance();
+  const events: Array<{ delta: number; scrolling: boolean }> = [];
+  onTestFinished(
+    subscribeTranscriptScroll(observed.element, (event) => {
+      if (event.type === "offset") {
+        events.push({ delta: event.delta, scrolling: event.scrolling });
+      }
+    }),
+  );
+  observed.native(800);
+  expect(observed.deliveries.at(-1)?.scrolling).toBe(true);
+  events.length = 0;
+  observed.owner.onNativeScroll.mockClear();
+  observed.element.scrollTop = 780;
+  observed.write(40);
+  expect(events[0]).toEqual({ delta: -20, scrolling: true });
+  expect(observed.owner.onNativeScroll).not.toHaveBeenCalled();
+  observed.element.scrollTop = 60;
+  observed.state.syncNativeOffset?.();
+  expect(events.at(-1)).toEqual({ delta: 20, scrolling: true });
+  expect(observed.owner.onNativeScroll).not.toHaveBeenCalled();
+  observed.native(80);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledExactlyOnceWith({
+    viewport: { scrollTop: 80, clientHeight: 200, scrollHeight: 1_000 },
+    delta: 20,
+    programmatic: false,
+    maintenance: false,
+  });
+  vi.runAllTimers();
+  expect(events.at(-1)?.scrolling).toBe(false);
+  expect(observed.owner.onNativeScroll).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])(
+  "restores native end anchoring only at the true tail (detached: %s)",
+  (detached) => {
+    const observed = observedMaintenance();
+    const policy = makeChatHost({ chatHasAutoScrolled: true });
+    if (detached) {
+      policy.chatHistoryPagination = {
+        hasMore: true,
+        olderCursor: "older",
+        hasNewer: true,
+        newerCursor: "newer",
+      };
+    }
+    observed.owner.canFollowEnd = () => canAutoFollowChat(policy);
+    observed.owner.onNativeScroll.mockImplementation((scroll) => handleChatScroll(policy, scroll));
+    observed.native(600);
+    policy.chatFollowLocked = true;
+    policy.chatReadingHistory = true;
+    observed.native(800);
+    expect(policy.chatFollowLocked).toBe(detached);
+    expect(policy.chatReadingHistory).toBe(detached);
+    observed.resize(900);
+    const follow = vi.fn();
+    observed.owner.endAnchor.reconcile(observed.element, canAutoFollowChat(policy), false, follow);
+    expect(follow).toHaveBeenCalledTimes(detached ? 0 : 1);
+  },
+);

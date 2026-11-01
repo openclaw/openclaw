@@ -16,7 +16,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import { resetChatScroll } from "./scroll.ts";
 
-export { nativeHistoryMessage } from "./chat-pane.test-support.ts";
+export { nativeHistoryMessage, transcriptScrollFact } from "./chat-pane.test-support.ts";
 
 export function createRefreshChatPane(client?: GatewayBrowserClient) {
   const baseContext = createInitializationContext();
@@ -73,7 +73,7 @@ export function nativeHistorySeq(message: unknown): number | undefined {
 }
 
 export function appendChatThread(
-  pane: TestChatPane,
+  pane: Pick<BaseTestChatPane, "append" | "transcript">,
   options: { clientHeight?: number; scrollHeight?: number; scrollTop?: number } = {},
 ) {
   const thread = document.createElement("div");

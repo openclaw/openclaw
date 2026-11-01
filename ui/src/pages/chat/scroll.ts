@@ -2,6 +2,10 @@ import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type {
+  TranscriptNativeScroll,
+  TranscriptViewportMeasurement,
+} from "./components/chat-transcript-scroll-events.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
@@ -279,12 +283,8 @@ export function scheduleChatScroll(
   queueChatScroll(host, force, smooth, options, false);
 }
 
-export function handleChatScroll(host: ChatScrollHost, event: Event): void {
-  const container = event.currentTarget as HTMLElement | null;
-  if (!container) {
-    return;
-  }
-  updateChatScrollPosition(host, container);
+export function handleChatScroll(host: ChatScrollHost, scroll: TranscriptNativeScroll): void {
+  updateChatScrollPosition(host, scroll.viewport, false, scroll);
 }
 
 export function handleChatScrollTakeover(
@@ -317,19 +317,22 @@ export function lockChatScroll(host: ChatScrollHost): void {
 
 function updateChatScrollPosition(
   host: ChatScrollHost,
-  container: HTMLElement,
+  container: Readonly<TranscriptViewportMeasurement>,
   takeover: false | "reader" | "toward-end" | "restored-reader" = false,
+  native?: TranscriptNativeScroll,
 ): void {
   const scrollTop = Math.max(0, container.scrollTop);
-  const delta = scrollTop - host.chatLastScrollTop;
+  const delta = native ? native.delta : scrollTop - host.chatLastScrollTop;
   host.chatLastScrollTop = scrollTop;
   host.chatLastScrollHeight = container.scrollHeight;
   // Ignore downward scroll events that we triggered, including intermediate
   // smooth-scroll frames. A real user scroll-up must still pass through so
   // streaming stops pinning them back to the bottom.
-  const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
+  const maintenance = native ? native.maintenance : host.chatIsMaintenanceScroll?.();
+  const programmatic = native ? native.programmatic : host.chatIsProgrammaticScroll?.();
+  const isUserScrollUp = takeover !== false || (delta < 0 && !maintenance);
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  if (host.chatIsProgrammaticScroll?.() && !isUserScrollUp) {
+  if (programmatic && !isUserScrollUp) {
     // A measured arrival clears the affordance even when maintenance must not
     // change the reader's follow policy.
     if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {

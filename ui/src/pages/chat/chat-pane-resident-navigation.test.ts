@@ -133,7 +133,6 @@ it.each([2_000, 400])(
     const thread = pane.transcript.scrollElement!;
     Object.defineProperty(thread, "scrollHeight", { configurable: true, value: height });
     thread.scrollTop = Math.max(0, height - thread.clientHeight);
-    pane.transcriptScrollTop = thread.scrollTop;
     thread.addEventListener("wheel", (event) => pane.handleTranscriptHistoryIntent(event));
     const before = requests.length;
     // At a restored physical bottom (or a short window), native offset cannot move.

@@ -17,6 +17,7 @@ import type {
 } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
 import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
+import type { TranscriptNativeScroll } from "./chat-transcript-scroll-events.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
@@ -36,6 +37,8 @@ export type TranscriptCallbacks = {
   getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean, source?: "bookmark") => void;
+  onNativeScroll?: (scroll: TranscriptNativeScroll) => void;
+  onHistoryIntent?: (event: Event) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
   /** A queued send/latest command supersedes reader anchoring before its first frame. */
