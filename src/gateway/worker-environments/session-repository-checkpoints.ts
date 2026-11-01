@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -16,6 +16,11 @@ import {
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
 import { readGitHubRepositoryPublicationMetadata } from "../github-repository-publication-snapshot.js";
+import {
+  checkpointRef,
+  publicationRef,
+  publishCheckpointRefs,
+} from "./session-repository-checkpoint-refs.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import {
@@ -27,7 +32,6 @@ import {
   requireWorkspaceResultGit as git,
   updateWorkspaceResultRefs,
   readWorkspaceResultRefObjects,
-  publishImmutableWorkspaceResultRefs,
   workspaceResultCheckpointInitArgs,
   workspaceResultGitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS,
@@ -63,8 +67,6 @@ export type SessionRepositoryCheckpointPayload = CheckpointSnapshot &
     publicationStagingRoot?: string;
     publicationDigest?: string;
   };
-const publicationRef = (ref: string) =>
-  workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 async function owner(params: CheckpointOwner) {
@@ -80,14 +82,6 @@ async function owner(params: CheckpointOwner) {
     current: prepared.current,
     root: store.artifactPath(params.workspaceId),
   };
-}
-
-function checkpointRef(workspace: SessionRepositoryWorkspaceRecord, ref?: string): string {
-  const selected = ref ?? workspace.checkpointRef;
-  if (!selected || !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(selected)) {
-    throw new Error("Repository workspace has no valid checkpoint");
-  }
-  return selected;
 }
 
 function assertBase(
@@ -390,22 +384,6 @@ export async function stageSessionRepositoryCheckpoint(
       throw new Error("Repository workspace revision changed");
     }
   };
-  const publishCheckpointRefs = (
-    objectId: string,
-    companionId: string | undefined,
-    refs: readonly string[],
-  ) =>
-    publishImmutableWorkspaceResultRefs(
-      root,
-      [...new Set(refs)].flatMap(
-        (target) =>
-          [
-            [checkpointRef(workspace, target), objectId],
-            [publicationRef(target), companionId],
-          ] as const,
-      ),
-      assertRevision,
-    );
   assertRevision();
   if (workspace.checkpointRef && params.currentManifestRef === workspace.manifestHash) {
     const acceptedRef = checkpointRef(workspace);
@@ -458,10 +436,14 @@ export async function stageSessionRepositoryCheckpoint(
         await verify();
         // Keep requested recovery identities and their companions atomic, even
         // when the accepted checkpoint needs no new objects or SQLite update.
-        await publishCheckpointRefs(object, companion, [
-          params.checkpointRef ? ref : acceptedRef,
-          ...additionalRefs,
-        ]);
+        await publishCheckpointRefs(
+          root,
+          workspace,
+          object,
+          companion,
+          [params.checkpointRef ? ref : acceptedRef, ...additionalRefs],
+          assertRevision,
+        );
       };
       return {
         checkpointRef: acceptedRef,
@@ -633,7 +615,14 @@ export async function stageSessionRepositoryCheckpoint(
     };
     await verify();
     const publishArtifacts = (additionalRefs: readonly string[] = []) =>
-      publishCheckpointRefs(objectId, companionId, [ref, ...additionalRefs]);
+      publishCheckpointRefs(
+        root,
+        workspace,
+        objectId,
+        companionId,
+        [ref, ...additionalRefs],
+        assertRevision,
+      );
     return {
       checkpointRef: ref,
       verify,
