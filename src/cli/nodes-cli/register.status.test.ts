@@ -87,4 +87,30 @@ describe.each(["status", "describe"])("nodes %s rendering", (command) => {
       );
     },
   );
+
+  it.each([
+    ["macos", "core v2026.10.9"],
+    ["darwin", "core v2026.10.9"],
+    ["linux", "core v2026.10.9"],
+    ["windows", "core v2026.10.9"],
+    ["iOS 18.2", "ui v2026.10.9"],
+  ] as const)("labels a single %s version as %s", async (platform, label) => {
+    const node = {
+      nodeId: "node-1",
+      paired: true,
+      connected: true,
+      platform,
+      version: "2026.10.9",
+    };
+    mocks.call.mockResolvedValue(command === "status" ? { nodes: [node] } : node);
+    const nodes = new Command("nodes");
+    registerNodesStatusCommands(nodes);
+    await nodes.parseAsync(command === "status" ? [command] : [command, "--node", "node-1"], {
+      from: "user",
+    });
+
+    const output = mocks.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain(label);
+    expect(output).not.toContain(label.startsWith("core") ? "ui v" : "core v");
+  });
 });

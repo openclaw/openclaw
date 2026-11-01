@@ -119,7 +119,7 @@ struct NodeMenuEntryFormatter {
 
     private static func isHeadlessPlatform(_ entry: NodeInfo) -> Bool {
         let raw = entry.platform?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        return raw == "darwin" || raw == "linux" || raw == "win32" || raw == "windows"
+        return raw == "darwin" || raw == "macos" || raw == "linux" || raw == "win32" || raw == "windows"
     }
 
     static func leadingSymbol(_ entry: NodeInfo) -> String {

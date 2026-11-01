@@ -93,6 +93,7 @@ function formatNodeVersions(
     // Legacy nodes reported one version field; headless hosts use it as core, mobile nodes as UI.
     if (
       platform === "darwin" ||
+      platform === "macos" ||
       platform === "linux" ||
       platform === "win32" ||
       platform === "windows"
