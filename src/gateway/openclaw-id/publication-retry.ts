@@ -144,18 +144,30 @@ export function createPublicationRetry(params: PublicationRetryParams) {
     timer.unref?.();
   };
 
+  // Every successful publication, direct or scheduled, replaces the refresh deadline here.
+  const publishWithRefresh = async (
+    publish: PublicationRetryParams["publish"],
+  ): Promise<PublishOutcome | undefined> => {
+    const outcome = await publish();
+    if (outcome?.state === "published") {
+      armRefresh();
+    }
+    return outcome;
+  };
+
   // One attempt; reports whether a newer request arrived meanwhile and needs another.
   const attemptOnce = async (): Promise<"again" | "done"> => {
     rerun = false;
-    const outcome = await params.publish().catch((error: unknown): PublishOutcome => ({
-      state: "failed",
-      code: "internal",
-      message: String((error as Error)?.message ?? error),
-      retryable: true,
-    }));
+    const outcome = await publishWithRefresh(params.publish).catch(
+      (error: unknown): PublishOutcome => ({
+        state: "failed",
+        code: "internal",
+        message: String((error as Error)?.message ?? error),
+        retryable: true,
+      }),
+    );
     if (outcome?.state === "published") {
       attempt = 0;
-      armRefresh();
       if (rerun) {
         return "again";
       }
@@ -194,6 +206,9 @@ export function createPublicationRetry(params: PublicationRetryParams) {
   };
 
   return {
+    /** Runs a caller's direct publication through the same refresh owner as scheduled attempts. */
+    publishDirect: publishWithRefresh,
+
     /** Records a pending publication durably, then publishes (or joins the attempt in flight). */
     async request(): Promise<void> {
       await params.setPending(true);

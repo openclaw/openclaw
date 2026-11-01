@@ -764,10 +764,12 @@ export function createOpenClawIdService(params: {
         return result;
       }
       await pushMembership();
-      const publication = await publish(enrollmentCode).catch((error: unknown) => {
-        params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
-        return undefined;
-      });
+      const publication = await publicationRetry
+        .publishDirect(() => publish(enrollmentCode))
+        .catch((error: unknown) => {
+          params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
+          return undefined;
+        });
       await publicationRetry.adopt(publication);
       return { ...result, ...(publication ? { publication } : {}) };
     },
@@ -793,17 +795,19 @@ export function createOpenClawIdService(params: {
         return result;
       }
       await applyEvents(result.events.filter((event) => event.type !== "publish_snapshot"));
-      const publication = await publish().catch((error: unknown) => {
-        params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
-        return undefined;
-      });
+      const publication = await publicationRetry
+        .publishDirect(() => publish())
+        .catch((error: unknown) => {
+          params.log.warn(`openclaw-id: publication failed: ${String(error)}`);
+          return undefined;
+        });
       await publicationRetry.adopt(publication);
       return { ...result, ...(publication ? { publication } : {}) };
     },
 
     /** Retries publication, for example with an enrollment code obtained after linking. */
     async publish(enrollmentCode?: string): Promise<PublishOutcome | undefined> {
-      return await publish(enrollmentCode);
+      return await publicationRetry.publishDirect(() => publish(enrollmentCode));
     },
 
     /** Applies an owner-signed statement sent directly by a client (never the mailbox). */
