@@ -165,11 +165,7 @@ export class CommandPaletteState {
         changed: this.changed,
         updateComplete: rendered,
         onClose: () => this.closePalette(),
-        onAttachmentModeChange: () => {
-          if (this.draft.attachmentMode) {
-            this.setMode("compose");
-          }
-        },
+        onAttachmentModeChange: () => this.draft.attachmentMode && this.setMode("compose"),
         onMessageChange: (query) => {
           if (!query.trim()) {
             this.filter = "all";
