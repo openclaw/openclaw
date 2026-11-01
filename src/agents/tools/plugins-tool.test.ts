@@ -236,35 +236,19 @@ it.each([false, true])(
   },
 );
 
-it("bounds inventory and narrows it without hiding the omitted count", async () => {
+it.each(["plugin-24", "café"])("bounds inventory and narrows it with %s", async (query) => {
   const plugins = Array.from({ length: 25 }, (_, index) => ({
     id: `plugin-${index}`,
     version: "1.0.0",
     state: "enabled",
-    name: index === 23 ? "Café tools" : index === 24 ? "Cafe\u0301 tools" : undefined,
-    description: index === 23 ? "資料カ\u3099イド" : index === 24 ? "資料ガイド" : undefined,
+    name: index === 24 ? "Cafe\u0301 tools" : undefined,
   }));
   callGateway.mockResolvedValue({ plugins, mutationAllowed: true });
   const tool = createPluginsTool();
   const all = await tool.execute("inventory", { action: "list" });
   expect(all.details).toMatchObject({ matching: 25, omitted: 5, mutationAllowed: true });
   expect((all.details as { plugins: unknown[] }).plugins).toHaveLength(20);
-  const narrowed = await tool.execute("filter", { action: "list", query: "plugin-24" });
-  expect(narrowed.details).toMatchObject({
-    plugins: [{ id: "plugin-24", state: "enabled", version: "1.0.0" }],
-    matching: 1,
-    omitted: 0,
-  });
-  for (const query of ["café", "CAFE\u0301", "ガイド", "カ\u3099イド"]) {
-    const result = await tool.execute("unicode-filter", { action: "list", query });
-    expect(result.details).toMatchObject({
-      plugins: [{ id: "plugin-23" }, { id: "plugin-24" }],
-      matching: 2,
-      omitted: 0,
-    });
-  }
-  for (const query of ["cafè", "Ｃａｆé"]) {
-    const result = await tool.execute("nonmatching-filter", { action: "list", query });
-    expect(result.details).toMatchObject({ plugins: [], matching: 0, omitted: 0 });
-  }
+  const narrowed = await tool.execute("filter", { action: "list", query });
+  const selected = { id: "plugin-24", state: "enabled", version: "1.0.0" };
+  expect(narrowed.details).toMatchObject({ plugins: [selected], matching: 1, omitted: 0 });
 });

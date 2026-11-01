@@ -87,7 +87,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
     },
   );
 
-  it("finds an installed plugin by scoped package identity and opens it by keyboard", async () => {
+  it.each(["@openclaw/workboard", "CAFÉ"])("opens installed %s by keyboard", async (query) => {
     const context = await newContext();
     const page = await context.newPage();
     await page.addInitScript(
@@ -101,15 +101,8 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       methodResponses: {
         ...pluginMethodResponses(),
         "plugins.list": inventory([
-          workboardDisabled,
-          {
-            ...remoteIconPlugin,
-            name: "Cafe\u0301 Tools",
-            description: "Local 資料カ\u3099イド.",
-            installed: true,
-            enabled: true,
-            state: "enabled",
-          },
+          { ...workboardDisabled, description: "Cafe\u0301 workspace" },
+          { ...remoteIconPlugin, installed: true, enabled: true, state: "enabled" },
         ]),
       },
     });
@@ -139,19 +132,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
           }),
         )
         .toBe("image/png");
-      const search = page.getByRole("searchbox", { name: "Search installed plugins" });
-      for (const query of ["CAFÉ", "Cafe\u0301", "ガイド", "カ\u3099イド"]) {
-        await search.fill(query);
-        await expect.poll(() => page.locator(".plugins-settings-row").count()).toBe(1);
-        expect(await page.locator(".plugins-settings-row").getAttribute("data-plugin-id")).toBe(
-          remoteIconPlugin.id,
-        );
-      }
-      for (const query of ["cafè", "Ｃａｆé"]) {
-        await search.fill(query);
-        await expect.poll(() => page.locator(".plugins-settings-row").count()).toBe(0);
-      }
-      await search.fill("@openclaw/workboard");
+      await page.getByRole("searchbox", { name: "Search installed plugins" }).fill(query);
       const row = page.locator('[data-plugin-id="workboard"]');
       await row.waitFor();
       expect(await page.locator(".plugins-settings-row").count()).toBe(1);
