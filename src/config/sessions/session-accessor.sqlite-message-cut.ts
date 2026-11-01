@@ -39,6 +39,7 @@ import type {
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
 import { planSessionMessageCut } from "./session-message-cut-plan.js";
 import type {
   SessionMessageCutIntent,
@@ -214,6 +215,16 @@ export async function mutateSqliteSessionAtMessage(
             storePath: memory.path,
             env: params.env,
           });
+          intent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+            {
+              agentId: memory.agentId,
+              sessionKey: sourceKey,
+              storePath: memory.path,
+              env: target.env,
+            },
+            entry,
+            () => memory.authority.assertCurrent(),
+          );
           return withSqliteSessionContextReset(
             {
               agentId: memory.agentId,
@@ -300,6 +311,18 @@ export async function mutateSqliteSessionAtMessage(
       assertPreparedCurrent,
       preconditions,
     );
+  if (mode !== "fork" && preparedEntry) {
+    intent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+      {
+        agentId: resolved.agentId,
+        sessionKey: sourceKey,
+        storePath: resolved.path,
+        env: resolved.env,
+      },
+      preparedEntry,
+      assertCurrent,
+    );
+  }
   return mode !== "fork" && preparedEntry
     ? await withSqliteSessionContextReset(
         resolved,

@@ -11,18 +11,14 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CodexCatalogIndexRow } from "../../extensions/codex/src/session-catalog-index-row.js";
 import { CodexCatalogRolloutScanner } from "../../extensions/codex/src/session-catalog-rollout-scanner.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -131,17 +127,9 @@ function distribution(samples: number[]) {
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 const inspector = new Session();
 const originalRelative = path.relative;
@@ -197,7 +185,7 @@ try {
   const usedCpu = process.cpuUsage(cpu);
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile

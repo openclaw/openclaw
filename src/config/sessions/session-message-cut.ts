@@ -17,6 +17,7 @@ import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { readSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
+import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutIntent,
@@ -95,6 +96,18 @@ export async function mutateSessionHistoryInWorker(
     assertCurrent,
   );
   assertCurrent();
+  if (intent.mode !== "fork") {
+    preparedIntent.settledLocalWorkspace = await prepareMessageCutLocalWorkspace(
+      {
+        agentId: resolved.agentId,
+        env: database.env,
+        sessionKey: intent.sourceKey,
+        storePath: database.path,
+      },
+      preparedEntry,
+      assertCurrent,
+    );
+  }
   const prepareContext = (run: (assertCurrent: () => void) => Promise<SessionMessageCutResult>) =>
     intent.mode === "fork"
       ? run(() => {})

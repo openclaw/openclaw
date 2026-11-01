@@ -6,6 +6,7 @@
    The attribute selector outscores the :root capability flip to 1.25. */
 :root[data-theme="crt"],
 :root[data-theme="crt-light"] {
+  --field-focus-border: var(--accent);
   --radius-sm: 2px;
   --radius-md: 3px;
   --radius-lg: 4px;

@@ -73,6 +73,12 @@ describe("subagent registry query regressions", () => {
     expect(active).toBe(0);
     expect(pending).toBe(2);
     expect(iterations).toBe(0);
+    using clears = vi.spyOn(Set.prototype, "clear");
+    for (let window = 0; window < 10; window++) {
+      expect(index.atTime(Date.now()).countActiveDescendantRuns(root)).toBe(0);
+    }
+    // Clearing an empty dirty set replaces its backing store on every warm read.
+    expect(clears).not.toHaveBeenCalled();
   });
 
   it.each([50, 150, 500])("repairs active descendants without reading %i siblings", (size) => {

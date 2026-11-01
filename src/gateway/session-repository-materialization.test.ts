@@ -33,9 +33,11 @@ import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-tran
 import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
-import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createRepositoryGatewayMovePreparation } from "./session-repository-materialization.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { bindRepositoryDiskForTest } from "./worker-environments/repository-disk-authority.test-support.js";
 import * as repositoryGitHubIdentity from "./worker-environments/repository-github-identity.js";
+import * as repositorySnapshot from "./worker-environments/repository-workspace-snapshot.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -49,6 +51,17 @@ const enterpriseGitHub = {
   apiBaseUrl: "https://ghe.example.test/api/v3",
 };
 const readFile = (root: string, name: string) => fsp.readFile(path.join(root, name), "utf8");
+const prepareGatewayMove = (cfg: OpenClawConfig) =>
+  createRepositoryGatewayMovePreparation({
+    placements: createWorkerSessionPlacementStore(),
+    getConfig: () => cfg,
+    environments: {
+      get: () => undefined,
+      startTunnel: async () => {
+        throw new Error("Unexpected worker tunnel for retained checkpoint fixture");
+      },
+    },
+  });
 
 async function createRepository(
   scope: { agentId: string; sessionKey: string },
@@ -215,9 +228,8 @@ it.each([
             }
             throw cloneFailure;
           });
-        const operation = materializeSessionRepositoryWorkspaceOnGateway({
+        const operation = prepareGatewayMove(cfg)({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent: () => {
             if (!current) {
@@ -474,20 +486,23 @@ it.each([
           throw new Error("source disk changed before handoff");
         }
       });
-      const operation = materializeSessionRepositoryWorkspaceOnGateway({
+      if (diskExport) {
+        vi.spyOn(repositorySnapshot, "captureRepositoryDiskCheckpoint").mockImplementation(
+          async (params, use) => {
+            params.assertCurrent();
+            return await use(
+              { checkpointRef: checkpoint.checkpointRef, manifestHash: current.manifestRef },
+              verifyDisk,
+            );
+          },
+        );
+      }
+      const move = prepareGatewayMove(cfg);
+      const operation = move({
         ...scope,
-        cfg,
         sessionId,
         assertCurrent,
-        exportDisk: diskExport
-          ? async (_repository, assertExportCurrent, use) => {
-              assertExportCurrent();
-              await use(
-                { checkpointRef: checkpoint.checkpointRef, manifestHash: current.manifestRef },
-                verifyDisk,
-              );
-            }
-          : undefined,
+        quiescence: diskExport ? { assertActive: verifyDisk, resume: async () => {} } : undefined,
       });
       if (outcome === "revoked" || outcome === "disk changed") {
         await expect(operation).rejects.toThrow(
@@ -539,9 +554,8 @@ it.each([
         ).split("\n");
         expect(published.includes("published[1].ignored")).toBe(Boolean(publicationDigest));
         expect(published).not.toContain("retained.ignored");
-        await materializeSessionRepositoryWorkspaceOnGateway({
+        await move({
           ...scope,
-          cfg,
           sessionId,
           assertCurrent,
         });
