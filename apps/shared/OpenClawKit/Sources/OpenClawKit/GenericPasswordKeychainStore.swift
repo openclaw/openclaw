@@ -29,14 +29,26 @@ public enum GenericPasswordKeychainStore {
         account: String,
         accessGroup: String? = nil) -> String?
     {
+        try? self.loadStringChecked(service: service, account: account, accessGroup: accessGroup)
+    }
+
+    /// Absence is distinct from an inaccessible row when a saved identity is authoritative.
+    public static func loadStringChecked(
+        service: String,
+        account: String,
+        accessGroup: String? = nil) throws -> String?
+    {
         var query = self.baseQuery(service: service, account: account, accessGroup: accessGroup)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        guard let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(errSecDecode))
+        }
+        return value
     }
 
     @discardableResult

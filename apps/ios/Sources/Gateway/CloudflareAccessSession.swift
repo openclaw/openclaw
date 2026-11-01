@@ -90,13 +90,14 @@ struct CloudflareAccessSession: Codable, Sendable, CustomStringConvertible, Cust
     }
 }
 
-enum CloudflareAccessError: Error, LocalizedError {
+enum CloudflareAccessError: Error, LocalizedError, Equatable {
     case invalidGateway
     case invalidApplication
     case connectionFailed
     case loginFailed
     case timedOut
     case invalidSession
+    case accountMismatch
     case storageFailed
 
     var errorDescription: String? {
@@ -113,6 +114,8 @@ enum CloudflareAccessError: Error, LocalizedError {
             "Browser sign-in timed out. Start sign-in again to continue."
         case .invalidSession:
             "The Cloudflare Access session could not be verified or has expired. Sign in again."
+        case .accountMismatch:
+            "This browser returned a different Cloudflare Access account. Choose Use another account and sign in with the original account, or explicitly sign out of Access to change accounts."
         case .storageFailed:
             "Could not save the sign-in session securely. Unlock this device and try again."
         }

@@ -287,6 +287,11 @@ final class GatewayIngressController {
         return origin
     }
 
+    func accountOrigin(stableID: String) -> CloudflareAccessOrigin? {
+        guard let origin = origin(stableID: stableID), self.sessions.hasAccount(for: origin) else { return nil }
+        return origin
+    }
+
     func signOut(stableID: String, expectedOrigin: CloudflareAccessOrigin? = nil) async {
         guard let origin = origin(stableID: stableID),
               expectedOrigin == nil || expectedOrigin == origin

@@ -11,6 +11,10 @@ import Security
 import Testing
 @testable import OpenClaw
 
+private struct IngressSavedAccount: Decodable {
+    let session: CloudflareAccessSession
+}
+
 @MainActor
 final class IngressTestBrowser: CloudflareAccessBrowserPresenting {
     var prepared: [UUID] = []
@@ -257,8 +261,11 @@ final class IngressTestHarness {
             })
     }
 
-    func session(for application: CloudflareAccessApplication, subject: String) throws -> CloudflareAccessSession {
-        let expires = self.nextSession.expiresAt
+    func session(
+        for application: CloudflareAccessApplication, subject: String, expires: Date? = nil) throws
+        -> CloudflareAccessSession
+    {
+        let expires = expires ?? self.nextSession.expiresAt
         let token = try self.tokens.token([
             "iss": application.issuer.absoluteString, "aud": [application.audience],
             "type": "app", "sub": subject, "exp": expires.timeIntervalSince1970,
@@ -382,6 +389,44 @@ extension GatewayIngressControllerTests {
         #expect(fixture.browser.presented.isEmpty)
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func `Settings can sign out expired and revoked accounts after restart`(expired: Bool) async throws {
+        let fixture = try IngressTestHarness()
+        let storage = IngressOriginStorage()
+        let app = fixture.application
+        let original = fixture.nextSession
+        let writer = CloudflareAccessSessionStore(
+            persistence: storage.persistence, authenticate: { _, _ in original },
+            now: { fixture.now }, retireTransports: { _ in })
+        let admitted = try await writer.signIn(application: app, openBrowser: { _ in }).value
+        if expired {
+            fixture.now = original.expiresAt
+            #expect(writer.snapshot(for: app.origin) == nil)
+            try await writer.waitForRetirement(of: app.origin)
+        } else {
+            try await writer.requireReauthentication(for: app.origin, revision: admitted.revision)
+        }
+        fixture.profileRows[0].accessOrigin = app.origin
+        let ingress = fixture.controller(persistence: storage.persistence)
+        let registry = GatewaySettingsStore.GatewayRegistry(
+            activeStableID: fixture.stableID, entries: fixture.profileRows)
+        #expect(!ingress.hasSession(stableID: fixture.stableID))
+        let target = try #require(SettingsProTab.gatewayAccessSessionTarget(in: registry, ingress: ingress))
+        #expect(target.origin == app.origin)
+        #expect(!ingress.hasSession(stableID: fixture.stableID))
+        await ingress.signOut(stableID: target.stableID, expectedOrigin: target.origin)
+        #expect(SettingsProTab.gatewayAccessSessionTarget(in: registry, ingress: ingress) == nil)
+        #expect(storage.values[app.origin] == nil)
+        #expect(fixture.profileRows.count == 1)
+        let replacement = try fixture.session(
+            for: app, subject: "replacement-account", expires: fixture.now.addingTimeInterval(3600))
+        let restarted = CloudflareAccessSessionStore(
+            persistence: storage.persistence, authenticate: { _, _ in replacement },
+            now: { fixture.now }, retireTransports: { _ in })
+        let changed = try await restarted.signIn(application: app, openBrowser: { _ in }).value
+        #expect(changed.session.subject == "replacement-account")
+    }
+
     @Test @MainActor
     func `a stale displayed Access origin cannot sign out its profile replacement`() async throws {
         let fixture = try IngressTestHarness()
@@ -481,7 +526,8 @@ private struct IngressNativeFixture {
             self.route = .init(url: server.url(), stableID: "native-main", tls: .init(
                 required: true, expectedFingerprint: pin, allowTOFU: false, storeKey: nil))
             let first = try harness.session(for: self.application, subject: "native-first")
-            self.next = try harness.session(for: self.application, subject: "native-next")
+            self.next = try harness.session(
+                for: self.application, subject: "native-first", expires: first.expiresAt.addingTimeInterval(60))
             harness.nextSession = self.next
             harness.persisted = try String(data: JSONEncoder().encode(first), encoding: .utf8)
             traffic.firstToken = try #require(first.authorizationHeader(for: server.url(), now: harness.now))
@@ -701,7 +747,7 @@ struct GatewayIngressControllerTests {
             } else {
                 #expect(try #require(admitted).isCurrent())
                 let stored = try #require(fixture.harness.persisted?.data(using: .utf8))
-                let session = try JSONDecoder().decode(CloudflareAccessSession.self, from: stored)
+                let session = try JSONDecoder().decode(IngressSavedAccount.self, from: stored).session
                 #expect(session.subject == fixture.next.subject)
                 #expect(session.origin == fixture.application.origin)
                 #expect(session.issuer == fixture.application.issuer)
@@ -1174,7 +1220,7 @@ struct GatewayIngressControllerTests {
         defer { state.restore() }
         let fixture = try IngressTestHarness()
         let persistence = CloudflareAccessSessionStore.Persistence.keychain
-        let previous = persistence.load(fixture.application.origin)
+        let previous = try persistence.load(fixture.application.origin)
         let headers = GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: fixture.stableID)
         defer {
             _ = persistence.delete(fixture.application.origin)
@@ -1201,7 +1247,7 @@ struct GatewayIngressControllerTests {
         let restarted = CloudflareAccessSessionStore(persistence: persistence, retireTransports: { _ in })
         #expect(restarted.snapshot(for: fixture.application.origin)?.session.subject == fixture.nextSession.subject)
         try await restarted.forget(fixture.application.origin).task.value
-        #expect(persistence.load(fixture.application.origin) == nil)
+        #expect(try persistence.load(fixture.application.origin) == nil)
         let credentials = GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceID,
             gatewayStableID: fixture.stableID)
@@ -1217,7 +1263,7 @@ struct GatewayIngressControllerTests {
         defer { isolation.restore() }
         let fixture = try IngressTestHarness()
         let persistence = CloudflareAccessSessionStore.Persistence.keychain
-        let previous = persistence.load(fixture.application.origin)
+        let previous = try persistence.load(fixture.application.origin)
         _ = persistence.delete(fixture.application.origin)
         defer {
             _ = persistence.delete(fixture.application.origin)
@@ -1242,7 +1288,7 @@ struct GatewayIngressControllerTests {
             route: route,
             userInitiated: true,
             admissionCheckpoint: producer.admissionCheckpoint())
-        #expect(persistence.load(fixture.application.origin) != nil)
+        #expect(try persistence.load(fixture.application.origin) != nil)
         #expect(GatewaySettingsStore.loadGatewayRegistry().entries.first?.accessOrigin == fixture.application.origin)
         // Normal profile/Bonjour updates must retain the association, even though
         // discovered rows intentionally do not persist the resolved hostname.
@@ -1254,7 +1300,7 @@ struct GatewayIngressControllerTests {
         }
         let relaunched = fixture.controller(useSavedProfiles: true, persistence: persistence)
         try await relaunched.forget(stableID: stableID)
-        #expect(persistence.load(fixture.application.origin) == nil)
+        #expect(try persistence.load(fixture.application.origin) == nil)
         #expect(!relaunched.hasSession(stableID: stableID))
     }
 
@@ -1376,7 +1422,7 @@ struct GatewayIngressControllerTests {
         secondGate.release()
         let authorization = try #require(try await second.value)
         let bytes = try #require(fixture.persisted)
-        let persisted = try JSONDecoder().decode(CloudflareAccessSession.self, from: Data(bytes.utf8))
+        let persisted = try JSONDecoder().decode(IngressSavedAccount.self, from: Data(bytes.utf8)).session
         #expect(persisted.issuer == application.issuer)
         #expect(persisted.audience == application.audience)
         #expect(persisted.subject == "replacement")
@@ -1522,7 +1568,7 @@ struct GatewayIngressControllerTests {
             #expect(current.message == attention.message)
             #expect(current.canSignIn == attention.canSignIn)
             storage.deletionSucceeds = true
-            fixture.nextSession = try fixture.session(for: application, subject: "other-subject")
+            fixture.nextSession = try fixture.session(for: application, subject: fixture.nextSession.subject)
             fixture.release.continuation.finish()
             try await ingress.signIn(for: attention, admissionCheckpoint: ingress.admissionCheckpoint())
             #expect(ingress.hasSession(stableID: sibling.stableID))
@@ -1635,7 +1681,7 @@ struct GatewayIngressControllerTests {
         defer { isolation.restore() }
         let fixture = try IngressTestHarness()
         let persistence = CloudflareAccessSessionStore.Persistence.keychain
-        let previous = persistence.load(fixture.application.origin)
+        let previous = try persistence.load(fixture.application.origin)
         _ = persistence.delete(fixture.application.origin)
         defer {
             _ = persistence.delete(fixture.application.origin)
@@ -1665,7 +1711,7 @@ struct GatewayIngressControllerTests {
             pending.cancel()
         }
         try await waitForIngress { fixture.browser.dismissed.count == 1 }
-        #expect(persistence.load(fixture.application.origin) != nil)
+        #expect(try persistence.load(fixture.application.origin) != nil)
         #expect(GatewaySettingsStore.loadGatewayRegistry().entries.first?.accessOrigin == fixture.application.origin)
         if replace {
             _ = try await producer.prepare(
@@ -1678,7 +1724,7 @@ struct GatewayIngressControllerTests {
         await #expect(throws: CancellationError.self) { try await pending.value }
         let relaunched = fixture.controller(useSavedProfiles: true, persistence: persistence)
         try await relaunched.forget(stableID: stableID)
-        #expect(persistence.load(fixture.application.origin) == nil)
+        #expect(try persistence.load(fixture.application.origin) == nil)
         #expect(!relaunched.hasSession(stableID: stableID))
     }
 
@@ -2006,7 +2052,7 @@ struct GatewayIngressControllerTests {
         }
         #expect(fixture.browser.presented.isEmpty)
         try await waitForIngress { fixture.retirements == 1 }
-        #expect(fixture.persisted == nil)
+        #expect((fixture.persisted == nil) == forget)
     }
 
     @Test @MainActor
@@ -2027,7 +2073,8 @@ struct GatewayIngressControllerTests {
                 admissionCheckpoint: ingress.admissionCheckpoint())
         }
         #expect(fixture.retirements == 1)
-        #expect(fixture.persisted == nil)
+        #expect(fixture.persisted != nil)
+        #expect(!ingress.hasSession(stableID: fixture.stableID))
         #expect(!old.isCurrent())
         #expect(ingress.attention?.stableID == fixture.stableID)
         #expect(fixture.browser.presented.isEmpty)
@@ -2124,7 +2171,7 @@ struct GatewayIngressControllerTests {
         fixture.revoked = true
         await #expect(throws: GatewayExternalAuthorizationError.self) { try await old.headers(fixture.route.url) }
         #expect(fixture.browser.presented.isEmpty)
-        fixture.nextSession = try fixture.tokens.session(subject: "replacement-subject")
+        fixture.nextSession = try fixture.tokens.session(subject: fixture.nextSession.subject)
         let renewal = Task { try await ingress.prepare(
             route: fixture.route,
             userInitiated: true,
@@ -2519,7 +2566,7 @@ struct GatewayIngressControllerTests {
         newAuthentication.release()
         let current = try #require(try await replacement?.value)
         #expect(current.isCurrent())
-        #expect(try JSONDecoder().decode(CloudflareAccessSession.self, from: Data(#require(fixture.persisted).utf8))
+        #expect(try JSONDecoder().decode(IngressSavedAccount.self, from: Data(#require(fixture.persisted).utf8)).session
             .subject == "replacement-owner")
         #expect(ingress.attention == nil)
         #expect(fixture.browser.presented.count == 2)
@@ -2799,7 +2846,8 @@ struct GatewayIngressControllerTests {
             #expect(!retirement.settled)
             #expect(fixture.retirements == 2)
             retirement.release()
-            try await waitForIngress { fixture.persisted == nil }
+            try await waitForIngress { retirement.settled }
+            #expect(fixture.persisted != nil)
             #expect(ingress.attention?.id == rejection.id)
             #expect(fixture.browser.presented.count == 1)
         } catch {
@@ -2994,7 +3042,7 @@ struct GatewayIngressControllerTests {
         newAuthentication.release()
         let authorization = try #require(try await replacement?.value)
         #expect(authorization.isCurrent())
-        #expect(try JSONDecoder().decode(CloudflareAccessSession.self, from: Data(#require(fixture.persisted).utf8))
+        #expect(try JSONDecoder().decode(IngressSavedAccount.self, from: Data(#require(fixture.persisted).utf8)).session
             .subject ==
             "new-browser-owner")
         #expect(ingress.attention == nil)
