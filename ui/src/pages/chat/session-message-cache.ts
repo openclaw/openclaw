@@ -1,5 +1,6 @@
 import {
   createSessionProjection,
+  readSessionMessageIdentity,
   readSessionMessageSequence,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
@@ -413,7 +414,18 @@ export function applyChatCacheSnapshot(
   state.chatHistoryPagination = snapshot.pagination;
   state.currentSessionId = snapshot.sessionId;
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
-  setChatHistoryCursor(state, snapshot.deltaCursor);
+  // Cached live answers lose their run projection on restore. Reconcile those
+  // rows against a full history page before accepting cursor-only updates.
+  const hasUnpersistedAssistant = snapshot.messages.some((message) => {
+    const identity = readSessionMessageIdentity(message);
+    return (
+      identity?.role === "assistant" &&
+      !identity.id &&
+      identity.sequence === null &&
+      !identity.isImported
+    );
+  });
+  setChatHistoryCursor(state, hasUnpersistedAssistant ? undefined : snapshot.deltaCursor);
 }
 
 export function appendChatMessageToCache(

@@ -22,6 +22,7 @@ import {
   createTestChatPane,
   connectPaneTestView,
   getPaneTestRuntime,
+  nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
@@ -94,7 +95,7 @@ function openingPane(approvals = false) {
     initialHistory: { ok: true; payload: ChatHistoryResult };
   }>();
   const history = {
-    messages: [{ role: "assistant", content: [{ type: "text", text: "Pipelined transcript" }] }],
+    messages: [nativeHistoryMessage(2, "Pipelined transcript")],
     sessionId: "pipeline-session",
   } satisfies ChatHistoryResult;
   const request = createReconnectRequest(history, {
