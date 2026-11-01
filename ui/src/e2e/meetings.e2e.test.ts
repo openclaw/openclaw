@@ -360,6 +360,30 @@ suite.define(() => {
       await expectDetailRequests(gateway);
     }));
 
+  it("keeps a toggled desktop filter disclosure open while the route settles", () =>
+    suite.withPage(
+      { viewport: { width: 1440, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: { "transcripts.list": { sessions: [meeting], nextCursor: null } },
+        });
+        await page.goto(`${suite.server.baseUrl}meetings`);
+        const view = page.locator("openclaw-meetings-page");
+        await view.getByRole("link", { name: /Design review/ }).waitFor();
+        const disclosure = view.locator(".transcripts-filters details");
+        await disclosure.locator("summary").click();
+        const search = view.getByRole("searchbox", { name: "Search meetings", exact: true });
+        await search.fill("design");
+        await search.press("Enter");
+        await page.waitForURL(/query=design/u);
+        await view.getByRole("link", { name: /Design review/ }).waitFor();
+        await page.waitForTimeout(500);
+        expect(await disclosure.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+          true,
+        );
+      },
+    ));
+
   it("moves filters and page actions into phone popovers without losing either", () =>
     suite.withPage({ viewport: { width: 390, height: 844 }, locale: "en-US" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

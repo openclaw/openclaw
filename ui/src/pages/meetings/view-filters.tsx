@@ -1,5 +1,5 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -66,8 +66,10 @@ function AdvancedFilterFields(props: TranscriptsViewProps) {
 export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
   // The popover surface stays inside the form, so its fields submit with the search field.
   let popover: PopoverHandle | undefined;
-  const advancedActive = () =>
-    TRANSCRIPT_ADVANCED_FILTER_KEYS.some((key) => new URLSearchParams(props.search).get(key));
+  // A memo, so route updates that leave the filters alone don't rewrite a toggled disclosure.
+  const advancedActive = createMemo(() =>
+    TRANSCRIPT_ADVANCED_FILTER_KEYS.some((key) => new URLSearchParams(props.search).get(key)),
+  );
   const clear = () => {
     popover?.hide();
     props.onNavigate(
