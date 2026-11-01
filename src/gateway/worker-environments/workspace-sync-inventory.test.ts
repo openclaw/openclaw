@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { runWithSpawnBroker } from "../../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
+import { supportsSpawnBrokerCommandTransport } from "../../process/spawn-broker/pipe.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_ENTRIES,
@@ -19,6 +22,7 @@ import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
 import { writeWorkspaceFiles as files } from "./workspace-sync-scripts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const startBroker = useSpawnBrokerTestFixture(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -128,6 +132,67 @@ function transferList(
 }
 
 describe("runWorkspaceInventoryCommandToFile", () => {
+  it.skipIf(!supportsSpawnBrokerCommandTransport())(
+    "streams inventory and pack input through the broker without forking the Gateway",
+    async () => {
+      const broker = await startBroker();
+      const { root } = commandFixture();
+      const inputPath = path.join(root, "input");
+      const payload = Buffer.alloc(256 * 1024, 0x61);
+      await fs.writeFile(inputPath, payload);
+      for (const bounded of [false, true]) {
+        const outputPath = path.join(root, String(bounded));
+        await runWithSpawnBroker(broker, () =>
+          inventoryCommand(
+            [
+              process.execPath,
+              "-e",
+              "process.stdout.write(`${process.ppid}\\n`); process.stdin.pipe(process.stdout);",
+            ],
+            outputPath,
+            { inputPath, ...(bounded ? { maxOutputBytes: payload.length + 32 } : {}) },
+          ),
+        );
+        expect(await fs.readFile(outputPath)).toEqual(
+          Buffer.concat([Buffer.from(`${broker!.pid}\n`), payload]),
+        );
+      }
+      await expect(
+        runWithSpawnBroker(broker, () =>
+          inventoryCommand(
+            [process.execPath, "-e", 'process.stdout.write("x".repeat(1024))'],
+            path.join(root, "overflow"),
+            { maxOutputBytes: 16 },
+          ),
+        ),
+      ).rejects.toThrow("pack exceeds the 16 byte limit");
+      const controller = new AbortController();
+      const stoppedOutput = path.join(root, "stopped");
+      interceptOutput(stoppedOutput, (handle) => {
+        const create = handle.createWriteStream.bind(handle);
+        handle.createWriteStream = (...args) => {
+          const stream = create(...args);
+          stream.once("pipe", (source: NodeJS.ReadableStream) => {
+            source.once("data", () => controller.abort());
+          });
+          return stream;
+        };
+      });
+      const stopped = await runWithSpawnBroker(broker, () =>
+        inventoryCommand(
+          [
+            process.execPath,
+            "-e",
+            'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);',
+          ],
+          stoppedOutput,
+          { signal: controller.signal },
+        ),
+      ).catch((error: unknown) => error);
+      expect(stopped).toBe(controller.signal.reason);
+    },
+  );
+
   it("persists stdout at its exact output budget", async () => {
     const { outputPath } = commandFixture();
     const expected = Buffer.from("bounded workspace inventory output\n");
