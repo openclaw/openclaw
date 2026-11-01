@@ -347,7 +347,7 @@ export function registerWorkboardGatewayMethods(params: {
             });
             return;
           }
-          return requestHandler(request);
+          await requestHandler(request);
         },
         { scope },
       );
