@@ -333,6 +333,7 @@ async function dispatchDiscordMessageAction(
       action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
       channelId: resolveChannelId(),
       messageId,
+      ...(action === "list-pins" ? { limit: readPositiveIntegerParam(params, "limit") } : {}),
     });
   }
 

@@ -114,6 +114,18 @@ it("reads normalized pins from the trusted current workspace", async () => {
   });
 });
 
+it("returns at most the requested number of pins", async () => {
+  listSlackPins.mockResolvedValueOnce(
+    ["1", "2", "3"].map((ts) => ({ message: { ts: `171234567${ts}.000000`, text: ts } })),
+  );
+  const result = await act({ action: "listPins", channelId: "C123", limit: 2 }, trustedContext);
+  expect(result.details).toMatchObject({
+    ok: true,
+    pins: [{ message: { text: "1" } }, { message: { text: "2" } }],
+  });
+  expect((result.details as { pins: unknown[] }).pins).toHaveLength(2);
+});
+
 it("rejects a bare detached target for an authenticated Enterprise install", async () => {
   installEnterprise();
   await expect(act({ action: "react", ...message, emoji: "thumbsup" })).rejects.toThrow(

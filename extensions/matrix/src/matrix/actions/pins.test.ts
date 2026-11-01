@@ -60,6 +60,21 @@ it("lists pinned ids and summarizes only resolvable events", async () => {
   });
 });
 
+it("limits listed pins before fetching their events", async () => {
+  const { client } = createPinsClient(["$a", "$b", "$c"], {
+    $a: message("$a", "first"),
+    $b: message("$b", "second"),
+    $c: message("$c", "third"),
+  });
+  const getEvent = vi.spyOn(client, "getEvent");
+
+  expect(await listMatrixPins(room, { client, limit: 2 })).toMatchObject({
+    pinned: ["$a", "$b"],
+    events: [{ eventId: "$a" }, { eventId: "$b" }],
+  });
+  expect(getEvent.mock.calls.map(([, eventId]) => eventId)).toEqual(["$a", "$b"]);
+});
+
 it("keeps other pinned messages visible when a poll repeats its pagination cursor", async () => {
   let pollPageCalls = 0;
   const getRelations = vi.fn(async () => {

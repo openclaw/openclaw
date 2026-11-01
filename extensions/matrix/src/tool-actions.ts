@@ -325,6 +325,12 @@ export async function handleMatrixAction(
       action === "list-pins"
         ? { kind: "list" as const }
         : { kind: action, messageId: readStringParam(params, "messageId", { required: true }) };
+    const limit =
+      action === "list-pins"
+        ? readPositiveIntegerParam(params, "limit", {
+            message: "limit must be a positive integer.",
+          })
+        : undefined;
     const roomId = readRoomId(params);
     const { withReadTarget } = prepareAction("pins");
     return await withReadTarget(roomId, async (resolvedRoom, actionOpts) => {
@@ -333,7 +339,7 @@ export async function handleMatrixAction(
         const result = await updatePin(resolvedRoom, request.messageId, actionOpts);
         return jsonResult({ ok: true, pinned: result.pinned });
       }
-      const result = await listMatrixPins(resolvedRoom, actionOpts);
+      const result = await listMatrixPins(resolvedRoom, { ...actionOpts, limit });
       return jsonResult({
         ok: true,
         pinned: result.pinned,

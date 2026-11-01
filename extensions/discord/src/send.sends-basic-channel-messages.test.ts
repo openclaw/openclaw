@@ -817,6 +817,34 @@ it.each([
   );
 });
 
+it.each([
+  { limit: 3, requestLimits: ["3"] },
+  { limit: 60, requestLimits: ["50", "10"] },
+])("stops listing pins at the requested limit of $limit", async ({ limit, requestLimits }) => {
+  const pins = Array.from({ length: 250 }, (_, index) => ({
+    pinned_at: new Date(Date.UTC(2026, 0, 1, 0, 0, 250 - index)).toISOString(),
+    message: { id: String(index + 1) },
+  }));
+  const loopback = await loopbackRest({
+    respond: ({ path }) => {
+      const url = new URL(path ?? "/", "http://localhost");
+      const before = url.searchParams.get("before");
+      const start = before === null ? 0 : pins.findIndex((pin) => pin.pinned_at === before) + 1;
+      const items = pins.slice(start, start + Number(url.searchParams.get("limit")));
+      return { items, has_more: start + items.length < pins.length };
+    },
+  });
+
+  await expect(listPinsDiscord("789", clientOptions(loopback.rest), limit)).resolves.toEqual(
+    pins.slice(0, limit).map((pin) => pin.message),
+  );
+  expect(
+    loopback.requests.map(({ path }) =>
+      new URL(path ?? "/", "http://localhost").searchParams.get("limit"),
+    ),
+  ).toEqual(requestLimits);
+});
+
 it("pins and unpins through current routes while preserving message ID normalization", async () => {
   const loopback = await loopbackRest({ respond: () => ({}) });
   await pinMessageDiscord("789", " 123 ", clientOptions(loopback.rest));
