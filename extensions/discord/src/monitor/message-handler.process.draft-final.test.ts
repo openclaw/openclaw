@@ -105,6 +105,27 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expectFreshFinalText("Hello\nWorld");
   });
 
+  it("preserves compaction notices alongside the progress draft and final answer", async () => {
+    const notices = [
+      { text: "🧹 Compacting context...", isCompactionNotice: true },
+      { text: "🧹 Compaction complete", isCompactionNotice: true },
+    ];
+    mockDispatch(async (params) => {
+      await params?.dispatcher.sendBlockReply({ text: "private answer delta" });
+      for (const notice of notices) {
+        await params?.dispatcher.sendBlockReply(notice);
+      }
+      await sendFinal(params, { text: "final answer" });
+    });
+    await runDraft({ discordConfig: { streaming: { mode: "progress" } } });
+
+    expect(createDiscordDraftStream).toHaveBeenCalledOnce();
+    expect(deliverDiscordReply.mock.calls.map(([delivery]) => delivery)).toEqual([
+      ...notices.map((notice) => expect.objectContaining({ kind: "block", replies: [notice] })),
+      expect.objectContaining({ kind: "final", replies: [{ text: "final answer" }] }),
+    ]);
+  });
+
   it("does not attach a progress receipt when final delivery starts before the delay", async () => {
     vi.useFakeTimers();
     const draftStream = createMockDraftStreamForTest();

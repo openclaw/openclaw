@@ -516,12 +516,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       draftStream &&
       draftPreview.isProgressMode &&
       info.kind === "block" &&
-      !deliverablePayload.isCommentary
+      !deliverablePayload.isCommentary &&
+      !deliverablePayload.isCompactionNotice &&
+      !resolveSendableOutboundReplyParts(deliverablePayload).hasMedia &&
+      !deliverablePayload.isError
     ) {
-      const reply = resolveSendableOutboundReplyParts(deliverablePayload);
-      if (!reply.hasMedia && !deliverablePayload.isError) {
-        return { visibleReplySent: false };
-      }
+      return { visibleReplySent: false };
     }
     let deliveryResult: LivePreviewDeliveryResult = { visibleReplySent: false };
     await lifecycle.deliver({
