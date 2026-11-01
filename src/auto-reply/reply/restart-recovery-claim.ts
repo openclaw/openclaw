@@ -26,6 +26,7 @@ import {
   createAgentRunStaleLifecycleError,
   isAgentRunStaleLifecycleError,
 } from "../../infra/agent-lifecycle-error.js";
+import { readUndispatchedChannelText } from "../../sessions/undispatched-channel-text.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -37,6 +38,7 @@ type ReplyRestartRecoveryClaimController = {
   admitUserTurn: (
     recorder?: UserTurnTranscriptRecorder,
   ) => Promise<"admitted" | "duplicate-source">;
+  consumeUndispatchedSource: () => Promise<string | undefined>;
   beginBeforeAgentReply: () => Promise<boolean>;
   checkpointBeforeAgentReply: (params: {
     state?: RestartRecoveryBeforeAgentReplyState;
@@ -126,6 +128,7 @@ export function createReplyRestartRecoveryClaimController(params: {
   let recoverySourceRunId: string | undefined;
   let trackedSessionId: string | undefined;
   let tracked = false;
+  let ownsUndispatchedSource = false;
   let confirmedArmed = false;
   const assertReadCurrent = () => {
     if (params.lifecycleGeneration) {
@@ -287,9 +290,13 @@ export function createReplyRestartRecoveryClaimController(params: {
     const deliveryContext = params.resolveDeliveryContext(entry);
     const recoverableDeliveryContext =
       deliveryContext && sourceTurnId ? deliveryContext : undefined;
+    let canFirstDispatch = false;
     if (recoverableDeliveryContext) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
       const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
+      canFirstDispatch =
+        sourceTurnId !== undefined &&
+        readUndispatchedChannelText(sourceMessage, sourceTurnId) !== undefined;
       if (!recorder || persistedSourceTurnId !== sourceTurnId) {
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
@@ -321,7 +328,7 @@ export function createReplyRestartRecoveryClaimController(params: {
           ...retiredClaim,
           abortedLastRun: false,
           endedAt: undefined,
-          restartRecoveryBeforeAgentReplyState: undefined,
+          restartRecoveryBeforeAgentReplyState: canFirstDispatch ? "undispatched-v1" : undefined,
           restartRecoveryDeliveryReceiptState: undefined,
           restartRecoveryDeliveryToolCallId: undefined,
           restartRecoveryDeliveryContext: recoverableDeliveryContext,
@@ -353,12 +360,14 @@ export function createReplyRestartRecoveryClaimController(params: {
     params.setEntry(persisted);
     recoverySourceRunId = normalizeOptionalString(persisted.restartRecoveryDeliverySourceRunId);
     tracked = persisted.restartRecoveryDeliveryRunId === recoveryRunId;
+    ownsUndispatchedSource =
+      tracked && persisted.restartRecoveryBeforeAgentReplyState === "undispatched-v1";
     trackedSessionId = tracked ? persisted.sessionId : undefined;
     return "admitted";
   };
 
   const updateBeforeAgentReply = async (
-    expectedState: "pending" | undefined,
+    expectedState: "undispatched-v1" | "pending" | undefined,
     {
       state,
       pendingFinalDelivery,
@@ -370,36 +379,47 @@ export function createReplyRestartRecoveryClaimController(params: {
     const updatedAt = Date.now();
     const persisted = await updateSessionEntry(
       { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
-      (current) =>
-        current.sessionId === params.getSessionId() &&
-        current.restartRecoveryDeliveryRunId === recoveryRunId &&
-        current.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
-        current.restartRecoveryBeforeAgentReplyState === expectedState
-          ? {
-              restartRecoveryBeforeAgentReplyState: state,
-              ...(pendingFinalDelivery
-                ? {
-                    pendingFinalDelivery: {
-                      ...(pendingFinalDelivery.text
-                        ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
-                        : { kind: "transport-only" as const }),
-                      createdAt: updatedAt,
-                      ...(pendingFinalDelivery.intentId
-                        ? { intentId: pendingFinalDelivery.intentId }
-                        : {}),
-                      deliveries: pendingFinalDelivery.deliveries,
-                      ...(pendingFinalDelivery.context
-                        ? { context: pendingFinalDelivery.context }
-                        : {}),
-                    },
-                    // Hook-owned replies are already terminal. A restart may only deliver this
-                    // checkpoint; it must never resume the model or broader tool surface.
-                    restartRecoveryForceSafeTools: true,
-                  }
-                : {}),
-              updatedAt,
-            }
-          : null,
+      (current) => {
+        if (
+          current.sessionId !== params.getSessionId() ||
+          current.restartRecoveryDeliveryRunId !== recoveryRunId ||
+          current.restartRecoveryDeliverySourceRunId !== recoverySourceRunId ||
+          current.restartRecoveryBeforeAgentReplyState !== expectedState ||
+          (expectedState === "undispatched-v1" &&
+            (current.abortedLastRun ||
+              current.mainRestartRecovery?.tombstone ||
+              current.status !== "running"))
+        ) {
+          if (expectedState === "undispatched-v1") {
+            throw new Error("Undispatched channel input lost restart recovery ownership");
+          }
+          return null;
+        }
+        return {
+          restartRecoveryBeforeAgentReplyState: state,
+          ...(pendingFinalDelivery
+            ? {
+                pendingFinalDelivery: {
+                  ...(pendingFinalDelivery.text
+                    ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
+                    : { kind: "transport-only" as const }),
+                  createdAt: updatedAt,
+                  ...(pendingFinalDelivery.intentId
+                    ? { intentId: pendingFinalDelivery.intentId }
+                    : {}),
+                  deliveries: pendingFinalDelivery.deliveries,
+                  ...(pendingFinalDelivery.context
+                    ? { context: pendingFinalDelivery.context }
+                    : {}),
+                },
+                // Hook-owned replies are already terminal. A restart may only deliver this
+                // checkpoint; it must never resume the model or broader tool surface.
+                restartRecoveryForceSafeTools: true,
+              }
+            : {}),
+          updatedAt,
+        };
+      },
       { skipMaintenance: true, takeCacheOwnership: true },
     );
     if (!persisted) {
@@ -533,6 +553,14 @@ export function createReplyRestartRecoveryClaimController(params: {
 
   return {
     admitUserTurn,
+    async consumeUndispatchedSource() {
+      if (ownsUndispatchedSource) {
+        await updateBeforeAgentReply("undispatched-v1", {});
+        ownsUndispatchedSource = false;
+        return recoveryRunId;
+      }
+      return undefined;
+    },
     async beginBeforeAgentReply() {
       // `pending` records only the ambiguous plugin side-effect window. A
       // finished unhandled hook clears it so recovery can re-enter normally.

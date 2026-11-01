@@ -53,6 +53,7 @@ export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
   unpersistedOffloadedRefs: OffloadedRef[];
   userTurn: PreparedAgentRunUserTurn;
   workspaceOverride?: string;
+  dispatchedOriginalSource?: true;
   restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
     MainSessionRecoveryPendingTarget | undefined
   >;

@@ -7,6 +7,17 @@ read_when:
 title: "Storage changes and release preflight"
 ---
 
+## 2026-10-29 — Channel input before first dispatch (R9)
+
+Accepted by the maintainer on 2026-10-29. The existing before-agent-reply checkpoint may
+contain `undispatched-v1` for the original visible text input. The channel owner
+commits this checkpoint with its source-keyed transcript admission. Before hooks
+or execution it clears the checkpoint under the same session and run ownership.
+Startup can consume it once in the existing recovery admission transaction.
+First dispatch uses the exact original input, sender and delivery target. Missing
+checkpoints on older rows never establish that execution did not start. After
+consumption a second crash requires the usual running-task evidence.
+
 ## Preparing for another database backend
 
 SQLite remains the supported runtime store. Preparation for PostgreSQL should

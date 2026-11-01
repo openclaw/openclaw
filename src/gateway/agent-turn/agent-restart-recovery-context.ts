@@ -1,6 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createExecutionIdentityRecoveryAdmission } from "../../agents/admitted-run-context.js";
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import {
+  resolveReplySourceTurnId,
+  setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
+} from "../../auto-reply/reply/source-turn-id.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
 import {
@@ -8,6 +13,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 
 type AgentRestartRecoveryChannelContext = {
   channel: string;
@@ -100,4 +106,41 @@ export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
     retryOnly: params.retryOnly,
     expectedOperationalRunId: params.runId,
   });
+}
+
+/** Restore the original channel identity and source receipt under the current recovery claim. */
+export function buildAgentRunChannelContext(
+  params: StartAgentRunExecutionParams,
+  restartRecoveryContext: ReturnType<typeof resolveAgentRestartRecoveryContext>,
+  threadId?: string | number,
+) {
+  const restartRecoveryChannelContext = restartRecoveryContext?.channel;
+  const runContext = {
+    messageChannel: restartRecoveryContext?.messageChannel ?? params.delivery.originMessageChannel,
+    accountId:
+      restartRecoveryChannelContext?.requesterAccountId ?? params.delivery.resolvedAccountId,
+    senderId: restartRecoveryChannelContext?.requesterSenderId,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
+    currentChannelId: restartRecoveryChannelContext?.currentChannelId,
+    currentThreadTs:
+      restartRecoveryChannelContext?.currentThreadTs ??
+      (threadId != null ? String(threadId) : undefined),
+  };
+  setChannelSourceTurnId(
+    runContext,
+    resolveReplySourceTurnId({
+      sourceTurnId: restartRecoveryChannelContext?.sourceTurnId,
+      admissionRunId: params.runId,
+      ingressProvider: runContext.messageChannel,
+      entry: params.sessionEntry,
+    }),
+  );
+  setChannelSourceTurnSameThreadRequired(
+    runContext,
+    restartRecoveryChannelContext?.sameChannelThreadRequired,
+  );
+
+  return runContext;
 }

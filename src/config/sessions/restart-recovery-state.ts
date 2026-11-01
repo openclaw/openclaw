@@ -371,7 +371,8 @@ export function normalizeRestartRecoveryEntryFields(
   }
   assign(
     "restartRecoveryBeforeAgentReplyState",
-    entry.restartRecoveryBeforeAgentReplyState === "admitted" ||
+    entry.restartRecoveryBeforeAgentReplyState === "undispatched-v1" ||
+      entry.restartRecoveryBeforeAgentReplyState === "admitted" ||
       entry.restartRecoveryBeforeAgentReplyState === "pending" ||
       entry.restartRecoveryBeforeAgentReplyState === "continue" ||
       entry.restartRecoveryBeforeAgentReplyState === "handled-silent" ||

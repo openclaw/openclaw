@@ -225,6 +225,39 @@ describe("main session recovery store", () => {
     expect(read().abortedLastRun).toBe(false);
   });
 
+  it("consumes a channel first-dispatch marker once across competing recovery admissions", async () => {
+    await write(
+      interruptedEntry({
+        restartRecoverySourceIngress: "channel",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryDeliverySourceRunId: "input-1",
+        restartRecoveryRequesterSenderId: "sender-1",
+        restartRecoveryDeliveryContext: {
+          channel: "slack",
+          to: "user:sender-1",
+          accountId: "default",
+        },
+        restartRecoveryBeforeAgentReplyState: "undispatched-v1",
+      }),
+    );
+    await reserve();
+    const admit = () =>
+      admitAgentRestartRecovery({
+        lifecycleGeneration,
+        runId: "recovery-1",
+        sessionId: "session-1",
+        sessionKey,
+        storePath,
+      });
+    const attempts = await Promise.allSettled([admit(), admit()]);
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    const winner = attempts.find((attempt) => attempt.status === "fulfilled");
+    expect(winner?.value.undispatchedSourceTurnId).toBe("input-1");
+    expect(read().restartRecoveryBeforeAgentReplyState).toBeUndefined();
+    await winner?.value.restore();
+    expect(read().restartRecoveryBeforeAgentReplyState).toBeUndefined();
+  });
+
   it.each(["recovery-1", "recovery-2"])(
     "does not let delayed restoration interrupt a newer admission of %s",
     async (successorRunId) => {
@@ -235,7 +268,7 @@ describe("main session recovery store", () => {
         }),
       );
       await reserve();
-      const restorePrevious = await admitAgentRestartRecovery({
+      const { restore: restorePrevious } = await admitAgentRestartRecovery({
         lifecycleGeneration,
         runId: "recovery-1",
         sessionId: "session-1",
@@ -268,7 +301,7 @@ describe("main session recovery store", () => {
       await sessionAccessor.updateSessionEntry({ sessionKey, storePath }, () => ({
         restartRecoveryDeliveryRunId: successorRunId,
       }));
-      const restoreSuccessor = await admitAgentRestartRecovery({
+      const { restore: restoreSuccessor } = await admitAgentRestartRecovery({
         lifecycleGeneration,
         runId: successorRunId,
         sessionId: "session-1",
@@ -301,7 +334,7 @@ describe("main session recovery store", () => {
       }),
     );
     await reserve();
-    const restore = await admitAgentRestartRecovery({
+    const { restore } = await admitAgentRestartRecovery({
       lifecycleGeneration,
       runId: "recovery-1",
       sessionId: "session-1",

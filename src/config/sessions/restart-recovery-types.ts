@@ -16,6 +16,7 @@ export type HarnessCompletionRecovery = {
 };
 
 export type RestartRecoveryBeforeAgentReplyState =
+  | "undispatched-v1"
   | "admitted"
   | "pending"
   | "continue"

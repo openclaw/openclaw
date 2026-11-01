@@ -100,6 +100,7 @@ type ExecutePreparedReplyAgentRunInput = Omit<
     RunReplyAgentParams,
     "blockReplyChunking" | "toolProgressDetail" | "transcriptCommandBody" | "typing" | "typingMode"
   > & {
+    consumeUndispatchedSource: () => Promise<string | undefined>;
     admitUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["admitUserTurn"];
     applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
     beginBeforeAgentReply: ReturnType<
@@ -221,6 +222,7 @@ export async function executePreparedReplyAgentRun(
   // Suppressed delivery persists only the user transcript; crashed suppressed runs die
   // silently. Deliverable turns atomically persist transcript plus recovery ownership.
   await turnAdoptionLifecycle?.onAdopted();
+  await input.consumeUndispatchedSource();
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {

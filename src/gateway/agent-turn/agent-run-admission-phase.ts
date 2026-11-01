@@ -252,6 +252,7 @@ export async function prepareAgentRunDispatch(
   let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
   let followupCompletion: FollowupCompletionOwner | undefined;
   let adoptedParentResume: SubagentRunRecord | undefined;
+  let undispatchedInput: string | undefined;
   let restoreAdmittedRestartRecoveryInterrupted:
     | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
     | undefined;
@@ -448,13 +449,15 @@ export async function prepareAgentRunDispatch(
       );
     }
     try {
-      restoreAdmittedRestartRecoveryInterrupted = await admitAgentRestartRecovery({
+      const admission = await admitAgentRestartRecovery({
         lifecycleGeneration: params.lifecycleGeneration,
         runId: params.runId,
         sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
         sessionKey: recoverySessionKey,
         storePath: lifecycleStorePath,
       });
+      restoreAdmittedRestartRecoveryInterrupted = admission.restore;
+      undispatchedInput = await admission.readUndispatchedInput(params.sessionEntry);
       const recoveryRevalidation = revalidateAdmission();
       if (recoveryRevalidation !== true) {
         return recoveryRevalidation;
@@ -514,19 +517,25 @@ export async function prepareAgentRunDispatch(
       activeSessionAgentId: params.activeSessionAgentId,
       resolvedThreadId,
       suppressVisibleSessionEffects: params.suppressVisibleSessionEffects,
-      requestedPromptPersistenceSuppression: params.requestedPromptPersistenceSuppression,
+      requestedPromptPersistenceSuppression:
+        undispatchedInput !== undefined || params.requestedPromptPersistenceSuppression,
       restoredCronContinuation: params.restoredCronContinuation,
       canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
       execApprovalFollowupApprovalId: params.execApprovalFollowupApprovalId,
-      message: params.message,
-      effectiveTranscriptInputText: params.effectiveTranscriptInputText,
+      message: undispatchedInput ?? params.message,
+      effectiveTranscriptInputText: undispatchedInput ?? params.effectiveTranscriptInputText,
       images: params.images,
       offloadedRefs: params.offloadedRefs,
-      inputProvenance: params.inputProvenance,
+      inputProvenance:
+        undispatchedInput === undefined ? params.inputProvenance : { kind: "external_user" },
       runId: params.runId,
       client: params.client,
       context: params.context,
     });
+    if (undispatchedInput !== undefined) {
+      // Synthetic Gateway scope cannot promote the original channel sender.
+      userTurn.senderIsOwner = false;
+    }
     if (userTurn.recorder) {
       // Accepted input owns these media references before it enters the transcript.
       // Later admission rejection must preserve the files retained by that custody.
@@ -694,6 +703,7 @@ export async function prepareAgentRunDispatch(
       unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
       userTurn,
       workspaceOverride,
+      ...(undispatchedInput !== undefined ? { dispatchedOriginalSource: true as const } : {}),
       restoreAdmittedRestartRecoveryInterrupted,
     };
   } catch (error) {
