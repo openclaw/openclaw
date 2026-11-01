@@ -324,6 +324,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         });
       },
     }),
+    createDoctorHealthContribution("doctor:model-allowlist-wildcards", "Model allowlist", {
+      updateWork: { kind: "standalone" },
+      async run(ctx) {
+        const { maybeOfferModelAllowlistWildcards } =
+          await import("../commands/doctor/shared/legacy-runtime-model-policy.js");
+        ctx.cfg = await maybeOfferModelAllowlistWildcards({ cfg: ctx.cfg, prompter: ctx.prompter });
+      },
+    }),
     createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
