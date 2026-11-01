@@ -21,49 +21,60 @@ function recordLine(...args: Parameters<typeof messageRecord>) {
   return JSON.stringify(messageRecord(...args)) + "\n";
 }
 
-describe("session ingestion", () => {
-  it.each(["unknown"] as const)("excludes %s sessions from memory ingestion", (sessionKind) => {
-    expect(
-      sessionIngestionSourceFromCorpus(
-        {
-          agentId: "main",
-          artifactKind: "active-session",
-          transcriptSource: "sqlite",
-          sessionFile: "synthetic-session",
-          sessionId: "synthetic-session",
-          sessionKind,
-        },
-        "backfill",
-      ),
-    ).toBeNull();
-  });
-
-  it.each([
+function corpusSource(
+  overrides: Partial<Parameters<typeof sessionIngestionSourceFromCorpus>[0]> = {},
+) {
+  return sessionIngestionSourceFromCorpus(
     {
-      name: "session id ending in .jsonl",
+      agentId: "main",
+      artifactKind: "active-session",
       sessionFile: path.join(os.tmpdir(), "foo.jsonl.jsonl"),
       sessionId: "foo.jsonl",
+      sessionKind: "interactive",
+      ...overrides,
     },
-  ])("preserves file-backed scope identity for $name", ({ sessionFile, sessionId }) => {
-    const source = sessionIngestionSourceFromCorpus(
-      {
-        agentId: "main",
-        artifactKind: "active-session",
-        sessionFile,
-        sessionId,
-        sessionKind: "interactive",
-      },
-      "backfill",
-    );
+    "backfill",
+  );
+}
 
-    expect(source?.scope).toBe(`main:${sessionId}`);
-    expect(source?.sessionOrigin).toEqual({ agentId: "main", sessionId });
+async function createArchive() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
+  tempDirs.push(dir);
+  const archiveFile = path.join(dir, "archive.jsonl");
+  const source = foreignSessionIngestionSource("main", archiveFile);
+  const scan = (options: Partial<Parameters<typeof scanSessionIngestionSource>[0]> = {}) =>
+    scanSessionIngestionSource({
+      source,
+      seenMessages: {},
+      verifyContent: true,
+      classifyDay: () => "include",
+      ...options,
+    });
+  return { archiveFile, source, scan };
+}
+
+function checkpoint(scan: Awaited<ReturnType<typeof scanSessionIngestionSource>>) {
+  if (!scan.fileState) {
+    throw new Error("expected transcript checkpoint");
+  }
+  return scan.fileState;
+}
+
+describe("session ingestion", () => {
+  it("excludes unknown sessions from memory ingestion", () => {
+    expect(corpusSource({ sessionKind: "unknown", transcriptSource: "sqlite" })).toBeNull();
+  });
+
+  it("preserves file-backed scope identity for a session id ending in .jsonl", () => {
+    const source = corpusSource();
+    expect({ scope: source?.scope, sessionOrigin: source?.sessionOrigin }).toEqual({
+      scope: "main:foo.jsonl",
+      sessionOrigin: { agentId: "main", sessionId: "foo.jsonl" },
+    });
   });
 
   it("verifies backfill content despite an unchanged size and mtime", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
-    tempDirs.push(dir);
-    const archiveFile = path.join(dir, "archive.jsonl");
+    const { archiveFile, scan } = await createArchive();
     const record = (content: string) => recordLine("message-1", content);
     const firstRaw = record("Alpha durable note.");
     const secondRaw = record("Bravo durable note.");
@@ -71,131 +82,71 @@ describe("session ingestion", () => {
     const fixedTime = new Date("2026-04-06T00:00:00.000Z");
     await fs.writeFile(archiveFile, firstRaw);
     await fs.utimes(archiveFile, fixedTime, fixedTime);
-    const source = foreignSessionIngestionSource("main", archiveFile);
-    const first = await scanSessionIngestionSource({
-      source,
-      seenMessages: {},
-      verifyContent: true,
-      classifyDay: () => "include",
-    });
-    if (!first.fileState) {
-      throw new Error("expected initial backfill checkpoint");
-    }
+    const previous = checkpoint(await scan());
 
     await fs.writeFile(archiveFile, secondRaw);
     await fs.utimes(archiveFile, fixedTime, fixedTime);
-    const second = await scanSessionIngestionSource({
-      source,
-      previous: first.fileState,
-      seenMessages: {},
-      verifyContent: true,
-      classifyDay: () => "include",
-    });
+    const second = await scan({ previous });
 
     expect(second.candidates.map((candidate) => candidate.snippet)).toEqual([
       "User: Bravo durable note.",
     ]);
   });
 
-  it.each([
-    { maxCandidates: 1, expected: ["User: Bravo durable note.", "User: Charlie durable note."] },
-  ])(
-    "resumes an append after consuming $maxCandidates snapshot lines",
-    async ({ maxCandidates, expected }) => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
-      tempDirs.push(dir);
-      const archiveFile = path.join(dir, "archive.jsonl");
-      await fs.writeFile(
-        archiveFile,
-        recordLine("message-1", "Alpha durable note.", "2026-04-06T06:59:59.000Z") +
-          recordLine("message-2", "Bravo durable note.", "2026-04-06T07:00:00.000Z"),
-      );
-      const source = foreignSessionIngestionSource("main", archiveFile);
-      const classifiedDays: string[] = [];
-      const classifyDay = (day: string) => {
-        classifiedDays.push(day);
-        return "include" as const;
-      };
-      const first = await scanSessionIngestionSource({
-        source,
-        seenMessages: {},
-        verifyContent: true,
-        maxCandidates,
-        timezone: "America/Los_Angeles",
-        classifyDay,
-      });
-      if (!first.fileState) {
-        throw new Error("expected initial backfill checkpoint");
-      }
-      expect(first.candidates.map((candidate) => candidate.day)).toEqual(
-        ["2026-04-05", "2026-04-06"].slice(0, maxCandidates),
-      );
-      expect(classifiedDays).toEqual(["2026-04-05", "2026-04-06"].slice(0, maxCandidates));
+  it("resumes an append after consuming one snapshot line", async () => {
+    const { archiveFile, scan } = await createArchive();
+    await fs.writeFile(
+      archiveFile,
+      recordLine("message-1", "Alpha durable note.", "2026-04-06T06:59:59.000Z") +
+        recordLine("message-2", "Bravo durable note.", "2026-04-06T07:00:00.000Z"),
+    );
+    const classifiedDays: string[] = [];
+    const classifyDay = (day: string) => {
+      classifiedDays.push(day);
+      return "include" as const;
+    };
+    const options = { timezone: "America/Los_Angeles", classifyDay };
+    const first = await scan({ ...options, maxCandidates: 1 });
+    const previous = checkpoint(first);
+    expect(first.candidates.map((candidate) => candidate.day)).toEqual(["2026-04-05"]);
+    expect(classifiedDays).toEqual(["2026-04-05"]);
 
-      classifiedDays.length = 0;
-      const unchanged = await scanSessionIngestionSource({
-        source,
-        previous: first.fileState,
-        seenMessages: {},
-        verifyContent: true,
-        timezone: "America/Los_Angeles",
-        classifyDay,
-      });
-      expect(unchanged.candidates.map((candidate) => candidate.snippet)).toEqual(
-        maxCandidates === 1 ? ["User: Bravo durable note."] : [],
-      );
-      expect(classifiedDays).toEqual(maxCandidates === 1 ? ["2026-04-06"] : []);
+    classifiedDays.length = 0;
+    const unchanged = await scan({ ...options, previous });
+    expect(unchanged.candidates.map((candidate) => candidate.snippet)).toEqual([
+      "User: Bravo durable note.",
+    ]);
+    expect(classifiedDays).toEqual(["2026-04-06"]);
 
-      await fs.appendFile(
-        archiveFile,
-        recordLine("message-3", "Charlie durable note.", "2026-04-06T07:30:00.000Z"),
-      );
-      classifiedDays.length = 0;
-      const second = await scanSessionIngestionSource({
-        source,
-        previous: first.fileState,
-        seenMessages: {},
-        verifyContent: true,
-        timezone: "America/Los_Angeles",
-        classifyDay,
-      });
+    await fs.appendFile(
+      archiveFile,
+      recordLine("message-3", "Charlie durable note.", "2026-04-06T07:30:00.000Z"),
+    );
+    classifiedDays.length = 0;
+    const second = await scan({ ...options, previous });
 
-      expect(second.candidates.map(({ snippet, day }) => ({ snippet, day }))).toEqual(
-        expected.map((snippet) => ({ snippet, day: "2026-04-06" })),
-      );
-      expect(classifiedDays).toEqual(
-        maxCandidates === 1 ? ["2026-04-06", "2026-04-06"] : ["2026-04-06"],
-      );
-    },
-  );
+    expect(second.candidates.map(({ snippet, day }) => ({ snippet, day }))).toEqual(
+      ["User: Bravo durable note.", "User: Charlie durable note."].map((snippet) => ({
+        snippet,
+        day: "2026-04-06",
+      })),
+    );
+    expect(classifiedDays).toEqual(["2026-04-06", "2026-04-06"]);
+  });
 
   it.each(["text", "timestamp", "provenance", "ordinal", "truncation"] as const)(
     "rescans when the previous snapshot changes by %s",
     async (change) => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-ingestion-"));
-      tempDirs.push(dir);
-      const archiveFile = path.join(dir, "archive.jsonl");
+      const { archiveFile, source, scan } = await createArchive();
       const firstRecord = messageRecord("message-1", "Alpha durable note.");
       const original = [firstRecord, messageRecord("message-2", "Bravo durable note.")];
       const writeRecords = (records: unknown[]) =>
         fs.writeFile(archiveFile, `${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
       await writeRecords(original);
-      const source = foreignSessionIngestionSource("main", archiveFile);
-      const first = await scanSessionIngestionSource({
-        source,
-        seenMessages: {},
-        verifyContent: true,
-        classifyDay: () => "include",
-      });
-      if (!first.fileState) {
-        throw new Error("expected initial transcript checkpoint");
-      }
+      const previous = checkpoint(await scan());
       let current: unknown[] = [...original, messageRecord("message-3", "Charlie durable note.")];
       if (change === "text") {
-        current[0] = {
-          ...firstRecord,
-          message: { ...firstRecord.message, content: "Altered durable note." },
-        };
+        current[0] = messageRecord("message-1", "Altered durable note.");
       } else if (change === "timestamp") {
         current[0] = {
           ...firstRecord,
@@ -209,13 +160,7 @@ describe("session ingestion", () => {
         current = [firstRecord];
       }
       await writeRecords(current);
-      const changed = await scanSessionIngestionSource({
-        source,
-        previous: first.fileState,
-        seenMessages: {},
-        verifyContent: true,
-        classifyDay: () => "include",
-      });
+      const changed = await scan({ previous });
       expect(changed.candidates.map((candidate) => candidate.snippet)).toEqual(
         change === "truncation"
           ? ["User: Alpha durable note."]

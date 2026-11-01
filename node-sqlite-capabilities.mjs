@@ -16,14 +16,15 @@ export function probeSqlite(DatabaseSync) {
   try {
     database = new DatabaseSync(":memory:");
     result.available = true;
-    const version = database.prepare("SELECT sqlite_version() AS version").get()?.version;
-    result.version = typeof version === "string" ? version : null;
     const text = "a\u0000b\u0000";
     const bytes = Buffer.from(text, "utf8");
     const json = JSON.stringify({ value: text });
     database.exec("CREATE TABLE probe (text_value TEXT, blob_value BLOB, json_value TEXT)");
     database.prepare("INSERT INTO probe VALUES (?, ?, ?)").run(text, bytes, json);
-    const row = database.prepare("SELECT text_value, blob_value, json_value FROM probe").get();
+    const row = database
+      .prepare("SELECT sqlite_version() AS version, text_value, blob_value, json_value FROM probe")
+      .get();
+    result.version = typeof row?.version === "string" ? row.version : null;
     result.text =
       typeof row?.text_value === "string" &&
       row.text_value.length === text.length &&
@@ -32,7 +33,16 @@ export function probeSqlite(DatabaseSync) {
       row?.blob_value instanceof Uint8Array && Buffer.from(row.blob_value).equals(bytes);
     result.json = row?.json_value === json && JSON.parse(row.json_value).value === text;
   } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
+    let failure = error;
+    if (database && result.version === null) {
+      try {
+        const version = database.prepare("SELECT sqlite_version() AS version").get()?.version;
+        result.version = typeof version === "string" ? version : null;
+      } catch (versionError) {
+        failure = versionError;
+      }
+    }
+    result.error = failure instanceof Error ? failure.message : String(failure);
   } finally {
     database?.close();
   }

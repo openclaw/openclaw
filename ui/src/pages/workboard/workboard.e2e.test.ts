@@ -111,7 +111,11 @@ const width = (locator: Locator) =>
 async function clickCardAction(cardLocator: Locator, name: string) {
   await cardLocator.hover();
   await cardLocator.locator(".workboard-card__menu-trigger").click();
-  await cardLocator.getByRole("button", { name, exact: true }).click();
+  await cardLocator
+    .page()
+    .getByRole("dialog", { name: "Card actions", exact: true })
+    .getByRole("button", { name, exact: true })
+    .click();
 }
 
 suite.define(() => {

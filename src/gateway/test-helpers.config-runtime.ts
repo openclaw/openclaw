@@ -49,11 +49,10 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     ? (baseConfig.bindings as AgentBinding[])
     : undefined;
 
-  const overrideChannels =
-    testState.channelsConfig && typeof testState.channelsConfig === "object"
-      ? { ...testState.channelsConfig }
-      : {};
-  const mergedChannels = { ...asNonArrayRecord(baseConfig.channels), ...overrideChannels };
+  const mergedChannels = {
+    ...asNonArrayRecord(baseConfig.channels),
+    ...testState.channelsConfig,
+  };
   if (testState.allowFrom !== undefined) {
     mergedChannels.whatsapp = {
       ...asNonArrayRecord(mergedChannels.whatsapp),
@@ -106,12 +105,9 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
 
 export function loadGatewayTestConfig(): OpenClawConfig {
   const configPath = resolveConfigPath();
-  let fileConfig: Record<string, unknown> = {};
+  let fileConfig: Record<string, unknown>;
   try {
-    if (fsSync.existsSync(configPath)) {
-      const raw = fsSync.readFileSync(configPath, "utf-8");
-      fileConfig = JSON.parse(raw) as Record<string, unknown>;
-    }
+    fileConfig = JSON.parse(fsSync.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
   } catch {
     fileConfig = {};
   }
@@ -249,4 +245,14 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
     }),
     writeConfigFile,
   };
+}
+
+/** Writes raw HTTP fixture config without applying runtime snapshots or defaults. */
+export async function writeGatewayConfig(config: Record<string, unknown>) {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
+  }
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
 }

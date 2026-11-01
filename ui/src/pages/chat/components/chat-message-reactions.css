@@ -56,6 +56,7 @@ openclaw-message-reaction-picker .chat-reaction-picker {
     0 12px 32px rgba(0, 0, 0, 0.16);
 }
 openclaw-message-reaction-picker .chat-reaction-picker.custom {
+  width: min(292px, calc(100vw - 32px));
   border-radius: var(--radius-md);
 }
 openclaw-message-reaction-picker .palette {
@@ -105,8 +106,7 @@ openclaw-message-reaction-picker .more svg {
   width: 16px;
   height: 16px;
 }
-openclaw-message-reaction-picker .custom {
-  width: min(292px, calc(100vw - 32px));
+openclaw-message-reaction-picker .chat-reaction-picker > .custom {
   padding: 4px;
 }
 openclaw-message-reaction-picker .back {

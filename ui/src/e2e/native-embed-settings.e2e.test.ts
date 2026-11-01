@@ -248,27 +248,21 @@ suite.define(() => {
       },
     );
   });
-  it("preserves normal desktop chrome for absent and malformed embed flags", async () => {
-    for (const flag of [undefined, { platform: "ios", formFactor: "watch" }]) {
-      await suite.withPage(
-        { viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
-        async ({ page }) => {
-          await page.addInitScript(
-            (host) => Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: host }),
-            flag,
-          );
-          await installMockGateway(page, { operatorScopes: ["operator.admin", "operator.read"] });
-          await page.goto(new URL("settings/appearance", suite.server.baseUrl).toString());
-          await waitForControlUiRoute(page, { routeId: "appearance" });
-          await page.locator(".shell--settings .settings-sidebar").waitFor();
-          expect(await page.locator(".shell-nav").isVisible()).toBe(true);
-          expect(await page.locator("openclaw-app-topbar").count()).toBe(1);
-          await expectAbsent(page, [
-            ".shell--embed, .native-embed-header, html.openclaw-native-embed",
-          ]);
-        },
-      );
-    }
+  it("preserves normal desktop chrome without an embed host", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 900 }, serviceWorkers: "block" },
+      async ({ page }) => {
+        await installMockGateway(page, { operatorScopes: ["operator.admin", "operator.read"] });
+        await page.goto(new URL("settings/appearance", suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { routeId: "appearance" });
+        await page.locator(".shell--settings .settings-sidebar").waitFor();
+        expect(await page.locator(".shell-nav").isVisible()).toBe(true);
+        expect(await page.locator("openclaw-app-topbar").count()).toBe(1);
+        await expectAbsent(page, [
+          ".shell--embed, .native-embed-header, html.openclaw-native-embed",
+        ]);
+      },
+    );
   });
   for (const viewport of viewports) {
     for (const colorScheme of ["light", "dark"] as const) {

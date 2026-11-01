@@ -27,13 +27,14 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   chat: [SESSION_READ_SCOPE],
   // This keyless, redacted invalidation tells session readers to refresh their own projection.
   "chat.metadata.changed": [SESSION_READ_SCOPE],
-  "board.changed": [READ_SCOPE],
-  "board.command": [READ_SCOPE],
+  "board.changed": [SESSION_READ_SCOPE],
+  "board.command": [SESSION_READ_SCOPE],
   "progressCard.changed": [SESSION_READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [SESSION_READ_SCOPE],
   cron: [READ_SCOPE],
+  "cron.inventory.changed": [READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
@@ -62,6 +63,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
   "mentions.changed": [SESSION_READ_SCOPE],
+  "mentions.failed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
@@ -123,6 +125,20 @@ export function isSessionReadInvalidation(
     return false;
   }
   const fields = Object.entries(Object.getOwnPropertyDescriptors(payload));
+  if (event === "mentions.changed") {
+    // Inbox producers target only the recipient's connections; this signal carries no message data.
+    return (
+      targeted &&
+      Object.hasOwn(payload, "gatewayInstanceId") &&
+      Object.hasOwn(payload, "revision") &&
+      fields.every(
+        ([key, field]) =>
+          "value" in field &&
+          ((key === "gatewayInstanceId" && typeof field.value === "string") ||
+            (key === "revision" && Number.isSafeInteger(field.value) && field.value >= 0)),
+      )
+    );
+  }
   // Hidden/deleted rows send subscribed readers only a signal to repeat an authorized read.
   return (
     event === "sessions.changed" &&

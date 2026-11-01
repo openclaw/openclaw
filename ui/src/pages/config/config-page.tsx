@@ -19,10 +19,9 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createConfigPage } from "./config-page-state.ts";
 import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts";
-import { Mcp, McpIntro } from "./mcp.tsx";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
-import { extractQuickSettingsSecurity, Security } from "./security.tsx";
+import { extractQuickSettingsSecurity } from "./security-model.ts";
 import { preloadConfigSection } from "./view-lazy.ts";
 import { ConfigReadError, ConfigReadLoading } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
@@ -31,12 +30,14 @@ import { Config } from "./view.tsx";
 registerRouteSubtitlesEnglish();
 export type { ConfigPageId } from "./config-sections.ts";
 
+const Mcp = lazy(() => import("./mcp.tsx"), { export: "Mcp" });
 const MeetingCaptureSettings = lazy(() => import("./meeting-capture.tsx"), {
   export: "MeetingCaptureSettings",
 });
 const MemorySettingsPage = lazy(() => import("./memory-page.tsx"), {
   export: "MemorySettingsPage",
 });
+const Security = lazy(() => import("./security.tsx"), { export: "Security" });
 const SessionStorageSettings = lazy(() => import("./session-storage.tsx"), {
   export: "SessionStorageSettings",
 });
@@ -58,6 +59,8 @@ export function preloadConfigPage(
   }
   return Promise.all([
     preloadConfigSection(section),
+    ...(pageId === "mcp" ? [Mcp.preload()] : []),
+    ...(pageId === "security" ? [Security.preload()] : []),
     ...(pageId === "communications" && section === "transcripts"
       ? [MeetingCaptureSettings.preload()]
       : []),
@@ -75,7 +78,11 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
         </>
       );
     case "mcp":
-      return <McpIntro />;
+      return (
+        <>
+          {t("mcpPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/tools/mcp" />
+        </>
+      );
     case "security":
       return (
         <>
@@ -227,7 +234,9 @@ function ConfigBody(props: {
         />
       </Show>
       <Show when={!["updates", "memory", "talk", "mcp", "security"].includes(props.pageId)}>
-        <Config {...config()} />
+        <Show when={props.pageId === "advanced"} fallback={<Config {...config()} />}>
+          <Config {...config()} progressive />
+        </Show>
       </Show>
     </>
   );
@@ -252,25 +261,21 @@ function ConfigPage(props: ConfigPageProps) {
         />
       </Show>
       <SettingsWorkspace>
-        <Show when={props.pageId} keyed>
-          {(pageId) => (
-            <Errored
-              fallback={(error, retry) => (
-                <ConfigReadError message={formatUiError(error())} onRetry={retry} />
-              )}
-            >
-              <Loading fallback={<ConfigReadLoading message={t("common.loading")} />}>
-                <ConfigBody
-                  state={state}
-                  pageId={pageId}
-                  routeData={props.routeData}
-                  config={state.configProps()}
-                  configObject={state.configObject()}
-                />
-              </Loading>
-            </Errored>
+        <Errored
+          fallback={(error, retry) => (
+            <ConfigReadError message={formatUiError(error())} onRetry={retry} />
           )}
-        </Show>
+        >
+          <Loading on={props.pageId} fallback={<ConfigReadLoading message={t("common.loading")} />}>
+            <ConfigBody
+              state={state}
+              pageId={props.pageId}
+              routeData={props.routeData}
+              config={state.configProps()}
+              configObject={state.configObject()}
+            />
+          </Loading>
+        </Errored>
       </SettingsWorkspace>
     </openclaw-config-page>
   );

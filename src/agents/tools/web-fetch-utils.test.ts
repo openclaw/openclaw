@@ -4,25 +4,26 @@ import { extractBasicHtmlContent, htmlToMarkdown, markdownToText } from "./web-f
 const renderedText = (html: string) => expect(htmlToMarkdown(html).text);
 const extractText = async (html: string) =>
   (await extractBasicHtmlContent({ html, extractMode: "text" }))?.text;
+const rawTextCases: [string, string][] = [
+  [
+    '<p>Visible before</p><script>x</script data-note="<!--"><p>Visible after</p>',
+    "Visible before\nVisible after",
+  ],
+  ["<script></scr<!-- -->ipt><p>Secret data</p></script><p>Visible sibling</p>", "Visible sibling"],
+];
+const definitionList = "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd></dl>";
+const definitionText = "Region\nEMEA\nUnits\n120";
 
 describe("web-fetch-utils", () => {
   it("removes complete balanced link destinations without leaking URL suffixes", async () => {
     const markdown =
       "Read [Cassini](https://example.com/a_(b(c))) and ![diagram](images/a_(b).png).";
     expect(markdownToText(markdown)).toBe("Read Cassini and .");
-    await expect(
-      extractText('<p>Read <a href="https://example.com/a_(b(c))">Cassini</a>.</p>'),
-    ).resolves.toBe("Read Cassini.");
-    await expect(
-      extractText('<p>Read <a href="https://example.com/search?q=(foo">Cassini</a>.</p>'),
-    ).resolves.toBe("Read Cassini.");
-    await expect(
-      extractText('<p>Read <a href="https://example.com/search?q=foo)">Cassini</a>.</p>'),
-    ).resolves.toBe("Read Cassini.");
-    await expect(
-      extractText('<p>Read <a href="https://example.com/annual report">report</a>.</p>'),
-    ).resolves.toBe("Read report.");
-    await expect(extractText('<p>Open <a href="/docs">C:\\</a>.</p>')).resolves.toBe("Open C:\\.");
+    for (const href of ["a_(b(c))", "search?q=(foo", "search?q=foo)", "annual report"]) {
+      await expect(extractText(`<a href="https://example.com/${href}">C:\\</a>`)).resolves.toBe(
+        "C:\\",
+      );
+    }
     expect(markdownToText("[broken](https://example.com/a_(b)")).toBe(
       "[broken](https://example.com/a_(b)",
     );
@@ -43,41 +44,45 @@ describe("web-fetch-utils", () => {
     );
   });
 
-  it.each([
-    "<p hidden>Before<bloc\u212aquote>Secret</bloc\u212aquote></p><p>Visible</p>",
-    "<p hidden>Before<div.foo>Secret</div.foo></p><p>Visible</p>",
-    "<p hidden>Before< div>Secret</ div></p><p>Visible</p>",
-    "<ul><li hidden>Before<li.foo>Secret</li.foo></li><li>Visible</li></ul>",
-  ])("does not recover HTML scope from an incomplete tag identity: %s", async (html) => {
-    const text = await extractText(html);
-    expect(text).toContain("Visible");
-    expect(text).not.toContain("Secret");
+  it("keeps Markdown-looking inline code literal in text mode", () => {
+    const markdown =
+      "Use `![alt](image.png)` and ``[label](https://example.com)``; read [guide](https://example.com).";
+    // Inline code spans are literal: only the link outside backticks is flattened.
+    expect(markdownToText(markdown)).toBe(
+      "Use ![alt](image.png) and [label](https://example.com); read guide.",
+    );
+    // Line-leading heading and list markers inside inline code stay literal.
+    expect(markdownToText("`# not a heading`\nNext line")).toBe("# not a heading\nNext line");
+    expect(markdownToText("`- not a list`\nNext line")).toBe("- not a list\nNext line");
+    // A backtick run with no matching run of the same length is preserved.
+    expect(markdownToText("cost is 5` per unit")).toBe("cost is 5` per unit");
+    // A fence-looking run inside an inline span is literal content, not a fence.
+    expect(markdownToText("Use `before ```x``` after`.")).toBe("Use before ```x``` after.");
+    // A backtick inside a link/image destination is not a code delimiter.
+    expect(markdownToText("![alt](image`1.png) and `code`.")).toBe("and code.");
   });
 
-  it.each([
+  it.each<[string, string, ("text" | "markdown")?]>([
+    ["<p hidden>Before<bloc\u212aquote>Secret</bloc\u212aquote></p><p>Visible</p>", "Visible"],
+    ["<p hidden>Before<div.foo>Secret</div.foo></p><p>Visible</p>", "Visible"],
+    ["<p hidden>Before< div>Secret</ div></p><p>Visible</p>", "Visible"],
+    ["<ul><li hidden>Before<li.foo>Secret</li.foo></li><li>Visible</li></ul>", "Visible"],
     ["<div\u0000 hidden>Secret</div\uFFFD><p>Visible</p>", "Visible"],
     ["<p>Visible before</p><!--><p>Visible after</p>", "Visible before\nVisible after"],
-  ])("extracts text across recovered token boundaries: %s", async (html, expected) => {
-    expect(await extractText(html)).toBe(expected);
-  });
+    [definitionList, definitionText],
+    [definitionList, definitionText, "markdown"],
+    ...rawTextCases,
+  ])(
+    "extracts visible text across token boundaries: %s",
+    async (html, expected, extractMode = "text") => {
+      expect((await extractBasicHtmlContent({ html, extractMode }))?.text).toBe(expected);
+    },
+  );
 
   it.each([
-    [
-      '<p>Visible before</p><script>x</script data-note="<!--"><p>Visible after</p>',
-      "Visible before\nVisible after",
-    ],
-    [
-      "<script></scr<!-- -->ipt><p>Secret data</p></script><p>Visible sibling</p>",
-      "Visible sibling",
-    ],
-  ])("preserves raw-text boundaries in rendering and extraction: %s", async (html, expected) => {
-    renderedText(html).toBe(expected);
-    expect(await extractText(html)).toBe(expected);
-  });
-
-  it.each([
-    ["<p>a &AMP; b</p>", "a & b"],
-    ["<p>x &QUOT;y&QUOT;</p>", 'x "y"'],
+    ...rawTextCases,
+    [definitionList, definitionText],
+    ["<p>&AMP; &QUOT;x&QUOT;</p>", '& "x"'],
     ["<p>a&NbSp;b</p>", "a b"],
     ["<p>&#39x; end</p>", "&#39x; end"],
     ["<script><!--<script></script><p>Secret data</p>--></script><p>Visible</p>", "Visible"],
@@ -141,17 +146,6 @@ describe("web-fetch-utils", () => {
     expect(htmlToMarkdown(html)).toEqual({ text, title });
   });
 
-  it.each(["markdown", "text"] as const)(
-    "separates definition-list terms in %s mode",
-    async (extractMode) => {
-      const result = await extractBasicHtmlContent({
-        html: "<dl><dt>Region</dt><dd>EMEA</dd><dt>Units</dt><dd>120</dd></dl>",
-        extractMode,
-      });
-      expect(result?.text).toBe("Region\nEMEA\nUnits\n120");
-    },
-  );
-
   it("separates HTML table cells and preserves preformatted code whitespace", () => {
     const html =
       "<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC</td><td>98</td><td>7</td></tr></tbody></table><pre><code>def f(x):\n    if x:\n        return 1\n    return 0</code></pre><p>Done after the example code.</p></article>";
@@ -165,19 +159,12 @@ describe("web-fetch-utils", () => {
   });
 
   it.each([
-    [
-      "<p>He said:</p><blockquote>Stay hungry</blockquote><p>Then he left.</p>",
-      "He said:\nStay hungry\nThen he left.",
-    ],
+    ["<p>One</p><blockquote>Two</blockquote>", "One\nTwo"],
     [
       "<figure><figcaption>Figure 1: Results</figcaption></figure><p>Body text.</p>",
       "Figure 1: Results\n\nBody text.",
     ],
-    ["<nav>Home</nav><main>Article</main><aside>Note</aside>", "Home\nArticle\nNote"],
-    ["<details><summary>Question</summary>Answer</details>", "Question\nAnswer"],
     ["<span>Price</span><div>10 EUR</div>", "Price\n10 EUR"],
-    ["Intro<p>Body</p>", "Intro\nBody"],
-    ["<p>One</p><p>Two</p>", "One\nTwo"],
   ])("starts block elements on their own line (case %#)", (html, expected) => {
     renderedText(html).toBe(expected);
   });

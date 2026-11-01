@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -15,13 +16,31 @@ const log = createSubsystemLogger("browser").child("relay-daemon");
 const RELAY_DAEMON_IDLE_EXIT_MS = 10 * 60 * 1000;
 const IDLE_POLL_MS = 30 * 1000;
 
-type RelayDaemonExitReason = "port-in-use" | "no-credential" | "idle" | "stopped";
+type RelayDaemonExitReason = "port-in-use" | "no-credential" | "idle" | "superseded" | "stopped";
+
+/**
+ * On-disk identity of the file the daemon was launched from. An in-place app or
+ * package update keeps the path but installs new files, so the path alone
+ * cannot tell this installation from its replacement. Null when the file is
+ * gone; undefined when it cannot be read, which is not proof of replacement.
+ */
+function readInstallationIdentity(file: string): string | null | undefined {
+  try {
+    const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+    return stat ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}` : null;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Run the standalone extension relay daemon: one loopback relay server with no
  * Gateway. The daemon stays alive while the paired extension holds its relay
  * connection or a CDP client is attached, and exits once both sides have been
- * gone for the idle grace so an idle daemon never outlives Chrome.
+ * gone for the idle grace so an idle daemon never outlives Chrome. It also
+ * exits, peers or not, once the installation it was launched from is replaced
+ * or removed: the extension's reconnect then wakes the native host of the
+ * current installation instead of adopting a relay from a retired one.
  * The caller awaits done and owns process.exit.
  * The returned port is null when startup was refused.
  */
@@ -35,9 +54,19 @@ export async function runExtensionRelayDaemon(params: {
    * silently reverted. The extension and mcporter both speak v2.
    */
   allowLegacyAuth?: boolean;
+  /** File whose replacement or removal retires this daemon (the daemon entry). */
+  installationPath?: string;
 }) {
   const allowLegacyAuth = params.allowLegacyAuth ?? false;
   const now = Date.now;
+  // Snapshot before any await so an update racing startup still reads as a replacement.
+  const installationPath = params.installationPath;
+  const installation = installationPath ? readInstallationIdentity(installationPath) : null;
+  if (installationPath && !installation) {
+    log.warn(
+      `relay daemon cannot read its installation at ${installationPath}; update detection is off`,
+    );
+  }
   const completion = createDeferred<RelayDaemonExitReason>();
 
   const token = readExtensionRelayToken();
@@ -84,6 +113,14 @@ export async function runExtensionRelayDaemon(params: {
     void handle.close().then(() => completion.resolve(reason), completion.reject);
   };
   const idleTimer = setInterval(() => {
+    if (installationPath && installation) {
+      const current = readInstallationIdentity(installationPath);
+      if (current !== undefined && current !== installation) {
+        log.info("relay daemon installation was replaced or removed; exiting");
+        finish("superseded");
+        return;
+      }
+    }
     if (handle.bridge.extensionConnected || handle.bridge.cdpClientCount > 0) {
       lastActiveAtMs = now();
       return;

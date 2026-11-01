@@ -321,7 +321,6 @@ export function scheduleLiveTextFlush(
     }
     cancelPendingLiveTextFlush(run, stream);
     pending.flush();
-  }, delayMs);
-  timer.unref?.();
+  }, delayMs).unref();
   pendingFlushes[stream] = { timer, flush };
 }

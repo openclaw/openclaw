@@ -214,7 +214,7 @@ export async function compareCodeModeMatrixResultsFile(
 }
 
 const modeResult = comparableResult.extend({
-  mode: z.enum(["direct", "code"]),
+  mode: z.enum(["direct", "auto", "code"]),
   buildSha256: z.string(),
   sourceDirty: z.boolean(),
   sourcePatchSha256: z.string().nullable(),
@@ -234,7 +234,7 @@ const modeResult = comparableResult.extend({
 });
 
 type ModeResult = z.infer<typeof modeResult>;
-type ModePair = { direct: ModeResult; code: ModeResult };
+type ModePair = { direct: ModeResult; treatment: ModeResult };
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) {
@@ -324,21 +324,34 @@ function modeTotals(rows: readonly ModeResult[]) {
 
 function pairMeasurement(pair: ModePair, measure: (row: ModeResult) => number | null) {
   const direct = measure(pair.direct);
-  const code = measure(pair.code);
-  return completedTask(pair.direct) && completedTask(pair.code) && direct !== null && code !== null
-    ? { direct, code, delta: code - direct, ratio: measuredRatio(direct, code) }
+  const treatment = measure(pair.treatment);
+  return completedTask(pair.direct) &&
+    completedTask(pair.treatment) &&
+    direct !== null &&
+    treatment !== null
+    ? {
+        direct,
+        [pair.treatment.mode]: treatment,
+        delta: treatment - direct,
+        ratio: measuredRatio(direct, treatment),
+      }
     : null;
 }
 
-function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePair[]) {
+function summarizeModeGroup(
+  rows: readonly ModeResult[],
+  pairs: readonly ModePair[],
+  treatmentMode: "auto" | "code",
+) {
   const direct = modeTotals(rows.filter((row) => row.mode === "direct"));
-  const code = modeTotals(rows.filter((row) => row.mode === "code"));
+  const treatment = modeTotals(rows.filter((row) => row.mode === treatmentMode));
   const unmatched = rows.length - pairs.length * 2;
   const successfulPairs = pairs.filter(
-    (pair) => completedTask(pair.direct) && completedTask(pair.code),
+    (pair) => completedTask(pair.direct) && completedTask(pair.treatment),
   );
-  const usageComplete = unmatched === 0 && direct.usageMissing === 0 && code.usageMissing === 0;
-  const costComplete = usageComplete && direct.costMissing === 0 && code.costMissing === 0;
+  const usageComplete =
+    unmatched === 0 && direct.usageMissing === 0 && treatment.usageMissing === 0;
+  const costComplete = usageComplete && direct.costMissing === 0 && treatment.costMissing === 0;
   const pairedDeltas = (measure: (row: ModeResult) => number | null) =>
     successfulPairs.flatMap((pair) => {
       const observation = pairMeasurement(pair, measure);
@@ -347,10 +360,10 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
   const latenciesComplete = successfulPairs.every(
     (pair) =>
       pair.direct.gateway?.taskElapsedMs !== undefined &&
-      pair.code.gateway?.taskElapsedMs !== undefined,
+      pair.treatment.gateway?.taskElapsedMs !== undefined,
   );
   const successDeltas = pairs.map(
-    (pair) => Number(completedTask(pair.code)) - Number(completedTask(pair.direct)),
+    (pair) => Number(completedTask(pair.treatment)) - Number(completedTask(pair.direct)),
   );
   return {
     models: [...new Set(rows.map((row) => row.model))],
@@ -358,8 +371,9 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
     pairs: pairs.length,
     unmatched,
     successfulPairs: successfulPairs.length,
+    treatmentMode,
     direct,
-    code,
+    [treatmentMode]: treatment,
     pairedSuccessDifference: distribution(successDeltas),
     pairedSuccessfulDeltas: {
       totalTokens: usageComplete ? distribution(pairedDeltas(tokens)) : null,
@@ -368,17 +382,18 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
         unmatched === 0 && latenciesComplete
           ? distribution(
               successfulPairs.map(
-                (pair) => pair.code.gateway!.taskElapsedMs! - pair.direct.gateway!.taskElapsedMs!,
+                (pair) =>
+                  pair.treatment.gateway!.taskElapsedMs! - pair.direct.gateway!.taskElapsedMs!,
               ),
             )
           : null,
     },
     operationalRatios: {
       totalTokensPerCompletedTask: usageComplete
-        ? measuredRatio(direct.tokensPerCompletedTask, code.tokensPerCompletedTask)
+        ? measuredRatio(direct.tokensPerCompletedTask, treatment.tokensPerCompletedTask)
         : null,
       costPerCompletedTask: costComplete
-        ? measuredRatio(direct.costPerCompletedTask, code.costPerCompletedTask)
+        ? measuredRatio(direct.costPerCompletedTask, treatment.costPerCompletedTask)
         : null,
     },
   };
@@ -390,7 +405,11 @@ export function compareCodeModeMatrixModes(values: readonly unknown[]) {
     throw new Error("Mode comparison exceeds the 10,000-observation bound.");
   }
   const rows = values.map((value) => modeResult.parse(value));
-  const groups = new Map<string, Partial<Record<"direct" | "code", ModeResult>>>();
+  const treatmentMode = rows.some((row) => row.mode === "auto") ? "auto" : "code";
+  if (treatmentMode === "auto" && rows.some((row) => row.mode === "code")) {
+    throw new Error("Mode comparison requires one treatment: direct/auto or direct/code.");
+  }
+  const groups = new Map<string, Partial<Record<ModeResult["mode"], ModeResult>>>();
   for (const row of rows) {
     if (!row.workload) {
       throw new Error("Mode comparison requires workload fingerprints on every attempt.");
@@ -415,10 +434,11 @@ export function compareCodeModeMatrixModes(values: readonly unknown[]) {
   const pairs: ModePair[] = [];
   const incompletePairs: string[] = [];
   for (const group of groups.values()) {
-    if (group.direct && group.code) {
-      pairs.push({ direct: group.direct, code: group.code });
+    const treatment = group[treatmentMode];
+    if (group.direct && treatment) {
+      pairs.push({ direct: group.direct, treatment });
     } else {
-      incompletePairs.push((group.direct ?? group.code)!.id);
+      incompletePairs.push((group.direct ?? treatment)!.id);
     }
   }
   const grouped = (includeTask: boolean) => {
@@ -442,27 +462,29 @@ export function compareCodeModeMatrixModes(values: readonly unknown[]) {
           { identity: JSON.parse(identity) as unknown },
           summarizeModeGroup(
             subset,
-            pairs.filter((pair) => members.has(pair.direct) && members.has(pair.code)),
+            pairs.filter((pair) => members.has(pair.direct) && members.has(pair.treatment)),
+            treatmentMode,
           ),
         );
       });
   };
   return {
     interpretation:
-      "Code minus direct, paired on model/task/seed, exact source/build, prompt/fixture and all settings. Completion means automated artifact/effect checks passed; final-response correctness and independent-task integrity require separate adjudication. All scheduled attempts contribute to operational totals; missing usage suppresses token savings for the entire group. Completed-with-observed-errors counts successful cells containing tool or model errors, including expected probes; it does not measure repair turns. Cost placeholders remain unavailable. Task latency excludes startup/interview. No comparison mixes models or reasoning settings.",
+      "Selected treatment minus direct, paired on model/task/seed, exact source/build, prompt/fixture and all settings. Auto measures model-selected activation, not forced Code Mode. Completion means automated artifact/effect checks passed; final-response correctness and independent-task integrity require separate adjudication. All scheduled attempts contribute to operational totals; missing usage suppresses token savings for the entire group. Completed-with-observed-errors counts successful cells containing tool or model errors, including expected probes; it does not measure repair turns. Cost placeholders remain unavailable. Task latency excludes startup/interview. No comparison mixes models or reasoning settings.",
     uncertainty:
       "Exploratory pilot of deliberately selected heterogeneous tasks, not a random population sample. Counts, means, medians and ranges describe these observations only; there are no inferential intervals or statistical readiness gates. Ratios use the observed schedule's task frequencies; inspect task groups before aggregating. Unattempted or entirely absent pairs are not represented by results alone; consult the retained schedule.",
     incompletePairs,
+    treatmentMode,
     byModel: grouped(false),
     byTask: grouped(true),
     pairs: pairs.map((pair) => ({
       directId: pair.direct.id,
-      codeId: pair.code.id,
+      [`${treatmentMode}Id`]: pair.treatment.id,
       model: pair.direct.model,
       task: pair.direct.task,
       repetition: pair.direct.repetition,
-      bothCompleted: completedTask(pair.direct) && completedTask(pair.code),
-      usageComplete: tokens(pair.direct) !== null && tokens(pair.code) !== null,
+      bothCompleted: completedTask(pair.direct) && completedTask(pair.treatment),
+      usageComplete: tokens(pair.direct) !== null && tokens(pair.treatment) !== null,
       totalTokens: pairMeasurement(pair, tokens),
       costUsd: pairMeasurement(pair, price),
     })),

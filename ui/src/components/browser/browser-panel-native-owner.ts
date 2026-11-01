@@ -4,11 +4,12 @@ import {
   readNativeBrowserState,
   subscribeNativeBrowserState,
   type NativeBrowserMessage,
-  type NativeBrowserState,
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
-import { listen } from "../../lib/reactive/listener.ts";
+import { observeDocumentScroll } from "../../lib/reactive/document-scroll.ts";
+import { observeIntersection, observeResize } from "../../lib/reactive/observers.ts";
+import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
@@ -224,24 +225,23 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
     mountStage(element: HTMLElement): () => void {
       presentationStage = element;
       intersecting = true;
-      const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
-      const intersection =
+      const stopSize =
+        typeof ResizeObserver === "function" ? observeResize([element], schedule) : undefined;
+      const stopIntersection =
         typeof IntersectionObserver === "function"
-          ? new IntersectionObserver(([entry]) => {
+          ? observeIntersection([element], ([entry]) => {
               intersecting = entry?.isIntersecting ?? intersecting;
               schedule();
             })
-          : null;
-      resize?.observe(presentationStage);
-      intersection?.observe(presentationStage);
-      const stopScroll = listen(document, "scroll", schedule, true);
-      const stopResize = listen(window, "resize", schedule);
+          : undefined;
+      const stopScroll = observeDocumentScroll(document, schedule);
+      const stopResize = observeWindowResize(window, schedule);
       presentation.update();
       return () => {
         presentation.hide();
         presentationStage = null;
-        resize?.disconnect();
-        intersection?.disconnect();
+        stopSize?.();
+        stopIntersection?.();
         stopScroll();
         stopResize();
       };
@@ -278,10 +278,10 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
     return allNativeTabs.filter((tab) => includesTab(tab));
   }
 
-  function acceptState(state: NativeBrowserState, activatePopups: boolean): void {
+  function acceptTabs(tabs: NativeBrowserTab[], activatePopups: boolean): void {
     const previous = new Set(nativeTabs().map((tab) => tab.id));
     const activeBefore = native.activeTab;
-    allNativeTabs = state.tabs;
+    allNativeTabs = tabs;
     controller.setState("tabs", native.mergeRemoteTabs(controller.tabs));
     const view = controller.view;
     if (
@@ -292,7 +292,7 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       controller.setState("view", null);
     }
     for (const id of popupScopes.keys()) {
-      if (!state.tabs.some((tab) => tab.id === id)) {
+      if (!tabs.some((tab) => tab.id === id)) {
         popupScopes.delete(id);
       }
     }
@@ -377,9 +377,9 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       presenters.add(presenterEntry);
       const initial = readNativeBrowserState();
       if (initial) {
-        acceptState(initial, false);
+        acceptTabs(initial.tabs, false);
       }
-      const stopState = subscribeNativeBrowserState((state) => acceptState(state, true));
+      const stopState = subscribeNativeBrowserState((state) => acceptTabs(state.tabs, true));
       const stopPresentation = presentation.mount();
       return () => {
         stopState();
@@ -413,6 +413,13 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       }
       if (reply && !reply.ok) {
         controller.reportError(reply.error);
+      } else if (reply?.ok && request.type === "close") {
+        // The native close commits before its scheduled state push. Publish the
+        // acknowledged removal before callers decide whether to close the panel.
+        acceptTabs(
+          allNativeTabs.filter((tab) => tab.id !== request.tabId),
+          false,
+        );
       }
       return reply?.ok === true;
     },

@@ -11,6 +11,7 @@ import type {
   WorkerEnvironmentAbandonment,
   WorkerProviderLifecycleOptions,
 } from "./provider-lifecycle.types.js";
+import { createWorkerReconcileCancellation } from "./provider-provisioning-cancellation.js";
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerAllocation,
@@ -43,6 +44,7 @@ export function createWorkerProviderOwnerLifecycle(
     | "isStopping"
     | "warn"
   > & {
+    ownerSignal: AbortSignal;
     providerFor: (providerId: string) => WorkerProvider;
     onOwnerStopped?: (environmentId: string) => void;
   },
@@ -53,6 +55,8 @@ export function createWorkerProviderOwnerLifecycle(
   const lifecycleLease = (record: WorkerEnvironmentRecord, leaseId: string) => ({
     leaseId,
     profile: requireWorkerProfile(record.profileSnapshot.settings),
+    ...(record.resourceReceipt ? { resourceReceipt: record.resourceReceipt } : {}),
+    ...(record.retention ? { retention: record.retention.policy } : {}),
   });
 
   const requireCurrentOwner = (record: WorkerEnvironmentRecord): WorkerEnvironmentRecord => {
@@ -158,22 +162,60 @@ export function createWorkerProviderOwnerLifecycle(
     provider: WorkerProvider,
     lease: Parameters<WorkerProvider["destroy"]>[0],
   ) => {
+    if (record.resourceReceipt && !provider.supportsResourceReceipts) {
+      throw serviceError(
+        "provider_failure",
+        "Worker provider cannot honor the recorded resource receipt",
+      );
+    }
+    if (record.resourceReceipt && record.resourceReceipt.leaseId !== lease.leaseId) {
+      throw serviceError(
+        "invalid_state",
+        "Worker cleanup allocation differs from its resource receipt",
+      );
+    }
     const timeoutMs =
-      options.providerCallTimeoutMs === undefined
-        ? requireProviderOperationTimeoutMs(
-            "destroy",
-            provider.resolveDestroyTimeoutMs?.(lease.profile),
-          )
-        : undefined;
+      options.providerCallTimeoutMs ??
+      requireProviderOperationTimeoutMs(
+        "destroy",
+        provider.resolveDestroyTimeoutMs?.(lease.profile),
+      ) ??
+      300_000;
     await options.callProvider(
       record.environmentId,
       "destroy",
-      () => {
+      async () => {
         // An earlier timed-out operation can keep this call queued across owner changes.
         if (requireCurrentOwner(record).state !== record.state) {
           throw serviceError("invalid_state", "Worker environment owner changed during teardown");
         }
-        return provider.destroy(lease);
+        // Turn cancellation must still finish compensating cleanup. Only the Gateway
+        // lifecycle and provider deadline interrupt teardown, retaining its durable intent.
+        using cancellation = createWorkerReconcileCancellation(options.ownerSignal);
+        const deadline = new AbortController();
+        const signal = AbortSignal.any([cancellation.signal, deadline.signal]);
+        signal.throwIfAborted();
+        const timer = setTimeout(
+          () => deadline.abort(new Error("Worker provider destroy timed out")),
+          timeoutMs,
+        );
+        timer.unref();
+        try {
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            if (requireCurrentOwner(record).state !== record.state) {
+              throw serviceError("invalid_state", "Worker teardown owner changed");
+            }
+          };
+          assertCurrent();
+          await provider.destroy({ ...lease, signal, assertCurrent });
+          // Drain can cancel new effects, not discard an already confirmed deletion.
+          if (requireCurrentOwner(record).state !== record.state) {
+            throw serviceError("invalid_state", "Worker teardown owner changed");
+          }
+        } finally {
+          clearTimeout(timer);
+        }
       },
       timeoutMs,
     );

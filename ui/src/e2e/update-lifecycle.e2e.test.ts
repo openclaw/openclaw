@@ -47,7 +47,7 @@ suite.define(() => {
           },
         });
         expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.waitForRequest("update.status");
         await gateway.emitGatewayEvent("update.available", { schedule, updateAvailable });
         await page.locator(".sidebar-identity-card").click();

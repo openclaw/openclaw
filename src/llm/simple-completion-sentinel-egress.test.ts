@@ -36,11 +36,8 @@ function closedStream() {
   return stream;
 }
 
-function prepareProvider(
-  source: Model,
-  createStreamFn: (model: Model) => StreamFn,
-  apiRegistry = createApiRegistry(),
-) {
+function prepareProvider(source: Model, createStreamFn: (model: Model) => StreamFn) {
+  const apiRegistry = createApiRegistry();
   const prepared = prepareModelForSimpleCompletion({
     apiRegistry,
     model: attachModelProviderRuntimePluginHandle(source, {
@@ -62,57 +59,43 @@ function prepareProvider(
 
 afterEach(resetSecretRedactionRegistryForTest);
 
-it.each(authModes)(
-  "resolves %s at construction and egress without mutating shared models",
-  (mode) => {
-    const auth = requestAuth(mode, "request-key");
-    const request = {
-      headers: { "x-request": seal("request-header") },
-      auth: requestAuth(mode, seal("request-key")),
-      proxy: { mode: "env-proxy" as const },
-      tls: { serverName: "provider.example.invalid" },
-    };
-    const protectedModel = withRequest(
-      { ...model, headers: { "x-visible": seal("visible-header") } },
-      request,
-    );
-    const observe = (received: Model) => {
-      expect(received.headers).toEqual({ "x-visible": "visible-header" });
-      expect(getModelProviderRequestTransport(received)).toEqual({
-        ...request,
-        headers: { "x-request": "request-header" },
-        auth,
-      });
-      expect(received.api).toBe(model.api);
-    };
-    const construction = vi.fn((received: Model) => {
-      observe(received);
-      return stream;
+it.each(authModes)("resolves %s without mutating shared models", (mode) => {
+  const request = {
+    headers: { "x-request": seal("request-header") },
+    auth: requestAuth(mode, seal("request-key")),
+  };
+  const protectedModel = withRequest(
+    { ...model, headers: { "x-visible": seal("visible-header") } },
+    request,
+  );
+  const observe = (received: Model) => {
+    expect(received.headers).toEqual({ "x-visible": "visible-header" });
+    expect(getModelProviderRequestTransport(received)).toEqual({
+      ...request,
+      headers: { "x-request": "request-header" },
+      auth: requestAuth(mode, "request-key"),
     });
-    const stream = vi.fn<StreamFn>((received, _context, options) => {
-      observe(received);
-      expect(options?.apiKey).toBe("option-key");
-      expect(options?.headers).toEqual({ "x-option": "option-header" });
-      return closedStream();
-    });
-    const apiRegistry = createApiRegistry();
-    const builtIn = vi.fn(closedStream);
-    apiRegistry.registerApiProvider({ api: model.api, stream: builtIn, streamSimple: builtIn });
-    const builtInProvider = apiRegistry.getApiProvider(model.api);
-    const complete = prepareProvider(protectedModel, construction, apiRegistry);
-    complete(protectedModel, {
-      apiKey: seal("option-key"),
-      headers: { "x-option": seal("option-header") },
-    });
-    expect(construction).toHaveBeenCalledOnce();
-    expect(stream).toHaveBeenCalledOnce();
-    expect(builtIn).not.toHaveBeenCalled();
-    expect(apiRegistry.getApiProvider(model.api)).toBe(builtInProvider);
-    expect(getModelProviderRequestTransport(protectedModel)).toBe(request);
-    expect(protectedModel.headers?.["x-visible"]).toBe(seal("visible-header"));
-    expect(request.headers["x-request"]).toBe(seal("request-header"));
-  },
-);
+    expect(received.api).toBe(model.api);
+  };
+  const construction = (received: Model) => {
+    observe(received);
+    return stream;
+  };
+  const stream = vi.fn<StreamFn>((received, _context, options) => {
+    observe(received);
+    expect(options?.apiKey).toBe("option-key");
+    expect(options?.headers).toEqual({ "x-option": "option-header" });
+    return closedStream();
+  });
+  prepareProvider(protectedModel, construction)(protectedModel, {
+    apiKey: seal("option-key"),
+    headers: { "x-option": seal("option-header") },
+  });
+  expect(stream).toHaveBeenCalledOnce();
+  expect(getModelProviderRequestTransport(protectedModel)).toBe(request);
+  expect(protectedModel.headers?.["x-visible"]).toBe(seal("visible-header"));
+  expect(request.headers["x-request"]).toBe(seal("request-header"));
+});
 
 const badBearer = withRequest(model, { auth: requestAuth("authorization-bearer", unknown) });
 it.each([

@@ -3,11 +3,8 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import {
-  createChatFlowE2eSuite,
-  expectDefined,
-  installMockGateway,
-} from "./chat-flow.test-support.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
+import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -165,11 +162,7 @@ suite.define(() => {
         return download;
       };
       expect((await downloadImage()).suggestedFilename()).toBe(`${filenamePrefix}.png`);
-      const downloadedPath = expectDefined(
-        await (await downloadImage()).path(),
-        "downloaded image path",
-      );
-      expect(await readFile(downloadedPath)).toEqual(imageBytes);
+      expect(await readControlUiE2eDownload(await downloadImage())).toEqual(imageBytes);
 
       if (failures > 0) {
         await openImage.click();

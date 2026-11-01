@@ -60,12 +60,11 @@ export function cloneTranscriptView<T>(
       if (!("value" in descriptor)) {
         throw new NativeCloneRequired();
       }
-      Object.defineProperty(result, key, {
-        value: copy(descriptor.value),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
+      descriptor.value = copy(descriptor.value);
+      descriptor.enumerable = true;
+      descriptor.configurable = true;
+      descriptor.writable = true;
+      Object.defineProperty(result, key, descriptor);
     }
     return result;
   };

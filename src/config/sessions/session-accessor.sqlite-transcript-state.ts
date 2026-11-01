@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { engineGreatest } from "../../infra/database-engine/scalar.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -6,7 +7,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -21,9 +22,13 @@ import {
   preserveSessionEntryCacheAcrossWrite,
   publishSessionEntryPlaceholderInsertion,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  getSessionKysely,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
+  returningTranscriptMutationAuthority,
   selectTranscriptAppendState,
   selectTranscriptSessionRoot,
   transcriptMutationStateQuery,
@@ -38,11 +43,10 @@ import {
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
-  SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 import { publishSessionTranscriptAuthority } from "./session-transcript-authority.js";
-import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,
@@ -230,8 +234,9 @@ function writeTranscriptGeneration(
 export function readTranscriptAppendStateInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
+  withLatestIdentity = false,
 ) {
-  const query = selectTranscriptAppendState(database, scope);
+  const query = selectTranscriptAppendState(database, scope, withLatestIdentity);
   const rows = executeSqliteQuerySync(database.db, query).rows;
   const row = rows[0]!;
   return {
@@ -239,6 +244,17 @@ export function readTranscriptAppendStateInTransaction(
     generation: row.generation,
     cold: Boolean(row.cold),
     nextSeq: row.max_seq === null ? 0 : sqliteNumber(row.max_seq) + 1,
+    parent: withLatestIdentity
+      ? {
+          latest:
+            row.append_parent_event_type != null && row.append_parent_event_json != null
+              ? {
+                  event_type: row.append_parent_event_type,
+                  event_json: row.append_parent_event_json,
+                }
+              : null,
+        }
+      : undefined,
     projection:
       row.indexed_seq === null
         ? undefined
@@ -455,17 +471,17 @@ export function advanceTranscriptMutationAtInTransaction(
   sessionId: string,
   value: number,
   options: TranscriptMutationOptions = {},
-): void {
+): SessionTranscriptContextVersion | undefined {
   return withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(sessionId)], () => {
     let transcriptUpdatedAt = Math.floor(value);
     const steps = options.steps ?? 1;
     if (!Number.isFinite(transcriptUpdatedAt) || transcriptUpdatedAt < 0) {
-      return;
+      return undefined;
     }
     if (!options.strictly) {
       const state = readTranscriptMutationStateInTransaction(database, sessionId);
       if (state.updatedAt !== null && state.updatedAt >= transcriptUpdatedAt) {
-        return;
+        return undefined;
       }
     }
     const db = getSessionKysely(database.db);
@@ -486,7 +502,7 @@ export function advanceTranscriptMutationAtInTransaction(
       .set((eb) => {
         const nextUpdatedAt =
           options.strictly && !actor?.window
-            ? eb.fn<number>(isPostgresSqlConnection(database.db) ? "greatest" : "max", [
+            ? engineGreatest(database.db, [
                 eb.val(transcriptUpdatedAt),
                 eb(eb.fn.coalesce("transcript_updated_at", eb.val(-1)), "+", steps),
                 eb(eb.fn.coalesce("transcript_observed_at", eb.val(-1)), "+", steps),
@@ -506,7 +522,7 @@ export function advanceTranscriptMutationAtInTransaction(
       .where("session_id", "=", sessionId);
     if (!findOpenClawAgentDatabaseIdentity(database)) {
       executeSqliteQuerySync(database.db, update);
-      return;
+      return undefined;
     }
     if (actor?.window) {
       if (options.persistActorMutation !== false) {
@@ -537,55 +553,14 @@ export function advanceTranscriptMutationAtInTransaction(
           : {}),
         ...publicationProjection,
       });
-      return;
+      return undefined;
     }
-    const context = executeSqliteQueryTakeFirstSync(
-      database.db,
-      update
-        .returning((eb) => [
-          "session_id as sessionId",
-          "session_key as sessionKey",
-          "transcript_updated_at as updatedAt",
-          eb
-            .selectFrom("transcript_rewrite_watermarks")
-            .select("generation")
-            .where("session_id", "=", sessionId)
-            .as("generation"),
-          eb.fn
-            .coalesce(
-              eb
-                .selectFrom("session_transcript_cold_archives")
-                .select("last_seq")
-                .where("session_id", "=", sessionId),
-              eb
-                .selectFrom("transcript_events")
-                .select((inner) => inner.fn.max<number | null>("seq").as("seq"))
-                .where("session_id", "=", sessionId),
-            )
-            .as("rawSeq"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("leaf_event_id")
-            .where("session_id", "=", sessionId)
-            .as("leafEventId"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("indexed_seq")
-            .where("session_id", "=", sessionId)
-            .as("indexedSeq"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("active_message_count")
-            .where("session_id", "=", sessionId)
-            .as("activeMessageCount"),
-          eb
-            .selectFrom("session_transcript_index_state")
-            .select("needs_rebuild")
-            .where("session_id", "=", sessionId)
-            .as("needsRebuild"),
-        ])
-        .$assertType<SessionTranscriptAuthority>(),
-    );
+    const context = options.writeWindowMutation
+      ? options.writeWindowMutation(update)
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          returningTranscriptMutationAuthority(update, sessionId),
+        );
     if (context) {
       retainTranscriptContextFacts(
         database,
@@ -602,7 +577,13 @@ export function advanceTranscriptMutationAtInTransaction(
         ...(options.projectionReady ? { projectionReady: true as const } : {}),
         ...publicationProjection,
       });
+      return {
+        generation: context.generation,
+        rawSeq: context.rawSeq,
+        updatedAt: context.updatedAt,
+      };
     }
+    return undefined;
   });
 }
 
@@ -611,8 +592,8 @@ export function touchTranscriptMutationInTransaction(
   sessionId: string,
   options: Omit<TranscriptMutationOptions, "strictly" | "steps" | "publicationAssistant"> = {},
   logicalAdvance?: TranscriptMutationAdvance,
-): void {
-  advanceTranscriptMutationAtInTransaction(
+): SessionTranscriptContextVersion | undefined {
+  return advanceTranscriptMutationAtInTransaction(
     database,
     sessionId,
     logicalAdvance?.adjustedTime ?? Date.now(),

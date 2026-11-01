@@ -37,13 +37,25 @@ function AccountRow(
   },
 ) {
   const state = () => props.readState();
+  const accounts = createMemo(() => state().accounts);
   const linked = () => props.row.kind === "linked";
   const reference = () => (props.row.kind === "linked" ? props.row.link : props.row.account);
-  const account = () =>
+  const account = createMemo(() =>
     props.row.kind === "linked"
-      ? state().accounts.find((candidate) => candidate.authProfileId === reference().authProfileId)
-      : props.row.account;
+      ? accounts().find((candidate) => candidate.authProfileId === reference().authProfileId)
+      : props.row.account,
+  );
   const label = () => account()?.label ?? t("profilePage.modelAccounts.gatewayAccount");
+  const duplicateLabel = createMemo(
+    () =>
+      account() &&
+      accounts().some(
+        (candidate) =>
+          candidate.authProfileId !== reference().authProfileId &&
+          candidate.provider === reference().provider &&
+          candidate.label === label(),
+      ),
+  );
   const provider = () => providerDisplayLabel(reference().provider);
   const action = () =>
     t(
@@ -64,17 +76,7 @@ function AccountRow(
           {props.row.kind === "linked"
             ? t("profilePage.modelAccounts.linkedDescription")
             : t(`profilePage.modelAccounts.authTypes.${props.row.account.authType}`)}
-          <Show
-            when={
-              account() &&
-              state().accounts.some(
-                (candidate) =>
-                  candidate.authProfileId !== reference().authProfileId &&
-                  candidate.provider === reference().provider &&
-                  candidate.label === label(),
-              )
-            }
-          >
+          <Show when={duplicateLabel()}>
             {" "}
             <code>{reference().authProfileId}</code>
           </Show>
@@ -341,6 +343,13 @@ function SignIn(props: StateProps) {
 
 export function ModelAccountInventory(props: StateProps & { pending: boolean }) {
   const state = () => props.readState();
+  const accounts = createMemo(() => state().accounts);
+  const savedAccounts = createMemo(() =>
+    accounts().filter(
+      (account) =>
+        !props.actions.links().some((link) => link.authProfileId === account.authProfileId),
+    ),
+  );
   return (
     <>
       <Show
@@ -358,13 +367,7 @@ export function ModelAccountInventory(props: StateProps & { pending: boolean }) 
           )}
         </For>
       </Show>
-      <For
-        each={state().accounts.filter(
-          (account) =>
-            !props.actions.links().some((link) => link.authProfileId === account.authProfileId),
-        )}
-        keyed={(account) => account.authProfileId}
-      >
+      <For each={savedAccounts()} keyed={(account) => account.authProfileId}>
         {(account) => (
           <AccountRow
             readState={props.readState}

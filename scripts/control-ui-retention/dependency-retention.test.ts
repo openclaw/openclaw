@@ -12,46 +12,42 @@ beforeAll(async () => {
 });
 afterAll(async () => browser?.close());
 
-async function collectProbe(mode: string, contents: string) {
-  const output = await build({
-    stdin: {
-      contents: `
-        let references;
+function probe(name: string, contents: string, value: unknown, alive = [false, false, false]) {
+  it.each(["production", "development", "observe"])(`%s ${name}`, async (mode) => {
+    const output = await build({
+      stdin: {
+        contents: `let references = [];
         ${contents}
-        window.retentionProbe = { retire, alive: () => references.map(ref => !!ref.deref()) };
-      `,
-      resolveDir: new URL("../../ui", import.meta.url).pathname,
-      sourcefile: "dependency-retention-probe.js",
-    },
-    bundle: true,
-    write: false,
-    format: "iife",
-    platform: "browser",
-    conditions: ["browser", ...(mode === "production" ? [] : [mode])],
-    minify: mode === "production",
+        window.retentionProbe = { retire, alive: () => references.map(ref => !!ref.deref()) };`,
+        resolveDir: new URL("../../ui", import.meta.url).pathname,
+      },
+      bundle: true,
+      write: false,
+      format: "iife",
+      platform: "browser",
+      conditions: ["browser", ...(mode === "production" ? [] : [mode])],
+      minify: mode === "production",
+    });
+    // Fresh runtime per probe: warming the first-select hook hides its leak.
+    const page = await browser.newPage();
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      await page.addScriptTag({ content: output.outputFiles[0]!.text });
+      const result: unknown = await page.evaluate("retentionProbe.retire()");
+      await cdp.send("HeapProfiler.collectGarbage");
+      await cdp.send("HeapProfiler.collectGarbage");
+      const collected: unknown = await page.evaluate("retentionProbe.alive()");
+      expect({ value: result, alive: collected }).toEqual({ value, alive });
+    } finally {
+      await cdp.detach();
+      await page.close();
+    }
   });
-  // Fresh runtime per probe: warming the first-select hook hides its leak.
-  const page = await browser.newPage();
-  const cdp = await page.context().newCDPSession(page);
-  try {
-    await page.addScriptTag({ content: output.outputFiles[0]!.text });
-    const value: unknown = await page.evaluate("retentionProbe.retire()");
-    await cdp.send("HeapProfiler.collectGarbage");
-    await cdp.send("HeapProfiler.collectGarbage");
-    const alive: unknown = await page.evaluate("retentionProbe.alive()");
-    return { value, alive };
-  } finally {
-    await cdp.detach();
-    await page.close();
-  }
 }
 
-it.each(["production", "development", "observe"])(
-  "%s releases the first value-bound select and its form",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
+probe(
+  "releases the first value-bound select and its form",
+  `
       import { render, setProperty, insert } from "@solidjs/web";
       async function retire() {
         const host = document.createElement("div");
@@ -72,106 +68,73 @@ it.each(["production", "development", "observe"])(
         return selected;
       }
     `,
-    );
-    expect(result.value, "late option selection").toBe("second");
-    expect(result.alive, "select, form, GC control").toEqual([false, false, false]);
-  },
+  "second",
 );
 
-it.each(["production", "development", "observe"])(
-  "%s releases an unobserved pending computation after root disposal while idle",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
-      import { createMemo, createRoot, getOwner } from "solid-js";
-      function retire() {
+function idleProbe(name: string, rejectSource: boolean) {
+  probe(
+    name,
+    `
+      import { createMemo, createRoot, flush, getOwner } from "solid-js";
+      const source = ${rejectSource} && createRoot(() => {
+        let reject;
+        const read = createMemo(() => new Promise((_, fail) => { reject = fail; }), { loadingValue: "ready" });
+        return { read, reject };
+      });
+      async function retire() {
         const payload = { pending: true };
         let started = false;
         const dispose = createRoot(dispose => {
           references = [new WeakRef(payload), new WeakRef(getOwner()), new WeakRef({ control: true })];
-          createMemo(async () => {
+          createMemo(source ? () => {
+            started = true;
+            source.read();
+            return payload;
+          } : async () => {
             started = true;
             await new Promise(() => {});
             return payload;
           });
           return dispose;
         });
+        if (source) {
+          flush();
+          source.reject(new Error("idle rejection"));
+          await Promise.resolve();
+        }
         dispose();
         return started;
       }
     `,
-    );
-    expect(result.value, "pending computation started").toBe(true);
-    expect(result.alive, "payload, root, GC control").toEqual([false, false, false]);
-  },
-);
+    true,
+  );
+}
+idleProbe("releases an unobserved pending computation after root disposal while idle", false);
+idleProbe("releases a reader queued by an idle rejection in another root", true);
 
-it.each(["production", "development", "observe"])(
-  "%s releases a reader queued by an idle rejection in another root",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
-      import { createMemo, createRoot, flush, getOwner } from "solid-js";
-      const source = createRoot(dispose => {
-        let reject;
-        const read = createMemo(() => new Promise((_, fail) => { reject = fail; }), {
-          loadingValue: "ready"
-        });
-        return { read, reject, dispose };
-      });
-      async function retire() {
-        const payload = { pending: true };
-        const dispose = createRoot(dispose => {
-          references = [new WeakRef(payload), new WeakRef(getOwner()), new WeakRef({ control: true })];
-          createMemo(() => { source.read(); return payload; });
-          return dispose;
-        });
-        flush();
-        source.reject(new Error("idle rejection"));
-        await Promise.resolve();
-        dispose();
-        return true;
-      }
-    `,
-    );
-    expect(result.value, "reader disposed after source rejection").toBe(true);
-    expect(result.alive, "payload, reader root, GC control").toEqual([false, false, false]);
-  },
-);
-
-it.each(["production", "development", "observe"])(
-  "%s cleans up the committed frame when its async replacement rejects",
-  async (mode) => {
-    const result = await collectProbe(
-      mode,
-      `
+probe(
+  "cleans up the committed frame when its async replacement rejects",
+  `
       import { createMemo, createRoot, createSignal, flush, onCleanup, resolve } from "solid-js";
-      async function retire() {
-        let cleanups = 0;
-        const root = createRoot(dispose => {
+      const retire = () => createRoot(async dispose => {
+          let cleanups = 0;
           const [revision, setRevision] = createSignal(0);
           const read = createMemo(() => {
             if (revision()) return Promise.reject(new Error("replacement rejected"));
             onCleanup(() => { cleanups++; });
             return Promise.resolve("ready");
           });
-          return { read, setRevision, dispose };
-        });
-        try {
-          await resolve(root.read);
-          root.setRevision(1);
-          flush();
-          await resolve(root.read).catch(() => {});
-          references = [];
-          return cleanups;
-        } finally {
-          root.dispose();
-        }
-      }
+          try {
+            await resolve(read);
+            setRevision(1);
+            flush();
+            await resolve(read).catch(() => {});
+            return cleanups;
+          } finally {
+            dispose();
+          }
+      });
     `,
-    );
-    expect(result.value, "previous committed run cleaned up at rejection").toBe(1);
-  },
+  1,
+  [],
 );

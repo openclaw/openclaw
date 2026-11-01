@@ -124,10 +124,6 @@
       "group": "extension-database-workers",
       "seconds": 13.262
     },
-    "extensions/workboard/src/lifecycle-sync.restart.test.ts": {
-      "group": "extension-database-workers",
-      "seconds": 33.472
-    },
     "extensions/workboard/src/lifecycle-sync.test.ts": {
       "group": "extension-database-workers",
       "seconds": 35.341

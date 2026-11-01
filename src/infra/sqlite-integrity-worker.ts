@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { fork } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import { deserialize, serialize } from "node:v8";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -9,12 +10,16 @@ import { assertChildRuntimeAvailable, observeChildRuntime } from "./child-runtim
 import { restoreNativeErrorResponse } from "./native-error-response.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "./sqlite-file-generation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import type {
+  SqliteIntegrityCheck,
   SqliteIntegrityCheckOptions,
   SqliteIntegrityCheckTiming,
 } from "./sqlite-integrity.js";
+import { SqliteIntegrityError } from "./sqlite-integrity.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
@@ -43,6 +48,7 @@ export type SqliteIntegrityWorkerResult =
         code?: string;
         errcode?: number;
         cause?: { message: string; code?: string; errcode?: number };
+        findings?: readonly unknown[];
       };
     };
 
@@ -69,6 +75,56 @@ type IntegrityScope = {
 };
 const integrityScope = new AsyncLocalStorage<IntegrityScope>();
 const log = createSubsystemLogger("state/sqlite");
+
+/** Synchronous CLI callers retain custody while the integrity child owns the scan. */
+export function runSqliteIntegrityCheckInWorkerSync(check: SqliteIntegrityCheck): void {
+  const identity = readSqliteIntegrityFileIdentity(check.databaseLabel);
+  const entry = resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
+  const startedAt = performance.now();
+  assertChildRuntimeAvailable();
+  const child = spawnSync(process.execPath, [...resolveRuntimeWorkerArgv(entry), "--check-sync"], {
+    input: serialize({
+      pathname: check.databaseLabel,
+      databaseLabel: check.databaseLabel,
+      identity,
+      busyTimeoutMs: readSqliteBusyTimeout(check.database),
+      integrity: { check: check.check, tables: check.tables, ftsSchemas: check.ftsSchemas },
+    } satisfies SqliteIntegrityWorkerInput),
+    timeout: readSqliteInspectionBudget("integrity check", check.databaseLabel, identity.size)
+      .timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
+  if (check.timing) {
+    check.timing.workerLifetimeElapsedMs = performance.now() - startedAt;
+  }
+  if (child.error) {
+    throw child.error;
+  }
+  if (child.status !== 0 || !child.stdout.length) {
+    throw new Error(
+      `SQLite integrity worker exited ${child.status} (${child.signal ?? "no signal"})`,
+    );
+  }
+  // SAFETY: The private integrity child emits the same result as its IPC transport.
+  const result = deserialize(child.stdout) as SqliteIntegrityWorkerResult;
+  readSqliteIntegrityFileIdentity(check.databaseLabel, identity);
+  if (check.timing) {
+    check.timing.workerCheckElapsedMs = result.checkElapsedMs;
+  }
+  if (!result.ok) {
+    const error = restoreNativeErrorResponse(result.error);
+    if (error.name === "SqliteIntegrityError") {
+      const failure = new SqliteIntegrityError(error.message, error.cause, result.error.findings);
+      failure.message = error.message;
+      throw failure;
+    }
+    throw error;
+  }
+  if (check.check !== "quick") {
+    recordSqliteDatabaseIntegrity(check.database);
+  }
+}
 
 async function closeIntegrityProcess(worker: IntegrityProcess): Promise<void> {
   if (!worker.retired) {
@@ -275,7 +331,17 @@ export function assertSqliteIntegrityInWorker(
           }
           readSqliteIntegrityFileIdentity(pathname, identity);
           if (!result.ok) {
-            throw restoreNativeErrorResponse(result.error);
+            const error = restoreNativeErrorResponse(result.error);
+            if (error.name === "SqliteIntegrityError") {
+              const integrityError = new SqliteIntegrityError(
+                error.message,
+                error.cause,
+                result.error.findings,
+              );
+              integrityError.message = error.message;
+              throw integrityError;
+            }
+            throw error;
           }
           resolve();
         } catch (error) {

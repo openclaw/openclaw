@@ -33,7 +33,7 @@ import {
   listSessionStateEventsSince,
 } from "../sessions/session-state-events.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import {
   isCompactOperationEvent,
   loadSessionEntry,
@@ -90,7 +90,7 @@ async function createCompactionSession(
 }
 
 function getSuiteGatewayContextResolver() {
-  const runtime = getGatewayRecoveryRuntime();
+  const runtime = getGatewayLifecycleRuntime();
   const resolveGatewayContext = runtime && getGatewayContextResolver(runtime);
   if (!resolveGatewayContext) {
     throw new Error("Suite Gateway runtime is unavailable");

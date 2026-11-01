@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
@@ -37,6 +40,7 @@ import {
 } from "./session-accessor.sqlite-message-cut.test-support.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import * as coldStorage from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
@@ -48,27 +52,22 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 import { maintenanceLane, rotateDatabaseWorkers } from "./session-transcript-worker-resources.js";
+import * as transcriptWorker from "./session-transcript-worker-runtime.js";
 import { messageEvent, timedMessageEvent } from "./transcript-message.test-support.js";
 
 const { tempDirs, createSession, createSiblingSession } = useSessionMessageCutFixtures();
 afterEach(() => vi.restoreAllMocks());
 
 function expectActiveBranch(
-  result: unknown,
+  result: Awaited<ReturnType<typeof listSessionBranches>>,
   leafEntryId: string,
   headline: string,
   messageCount?: number,
 ) {
-  expect(result).toMatchObject({
-    status: "ok",
-    branches: expect.arrayContaining([
-      expect.objectContaining({
-        active: true,
-        leafEntryId,
-        headline,
-        ...(messageCount === undefined ? {} : { messageCount }),
-      }),
-    ]),
+  expect(requireBranches(result).find((branch) => branch.active)).toMatchObject({
+    leafEntryId,
+    headline,
+    ...(messageCount === undefined ? {} : { messageCount }),
   });
 }
 
@@ -88,6 +87,7 @@ describe("SQLite session branches", () => {
     });
     await rotateDatabaseWorkers(maintenanceLane);
     const scopes = [scope, sibling];
+    const reads = vi.spyOn(transcriptWorker, "runSessionBranchSummaryWorkerRequest");
     const before = await Promise.all(scopes.map(listSessionBranches));
     expect(before).toEqual([
       expect.objectContaining({ status: "ok" }),
@@ -99,7 +99,9 @@ describe("SQLite session branches", () => {
       parentId: "branch-reader-sibling-user",
       message: { role: "assistant", content: "Updated sibling answer" },
     });
+    reads.mockClear();
     const after = await Promise.all(scopes.map(listSessionBranches));
+    expect(reads).toHaveBeenCalledTimes(1);
     expect(after[0]).toEqual(before[0]);
     expect(after[1]).toEqual({
       status: "ok",
@@ -116,9 +118,7 @@ describe("SQLite session branches", () => {
   it("returns detached summaries to concurrent viewers", async () => {
     const { scope } = await createSession();
     const results = await Promise.all(Array.from({ length: 3 }, () => listSessionBranches(scope)));
-    expect(results[0]).toMatchObject({ status: "ok" });
-    expect(results[1]).toEqual(results[0]);
-    expect(results[2]).toEqual(results[0]);
+    expect(results).toEqual([results[0], results[0], results[0]]);
     const second = results[1];
     assert(second?.status === "ok" && second.branches[0], "expected shared branch summaries");
     second.branches[0].headline = "caller mutation";
@@ -162,7 +162,9 @@ describe("SQLite session branches", () => {
     );
   });
 
-  it("refuses cached worker summaries in cold storage and reuses them after restoration", async () => {
+  it("cancels queued cold branch reads and reuses summaries after restoration", async ({
+    signal,
+  }) => {
     const storePath = path.join(tempDirs.make("openclaw-branch-cold-"), "agent.sqlite");
     const fixture = await createSessionColdStorageFixture(storePath);
     await replaceSessionEntry(fixture.scope, { sessionId: historicalId, updatedAt: 1 });
@@ -179,18 +181,58 @@ describe("SQLite session branches", () => {
     expect(() => readSessionBranchSummariesInWorker(request)).toThrow(
       expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
     );
+    const archive = readSessionColdTranscript(fixture.database(), historicalId);
+    const entered = createDeferredCore();
+    const release = createDeferredCore<undefined>();
+    const held = coldStorage.restoreSessionColdTranscript(fixture.scope, undefined, {
+      target: { ...fixture.scope, path: storePath },
+      readMetadata: async (phase) => {
+        if (phase === "initial") {
+          return archive;
+        }
+        entered.resolve();
+        return release.promise;
+      },
+    });
+    const controller = new AbortController();
+    let canceled: ReturnType<typeof listSessionBranches> | undefined;
+    try {
+      await awaitGateBeforeSettlement(entered.promise, held, "Restore did not enter its queue");
+      const queued = createDeferredCore();
+      const enqueue = storeWriterQueue.runQueuedStoreWrite;
+      const spy = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite").mockImplementation((input) => {
+        const result = enqueue(input);
+        if (input.label === "session.cold.restore") {
+          queued.resolve();
+        }
+        return result;
+      });
+      canceled = listSessionBranches({ ...fixture.scope, signal: controller.signal });
+      await awaitGateBeforeSettlement(
+        queued.promise,
+        canceled,
+        "Branch read did not queue restoration",
+      );
+      controller.abort();
+      await withinTest(expect(canceled).resolves.toEqual({ status: "failed" }), signal);
+      spy.mockRestore();
+    } finally {
+      release.resolve(undefined);
+      await Promise.allSettled([held, canceled]);
+    }
+    const reads = vi.spyOn(transcriptWorker, "runSessionBranchSummaryWorkerRequest");
     await expect(listSessionBranches(fixture.scope)).resolves.toMatchObject({
       status: "ok",
       branches,
     });
+    expect(reads).toHaveBeenCalledTimes(2);
     expect(readSessionBranchSummariesInWorker(request)).toEqual(first);
   });
 
   it("recomputes summaries after physical database replacement with identical watermarks", async () => {
     const { env } = await createSession();
     const database = openOpenClawAgentDatabase({ agentId, env });
-    const first = await listSessionBranches({ agentId, env, sessionKey });
-    expect(first.status).toBe("ok");
+    expect((await listSessionBranches({ agentId, env, sessionKey })).status).toBe("ok");
 
     // Canonical close drains readers and checkpoints WAL before copying the complete database.
     await closeOpenClawAgentDatabaseByPathAsync(database.path, agentId);
@@ -220,7 +262,7 @@ describe("SQLite session branches", () => {
     expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
   });
 
-  it("refreshes appended and replaced sessions", async () => {
+  it("refreshes appended and replaced sessions when a write overtakes the branch reply", async () => {
     const { env, scope } = await createSession();
     const replacement = await createSiblingSession({
       env,
@@ -230,13 +272,20 @@ describe("SQLite session branches", () => {
     });
     await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
 
+    const read = transcriptWorker.runSessionBranchSummaryWorkerRequest;
+    vi.spyOn(transcriptWorker, "runSessionBranchSummaryWorkerRequest").mockImplementationOnce(
+      async (request) => {
+        const result = await read(request);
+        await appendTranscriptMessage(scope, {
+          eventId: "assistant-3",
+          message: { role: "assistant", content: "third answer" },
+          now: Date.parse("2026-07-18T00:00:07.000Z"),
+          parentId: "assistant-2",
+        });
+        return result;
+      },
+    );
     const before = await listSessionBranches({ agentId, env, sessionKey });
-    await appendTranscriptMessage(scope, {
-      eventId: "assistant-3",
-      message: { role: "assistant", content: "third answer" },
-      now: Date.parse("2026-07-18T00:00:07.000Z"),
-      parentId: "assistant-2",
-    });
 
     await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
     const after = await listSessionBranches({ agentId, env, sessionKey });
@@ -260,9 +309,7 @@ describe("SQLite session branches", () => {
       const aliasKey = `${sessionKey}:alias`;
       const targetKey = `${sessionKey}:fork`;
       const sourceEntry = loadSessionEntry(scope);
-      if (!sourceEntry) {
-        throw new Error("expected source session entry");
-      }
+      assert(sourceEntry, "expected source session entry");
       await upsertSessionEntryCore({ agentId, env, sessionKey: aliasKey }, sourceEntry);
       await listSessionBranches({ agentId, env, sessionKey });
 

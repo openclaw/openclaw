@@ -2,7 +2,6 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   prepareAgentRunTerminalReply,
   sanitizeAgentRunTerminalReply,
-  type PreparedAgentRunTerminalReply,
 } from "../agent-run-terminal-reply.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import {
@@ -54,15 +53,7 @@ export function resolveCliSourceReplyMirror(params: {
   return { payloads, delivered, visibleText };
 }
 
-export type PreparedCliRunTerminalReply = PreparedAgentRunTerminalReply & {
-  sourceReplyMirror: { payloads: ReplyPayload[]; delivered: boolean; visibleText?: string };
-  completedFinalSource: boolean;
-};
-
-export function prepareCliRunTerminalReply(
-  context: PreparedCliRunContext,
-  output: CliOutput,
-): PreparedCliRunTerminalReply {
+export function prepareCliRunTerminalReply(context: PreparedCliRunContext, output: CliOutput) {
   let sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
     runParams: context.params,
@@ -106,6 +97,8 @@ export function prepareCliRunTerminalReply(
     sourceReplyMirror,
     completedFinalSource,
     text,
+    // The final model message alone, transformed; `text` keeps earlier narration for delivery.
+    ...(prepared.terminalReply.disposition === "visible" ? { finalMessageText: finalText } : {}),
     terminalReply:
       prepared.terminalReply.disposition === "visible"
         ? sanitizeAgentRunTerminalReply(finalText)

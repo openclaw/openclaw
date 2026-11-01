@@ -19,13 +19,6 @@ const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;
 const DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024;
 
-export type ResolvedOpenAiChatCompletionsLimits = {
-  maxBodyBytes: number;
-  maxImageParts: number;
-  maxTotalImageBytes: number;
-  images: InputImageLimits;
-};
-
 function resolveImageLimits(
   config: GatewayHttpResponsesConfig["images"],
   allowUrl: boolean,
@@ -42,7 +35,7 @@ function resolveImageLimits(
 
 export function resolveOpenAiChatCompletionsLimits(
   config: GatewayHttpChatCompletionsConfig | undefined,
-): ResolvedOpenAiChatCompletionsLimits {
+) {
   return {
     maxBodyBytes: DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
     maxImageParts: DEFAULT_OPENAI_MAX_IMAGE_PARTS,

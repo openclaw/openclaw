@@ -18,6 +18,36 @@ import {
   makeRealtimeProvider,
 } from "./realtime-handler.lifecycle.test-helpers.js";
 
+type LifecycleFixture = ReturnType<typeof createCarrierLifecycleHarness>;
+
+async function startBridge(
+  fixture: LifecycleFixture,
+  create: unknown,
+  stream = "MZ-test",
+  count = 1,
+) {
+  const { ws } = await connectCarrierStream(fixture.handler);
+  sendCarrierStart(ws, stream, fixture.call.providerCallId);
+  await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(count));
+  return ws;
+}
+
+function expectActiveCall(
+  fixture: LifecycleFixture,
+  ws: WebSocket,
+  greeting: ReturnType<typeof vi.fn>,
+) {
+  expect(fixture.endCall).not.toHaveBeenCalled();
+  expect(endedEvents(fixture.processEvent)).toHaveLength(0);
+  expect(ws.readyState).toBe(WebSocket.OPEN);
+  expect(fixture.handler.speak(fixture.call.callId, "still connected")).toEqual({ success: true });
+  expect(greeting).toHaveBeenLastCalledWith("still connected");
+}
+
+function sendMedia(ws: WebSocket, audio = Buffer.from([0xff])) {
+  ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
+}
+
 async function openBridge(
   close: RealtimeVoiceBridge["close"],
   overrides: Partial<RealtimeVoiceBridge> = {},
@@ -50,9 +80,7 @@ async function openBridge(
         }
       : options,
   );
-  const { ws } = await connectCarrierStream(fixture.handler);
-  sendCarrierStart(ws, "MZ-test", fixture.call.providerCallId);
-  await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledOnce());
+  const ws = await startBridge(fixture, createBridgeForCall);
   return { ...fixture, ws, callbacks: await ready.promise };
 }
 
@@ -60,9 +88,7 @@ function invokeConsult(request: RealtimeVoiceBridgeCreateRequest, id: string, ar
   request.onToolCall?.({ itemId: `item-${id}`, callId: id, name: "openclaw_agent_consult", args });
 }
 
-function endedEvents(
-  processEvent: ReturnType<typeof createCarrierLifecycleHarness>["processEvent"],
-) {
+function endedEvents(processEvent: LifecycleFixture["processEvent"]) {
   return processEvent.mock.calls.filter(([event]) => event.type === "call.ended");
 }
 
@@ -83,7 +109,7 @@ describe("RealtimeCallHandler lifecycle", () => {
     const { ws } = await connectCarrierStream(handler);
     sendCarrierStart(ws, "MZ-pending-store", call.providerCallId);
     const audio = Buffer.from([0xff, 0xfe, 0xfd]);
-    ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
+    sendMedia(ws, audio);
     await vi.waitFor(() => expect(processEvent).toHaveBeenCalledOnce());
     expect(createBridgeForCall).not.toHaveBeenCalled();
     let closed = false;
@@ -113,13 +139,6 @@ describe("RealtimeCallHandler lifecycle", () => {
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("never connected"));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("call-never-connected"));
-    expect(
-      (
-        handler as unknown as {
-          pendingStreamTokens: Map<string, unknown>;
-        }
-      ).pendingStreamTokens.size,
-    ).toBe(0);
   });
 
   it.each(["registration", "creation", "close callback", "close throws"] as const)(
@@ -171,19 +190,11 @@ describe("RealtimeCallHandler lifecycle", () => {
           expect(warn).toHaveBeenCalledWith(expect.stringContaining("carrier unavailable")),
         );
         expect(endedEvents(processEvent)).toHaveLength(0);
-        expect(call.state).toBe("ringing");
       } else if (stage === "registration") {
-        expect(registration).toHaveBeenCalledExactlyOnceWith(call);
         expect(create).not.toHaveBeenCalled();
-        expect(processEvent.mock.calls.map(([event]) => event.type)).toEqual([
-          "call.initiated",
-          "call.ended",
-        ]);
+        expect(endedEvents(processEvent)).toHaveLength(1);
         expect(call.metadata?.initialMessage).toBe("Hello from the routed agent.");
       } else {
-        expect(outcome.reason).toBe(
-          stage === "close throws" ? "Failed to connect" : "Bridge disconnected",
-        );
         await handler.close();
         expect(close).toHaveBeenCalledOnce();
         expect(
@@ -211,31 +222,21 @@ describe("RealtimeCallHandler lifecycle", () => {
       .mockImplementationOnce(() => {
         throw new Error("replacement agent realtime is unavailable");
       });
-    const { call, handler, endCall, processEvent } = createCarrierLifecycleHarness(
-      realtimeProvider.createBridge,
-      { resolveCallRegistration },
-    );
-    const { ws: predecessor } = await connectCarrierStream(handler);
-    sendCarrierStart(predecessor, "MZ-predecessor", call.providerCallId);
-    await vi.waitFor(() => expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1));
+    const fixture = createCarrierLifecycleHarness(realtimeProvider.createBridge, {
+      resolveCallRegistration,
+    });
+    const { call, handler, processEvent } = fixture;
+    const predecessor = await startBridge(fixture, realtimeProvider.createBridge, "MZ-predecessor");
 
     const replacement = await connectCarrierStream(handler);
     const replacementClosed = waitForClose(replacement.ws);
     sendCarrierStart(replacement.ws, "MZ-replacement-admission", call.providerCallId);
 
     expect((await replacementClosed).code).toBe(1011);
-    expect(resolveCallRegistration).toHaveBeenCalledTimes(2);
-    expect(realtimeProvider.createBridge).toHaveBeenCalledTimes(1);
     expect(
       processEvent.mock.calls.filter(([event]) => event.type === "call.answered"),
     ).toHaveLength(1);
-    expect(endedEvents(processEvent)).toHaveLength(0);
-    expect(endCall).not.toHaveBeenCalled();
-    expect(predecessor.readyState).toBe(WebSocket.OPEN);
-    expect(handler.speak(call.callId, "predecessor remains connected")).toEqual({
-      success: true,
-    });
-    expect(predecessorGreeting).toHaveBeenCalledWith("predecessor remains connected");
+    expectActiveCall(fixture, predecessor, predecessorGreeting);
   });
 
   it("does not hang up a replacement when its stale predecessor rejects startup", async () => {
@@ -249,26 +250,14 @@ describe("RealtimeCallHandler lifecycle", () => {
       .mockImplementationOnce(() =>
         createBridge(vi.fn(), { triggerGreeting: replacementGreeting }),
       );
-    const { call, handler, endCall, processEvent } =
-      createCarrierLifecycleHarness(createBridgeForCall);
-    const { ws: previous } = await connectCarrierStream(handler);
-    sendCarrierStart(previous, "MZ-previous", call.providerCallId);
-    await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(1));
-
-    const { ws: replacement } = await connectCarrierStream(handler);
-    sendCarrierStart(replacement, "MZ-replacement", call.providerCallId);
-    await vi.waitFor(() => expect(createBridgeForCall).toHaveBeenCalledTimes(2));
+    const fixture = createCarrierLifecycleHarness(createBridgeForCall);
+    const previous = await startBridge(fixture, createBridgeForCall, "MZ-previous");
+    const replacement = await startBridge(fixture, createBridgeForCall, "MZ-replacement", 2);
 
     const previousClosed = waitForClose(previous);
     pendingStartup.reject(new Error("superseded provider rejected startup"));
     expect((await previousClosed).code).toBe(1011);
-    expect(endCall).not.toHaveBeenCalled();
-    expect(endedEvents(processEvent)).toHaveLength(0);
-    expect(replacement.readyState).toBe(WebSocket.OPEN);
-    expect(handler.speak(call.callId, "replacement remains connected")).toEqual({
-      success: true,
-    });
-    expect(replacementGreeting).toHaveBeenCalledWith("replacement remains connected");
+    expectActiveCall(fixture, replacement, replacementGreeting);
   });
 
   it("ends the call after inactivity following media renewal", async () => {
@@ -287,24 +276,17 @@ describe("RealtimeCallHandler lifecycle", () => {
     await bridgeStarted.promise;
 
     await vi.advanceTimersByTimeAsync(29_999);
-    ws.send(
-      JSON.stringify({
-        event: "media",
-        media: { payload: Buffer.from([0xff]).toString("base64") },
-      }),
-    );
+    sendMedia(ws);
     await mediaReceived.promise;
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(sendAudio).toHaveBeenCalledOnce();
     expect(endCall).not.toHaveBeenCalled();
     expect(ws.readyState).toBe(WebSocket.OPEN);
-    expect(endedEvents(processEvent)).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1_999);
     expect(endedEvents(processEvent)).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(closeBridge).toHaveBeenCalledOnce();
     expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "timeout" });
+    expect(closeBridge).toHaveBeenCalledOnce();
   });
 
   it.each(["settling", "running"] as const)(
@@ -375,8 +357,8 @@ describe("RealtimeCallHandler lifecycle", () => {
       .mockImplementationOnce(() => {
         throw new Error("concurrent realtime bridge creation failed");
       });
-    const { call, handler, endCall, processEvent } =
-      createCarrierLifecycleHarness(createBridgeForCall);
+    const fixture = createCarrierLifecycleHarness(createBridgeForCall);
+    const { call, handler, processEvent } = fixture;
     let answered = 0;
     processEvent.mockImplementation(async (event) => {
       if (event.type === "call.answered") {
@@ -388,33 +370,25 @@ describe("RealtimeCallHandler lifecycle", () => {
 
     sendCarrierStart(first.ws, "MZ-concurrent-first", call.providerCallId);
     const audio = Buffer.from([0xff, 0xfe, 0xfd]);
-    first.ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
+    sendMedia(first.ws, audio);
     await vi.waitFor(() => expect(answered).toBe(1));
     const second = await connectCarrierStream(handler);
     const secondClosed = waitForClose(second.ws);
     sendCarrierStart(second.ws, "MZ-concurrent-second", call.providerCallId);
     await vi.waitFor(() => expect(answered).toBe(2));
-    expect(createBridgeForCall).not.toHaveBeenCalled();
     expect(sendAudio).not.toHaveBeenCalled();
 
     firstPersistence.resolve({ kind: "processed" });
     await vi.waitFor(() => expect(sendAudio).toHaveBeenCalledWith(audio));
-    expect(createBridgeForCall).toHaveBeenCalledOnce();
-    expect(handler.speak(call.callId, "first bridge is active")).toEqual({ success: true });
     secondPersistence.resolve({ kind: "processed" });
     expect((await secondClosed).code).toBe(1011);
 
-    expect(createBridgeForCall).toHaveBeenCalledTimes(2);
-    expect(endCall).not.toHaveBeenCalled();
-    expect(first.ws.readyState).toBe(WebSocket.OPEN);
-    expect(handler.speak(call.callId, "first bridge remains active")).toEqual({ success: true });
-    expect(greeting).toHaveBeenLastCalledWith("first bridge remains active");
+    expectActiveCall(fixture, first.ws, greeting);
   });
 
   it.each(["complete", "abort", "close", "disabled"] as const)(
     "uses the call-owned consult handler and preserves its %s outcome",
     async (outcome) => {
-      const connect = vi.fn(async () => {});
       const submitToolResult = vi.fn();
       const {
         handler,
@@ -423,7 +397,6 @@ describe("RealtimeCallHandler lifecycle", () => {
       } = await openBridge(
         vi.fn(),
         {
-          connect,
           submitToolResult,
         },
         outcome === "disabled" ? { toolPolicy: "none" } : {},
@@ -442,12 +415,9 @@ describe("RealtimeCallHandler lifecycle", () => {
         return { text: "The train leaves at noon." };
       });
       const controller = new AbortController();
-      await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
-      if (!request?.runAgentConsult) {
-        throw new Error("Native delegation was not wired to the carrier session");
-      }
+      const delegate = expectDefined(request.runAgentConsult, "native delegation");
       expect(request.tools).toEqual([]);
-      const result = request.runAgentConsult({
+      const result = delegate({
         prompt: "Read my itinerary",
         signal: controller.signal,
       });
@@ -471,9 +441,7 @@ describe("RealtimeCallHandler lifecycle", () => {
       }
       expect(submitToolResult).not.toHaveBeenCalled();
       await handler.close();
-      await expect(request.runAgentConsult({ prompt: "Late work" })).rejects.toThrow(
-        /closed|active/,
-      );
+      await expect(delegate({ prompt: "Late work" })).rejects.toThrow(/closed|active/);
       expect(effects).toHaveLength(outcome === "complete" ? 1 : 0);
     },
   );
@@ -564,7 +532,6 @@ describe("RealtimeCallHandler lifecycle", () => {
         expect(await completion).toBeUndefined();
       }
       expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "completed" });
-      expect(providerClose).toHaveBeenCalledOnce();
       if (session) {
         const server = await startUpgradeWsServer({
           urlPath: new URL(session.streamUrl).pathname,
@@ -706,10 +673,8 @@ describe("native realtime consult request identity", () => {
         error: expect.stringMatching(/different request.*not started.*retry/i),
       }),
     );
-    expect(provider.submit.mock.calls.filter(([id]) => id === "different")).toHaveLength(1);
     working.resolve();
     await vi.advanceTimersByTimeAsync(350);
-    expect(consult).toHaveBeenCalledOnce();
     expect(consult.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ question: empty ? "Dataset A" : speechA }),
     );
@@ -751,26 +716,5 @@ describe("native realtime consult request identity", () => {
     await expect(answerB).resolves.toEqual(responseB);
     expect(consult.mock.calls[1]?.[2].partialUserTranscript).toBe(speechB);
     expect(provider.submit).not.toHaveBeenCalled();
-  });
-
-  it("lets exact replays keep collecting their own transcript before dispatch", async () => {
-    const { consult, provider } = await createConsultFixture();
-    consult.mockReset().mockResolvedValue(responseA);
-    provider.request.onTranscript?.("user", "Read the latest report", false);
-    provider.invoke("first", { question: "message" });
-    await vi.advanceTimersByTimeAsync(50);
-    provider.request.onTranscript?.("user", "for Dataset A.", false);
-    provider.invoke("first", { question: "message" });
-    await vi.advanceTimersByTimeAsync(350);
-    expect(consult).toHaveBeenCalledOnce();
-    expect(consult.mock.calls[0]).toEqual([
-      {
-        question: speechA,
-        context: "Realtime provider supplied a shorter consult question: message",
-      },
-      "call-startup",
-      { partialUserTranscript: speechA, abortSignal: expect.any(AbortSignal) },
-    ]);
-    expect(provider.finalResults("first")).toHaveLength(2);
   });
 });

@@ -22,7 +22,12 @@ const png = Buffer.from(
   "base64",
 );
 
-function guardedNodes(workspaceDir: string, sandbox = false) {
+it.each([
+  ["capture.mp4", false],
+  ["/workspace/capture.mp4", true],
+  ["/etc/passwd", false],
+] as const)("guards node output %s (sandbox=%s)", async (outPath, sandbox) => {
+  const workspaceDir = tempDirs.make("openclaw-nodes-workspace-");
   const execute = vi.fn(async () => ({ content: [], details: {} }));
   const tool = applyNodesToolWorkspaceGuard(
     { name: "nodes", label: "Nodes", description: "Nodes", parameters: Type.Object({}), execute },
@@ -32,30 +37,19 @@ function guardedNodes(workspaceDir: string, sandbox = false) {
       ...(sandbox ? { sandboxRoot: workspaceDir, sandboxContainerWorkdir: "/workspace" } : {}),
     },
   );
-  return { tool, execute };
-}
-
-it.each([
-  { outPath: "capture.mp4", sandbox: false },
-  { outPath: "/workspace/capture.mp4", sandbox: true },
-])("normalizes $outPath before executing the node tool", async ({ outPath, sandbox }) => {
-  const workspace = tempDirs.make("openclaw-nodes-workspace-");
-  const { tool, execute } = guardedNodes(workspace, sandbox);
-  await tool.execute("capture", { action: "screen_record", outPath });
-  expect(execute).toHaveBeenCalledExactlyOnceWith(
-    "capture",
-    { action: "screen_record", outPath: path.join(workspace, "capture.mp4") },
-    undefined,
-    undefined,
-  );
-});
-
-it("rejects an output outside the workspace before node execution", async () => {
-  const { tool, execute } = guardedNodes(tempDirs.make("openclaw-nodes-workspace-"));
-  await expect(tool.execute("capture", { outPath: "/etc/passwd" })).rejects.toThrow(
-    /Path escapes sandbox root/,
-  );
-  expect(execute).not.toHaveBeenCalled();
+  const result = tool.execute("capture", { action: "screen_record", outPath });
+  if (outPath === "/etc/passwd") {
+    await expect(result).rejects.toThrow(/Path escapes sandbox root/);
+    expect(execute).not.toHaveBeenCalled();
+  } else {
+    await result;
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      "capture",
+      { action: "screen_record", outPath: path.join(workspaceDir, "capture.mp4") },
+      undefined,
+      undefined,
+    );
+  }
 });
 function createMediaTool(name: string, options: Parameters<typeof createOpenClawTools>[0]) {
   const tool = createOpenClawTools({
@@ -125,16 +119,11 @@ it("loads session-worktree images with workspaceOnly=true", async () => {
 });
 
 it("keeps sandbox media on its bridge despite a different host session root", async () => {
-  const workspaceDir = tempDirs.make("openclaw-media-canonical-");
-  const hostRoot = tempDirs.make("openclaw-media-host-");
+  const { imagePath: hostImage, options } = await sessionFiles("host.png");
   const sandboxRoot = tempDirs.make("openclaw-media-sandbox-");
   await fs.writeFile(path.join(sandboxRoot, "screenshot.png"), png);
-  const hostImage = path.join(hostRoot, "host.png");
-  await fs.writeFile(hostImage, png);
   const tool = createMediaTool("view_image", {
-    workspaceDir,
-    cwd: hostRoot,
-    fsPolicy: { workspaceOnly: true, root: hostRoot },
+    ...options,
     sandboxRoot,
     sandboxFsBridge: createHostSandboxFsBridge(sandboxRoot),
   });

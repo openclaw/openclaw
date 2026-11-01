@@ -69,6 +69,18 @@ describe("root memory repair", () => {
     return hasDistinctRootMemoryFiles(tmpDir);
   }
   const repair = () => maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+  function onArchive(
+    before?: (source: Parameters<typeof fs.rename>[0]) => Promise<unknown>,
+    after?: (...paths: Parameters<typeof fs.rename>) => Promise<unknown>,
+  ) {
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (source, target) => {
+      await before?.(source);
+      rename.mockRestore();
+      await fs.rename(source, target);
+      await after?.(source, target);
+    });
+  }
   function expectSkipped(reason: string) {
     expect(note).toHaveBeenCalledExactlyOnceWith(
       `Workspace memory root repair skipped (${reason}):\n- current: ${canonicalPath}\n- legacy: ${legacyPath}`,
@@ -104,75 +116,56 @@ describe("root memory repair", () => {
     await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
   });
 
-  it("preserves invalid UTF-8 introduced into the legacy memory archive", async () => {
-    const canonical = Buffer.from("# Canonical\n");
-    const invalid = Buffer.from([0x23, 0x20, 0xff, 0x0a]);
-    if (!(await seedMemory(canonical))) {
-      return;
-    }
-    const rename = vi.spyOn(fs, "rename");
-    rename.mockImplementationOnce(async (source, target) => {
-      rename.mockRestore();
-      await fs.rename(source, target);
-      await fs.writeFile(target, invalid);
-    });
-
-    await repair();
-
-    await expect(fs.readFile(canonicalPath)).resolves.toEqual(canonical);
-    const message = String(note.mock.calls[0]?.[0]);
-    for (const text of ["not valid UTF-8", canonicalPath, legacyPath]) {
-      expect(message).toContain(text);
-    }
-    expect(message).not.toContain("Workspace memory root merged");
-    await expectPathMissing(legacyPath);
-    const archive = await expectArchivedLegacyMemory();
-    await expect(fs.readFile(archive)).resolves.toEqual(invalid);
-    expect(message).toContain(`- preserved archive: ${archive}`);
-  });
+  it.each(["invalid UTF-8", "oversized"])(
+    "preserves the archive when its content becomes %s after validation",
+    async (failure) => {
+      if (!(await seedMemory())) {
+        return;
+      }
+      const invalid = Buffer.from([0x23, 0x20, 0xff, 0x0a]);
+      const oversized = failure === "oversized";
+      onArchive(
+        oversized ? (source) => fs.appendFile(source, Buffer.alloc(9 * 1024 * 1024)) : undefined,
+        (source, target) =>
+          oversized
+            ? fs.writeFile(source, "# Concurrent replacement\n")
+            : fs.writeFile(target, invalid),
+      );
+      await repair();
+      await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
+      const archive = await expectArchivedLegacyMemory();
+      if (!oversized) {
+        await expect(fs.readFile(archive)).resolves.toEqual(invalid);
+      }
+      const message = String(note.mock.calls[0]?.[0]);
+      for (const text of [
+        oversized ? "safe read limit" : "not valid UTF-8",
+        canonicalPath,
+        legacyPath,
+        `- preserved archive: ${archive}`,
+      ]) {
+        expect(message).toContain(text);
+      }
+      expect(message).not.toContain("Workspace memory root merged");
+      if (oversized) {
+        await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("# Concurrent replacement\n");
+      } else {
+        await expectPathMissing(legacyPath);
+      }
+    },
+  );
 
   it("reads legacy content after moving it into the archive", async () => {
     if (!(await seedMemory())) {
       return;
     }
 
-    const rename = vi.spyOn(fs, "rename");
-    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
-      await fs.appendFile(sourcePath, "# Added before archive\n", "utf8");
-      rename.mockRestore();
-      await fs.rename(sourcePath, targetPath);
-    });
+    onArchive((source) => fs.appendFile(source, "# Added before archive\n", "utf8"));
 
     await repair();
     const canonical = await fs.readFile(canonicalPath, "utf8");
     expect(canonical).toContain("# Legacy");
     expect(canonical).toContain("# Added before archive");
-  });
-
-  it("preserves a concurrent legacy replacement beside the archive", async () => {
-    if (!(await seedMemory())) {
-      return;
-    }
-
-    const rename = vi.spyOn(fs, "rename");
-    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
-      await fs.appendFile(sourcePath, Buffer.alloc(9 * 1024 * 1024));
-      rename.mockRestore();
-      await fs.rename(sourcePath, targetPath);
-      await fs.writeFile(sourcePath, "# Concurrent replacement\n", "utf8");
-    });
-
-    await repair();
-
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Workspace memory root repair skipped (a file exceeded the safe read limit):",
-      ),
-      "Doctor changes",
-    );
-    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("# Concurrent replacement\n");
-    await expectArchivedLegacyMemory();
-    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
   });
 
   it("warns and repairs split-brain root memory through workspace doctor helpers", async () => {

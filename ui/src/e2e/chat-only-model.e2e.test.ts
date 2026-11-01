@@ -67,7 +67,7 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
 
     const main = page.getByRole("main");
     const composer = main.locator(".agent-chat__composer-shell");

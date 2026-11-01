@@ -119,6 +119,7 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
       gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
+        initializeCurrentRuntimeState: true,
         command: {
           executablePath: process.execPath,
           argsPrefix: ["--import", "tsx", "src/entry.ts"],

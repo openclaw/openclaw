@@ -9,16 +9,12 @@ import type { AgentContextPruningConfig } from "../../config/types.agent-default
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
-import {
-  calculateMaxToolResultCharsWithCap,
-  resolveAutoLiveToolResultMaxChars,
-  resolveLiveToolResultMaxChars,
-} from "../tool-result-limits.js";
+import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { readCacheTtlCheckpoint } from "./cache-ttl-checkpoint.js";
 import * as truncationNotice from "./context-truncation-notice.js";
 import { log } from "./logger.js";
@@ -36,8 +32,10 @@ import {
 import { projectToolResultMessage } from "./tool-result-projection-message.js";
 import {
   estimateToolResultTextChars,
+  getToolResultHistoryTextBudget,
+  getToolResultTextBudget,
   isToolResultTextBlock,
-  readPreparedToolResultTextChars,
+  prepareToolResultTextChars,
   sliceToolResultTextTailToBudget,
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
@@ -171,7 +169,7 @@ function softPruneCacheTtlToolResult(
       ? text
       : `${sliceUtf16Safe(text, 0, 1_500)}\n...\n${sliceUtf16Safe(text, -1_500)}\n\n` +
         `[Tool result trimmed: kept first 1500 chars and last 1500 chars of ${text.length} chars.]`;
-  return { ...message, content: freezeJsonSnapshot([{ type: "text", text: projected }]) };
+  return { ...message, content: freezeTrustedJsonSnapshot([{ type: "text", text: projected }]) };
 }
 
 /** Projects expired cache-TTL history without mutating the transcript. */
@@ -280,7 +278,7 @@ export function pruneExpiredCacheTtlToolResults(params: {
       }
       const cleared = {
         ...message,
-        content: freezeJsonSnapshot([{ type: "text" as const, text: settings.placeholder }]),
+        content: freezeTrustedJsonSnapshot([{ type: "text" as const, text: settings.placeholder }]),
       };
       totalChars += cacheTtlMessageChars(cleared) - chars;
       recordProjection(index, cleared, "hard");
@@ -459,20 +457,6 @@ export function resolveLiveToolResultAggregateMaxChars(params: {
   );
 }
 
-function getToolResultTextBudget(msg: AgentMessage): number {
-  if (!msg || msg.role !== "toolResult") {
-    return 0;
-  }
-  const content = (msg as { content?: unknown }).content;
-  return Array.isArray(content)
-    ? content.reduce(
-        (total, block) =>
-          total + (isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text) : 0),
-        0,
-      )
-    : 0;
-}
-
 export function truncateToolResultMessage(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
   maxChars: number,
@@ -488,9 +472,7 @@ export function truncateToolResultMessage(
   maxChars: number,
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
-  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
   const budgetOptions = { minimumRawWeight: options.minimumRawWeight };
-  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
@@ -498,14 +480,15 @@ export function truncateToolResultMessage(
 
   const blockTextChars = content.map((block) =>
     isToolResultTextBlock(block)
-      ? (readPreparedToolResultTextChars(block, block.text, budgetOptions.minimumRawWeight ?? 1) ??
-        estimateToolResultTextChars(block.text, budgetOptions))
+      ? prepareToolResultTextChars(block, block.text, budgetOptions.minimumRawWeight ?? 1)
       : 0,
   );
   const totalTextChars = blockTextChars.reduce((sum, chars) => sum + chars, 0);
   if (totalTextChars <= maxChars) {
     return msg;
   }
+  const suffixFactory = options.suffix ?? truncationNotice.forMessage(msg);
+  const minKeepChars = resolveEffectiveMinKeepChars(maxChars, options, suffixFactory);
 
   // A caller's raw-text safety floor changes cost, not which semantic blocks
   // are short. Reserve their actual weighted cost before shrinking larger text.
@@ -695,10 +678,7 @@ function resolveToolResultBudgets(params: {
   const maxChars = Math.max(
     1,
     params.maxCharsOverride ??
-      calculateMaxToolResultCharsWithCap(
-        params.contextWindowTokens,
-        resolveAutoLiveToolResultMaxChars(params.contextWindowTokens),
-      ),
+      resolveLiveToolResultMaxChars({ contextWindowTokens: params.contextWindowTokens }),
   );
   return {
     maxChars,
@@ -735,7 +715,7 @@ export function restoreCacheTtlToolResultProjections(
     projectionState.frozen.add(key);
     if (texts) {
       projectionState.replacements.set(key, {
-        content: freezeJsonSnapshot(texts.map((text) => ({ type: "text" as const, text }))),
+        content: freezeTrustedJsonSnapshot(texts.map((text) => ({ type: "text" as const, text }))),
       });
     }
   }
@@ -845,7 +825,7 @@ function materializeRestoredCacheTtl(
       mark.mode === "hard"
         ? {
             ...message,
-            content: freezeJsonSnapshot([{ type: "text" as const, text: mark.placeholder }]),
+            content: freezeTrustedJsonSnapshot([{ type: "text" as const, text: mark.placeholder }]),
           }
         : softPruneCacheTtlToolResult(message);
     recordToolResultPromptProjection(state, key, projected, mark.mode);
@@ -908,11 +888,23 @@ function buildToolResultReplacementPlan(params: {
   protectTrailingToolResults?: boolean;
 }) {
   // Plan on message positions; transcript entry IDs belong only to the rewrite boundary.
+  const { textLengths, totalChars, largestChars } = getToolResultHistoryTextBudget(params.messages);
+  if (largestChars <= params.maxChars && totalChars <= params.aggregateBudgetChars) {
+    return {
+      messages: params.messages,
+      changedIndices: new Set<number>(),
+      oversizedReplacementCount: 0,
+      aggregateReplacementCount: 0,
+      aggregatePressureExceeded: false,
+      oversizedReducibleChars: 0,
+      aggregateReducibleChars: 0,
+    };
+  }
   const trailingStart = params.protectTrailingToolResults
     ? params.messages.findLastIndex((message) => message.role === "assistant") + 1
     : params.messages.length;
   const candidates = params.messages.flatMap((message, index) => {
-    const textLength = getToolResultTextBudget(message);
+    const textLength = textLengths[index]!;
     return message.role === "toolResult" && textLength > 0
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];

@@ -26,7 +26,15 @@ type TimeSeriesProps = {
 };
 
 export function deriveTimeSeries(
-  detail: UsageProps["detail"],
+  detail: Pick<
+    UsageProps["detail"],
+    | "timeSeries"
+    | "timeSeriesStatus"
+    | "timeSeriesMode"
+    | "timeSeriesBreakdownMode"
+    | "timeSeriesCursorStart"
+    | "timeSeriesCursorEnd"
+  >,
   range: ReturnType<typeof prepareUsageDateRange>,
   usage: UsageSessionEntry["usage"],
 ) {
@@ -72,7 +80,7 @@ export function deriveTimeSeries(
   const first = selectedPoints[0];
   const last = selectedPoints.at(-1);
   const filteredUsage =
-    hasSelection && usage && first && last && timeSeries?.usageReport?.state !== "unavailable"
+    hasSelection && usage && first && last
       ? {
           ...usage,
           ...filteredTokens,
@@ -84,15 +92,6 @@ export function deriveTimeSeries(
       : undefined;
   if (status.error && !status.hasLoaded) {
     return { chart: null, emptyKey: null, showTitle: true, showStatus: true, filteredUsage };
-  }
-  if (timeSeries?.usageReport?.state === "unavailable") {
-    return {
-      chart: null,
-      emptyKey: "usage.unavailable",
-      showTitle: true,
-      showStatus: true,
-      filteredUsage,
-    };
   }
   if (!timeSeries || timeSeries.points.length < 2) {
     return {

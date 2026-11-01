@@ -95,3 +95,22 @@ it("updates saved data and contains invalid report content without executing it"
   expect(element.querySelector('[role="alert"]')).not.toBeNull();
   expect(element.querySelector("a,iframe,script")).toBeNull();
 });
+
+it("retains report content and focus when a board refresh only changes widget metadata", async () => {
+  const props = {
+    blocks: [
+      { type: "text", text: "Original" },
+      chart("line", [1, 2]),
+      { type: "links", items: [{ label: "Details", url: "https://example.com/report" }] },
+    ],
+  };
+  const element = await mount(props);
+  const graphic = element.querySelector("svg");
+  const link = element.querySelector("a")!;
+  link.focus();
+  element.widget = { ...widget(structuredClone(props)), title: "Renamed report", revision: 2 };
+  await element.updateComplete;
+  expect(element.querySelector("article")?.getAttribute("aria-label")).toBe("Renamed report");
+  expect(element.querySelector("svg")).toBe(graphic);
+  expect(document.activeElement).toBe(link);
+});

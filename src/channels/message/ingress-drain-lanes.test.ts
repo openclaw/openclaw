@@ -39,6 +39,112 @@ async function drainIdle(drain: ReturnType<typeof createChannelIngressDrain<Payl
 }
 
 describe("channel ingress drain lanes", () => {
+  it("preserves priority FIFO without bypassing a retry-delayed lane head", async () => {
+    await withTempState(async (stateDir) => {
+      let currentNow = 10_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => currentNow });
+      const dispatches: string[] = [];
+      for (const id of ["ambient-a", "live-a", "live-b", "ambient-b"]) {
+        await enqueue(queue, id);
+      }
+      const claim = expectDefined(await queue.claim("ambient-a"), "retry head");
+      await queue.release(claim, { lastError: "retry", releasedAt: currentNow });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => currentNow,
+        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+        prioritizePending: (event) => event.id.startsWith("live-"),
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          await lifecycle.onAdopted();
+        },
+      });
+      try {
+        expect(await drain.drainOnce()).toEqual({ started: 0 });
+        currentNow += 60_000;
+        for (let pass = 0; pass < 4; pass++) {
+          await drainIdle(drain);
+        }
+        expect(dispatches).toEqual(["live-a", "live-b", "ambient-a", "ambient-b"]);
+        expect(await queue.listPending()).toEqual([]);
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
+
+  it("blocks active, peer-owned, and delayed lanes without ordering their keys", async () => {
+    await withTempState(async (stateDir) => {
+      const currentNow = 10_000;
+      const queue = createTestIngressQueue(stateDir, { now: () => currentNow });
+      const dispatches: string[] = [];
+      const peer = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => currentNow,
+        dispatchClaimedEvent: () => ({ kind: "deferred" }),
+      });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => currentNow,
+        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          if (event.id.startsWith("active-")) {
+            return { kind: "deferred" };
+          }
+          await lifecycle.onAdopted();
+          return undefined;
+        },
+      });
+      try {
+        for (const id of ["peer-z", "peer-a"]) {
+          await enqueue(queue, id, id);
+        }
+        await drainIdle(peer);
+        for (const id of ["active-z", "active-a"]) {
+          await enqueue(queue, id, id);
+        }
+        await drainIdle(drain);
+        for (const id of ["delayed-z", "delayed-a"]) {
+          await enqueue(queue, id, id);
+          const claim = expectDefined(await queue.claim(id), "delayed claim");
+          await queue.release(claim, { lastError: "retry", releasedAt: currentNow });
+        }
+        const blocked = ["peer-z", "peer-a", "active-z", "active-a", "delayed-z", "delayed-a"];
+        for (const lane of blocked) {
+          await enqueue(queue, `${lane}-tail`, lane, 2);
+        }
+        await enqueue(queue, "eligible", "eligible", 3);
+
+        const compare = vi.spyOn(String.prototype, "localeCompare");
+        let comparisons: number;
+        try {
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          comparisons = compare.mock.calls.length;
+        } finally {
+          compare.mockRestore();
+        }
+
+        expect(dispatches).toEqual(["active-a", "active-z", "eligible"]);
+        expect((await queue.listClaims()).map((claim) => claim.id)).toEqual(
+          expect.arrayContaining(["peer-z", "peer-a", "active-z", "active-a"]),
+        );
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(
+          expect.arrayContaining([
+            "delayed-z",
+            "delayed-a",
+            ...blocked.map((lane) => `${lane}-tail`),
+          ]),
+        );
+        expect(comparisons).toBe(0);
+      } finally {
+        drain.dispose();
+        peer.dispose();
+      }
+    });
+  });
+
   it("keeps a competing head ahead of its tail while dispatching reconciled and retained lanes", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);

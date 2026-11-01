@@ -217,14 +217,7 @@ export function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
   const probeEmbeddingAvailability =
     options.probeEmbeddingAvailability ?? vi.fn().mockResolvedValue({ ok: true });
   getMemorySearchManager.mockResolvedValue({
-    manager: {
-      status: options.status,
-      probeEmbeddingAvailability,
-      ...(options.getCachedEmbeddingAvailability
-        ? { getCachedEmbeddingAvailability: options.getCachedEmbeddingAvailability }
-        : {}),
-      close,
-    },
+    manager: { ...options, probeEmbeddingAvailability, close },
   });
   return { close, probeEmbeddingAvailability };
 }

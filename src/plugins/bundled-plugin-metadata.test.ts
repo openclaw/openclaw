@@ -1,29 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
-import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { assert, beforeEach, describe, expect, it } from "vitest";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-plugin-ids.js";
+import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import {
   createGeneratedPluginTempRoot,
   installGeneratedPluginTempRootCleanup,
   pluginTestRepoRoot as repoRoot,
   writeJson,
 } from "./generated-plugin-test-helpers.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import {
-  getPackageManifestMetadata,
-  loadPluginManifest,
-  type PackageManifest,
-} from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import {
-  createPluginManifestRecordFixture,
-  createPluginMetadataSnapshotFixture,
-} from "./plugin-metadata.test-support.js";
 import { writeBundledRuntimeSidecarPathBaseline } from "./runtime-sidecar-paths-baseline.js";
 
 // llama-cpp starts for its enabled local_image tool factory, not a startup sidecar.
@@ -64,80 +56,32 @@ function writeEntry(root: string, relative: string) {
 }
 
 function collectRepoBundledChannelConfigsForTest(dirName: string) {
-  const pluginDir = path.join(repoRoot, "extensions", dirName);
-  const manifest = loadPluginManifest(pluginDir, false);
-  if (!manifest.ok) {
-    throw toLintErrorObject(manifest.error, "Non-Error thrown");
-  }
-  const packagePath = path.join(pluginDir, "package.json");
-  const packageManifest: PackageManifest | undefined = fs.existsSync(packagePath)
-    ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
-    : undefined;
+  const metadata = listBundledPluginMetadata({
+    rootDir: repoRoot,
+    includeChannelConfigs: false,
+  }).find((entry) => entry.dirName === dirName);
+  assert(metadata, `missing bundled plugin ${dirName}`);
   return collectBundledChannelConfigsCore({
-    pluginDir,
-    manifest: manifest.manifest,
-    packageManifest: getPackageManifestMetadata(packageManifest),
+    pluginDir: path.join(repoRoot, "extensions", dirName),
+    manifest: metadata.manifest,
+    packageManifest: metadata.packageManifest,
   });
 }
 
-function listRepoBundledPluginManifestsUncached() {
-  const bundledPluginsDir = path.join(repoRoot, "extensions");
-  return fs
-    .readdirSync(bundledPluginsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .toSorted()
-    .flatMap((dirName) => {
-      const result = loadPluginManifest(path.join(bundledPluginsDir, dirName), false);
-      return result.ok ? [{ dirName, manifest: result.manifest }] : [];
-    });
-}
-
-let repoBundledPluginManifestsCache: ReturnType<typeof listRepoBundledPluginManifestsUncached>;
-
 function createRepoBundledManifestRegistry(): PluginManifestRegistry {
-  return {
-    plugins: (repoBundledPluginManifestsCache ??= listRepoBundledPluginManifestsUncached()).map(
-      ({ manifest, dirName }) =>
-        createPluginManifestRecordFixture({
-          id: manifest.id,
-          enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
-          enabledByDefaultOnPlatforms: manifest.enabledByDefaultOnPlatforms,
-          kind: manifest.kind,
-          channels: manifest.channels ?? [],
-          providers: manifest.providers ?? [],
-          cliBackends: manifest.cliBackends ?? [],
-          syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
-          nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
-          skills: manifest.skills ?? [],
-          rootDir: path.join(repoRoot, "extensions", dirName),
-          source: path.join(repoRoot, "extensions", dirName, "index.ts"),
-          activation: manifest.activation,
-          setup: manifest.setup,
-          modelCatalog: manifest.modelCatalog,
-          contracts: manifest.contracts,
-        }),
-    ),
-    diagnostics: [],
-  };
+  return loadBundledPluginManifestRegistry({
+    env: {},
+    bundledRoot: path.join(repoRoot, "extensions"),
+  });
 }
 
 function createInstalledPluginIndexForManifests(manifestRegistry: PluginManifestRegistry) {
-  const index = createPluginMetadataSnapshotFixture(manifestRegistry).index;
-  index.plugins = manifestRegistry.plugins.map((record, i) => ({
-    ...index.plugins[i]!,
-    enabled: record.enabledByDefault === true,
-    enabledByDefault: record.enabledByDefault,
-    enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms,
-    startup: {
-      sidecar: record.activation?.onStartup === true,
-      memory: Array.isArray(record.kind)
-        ? record.kind.includes("memory")
-        : record.kind === "memory",
-      agentHarnesses: [
-        ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...record.cliBackends]),
-      ].toSorted((left, right) => left.localeCompare(right)),
-    },
+  const index = createInstalledPluginIndexFixture(manifestRegistry);
+  index.plugins = index.plugins.map((plugin, i) => ({
+    ...plugin,
+    packageBuild: undefined,
+    enabledByDefaultOnPlatforms: manifestRegistry.plugins[i]!.enabledByDefaultOnPlatforms,
+    enabled: plugin.enabledByDefault === true,
   }));
   return index;
 }

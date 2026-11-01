@@ -2,7 +2,8 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   disposeSelectedSessionMessageSubscription,
@@ -24,10 +25,7 @@ it.each<[string, boolean]>([
   const retry = change === "timeout" || change === "session changed";
   const succeeds = retry || change === "upgraded";
   if (retry) {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    useFakeClock();
   }
   const cached = retry ? [{ role: "assistant", content: "Cached conversation" }] : [];
   const completed = [...cached, { role: "assistant", content: "Completed before admission." }];

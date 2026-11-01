@@ -13,10 +13,13 @@ import {
   isDocsMarkdownLintPath,
 } from "../changed-lanes.mts";
 import { hasProtocolGenerationInput } from "../lib/ci-check-family-scope.mts";
+import { toolingDependencyOptions } from "../lib/tooling-dependencies.mjs";
 
 type FreshnessCheck = {
   name: string;
   script: string;
+  /** Explicitly opts this entry into qualified tooling without a workspace link. */
+  toolingEntrypoint?: string;
   args: string[];
   fix: string;
   /** Staged paths that select the check. A trigger list, not the check's full input set. */
@@ -61,15 +64,17 @@ export function selectStagedFreshnessChecks(paths: string[]): FreshnessCheck[] {
     {
       name: "native app i18n inventory",
       script: "native:i18n:verify",
-      args: [],
-      fix: "pnpm native:i18n:baseline",
+      toolingEntrypoint: "scripts/native-app-i18n.ts",
+      args: ["verify"],
+      fix: "pnpm native:i18n:baseline from an independently installed checkout of this branch",
       selects: hasNativeI18nInput,
       unstagedInputs: "tree",
     },
     {
       name: "config docs baseline",
       script: "config:docs:check",
-      args: [],
+      toolingEntrypoint: "scripts/generate-config-doc-baseline.ts",
+      args: ["--check"],
       fix: "pnpm config:docs:gen",
       selects: hasConfigDocInput,
       unstagedInputs: "tree",
@@ -111,6 +116,19 @@ function replayingCommits() {
 
 // pnpm startup dominates these checks, so plain `node ...` package scripts run directly.
 function resolveCommand(check: FreshnessCheck): [string, string[]] {
+  if (check.toolingEntrypoint) {
+    const tooling = toolingDependencyOptions(process.cwd(), check.script, { tsx: true });
+    return [
+      process.versions.bun ? "node" : process.execPath,
+      [
+        ...(tooling.execArgv ?? []),
+        "--import",
+        tooling.tsxImport ?? new URL("../tsx.mjs", import.meta.url).href,
+        check.toolingEntrypoint,
+        ...check.args,
+      ],
+    ];
+  }
   const script = JSON.parse(readFileSync("package.json", "utf8")).scripts?.[check.script];
   if (typeof script === "string" && /^node(?: [\w./:=@-]+)+$/u.test(script)) {
     return [process.execPath, [...script.split(" ").slice(1), ...check.args]];
@@ -120,9 +138,18 @@ function resolveCommand(check: FreshnessCheck): [string, string[]] {
 
 // Independent read-only checks run together so the hook costs the slowest one.
 async function run(check: FreshnessCheck) {
-  const [command, args] = resolveCommand(check);
+  let invocation: [string, string[]];
+  try {
+    invocation = resolveCommand(check);
+  } catch (error) {
+    return { check, status: 1, output: String(error) };
+  }
+  const [command, args] = invocation;
   return await new Promise<{ check: FreshnessCheck; status: number; output: string }>((resolve) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: check.toolingEntrypoint ? { ...process.env, TSX_DISABLE_CACHE: "1" } : process.env,
+    });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
     child.stderr.on("data", (chunk) => (output += chunk));

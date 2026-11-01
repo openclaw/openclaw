@@ -19,6 +19,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 
 const primary = "pin-alpha/exact-supported";
@@ -72,18 +73,15 @@ module.exports = {
   },
 };`,
   });
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-      providers: [id],
-      modelCatalog: { providers: { [id]: { models: [{ id: "catalog-model" }] } } },
-      ...(options.aliases
-        ? { modelIdNormalization: { providers: { [id]: { aliases: options.aliases } } } }
-        : {}),
-    }),
-  );
+  writeFixtureJsonSync(path.join(plugin.dir, "openclaw.plugin.json"), {
+    id,
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+    providers: [id],
+    modelCatalog: { providers: { [id]: { models: [{ id: "catalog-model" }] } } },
+    ...(options.aliases
+      ? { modelIdNormalization: { providers: { [id]: { aliases: options.aliases } } } }
+      : {}),
+  });
   return plugin;
 }
 

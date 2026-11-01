@@ -11,6 +11,7 @@ import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
+  requireElement as required,
   resetTranscriptTestDom,
   threadProps,
 } from "./chat-transcript.test-support.ts";
@@ -36,23 +37,18 @@ function saved(
   return { role, content, timestamp, __openclaw };
 }
 
-function required(parent: ParentNode, selector: string) {
-  return expectDefined(parent.querySelector<HTMLElement>(selector), selector);
-}
-
 async function setupEntryTranscript(messages: unknown[] = []) {
   const transcript = createTestTranscript();
-  const props = {
-    ...threadProps("pane-entry", "agent:main:entry", messages),
-    queue: [] as ChatQueueItem[],
-    stream: null as string | null,
-    streamStartedAt: null as number | null,
-    runId: null as string | null,
+  const props = threadProps("pane-entry", "agent:main:entry", messages, {
+    runId: null,
     runWorking: false,
-  };
+  });
   let container = document.body.appendChild(document.createElement("div"));
   let view = createChatThreadHarness(container, transcript);
-  onTestFinished(() => view.unmount());
+  onTestFinished(() => {
+    transcript.dispose();
+    view.unmount();
+  });
   const update = () => {
     view.render(props);
     flush();
@@ -67,6 +63,21 @@ async function setupEntryTranscript(messages: unknown[] = []) {
     props,
     transcript,
     update,
+    set(patch: Partial<typeof props>) {
+      Object.assign(props, patch);
+      update();
+    },
+    startReply(runId: string, stream: string, streamSegments = props.streamSegments) {
+      Object.assign(props, {
+        runId,
+        runWorking: true,
+        runActive: true,
+        streamStartedAt: 3_000,
+        stream,
+        streamSegments,
+      });
+      update();
+    },
     get container() {
       return container;
     },
@@ -98,8 +109,7 @@ describe("chat transcript entry lifecycle", () => {
         { role: "user", content: "existing prompt", timestamp: 1_000 },
       ]);
       const existing = bubbles(view.container)[0];
-      view.props.queue = [pendingSend("new-prompt")];
-      view.update();
+      view.set({ queue: [pendingSend("new-prompt")] });
       const submitted = expectDefined(bubbles(view.container)[1], "submitted prompt");
       expect(bubbles(view.container)[0]).toBe(existing);
       expect(entering(view.container)).toEqual([submitted]);
@@ -142,34 +152,26 @@ describe("chat transcript entry lifecycle", () => {
     const view = await setupEntryTranscript();
     const first = { ...pendingSend("First input"), createdAt: 10, queueMode: "steer" as const };
     const second = { ...pendingSend("Second input"), createdAt: 20, queueMode: "steer" as const };
-    try {
-      view.props.queue = [first];
-      view.update();
-      const firstBubble = expectDefined(bubbles(view.container)[0], "first prompt");
-      view.props.queue = [first, second];
-      view.update();
-      const pendingBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
-      expect(pendingBubbles.map((bubble) => bubble.dataset.messageText)).toEqual([
-        "First input",
-        "Second input",
-      ]);
-      expect(pendingBubbles[0]).toBe(firstBubble);
+    view.set({ queue: [first] });
+    const firstBubble = expectDefined(bubbles(view.container)[0], "first prompt");
+    view.set({ queue: [first, second] });
+    const pendingBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
+    expect(pendingBubbles.map((bubble) => bubble.dataset.messageText)).toEqual([
+      "First input",
+      "Second input",
+    ]);
+    expect(pendingBubbles[0]).toBe(firstBubble);
 
-      view.props.messages = [first, second].map((input, index) => ({
-        role: "user",
-        content: input.text,
-        timestamp: input.createdAt,
-        __openclaw: { id: input.id, seq: index + 1, idempotencyKey: input.sendRunId },
-      }));
-      view.props.queue = [];
-      view.update();
-      const settledBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
-      expect(settledBubbles).toHaveLength(2);
-      expect(settledBubbles[0]).toBe(firstBubble);
-      expect(settledBubbles[1]).toBe(pendingBubbles[1]);
-    } finally {
-      view.transcript.dispose();
-    }
+    view.props.messages = [first, second].map((input, index) => ({
+      role: "user",
+      content: input.text,
+      timestamp: input.createdAt,
+      __openclaw: { id: input.id, seq: index + 1, idempotencyKey: input.sendRunId },
+    }));
+    view.set({ queue: [] });
+    const settledBubbles = bubbles(view.container).filter((bubble) => bubble.dataset.messageText);
+    expect(settledBubbles).toHaveLength(2);
+    settledBubbles.forEach((bubble, index) => expect(bubble).toBe(pendingBubbles[index]));
   });
 
   it("does not leave a dormant arrival when reduced motion disables animation", async () => {
@@ -180,16 +182,13 @@ describe("chat transcript entry lifecycle", () => {
     });
     vi.stubGlobal("matchMedia", media(true));
     const view = await setupEntryTranscript();
-    view.props.queue = [pendingSend("reduced-motion-prompt")];
-    view.update();
+    view.set({ queue: [pendingSend("reduced-motion-prompt")] });
     expect(entering(view.container)).toHaveLength(0);
     vi.stubGlobal("matchMedia", media(false));
-    view.props.queue = [...view.props.queue, pendingSend("later-prompt")];
-    view.update();
+    view.set({ queue: [...view.props.queue, pendingSend("later-prompt")] });
     expect(entering(view.container).map((bubble) => bubble.dataset.messageText)).toEqual([
       "later-prompt",
     ]);
-    view.transcript.dispose();
   });
 
   it("keeps asynchronous reply text out of entry animation through terminal and history handoff", async () => {
@@ -215,66 +214,55 @@ describe("chat transcript entry lifecycle", () => {
     ];
     const view = await setupEntryTranscript(history);
     const earlierReply = required(view.container, '[data-entry-id="earlier-answer"]');
-    try {
-      view.props.runId = runId;
-      view.props.runWorking = true;
-      view.props.runActive = true;
-      view.props.streamStartedAt = 3_000;
-      view.props.stream = "";
-      view.update();
-      expect(entering(view.container)).toHaveLength(0);
-      view.props.stream = prefix + "A new reply";
-      view.update();
-      const reply = required(view.container, ".chat-bubble.streaming");
-      const paragraph = required(reply, ".chat-text p");
-      const row = expectDefined(reply.closest(".chat-virtual-row"), "causal run frame");
-      expect(reply).not.toBe(earlierReply);
-      expect(entering(view.container)).toHaveLength(0);
-      view.props.stream = completedText;
-      view.update();
-      expect(view.container.querySelector(".chat-bubble.streaming")).toBe(reply);
-      expect(reply.querySelector(".chat-text p")).toBe(paragraph);
+    view.startReply(runId, "");
+    expect(entering(view.container)).toHaveLength(0);
+    view.set({ stream: prefix + "A new reply" });
+    const reply = required(view.container, ".chat-bubble.streaming");
+    const paragraph = required(reply, ".chat-text p");
+    const row = expectDefined(reply.closest(".chat-virtual-row"), "causal run frame");
+    expect(reply).not.toBe(earlierReply);
+    expect(entering(view.container)).toHaveLength(0);
+    view.set({ stream: completedText });
+    expect(view.container.querySelector(".chat-bubble.streaming")).toBe(reply);
+    expect(reply.querySelector(".chat-text p")).toBe(paragraph);
 
-      const terminal = {
-        role: "assistant",
-        content: completedText,
-        timestamp: 4_000,
-        stopReason: "stop",
-      };
-      view.props.stream = null;
-      view.props.streamStartedAt = null;
-      view.props.runWorking = false;
-      view.props.runActive = false;
-      view.props.runId = null;
-      // Real terminal publication replaces the stream atomically, before its receipt.
-      for (const [stage, message] of [
-        ["live terminal", rememberLiveTerminalRun(terminal, runId)],
-        ["canonical history", { ...terminal, __openclaw: { id: "answer", runId, seq: 4 } }],
-      ] as const) {
-        view.props.messages = [...history, message];
-        view.update();
-        const matches = bubbles(view.container).filter(
-          (bubble) => bubble.dataset.messageText === completedText,
-        );
-        expect(matches, stage + ": distinct causal occurrences").toHaveLength(2);
-        expect(matches[0], stage + ": unrelated reply is untouched").toBe(earlierReply);
-        const current = expectDefined(matches[1], stage + ": current answer");
-        expect.soft(current.closest(".chat-virtual-row"), stage + ": run frame").toBe(row);
-        expect(current.textContent, stage + ": visible response").toContain(
-          "A new reply with more tokens",
-        );
-        // Terminal/canonical identity may change; neither representation may restart
-        // or interrupt an entry fade. Browser probes check opacity at every frame.
-        expect(entering(view.container), stage + ": no reply entry animation").toHaveLength(0);
-      }
-      expect(view.container.querySelector('[data-entry-id="answer"]')).toBe(
-        bubbles(view.container).at(-1),
+    const terminal = {
+      role: "assistant",
+      content: completedText,
+      timestamp: 4_000,
+      stopReason: "stop",
+    };
+    Object.assign(view.props, {
+      stream: null,
+      streamStartedAt: null,
+      runWorking: false,
+      runActive: false,
+      runId: null,
+    });
+    // Real terminal publication replaces the stream atomically, before its receipt.
+    for (const [stage, message] of [
+      ["live terminal", rememberLiveTerminalRun(terminal, runId)],
+      ["canonical history", { ...terminal, __openclaw: { id: "answer", runId, seq: 4 } }],
+    ] as const) {
+      view.props.messages = [...history, message];
+      view.update();
+      const matches = bubbles(view.container).filter(
+        (bubble) => bubble.dataset.messageText === completedText,
       );
-      view.remount();
-      expect(entering(view.container)).toHaveLength(0);
-    } finally {
-      view.transcript.dispose();
+      expect(matches, stage + ": distinct causal occurrences").toHaveLength(2);
+      expect(matches[0], stage + ": unrelated reply is untouched").toBe(earlierReply);
+      const current = expectDefined(matches[1], stage + ": current answer");
+      expect.soft(current.closest(".chat-virtual-row"), stage + ": run frame").toBe(row);
+      expect(current.textContent, stage + ": visible response").toContain(
+        "A new reply with more tokens",
+      );
+      expect(entering(view.container), stage + ": no reply entry animation").toHaveLength(0);
     }
+    expect(view.container.querySelector('[data-entry-id="answer"]')).toBe(
+      bubbles(view.container).at(-1),
+    );
+    view.remount();
+    expect(entering(view.container)).toHaveLength(0);
   });
 
   it("retains the later live body and code choice when preceding commentary persists", async () => {
@@ -290,58 +278,40 @@ describe("chat transcript entry lifecycle", () => {
       "\n",
     );
     const answer = "The retained answer.\n\n```ts\n" + code + "\n```\n\nMore is arriving.";
-    try {
-      view.props.runId = runId;
-      view.props.runWorking = true;
-      view.props.runActive = true;
-      view.props.streamStartedAt = 3_000;
-      view.props.streamSegments = [{ text: commentary, ts: 2_000, runId, itemId: "commentary-1" }];
-      view.props.stream = answer;
-      view.update();
-      await Promise.resolve();
-      const reply = required(view.container, ".chat-bubble.streaming");
-      const paragraph = required(reply, ".chat-text p");
-      const expand = expectDefined(
-        reply.querySelector<HTMLButtonElement>(".code-block-expand"),
-        ".code-block-expand",
-      );
-      expand.click();
-      expect(expand.getAttribute("aria-expanded")).toBe("true");
-      // The matching durable commentary retires only its keyed segment. The
-      // later cumulative live answer keeps its run, content, and stream identity.
-      view.props.messages = [
-        prompt,
-        {
-          role: "assistant",
-          content: commentary,
-          timestamp: 2_000,
-          phase: "commentary",
-          openclawStreamFallback: { source: "segment", itemId: "commentary-1", runId },
-          __openclaw: { id: "saved-commentary", runId, seq: 2 },
-        },
-      ];
-      view.props.streamSegments = [];
-      view.update();
-      await Promise.resolve();
-      const retained = required(view.container, ".chat-bubble.streaming");
+    view.startReply(runId, answer, [
+      { text: commentary, ts: 2_000, runId, itemId: "commentary-1" },
+    ]);
+    await Promise.resolve();
+    const reply = required(view.container, ".chat-bubble.streaming");
+    const paragraph = required(reply, ".chat-text p");
+    const expand = required(reply, ".code-block-expand");
+    expand.click();
+    expect(expand.getAttribute("aria-expanded")).toBe("true");
+    view.props.messages = [
+      prompt,
+      {
+        role: "assistant",
+        content: commentary,
+        timestamp: 2_000,
+        phase: "commentary",
+        openclawStreamFallback: { source: "segment", itemId: "commentary-1", runId },
+        __openclaw: { id: "saved-commentary", runId, seq: 2 },
+      },
+    ];
+    view.set({ streamSegments: [] });
+    await Promise.resolve();
+    const retained = required(view.container, ".chat-bubble.streaming");
+    for (const text of [commentary, answer]) {
       expect(
-        bubbles(view.container).filter((bubble) => bubble.dataset.messageText === commentary),
+        bubbles(view.container).filter((bubble) => bubble.dataset.messageText === text),
       ).toHaveLength(1);
-      expect(
-        bubbles(view.container).filter((bubble) => bubble.dataset.messageText === answer),
-      ).toHaveLength(1);
-      expect.soft(retained, "retained body").toBe(reply);
-      expect.soft(retained.querySelector(".chat-text p"), "retained paragraph").toBe(paragraph);
-      expect.soft(retained.querySelector(".code-block-expand"), "retained control").toBe(expand);
-      expect
-        .soft(
-          retained.querySelector(".code-block-expand")?.getAttribute("aria-expanded"),
-          "retained choice",
-        )
-        .toBe("true");
-    } finally {
-      view.transcript.dispose();
     }
+    expect.soft(retained, "retained body").toBe(reply);
+    expect.soft(retained.querySelector(".chat-text p"), "retained paragraph").toBe(paragraph);
+    expect.soft(retained.querySelector(".code-block-expand"), "retained control").toBe(expand);
+    expect
+      .soft(retained.querySelector(".code-block-expand")?.getAttribute("aria-expanded"))
+      .toBe("true");
   });
 
   it("does not animate initial history, prepends, search restoration, or session restoration", async () => {
@@ -364,12 +334,9 @@ describe("chat transcript entry lifecycle", () => {
     toggleTranscriptSearch(view.props.paneId);
     view.update();
     expect(entering(view.container)).toHaveLength(0);
-    view.props.sessionKey = "agent:main:other";
-    view.props.queue = [pendingSend("restored-prompt")];
-    view.update();
+    view.set({ sessionKey: "agent:main:other", queue: [pendingSend("restored-prompt")] });
     expect(entering(view.container)).toHaveLength(0);
     // The retired pending-only animation must not bypass session initialization.
     expect(view.container.querySelector(".chat-bubble--user-turn-enter")).toBeNull();
-    view.transcript.dispose();
   });
 });

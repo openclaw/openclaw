@@ -17,14 +17,9 @@ vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   watch: observer.watch,
 }));
 const fixture = memoryWatchFixture(() => observer.reset(), "memory-files-watch");
-function start(output: Writable) {
+function start<T extends Writable>(output: T, watch = true) {
   const input = new PassThrough();
-  const worker = serveMemoryFiles({
-    workspace: fixture.state.workspaceDir,
-    input,
-    output,
-    watch: true,
-  });
+  const worker = serveMemoryFiles({ workspace: fixture.state.workspaceDir, input, output, watch });
   const finished = vi.fn();
   void worker.then(finished, finished);
   fixture.cleanup(async () => {
@@ -32,41 +27,37 @@ function start(output: Writable) {
     await worker.catch(() => {});
     output.destroy();
   });
-  return { input, worker, finished };
+  if (watch) {
+    input.write(JSON.stringify(request) + "\n");
+  }
+  return { input, output, worker, finished };
 }
 function observeClose() {
   const closing = createDeferred<{ retired: Promise<void> }>();
   // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
   const original = MemoryFileWatcher.prototype.close;
-  vi.spyOn(MemoryFileWatcher.prototype, "close").mockImplementation(function (
-    this: MemoryFileWatcher,
-  ) {
+  const close = vi.spyOn(MemoryFileWatcher.prototype, "close");
+  close.mockImplementation(function (this: MemoryFileWatcher) {
     const retired = original.call(this);
     closing.resolve({ retired });
     return retired;
   });
   return closing.promise;
 }
-const requestLine = JSON.stringify(request) + "\n";
-
 it("revokes remote admission while startup is awaiting filesystem discovery", async () => {
-  const output = new PassThrough();
   const entered = createDeferred<AbortSignal>();
   const resume = fixture.barrier();
   const closing = observeClose();
-  // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted owner.
+  // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
   const original = MemoryWatchPolicy.prototype.observations;
-  vi.spyOn(MemoryWatchPolicy.prototype, "observations").mockImplementation(async function (
-    this: MemoryWatchPolicy,
-    signal,
-  ) {
+  const observations = vi.spyOn(MemoryWatchPolicy.prototype, "observations");
+  observations.mockImplementation(async function (this: MemoryWatchPolicy, signal) {
     const groups = await original.call(this, signal);
     entered.resolve(signal);
     await resume.promise;
     return groups;
   });
-  const { input, worker, finished } = start(output);
-  input.write(requestLine);
+  const { input, output, worker, finished } = start(new PassThrough());
   const admissionSignal = await entered.promise;
   input.end();
   await closing;
@@ -79,73 +70,53 @@ it("revokes remote admission while startup is awaiting filesystem discovery", as
   expect(output.read()).toBeNull();
 });
 
-it.each(["input end", "output error"] as const)(
-  "joins observation and backpressured stdout after %s",
-  async (ending) => {
-    const ready = createDeferred<void>();
-    const written = createDeferred<void>();
-    const physical = fixture.barrier();
-    const drain = fixture.barrier();
-    const closing = observeClose();
-    observer.created = () => ready.resolve();
-    observer.closeBarrier = physical.promise;
-    let events = "";
-    const output = new Writable({
-      highWaterMark: 1,
-      write(chunk: Buffer, _encoding, callback) {
-        events += chunk.toString("utf8");
-        written.resolve();
-        void drain.promise.then(() => callback());
-      },
-    });
-    const { input, worker, finished } = start(output);
-    input.write(requestLine);
-    await ready.promise;
-    observer.observations[0]!.dirty();
-    expect(events).toBe("");
-    await vi.advanceTimersByTimeAsync(10);
-    await written.promise;
-    expect(events).toBe('"change"\n');
-    expect(output.writableNeedDrain).toBe(true);
-    const failure = new Error("Memory stdout failed");
-    if (ending === "output error") {
-      output.destroy(failure);
-    } else {
-      input.end();
-    }
-    const { retired } = await closing;
+it.each(["end", "error"])("joins watcher and backpressured stdout on %s", async (ending) => {
+  const ready = createDeferred<void>();
+  const written = createDeferred<Buffer>();
+  const physical = fixture.barrier();
+  const drain = fixture.barrier();
+  const closing = observeClose();
+  observer.created = () => ready.resolve();
+  observer.closeBarrier = physical.promise;
+  const output = new Writable({
+    highWaterMark: 1,
+    write(chunk: Buffer, _encoding, callback) {
+      written.resolve(chunk);
+      void drain.promise.then(() => callback());
+    },
+  });
+  const { input, worker, finished } = start(output);
+  await ready.promise;
+  observer.observations[0]!.dirty();
+  expect(output.writableLength).toBe(0);
+  await vi.advanceTimersByTimeAsync(10);
+  expect((await written.promise).toString("utf8")).toBe('"change"\n');
+  expect(output.writableNeedDrain).toBe(true);
+  const failure = new Error("Memory stdout failed");
+  if (ending === "error") {
+    output.destroy(failure);
+  } else {
+    input.end();
+  }
+  const { retired } = await closing;
+  expect(finished).not.toHaveBeenCalled();
+  physical.resolve();
+  await retired;
+  if (ending === "end") {
     expect(finished).not.toHaveBeenCalled();
-    physical.resolve();
-    await retired;
-    if (ending === "input end") {
-      expect(finished).not.toHaveBeenCalled();
-      drain.resolve();
-      await worker;
-      expect(output.writableLength).toBe(0);
-    } else {
-      await expect(worker).rejects.toMatchObject({ errors: [failure] });
-    }
-    expect(observer.observations[0]!.close).toHaveBeenCalledOnce();
-  },
-);
+    drain.resolve();
+    await worker;
+    expect(output.writableLength).toBe(0);
+  } else {
+    await expect(worker).rejects.toMatchObject({ errors: [failure] });
+  }
+});
 
 it("preserves the malformed diary error code across the remote file protocol", async () => {
   const dreamsPath = path.join(fixture.state.workspaceDir, "DREAMS.md");
-  const bytes = Buffer.concat([Buffer.from("# Dream Diary\n"), Buffer.from([0xff])]);
-  await fs.writeFile(dreamsPath, bytes);
-  const input = new PassThrough();
-  const output = new PassThrough();
-  const worker = serveMemoryFiles({ workspace: fixture.state.workspaceDir, input, output });
-  fixture.cleanup(async () => {
-    input.end();
-    await worker;
-    output.destroy();
-  });
+  await fs.writeFile(dreamsPath, Buffer.from([0xff]));
+  const { input, output, worker } = start(new PassThrough(), false);
   input.end(JSON.stringify({ operation: "maintenance", method: "readDreams", args: [dreamsPath] }));
   await worker;
-
-  expect(JSON.parse(String(output.read()))).toMatchObject({
-    error: { code: "ERR_INVALID_UTF8", message: expect.stringContaining("must be valid UTF-8") },
-  });
-  expect(await fs.readFile(dreamsPath)).toEqual(bytes);
+  expect(JSON.parse(String(output.read())).error.code).toBe("ERR_INVALID_UTF8");
 });

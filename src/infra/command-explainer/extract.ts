@@ -16,6 +16,11 @@ import {
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
 import {
+  decodeShellText,
+  hasEscapedLineContinuation,
+  hasUnescapedDynamicPattern,
+} from "./shell-text.js";
+import {
   resolveCommandOperators,
   type CommandOperatorSource,
   type RecordedCommandStep,
@@ -45,7 +50,7 @@ type CommandArgument = {
   text: string;
   value: string;
   span: SourceSpan;
-  decodedSourceOffsets: number[];
+  node: TreeSitterNode;
 };
 
 type CommandArgv = {
@@ -124,57 +129,22 @@ function advancePosition(
   return { row, column };
 }
 
-function valuePrefixLength(node: TreeSitterNode): number {
-  if (node.type === "string" || node.type === "raw_string") {
-    return 1;
-  }
-  if (node.type === "ansi_c_string") {
-    return 2;
-  }
-  return 0;
-}
-
-type DecodedShellText = {
-  value: string;
-  sourceOffsets: number[];
-};
-
-function appendDecodedText(
-  decoded: DecodedShellText,
-  value: string,
-  sourceEndOffset: number,
-): void {
-  decoded.value += value;
-  decoded.sourceOffsets.push(...Array.from({ length: value.length }, () => sourceEndOffset));
-}
-
-function identityDecodedShellText(text: string, sourceOffset = 0): DecodedShellText {
-  return {
-    value: text,
-    sourceOffsets: Array.from({ length: text.length + 1 }, (_, index) => sourceOffset + index),
-  };
-}
-
 function decodedSourceOffsetsForNode(node: TreeSitterNode, value: string): number[] {
-  let decoded: DecodedShellText;
-  switch (node.type) {
-    case "raw_string":
-      decoded = identityDecodedShellText(node.text.slice(1, -1), 1);
-      break;
-    case "string":
-      decoded = decodeShellTextWithOffsets(node.text, "double");
-      break;
-    case "ansi_c_string":
-      decoded = decodeShellTextWithOffsets(node.text, "ansi-c");
-      break;
-    default:
-      decoded = decodeShellTextWithOffsets(node.text);
-      break;
+  const prefixLength =
+    node.type === "string" || node.type === "raw_string"
+      ? 1
+      : node.type === "ansi_c_string"
+        ? 2
+        : 0;
+  if (node.type !== "raw_string") {
+    const sourceOffsets: number[] = [];
+    const quoting =
+      node.type === "string" ? "double" : node.type === "ansi_c_string" ? "ansi-c" : "unquoted";
+    const decoded = decodeShellText(node.text, quoting, sourceOffsets);
+    if (decoded === value && sourceOffsets.length === value.length + 1) {
+      return sourceOffsets;
+    }
   }
-  if (decoded.value === value && decoded.sourceOffsets.length === value.length + 1) {
-    return decoded.sourceOffsets;
-  }
-  const prefixLength = valuePrefixLength(node);
   return Array.from({ length: value.length + 1 }, (_, index) => prefixLength + index);
 }
 
@@ -202,113 +172,6 @@ const COMMAND_ARGUMENT_NODE_TYPES = new Set([
   "word",
 ]);
 
-function hasEscapedLineContinuation(text: string): boolean {
-  return /\\(?:\r\n|[\r\n])/.test(text);
-}
-
-function hasLineBreakEscapedWordBoundary(text: string): boolean {
-  return /(?:\r\n|[\r\n])\\/.test(text);
-}
-
-function hasExecutableLineContinuation(text: string): boolean {
-  return /^[^\s]*\\(?:\r\n|[\r\n])/.test(text);
-}
-
-function hasUnescapedDynamicPattern(text: string): boolean {
-  for (let index = 0; index < text.length; index += 1) {
-    const ch = text[index];
-    if (ch === "\\") {
-      index += 1;
-      continue;
-    }
-    if (ch === "*" || ch === "?") {
-      return true;
-    }
-    if (ch === "[" && text.indexOf("]", index + 1) > index + 1) {
-      return true;
-    }
-    if (ch === "{" && text.indexOf("}", index + 1) > index + 1) {
-      return true;
-    }
-  }
-  return false;
-}
-
-const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
-  "'": "'",
-  '"': '"',
-  "?": "?",
-  "\\": "\\",
-  a: "\u0007",
-  b: "\b",
-  e: "\u001B",
-  E: "\u001B",
-  f: "\f",
-  n: "\n",
-  r: "\r",
-  t: "\t",
-  v: "\v",
-};
-
-function decodeShellTextWithOffsets(
-  text: string,
-  quoting: "unquoted" | "double" | "ansi-c" = "unquoted",
-): DecodedShellText {
-  const prefix = quoting === "double" ? '"' : quoting === "ansi-c" ? "$'" : "";
-  const hasQuotes = prefix && text.startsWith(prefix) && text.endsWith(prefix.slice(-1));
-  const bodyStart = hasQuotes ? prefix.length : 0;
-  const body = hasQuotes ? text.slice(bodyStart, -1) : text;
-  const decoded: DecodedShellText = { value: "", sourceOffsets: [bodyStart] };
-  for (let index = 0; index < body.length; index += 1) {
-    const ch = body.charAt(index);
-    const next = body[index + 1];
-    const sourceOffset = bodyStart + index;
-    if (
-      ch !== "\\" ||
-      next === undefined ||
-      (quoting === "double" && !["\\", '"', "$", "`", "\n", "\r"].includes(next))
-    ) {
-      appendDecodedText(decoded, ch, sourceOffset + 1);
-      continue;
-    }
-    if (quoting !== "ansi-c" && (next === "\n" || next === "\r")) {
-      const width = next === "\r" && body[index + 2] === "\n" ? 3 : 2;
-      decoded.sourceOffsets[decoded.value.length] = sourceOffset + width;
-      index += width - 1;
-      continue;
-    }
-
-    let digits: string | undefined;
-    let radix = 16;
-    let prefixLength = 2;
-    if (quoting === "ansi-c") {
-      if (next === "x" || next === "u" || next === "U") {
-        const maxLength = next === "x" ? 2 : next === "u" ? 4 : 8;
-        digits = body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0];
-      } else if (/^[0-7]$/.test(next)) {
-        digits = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0];
-        radix = 8;
-        prefixLength = 1;
-      }
-    }
-    if (digits) {
-      const endOffset = sourceOffset + prefixLength + digits.length;
-      try {
-        appendDecodedText(decoded, String.fromCodePoint(Number.parseInt(digits, radix)), endOffset);
-      } catch {
-        appendDecodedText(decoded, `\\${next}${digits}`, endOffset);
-      }
-      index += prefixLength + digits.length - 1;
-      continue;
-    }
-
-    const value = quoting === "ansi-c" ? (ANSI_C_SIMPLE_ESCAPES[next] ?? next) : next;
-    appendDecodedText(decoded, value, sourceOffset + 2);
-    index += 1;
-  }
-  return decoded;
-}
-
 function hasDynamicWordPart(root: TreeSitterNode): boolean {
   const pending = [root];
   for (let node = pending.pop(); node; node = pending.pop()) {
@@ -333,8 +196,7 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
   ) {
     return {
       kind: "dynamic",
-      value:
-        node.type === "string" ? decodeShellTextWithOffsets(node.text, "double").value : node.text,
+      value: node.type === "string" ? decodeShellText(node.text, "double") : node.text,
     };
   }
 
@@ -347,7 +209,7 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
       ) {
         return {
           kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-          value: decodeShellTextWithOffsets(node.text).value,
+          value: decodeShellText(node.text),
         };
       }
       let value = "";
@@ -367,20 +229,20 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
     case "word":
       return {
         kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
-        value: decodeShellTextWithOffsets(node.text).value,
+        value: decodeShellText(node.text),
       };
     case "raw_string":
       return { kind: "literal", value: node.text.slice(1, -1) };
     case "string":
-      return { kind: "literal", value: decodeShellTextWithOffsets(node.text, "double").value };
+      return { kind: "literal", value: decodeShellText(node.text, "double") };
     case "ansi_c_string":
-      return { kind: "literal", value: decodeShellTextWithOffsets(node.text, "ansi-c").value };
+      return { kind: "literal", value: decodeShellText(node.text, "ansi-c") };
     default:
       return {
         kind: node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
           ? "dynamic"
           : "literal",
-        value: decodeShellTextWithOffsets(node.text).value,
+        value: decodeShellText(node.text),
       };
   }
 }
@@ -391,7 +253,7 @@ function appendCommandArgument(node: TreeSitterNode, parsed: CommandArgv, state:
     text: node.text,
     value: value.value,
     span: spanFromNode(node, state.spanBase),
-    decodedSourceOffsets: decodedSourceOffsetsForNode(node, value.value),
+    node,
   };
   parsed.arguments.push(argument);
   if (value.kind === "dynamic") {
@@ -410,7 +272,7 @@ function argvFromCommand(
     if (
       !nameNode ||
       hasEscapedLineContinuation(nameNode.text) ||
-      hasExecutableLineContinuation(node.text)
+      /^[^\s]*\\(?:\r\n|[\r\n])/.test(node.text)
     ) {
       return null;
     }
@@ -467,6 +329,28 @@ function appendTestCommandArguments(
 function isCommandLikeNode(node: TreeSitterNode): boolean {
   return (
     node.type === "command" || node.type === "declaration_command" || node.type === "test_command"
+  );
+}
+
+// A standalone assignment adds no command step, but bash evaluates `$((name))`, `${name:expr}`,
+// `${arr[expr]}`, `${!name}`, `${name@P}` and `name[expr]=` recursively, and an array subscript
+// reached that way runs command substitutions. Command preludes and declaration arguments are
+// already covered by the prelude and dynamic-argument checks.
+function isDynamicStandaloneAssignment(node: TreeSitterNode): boolean {
+  if (node.type !== "variable_assignment") {
+    return false;
+  }
+  const parentType = node.parent?.type;
+  if (parentType === "command" || parentType === "declaration_command") {
+    return false;
+  }
+  // The parser flattens keyed compound entries, whose semantics depend on prior array state.
+  const value = node.childForFieldName("value");
+  return (
+    node.childForFieldName("name")?.type === "subscript" ||
+    (value?.type === "array" &&
+      value.namedChildren.some((entry) => /^\s*\[[\s\S]*\]\+?=/u.test(entry.text))) ||
+    node.descendantsOfType(["arithmetic_expansion", "expansion"]).length > 0
   );
 }
 
@@ -549,13 +433,15 @@ function payloadBaseFromArgument(argument: CommandArgument, payload: string): Sp
   if (payloadOffset < 0) {
     return null;
   }
-  const rawPayloadOffset = argument.decodedSourceOffsets[payloadOffset];
+  // Trees remain alive for the synchronous walk; only wrapper payloads need offset maps.
+  const sourceOffsets = decodedSourceOffsetsForNode(argument.node, argument.value);
+  const rawPayloadOffset = sourceOffsets[payloadOffset];
   if (rawPayloadOffset === undefined) {
     return null;
   }
   return {
     mapOffset(offset) {
-      const rawOffset = argument.decodedSourceOffsets[payloadOffset + offset];
+      const rawOffset = sourceOffsets[payloadOffset + offset];
       const mappedRawOffset = rawOffset ?? rawPayloadOffset + offset;
       return {
         index: argument.span.startIndex + mappedRawOffset,
@@ -698,7 +584,7 @@ function visitNode(
   let childContext = context;
   if (node.type === "program" && hasEscapedLineContinuation(node.text)) {
     output.risks.push({ kind: "line-continuation", span });
-  } else if (node.type === "word" && hasLineBreakEscapedWordBoundary(node.text)) {
+  } else if (node.type === "word" && /(?:\r\n|[\r\n])\\/.test(node.text)) {
     output.risks.push({ kind: "line-continuation", span });
   }
 
@@ -724,6 +610,8 @@ function visitNode(
     output.risks.push({ kind: "redirect", span });
   } else if (node.type === "ERROR") {
     output.risks.push({ kind: "syntax-error", span });
+  } else if (isDynamicStandaloneAssignment(node)) {
+    output.risks.push({ kind: "dynamic-assignment", span });
   }
 
   if (isCommandLikeNode(node)) {
@@ -851,4 +739,3 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
     tree.delete();
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

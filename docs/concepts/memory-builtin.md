@@ -8,13 +8,14 @@ read_when:
   - You are migrating from the removed QMD memory backend
 ---
 
-The builtin engine is the default memory backend. It stores your memory index
-in a per-agent SQLite database and needs no extra dependencies to get
-started.
+The builtin engine is the default memory backend. By default, it stores your
+memory index in a per-agent SQLite database and needs no extra dependencies to
+get started. It also supports PostgreSQL when the agent store selects that engine;
+see [PostgreSQL search and requirements](/gateway/postgresql#search-on-postgresql).
 
 ## What it provides
 
-- **Keyword search** via FTS5 full-text indexing (BM25 scoring).
+- **Keyword search** via SQLite FTS5 (BM25 scoring) or PostgreSQL native full text.
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
 - **Ranking** by relevance, recency, and write-time importance, using fixed rules.
@@ -132,14 +133,14 @@ Set `memory.search.provider` to switch away from OpenAI.
 
 OpenClaw indexes `MEMORY.md`, an existing root `USER.md`, and `memory/*.md` into
 chunks (400 tokens with 80-token overlap by default) and stores them in a
-per-agent SQLite database. OpenClaw does not create `USER.md` automatically.
+per-agent database. OpenClaw does not create `USER.md` automatically.
 
 Each chunk can carry nullable importance and trigger metadata. Null values are
 neutral, so older indexes remain usable. Search combines hybrid relevance,
 recency decay, and importance before applying MMR diversity; trigger recall
 only injects curated or promoted-trusted entries.
 
-Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
+Each indexed chunk also has database-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
 optional supersession key. This metadata is stored separately from Markdown
 so recalled prose cannot rewrite its own trust classification. Automatic
@@ -147,9 +148,10 @@ session ingestion also records source-session origins for its staged entries,
 which support selective deletion after promotion. For coverage and limits, see
 [Memory provenance and deletion](/concepts/memory-provenance).
 
-- **Index location:** the owning agent database at
-  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
-- **Storage maintenance:** SQLite WAL sidecars are bounded with periodic and
+- **Index location:** the owning agent database; SQLite uses
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`, while PostgreSQL keeps
+  a local anchor at that path and stores the index on the server.
+- **SQLite storage maintenance:** WAL sidecars are bounded with periodic and
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex
   (1.5s default).
@@ -316,7 +318,14 @@ BLOBs. The software search fallback scores these full-precision BLOBs directly
 in a worker, without allocating a numeric array per chunk, even when the
 optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
 separate 32-bit vector index. The keyword index uses each chunk's stable integer
-identity, so edits and deletion update the corresponding FTS rows directly.
+identity, so edits and deletion update the corresponding SQLite FTS rows directly.
+
+On PostgreSQL, exact path matches use three B-tree indexes of bounded digests for
+normalized paths, basenames, and extensionless basenames. The original path
+predicate rechecks candidates, preserving search results and ranking while avoiding
+a full source scan for each keyword query. Agent schema 36 installs these indexes
+through Doctor; SQLite keeps its existing keyword search, including the broader
+scan used by Unicode fallback queries.
 
 Agent schema 23 converts existing JSON vectors locally, without contacting an
 embedding provider. It preserves chunk IDs, provenance, recall metadata, and

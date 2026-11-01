@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,26 +18,17 @@ const sessionRow = {
   ...createControlUiSessionRow(sessionKey, "Service status", Date.now()),
   boardFace: "dashboard",
 };
-const snapshot = {
-  sessionKey,
-  revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [
-    {
-      name: "website",
-      tabId: "main",
-      title: "Service status",
-      contentKind: "plugin",
-      pluginKind: "session:website",
-      props: { url: websiteUrl },
-      sizeW: 12,
-      sizeH: 8,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-  ],
-};
+const snapshot = createBoardSnapshot(sessionKey, [
+  createBoardWidget({
+    name: "website",
+    title: "Service status",
+    contentKind: "plugin",
+    pluginKind: "session:website",
+    props: { url: websiteUrl },
+    sizeW: 12,
+    sizeH: 8,
+  }),
+]);
 const website = `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Service status</title>
 <style>body{margin:0;background:#102820;color:#e8fff2;font:16px system-ui}main{padding:clamp(24px,5vw,64px)}h1{font-size:clamp(32px,5vw,58px);margin:10px 0 24px}p{color:#a9c9b8}input,button,a{font:inherit}input{display:block;max-width:85%;margin:20px 0;padding:10px}button{padding:10px 16px;background:#b4f9bf;border:0;border-radius:8px}a{color:#b4f9bf}#status{font-size:24px;color:#b4f9bf}</style>
 <main><p>OPERATIONS / SERVICE STATUS</p><h1>Everything in view.</h1><p id="status">Loading status…</p><input aria-label="Status note" placeholder="Add a local note"><button id="refresh">Refresh status</button><p><a href="/details">View details</a></p></main>

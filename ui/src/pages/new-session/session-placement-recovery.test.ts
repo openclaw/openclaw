@@ -132,51 +132,43 @@ describe("session placement recovery", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it.each([true])(
-    "keeps input in memory on a failed pause write (already paused=%s)",
-    (alreadyPaused) => {
-      const retained = alreadyPaused
-        ? {
-            ...recovery,
-            phase: "paused" as const,
-            reason: "not-sent" as const,
-            error: "first failure",
-          }
-        : recovery;
-      expect(writeSessionPlacementRecovery(retained)).toBe(true);
-      const storage = sessionStorage;
-      vi.stubGlobal("sessionStorage", {
-        getItem: storage.getItem.bind(storage),
-        removeItem: storage.removeItem.bind(storage),
-        setItem: () => {
-          throw new DOMException("quota exceeded", "QuotaExceededError");
-        },
-      });
-      expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
-        persisted: false,
-        recovery: {
-          message: retained.message,
-          messageId: retained.messageId,
-          phase: "paused",
-          reason: "not-sent",
-          error: expect.stringContaining("Keep this page open"),
-        },
-      });
-      expect(readRecovery()).toEqual(alreadyPaused ? retained : null);
-    },
-  );
+  it("keeps input in memory on a failed pause write (already paused=true)", () => {
+    const retained = {
+      ...recovery,
+      phase: "paused" as const,
+      reason: "not-sent" as const,
+      error: "first failure",
+    };
+    expect(writeSessionPlacementRecovery(retained)).toBe(true);
+    const storage = sessionStorage;
+    vi.stubGlobal("sessionStorage", {
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+    });
+    expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
+      persisted: false,
+      recovery: {
+        message: retained.message,
+        messageId: retained.messageId,
+        phase: "paused",
+        reason: "not-sent",
+        error: expect.stringContaining("Keep this page open"),
+      },
+    });
+    expect(readRecovery()).toEqual(retained);
+  });
 
-  it.each([false])(
-    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
-    (persistent) => {
-      const error = `${"x".repeat(4095)}🤖`;
-      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+  it("keeps bounded pause errors on UTF-16 boundaries (persistent=false)", () => {
+    const error = `${"x".repeat(4095)}🤖`;
+    const paused = pauseSessionPlacementRecovery(recovery, error, false);
 
-      expect(paused.recovery.error).toBe("x".repeat(4095));
-      expect(paused.persisted).toBe(persistent);
-      expect(readRecovery()).toEqual(persistent ? paused.recovery : null);
-    },
-  );
+    expect(paused.recovery.error).toBe("x".repeat(4095));
+    expect(paused.persisted).toBe(false);
+    expect(readRecovery()).toEqual(null);
+  });
 
   it("keeps storage-failure guidance on UTF-16 boundaries", () => {
     const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";

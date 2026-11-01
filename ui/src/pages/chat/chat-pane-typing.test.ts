@@ -9,12 +9,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { renderTypingIndicator } from "./components/chat-status.test-support.ts";
 import { scheduleCommittedChatScroll } from "./scroll.ts";
 

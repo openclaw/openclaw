@@ -1,3 +1,4 @@
+import { EventEmitter, once } from "node:events";
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { createEmptyTransportUsage } from "@openclaw/ai/transports";
 import type {
@@ -49,9 +50,7 @@ export function captureAgent(
     },
   });
   const events: AgentTypes.AgentEvent[] = [];
-  agent.subscribe((event) => {
-    events.push(event);
-  });
+  agent.subscribe((event) => void events.push(event));
   return { agent, requests, events };
 }
 
@@ -102,9 +101,7 @@ export function createTurnSequenceStream(
 export function reply(message: AssistantMessage, prelude: AssistantMessageEvent[] = []) {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
-    for (const event of prelude) {
-      stream.push(event);
-    }
+    prelude.forEach((event) => stream.push(event));
     finishMessageStream(stream, message);
   });
   return stream;
@@ -147,6 +144,12 @@ export function finishMessageStream(
   stream.end();
 }
 
+export function toolResultMessages(events: AgentTypes.AgentEvent[]) {
+  return events.flatMap((event) =>
+    event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
+  );
+}
+
 export function captureAgentLoop(
   prompts: AgentTypes.AgentMessage[],
   context: AgentTypes.AgentContext,
@@ -178,6 +181,7 @@ export function captureToolLoop(options: {
 }) {
   const response = createAssistantMessageEventStream();
   const persisted: AgentTypes.AgentMessage[] = [];
+  const publications = new EventEmitter();
   const events: AgentTypes.AgentEvent[] = [];
   const run = runAgentLoop(
     [options.prompt ?? user("start", 0)],
@@ -187,6 +191,7 @@ export function captureToolLoop(options: {
       events.push(event);
       if (event.type === "message_end") {
         persisted.push(event.message);
+        publications.emit("message");
         if (options.onMessage) {
           return options.onMessage(event.message);
         }
@@ -196,5 +201,10 @@ export function captureToolLoop(options: {
     options.signal,
     options.streamFn ?? (() => response),
   );
-  return { response, persisted, events, run };
+  const waitForMessage = async (match: (message: AgentTypes.AgentMessage) => boolean) => {
+    while (!persisted.some(match)) {
+      await once(publications, "message");
+    }
+  };
+  return { response, persisted, events, run, waitForMessage };
 }

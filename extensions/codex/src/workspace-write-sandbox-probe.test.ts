@@ -101,9 +101,19 @@ describe("Codex workspace-write sandbox probe", () => {
     });
   });
 
-  it("reports spawn errors without throwing and removes its temporary state", async () => {
-    runner.mockRejectedValueOnce(new Error("spawn ENOENT"));
-    expect(await probe()).toMatchObject({ status: "inconclusive", reason: "spawn ENOENT" });
+  it.each([
+    ["spawn", "spawn ENOENT"],
+    ["launcher", "managed launcher missing"],
+  ])("reports %s failures and removes temporary state", async (kind, reason) => {
+    (kind === "spawn" ? runner : resolveStart).mockRejectedValueOnce(new Error(reason));
+    const result = await probe();
+    const expected = { status: "inconclusive", reason };
+    if (kind === "launcher") {
+      expect(result).toEqual(expected);
+      expect(runner).not.toHaveBeenCalled();
+    } else {
+      expect(result).toMatchObject(expected);
+    }
   });
 
   it("uses the stdio launcher and environment with a disposable home and writable sibling cwd", async () => {
@@ -150,15 +160,11 @@ describe("Codex workspace-write sandbox probe", () => {
   });
 
   it.each([
-    {
-      command: "node",
-      launchArgs: ["./codex-wrapper.js", "app-server"],
-      expected: ["node", "/runtime/codex-wrapper.js"],
-    },
-    { command: "./bin/codex", launchArgs: ["app-server"], expected: ["/runtime/bin/codex"] },
-  ])(
-    "preserves the custom launcher $command outside the disposable cwd",
-    async ({ command, launchArgs, expected }) => {
+    ["node", ["./codex-wrapper.js", "app-server"], ["node", "/runtime/codex-wrapper.js"]],
+    ["./bin/codex", ["app-server"], ["/runtime/bin/codex"]],
+  ] as const)(
+    "preserves the custom launcher %s outside the disposable cwd",
+    async (command, launchArgs, expected) => {
       resolveStart.mockImplementationOnce(async (start) => ({ ...start, cwd: "/runtime" }));
       expect(await probe(config({ command, args: launchArgs }))).toMatchObject({ status: "ok" });
       expect(runner).toHaveBeenCalledWith([...expected, ...args], expect.any(Object));
@@ -166,13 +172,7 @@ describe("Codex workspace-write sandbox probe", () => {
   );
 
   it.each([
-    [
-      "proxy",
-      config({
-        command: "/custom/codex",
-        args: ["app-server", "proxy", "--sock", "/run/codex.sock"],
-      }),
-    ],
+    ["proxy", config({ command: "/custom/codex", args: ["app-server", "proxy"] })],
     ["websocket", config({ transport: "websocket", url: "ws://localhost:4500" })],
     ["non-linux", config()],
     ["no-runtime", config({}, false)],
@@ -188,12 +188,6 @@ describe("Codex workspace-write sandbox probe", () => {
       }));
     }
     expect(await probe(cfg)).toMatchObject({ status: "skipped", reason: expect.any(String) });
-    expect(runner).not.toHaveBeenCalled();
-  });
-
-  it("reports an unresolvable configured runtime as unverified without throwing", async () => {
-    resolveStart.mockRejectedValueOnce(new Error("managed launcher missing"));
-    expect(await probe()).toEqual({ status: "inconclusive", reason: "managed launcher missing" });
     expect(runner).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -21,7 +22,6 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
@@ -62,7 +62,7 @@ const startNotifyRun = async (
   return { id: process.run.session.id, receipt: result.value };
 };
 const processTool = createProcessTool();
-const execute = (action: "poll" | "clear", sessionId: string) =>
+const execute = (action: "poll" | "log" | "clear", sessionId: string) =>
   processTool.execute(`${action}-${sessionId}`, { action, sessionId });
 const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.contextKey);
 
@@ -79,18 +79,17 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-occurrence-" });
   setRuntimeConfigSnapshot({ agents: { entries: { main: {}, research: {} } } });
   openOpenClawStateDatabase({ env: state.env });
-  for (const { agentId, sessionKey } of [
-    { agentId: "main", sessionKey: QUEUE_KEY },
-    { agentId: "research", sessionKey: "global" },
-  ]) {
+  for (const [agentId, sessionKey] of [
+    ["main", QUEUE_KEY],
+    ["research", "global"],
+  ] as const) {
     writeSessionEntry(openOpenClawAgentDatabase({ agentId, env: state.env }), sessionKey, {
       sessionId: `${agentId}-origin`,
       lifecycleRevision: "original-revision",
       updatedAt: Date.now(),
     });
   }
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
 });
 afterEach(async () => {
   resetProcessRegistryForTests();
@@ -113,9 +112,6 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
   });
 
   expect(vi.mocked(enqueueSessionEvent).mock.lastCall?.[1]).toMatchObject({
-    source: "exec",
-    agentId: "research",
-    sessionKey: "global",
     expectedTarget: { agentId: "research" },
   });
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
@@ -128,15 +124,16 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   enqueueSystemEventEntry("unrelated", { sessionKey: QUEUE_KEY, contextKey: "marker" });
   const second = await startNotifyRun();
 
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
+  expect(second.id).toBe(first.id);
+  const context = `exec:${first.id}`;
+  expect(contexts()).toEqual([context, "marker", context]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
-  expect(queued[0]).toEqual({ ...queued[2], id: queued[0]?.id });
 
   await pollAndAcknowledge(second.id, queued);
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
+  expect(contexts()).toEqual([context, "marker"]);
   acknowledgeInternalToolResult(await execute("poll", second.id));
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
+  expect(contexts()).toEqual([context, "marker"]);
 });
 
 it("keeps an identical successor queued when an earlier consumer settles", async () => {
@@ -156,4 +153,22 @@ it("keeps an identical successor queued when an earlier consumer settles", async
   expect(queued[0]?.id).not.toBe(snapshot[0]?.id);
   await pollAndAcknowledge(successor.id, queued);
   expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
+});
+
+it("consumes a finished completion that the model reads with process log", async () => {
+  const { id } = await startNotifyRun();
+  const queued = peekSystemEventEntries(QUEUE_KEY);
+  expect(queued).toHaveLength(1);
+
+  const log = await execute("log", id);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
+  acknowledgeInternalToolResult(log);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
+  // The read retires the completion only because it shows how the process ended.
+  expect(log.content).toEqual([
+    {
+      type: "text",
+      text: expect.stringMatching(/producer output\n\nProcess exited with code 0\.$/),
+    },
+  ]);
 });

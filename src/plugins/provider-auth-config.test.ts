@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { expect, it } from "vitest";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,23 +38,19 @@ it.each([
           }),
         ],
       };
-      await state.writeConfig({ models: { providers: { [sourceKey]: provider } } });
+      await state.writeConfig(configForProviders({ [sourceKey]: provider }));
       const snapshot = await readConfigFileSnapshot();
       expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
 
       await writeProviderAuthConfig({
         config: snapshot.config,
         configSnapshot: snapshot,
-        configPatch: {
-          models: {
-            providers: {
-              [patchKey]: {
-                baseUrl: "https://proxy.example.test/v1",
-                models: [{ id: "local-qwen", name: "Selected local model" }],
-              },
-            },
+        configPatch: configForProviders({
+          [patchKey]: {
+            baseUrl: "https://proxy.example.test/v1",
+            models: [{ id: "local-qwen", name: "Selected local model" }],
           },
-        },
+        }),
         credentialsSaved: false,
       });
 

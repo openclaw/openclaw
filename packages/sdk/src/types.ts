@@ -103,12 +103,8 @@ export type EnvironmentSummary = SDKEnvironmentSummary;
 
 export type EnvironmentCreateParams = GatewayEnvironmentsCreateParamsType;
 
-type GatewayWorkerEnvironmentProfileSummary = NonNullable<
-  GatewayEnvironmentsListResultType["profiles"]
->[number];
-
 export type SDKWorkerEnvironmentProfileSummary = Omit<
-  GatewayWorkerEnvironmentProfileSummary,
+  NonNullable<GatewayEnvironmentsListResultType["profiles"]>[number],
   "trust"
 > & {
   trust?: SDKEnvironmentTrust;
@@ -151,30 +147,26 @@ export type SDKMessage = {
   toolCallId?: string;
 };
 
-/** SDK-friendly artifact type suggestions over the protocol's open string. */
-type SDKArtifactType =
-  | "file"
-  | "patch"
-  | "diff"
-  | "log"
-  | "media"
-  | "screenshot"
-  | "trajectory"
-  | "pull_request"
-  | "workspace"
-  | (string & {});
-
-/** The SDK remains forward-compatible with future artifact delivery modes. */
-type SDKArtifactDownloadMode = GatewayArtifactSummaryType["download"]["mode"] | (string & {});
-
 /**
  * SDK artifact projection retained for pre-protocol consumers.
  * Wire responses satisfy this shape, while legacy sparse summaries remain assignable.
  */
 export type SDKArtifactSummary = Omit<GatewayArtifactSummaryType, "type" | "title" | "download"> & {
-  type: SDKArtifactType;
+  /** SDK-friendly artifact type suggestions over the protocol's open string. */
+  type:
+    | "file"
+    | "patch"
+    | "diff"
+    | "log"
+    | "media"
+    | "screenshot"
+    | "trajectory"
+    | "pull_request"
+    | "workspace"
+    | (string & {});
   title?: GatewayArtifactSummaryType["title"];
-  download?: { mode: SDKArtifactDownloadMode };
+  /** The SDK remains forward-compatible with future artifact delivery modes. */
+  download?: { mode: GatewayArtifactSummaryType["download"]["mode"] | (string & {}) };
   sessionId?: string;
   createdAt?: string;
   expiresAt?: string;

@@ -46,6 +46,11 @@ import {
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
 import {
+  CRON_DEFAULT_STORE_IDENTITY_SCHEMA_VERSION,
+  migrateCronDefaultStoreIdentity,
+  resolveCronIdentityMigrationDefaultStoreKey,
+} from "./openclaw-state-db-cron-identity-migration.js";
+import {
   admitStatePostgres,
   inspectStateSqlite,
   stateEngineInput,
@@ -197,13 +202,18 @@ function openNativeStateDatabase(
         admitPostgres: (database, fresh) => {
           admitStatePostgres(database, fresh);
           if (fresh) {
+            migrateCronDefaultStoreIdentity(database, {
+              previousVersion: 0,
+              legacyDefaultStoreKey: resolveCronIdentityMigrationDefaultStoreKey(params.env),
+              fresh: true,
+            });
             bindFreshClientCredentialStore(database, {
               path: params.pathname,
               env: params.env,
             });
           }
         },
-        beforeMigrate: (database, fromVersion) => {
+        beforeMigrate: (database, fromVersion, sourceTables) => {
           prepareClientCredentialMigration(database, {
             path: params.pathname,
             env: params.env,
@@ -213,6 +223,13 @@ function openNativeStateDatabase(
             advanceStateSchemaContentVersion(database, {
               fromVersion,
               toVersion: CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+            });
+          }
+          if (fromVersion === CRON_DEFAULT_STORE_IDENTITY_SCHEMA_VERSION - 1) {
+            migrateCronDefaultStoreIdentity(database, {
+              previousVersion: fromVersion,
+              legacyDefaultStoreKey: resolveCronIdentityMigrationDefaultStoreKey(params.env),
+              sourceTables,
             });
           }
         },

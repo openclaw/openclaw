@@ -138,7 +138,6 @@ export function setupLoginCommandTests() {
     runModelsAuthLoginFlowMock.mockReset();
     patchSessionEntryMock.mockReset();
     loginFlows.current?.logins.clear();
-    loginFlows.current?.modelAccess.clear();
   });
 
   afterEach(() => {

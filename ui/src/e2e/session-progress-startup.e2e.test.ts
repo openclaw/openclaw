@@ -62,6 +62,7 @@ suite.define(() => {
         ],
       };
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionInfo: {
           key: sessionKey,
           kind: "direct",

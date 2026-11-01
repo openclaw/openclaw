@@ -6,6 +6,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
+import { createResolvedApproverActionAuthAdapter } from "../../plugin-sdk/approval-auth-helpers.js";
 import { markImplicitSameChatApprovalAuthorization } from "../../plugin-sdk/approval-auth-runtime.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -231,14 +232,18 @@ describe("handleApproveCommand", () => {
       buildApproveParams("/approve plugin:abc allow-once", cfg, ctx, { isAuthorizedSender: false }),
     );
     expect(approvalResolverRequest(0).senderId).toBe("team:T11111111:user:U12345678");
+    expect(approvalResolverRequest(0).resolveMethod).toBe("plugin");
 
     resolveApprovalOverGatewayMock.mockClear();
     withApprovalPolicy(cfg, {
       plugin: { authorizedSenders: [] },
       exec: { authorizedSenders: ["U12345678"] },
     });
-    await approve(buildApproveParams("/approve exec:abc allow-once", cfg, ctx));
+    await approve(
+      buildApproveParams("/approve exec:abc allow-once", cfg, ctx, { isAuthorizedSender: false }),
+    );
     expect(approvalResolverRequest(0).senderId).toBe("U12345678");
+    expect(approvalResolverRequest(0).resolveMethod).toBe("exec");
   });
 
   it("honors the configured default account for omitted-account /approve auth", async () => {
@@ -252,19 +257,81 @@ describe("handleApproveCommand", () => {
     expect(approvalResolverRequest()).toMatchObject({ channel: "telegram", accountId: "work" });
   });
 
-  it("does not bypass unauthorized senders with implicit approval auth", async () => {
-    const result = await approve(
-      buildApproveParams(
-        "/approve abc12345 allow-once",
-        { commands: { text: true } },
-        channelContext("webchat", "123"),
-        {
-          isAuthorizedSender: false,
-        },
-      ),
+  it.each(["no override", "disabled", "empty approvers"] as const)(
+    "keeps %s approval authorization implicit at the command boundary",
+    async (name) => {
+      const availability = vi.fn(() => ({ kind: "disabled" as const }));
+      const capability: ChannelApprovalCapability | undefined =
+        name === "disabled"
+          ? {
+              authorizeActorAction: () => ({ authorized: true }),
+              getActionAvailabilityState: availability,
+            }
+          : name === "empty approvers"
+            ? createResolvedApproverActionAuthAdapter({
+                channelLabel: "QuietChat",
+                resolveApprovers: () => [],
+              })
+            : undefined;
+      const channel =
+        name === "no override" ? "webchat" : name === "empty approvers" ? "quietchat" : "slack";
+      setPlugins({ ...createApprovalTestPlugin(channel, channel), approvalCapability: capability });
+      const cfg: OpenClawConfig = { commands: { text: true } };
+      for (const isAuthorizedSender of [false, true]) {
+        resolveApprovalOverGatewayMock.mockClear();
+        const result = await approve(
+          buildApproveParams(
+            "/approve abc12345 allow-once",
+            cfg,
+            {
+              ...channelContext(channel, "uuid:attacker"),
+              AccountId: name === "no override" ? undefined : "work",
+            },
+            { isAuthorizedSender },
+          ),
+        );
+        expect(result?.shouldContinue).toBe(false);
+        if (isAuthorizedSender) {
+          expectReply(result, "Approval allow-once submitted");
+          expectApprovalResolverCall("abc12345");
+          expect(resolveApprovalOverGatewayMock).toHaveBeenCalledOnce();
+        } else {
+          expect(result?.reply).toBeUndefined();
+          expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+        }
+      }
+      if (name === "disabled") {
+        expect(availability).toHaveBeenCalledWith({
+          cfg,
+          accountId: "work",
+          action: "approve",
+          approvalKind: "exec",
+        });
+      }
+    },
+  );
+
+  it("rejects legacy channel reviewer policy before plugin authorization or submission", async () => {
+    const authorizeActorAction = vi.fn(
+      ({ approvalKind }: { approvalKind: ChannelApprovalKind }) => ({
+        authorized: approvalKind === "plugin",
+      }),
     );
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply).toBeUndefined();
+    setPlugins({ ...slackApproveTestPlugin, approvalCapability: { authorizeActorAction } });
+    const cfg: OpenClawConfig = {
+      commands: { text: true },
+      approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+    };
+    const result = await approve(
+      buildApproveParams("/approve plugin:abc12345 allow-once", cfg, {
+        ...channelContext("slack", "U22222222"),
+        AccountId: "default",
+      }),
+    );
+    expectReply(result, "require an updated channel plugin");
+    expect(authorizeActorAction.mock.calls.some(([input]) => input.approvalKind === "plugin")).toBe(
+      false,
+    );
     expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
   });
 

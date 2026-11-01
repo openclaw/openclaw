@@ -3,8 +3,29 @@ import type { CDPSession, Locator, Page } from "playwright";
 export const criticalPathRoutes = ["sessions", "settings", "cron", "agents"] as const;
 export type CriticalPathRoute = (typeof criticalPathRoutes)[number];
 
-type CriticalPathCapture = {
+export type CriticalPathPresentation = {
+  startedMs: number;
+  capturedMs: number;
+  settleMs: number;
+  cls: number;
+  nonRecentInputShiftSum: number;
+  allShiftSum: number;
+  layoutShifts: Array<{
+    atMs: number;
+    value: number;
+    hadRecentInput: boolean;
+    sources: Array<{
+      element: string | null;
+      previousRect: unknown;
+      currentRect: unknown;
+    }>;
+  }>;
+};
+
+export type CriticalPathCapture = {
   name: string;
+  documentUrl: string;
+  timeOrigin: number;
   startedMs: number;
   intentStartedMs?: number;
   intentDwellMs?: number;
@@ -12,6 +33,7 @@ type CriticalPathCapture = {
   readyMs: number;
   elapsedMs: number;
   capturedMs: number;
+  presentation?: CriticalPathPresentation;
   rpcs: Array<{
     method: string;
     params: unknown;
@@ -19,8 +41,21 @@ type CriticalPathCapture = {
     responseMs: number;
     requestBytes: number;
     responseBytes: number;
+    stack?: string;
+    abandoned?: true;
   }>;
-  resources: unknown[];
+  resources: Array<
+    Pick<
+      PerformanceResourceTiming,
+      | "name"
+      | "initiatorType"
+      | "startTime"
+      | "duration"
+      | "encodedBodySize"
+      | "decodedBodySize"
+      | "transferSize"
+    >
+  >;
 };
 
 function canonicalParams(value: unknown): unknown {
@@ -67,7 +102,7 @@ export function criticalPathCpuDelta(
 }
 
 /** Browser-local frame sampling excludes the driver's polling/round-trip delay. */
-export function installCriticalPathProbe(bootRoute: "chat" | "new") {
+export function installCriticalPathProbe(bootRoute: "chat" | "new" | "sessions" | "settings") {
   performance.setResourceTimingBufferSize(5000);
   type Step = {
     name: string;
@@ -105,11 +140,13 @@ export function installCriticalPathProbe(bootRoute: "chat" | "new") {
       case "cold-new":
         ready = Boolean(enabled(".new-session-page__message"));
         break;
+      case "cold-sessions":
       case "sessions":
         ready = Boolean(
           visible("openclaw-sessions-page .session-link") && enabled(".sessions-toolbar__refresh"),
         );
         break;
+      case "cold-settings":
       case "settings":
         ready = Boolean(
           (document.querySelector(".shell--mobile-nav:not(.shell--nav-drawer-open)") ||

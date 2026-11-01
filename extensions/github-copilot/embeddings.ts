@@ -1,5 +1,7 @@
+import type { EmbeddingProviderCallOptions } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,
+  extractEmbeddingUsage,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
@@ -19,7 +21,6 @@ import {
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
 import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
-import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
@@ -38,28 +39,6 @@ type CopilotModelEntry = {
   id?: unknown;
   supported_endpoints?: unknown;
 };
-
-function isCopilotSetupError(err: unknown): boolean {
-  if (err instanceof CopilotRuntimeAuthError) {
-    return true;
-  }
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  // All Copilot-specific setup failures should allow auto-selection to
-  // fall through to the next provider (e.g. OpenAI). This covers: missing
-  // GitHub token, authentication failures, no embedding models on the plan,
-  // model discovery errors, and user-pinned model not available on Copilot.
-  return (
-    err.message.includes("No GitHub token available") ||
-    err.message.includes("Copilot user response") ||
-    err.message.includes("No embedding models available") ||
-    err.message.includes("GitHub Copilot model discovery") ||
-    err.message.includes("github-copilot.model-discovery") ||
-    err.message.includes("GitHub Copilot embedding model") ||
-    err.message.includes("Unexpected response from GitHub Copilot user endpoint")
-  );
-}
 
 function normalizeCopilotEmbeddingModel(model: string): string {
   const normalized = model.trim();
@@ -136,8 +115,6 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   authProviderId: COPILOT_EMBEDDING_PROVIDER_ID,
   normalizeModel: ({ model }) => normalizeCopilotEmbeddingModel(model),
   autoSelectPriority: 15,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isCopilotSetupError,
   create: async (options) => {
     const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
@@ -240,7 +217,10 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
 
     const fetchImpl = fetch;
     const providerHeaders = { ...headers, Authorization: `Bearer ${runtimeAuth.apiKey}` };
-    const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+    const embedMany = async (
+      input: string[],
+      callOptions?: EmbeddingProviderCallOptions,
+    ): Promise<number[][]> => {
       if (input.length === 0) {
         return [];
       }
@@ -250,7 +230,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         url,
         fetchImpl,
         ssrfPolicy,
-        signal,
+        signal: callOptions?.signal,
         init: {
           method: "POST",
           headers: providerHeaders,
@@ -267,7 +247,9 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
           const payload = await readProviderJsonResponse(response, "github-copilot.embeddings", {
             maxBytes: COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES,
           });
-          return parseGitHubCopilotEmbeddingPayload(payload, input.length);
+          const vectors = parseGitHubCopilotEmbeddingPayload(payload, input.length);
+          callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+          return vectors;
         },
       });
     };
@@ -277,7 +259,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       embed: async (input, callOptions) => {
         const [vector] = await embedMany(
           [typeof input === "string" ? input : input.text],
-          callOptions?.signal,
+          callOptions,
         );
         return vector ?? [];
       },
@@ -285,10 +267,10 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
         const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
         if (callOptions?.inputType === "query") {
           return await Promise.all(
-            texts.map(async (text) => (await embedMany([text], callOptions.signal))[0] ?? []),
+            texts.map(async (text) => (await embedMany([text], callOptions))[0] ?? []),
           );
         }
-        return await embedMany(texts, callOptions?.signal);
+        return await embedMany(texts, callOptions);
       },
     };
 

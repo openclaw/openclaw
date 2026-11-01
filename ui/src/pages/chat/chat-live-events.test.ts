@@ -52,6 +52,25 @@ async function harness() {
   return { state, send, chat };
 }
 
+function activeHistory(key: string, runId: string, content: string, text: string) {
+  return {
+    messages: [{ role: "user", content }],
+    sessionId: "selected-session",
+    sessionInfo: {
+      key,
+      sessionId: "selected-session",
+      hasActiveRun: true,
+      activeRunIds: [runId],
+      status: "running",
+    },
+    inFlightRun: {
+      runId,
+      text,
+      events: [{ runId, seq: 1, stream: "usage", ts: 1, data: { outputTokens: 3 } }],
+    },
+  };
+}
+
 it("preserves live ordering across one shared import and retires superseded pane/snapshot work", async () => {
   const boundary = await import("./chat-live-events.ts");
   const { chatRunPresentation } = await import("./chat-run-presentation.ts");
@@ -143,45 +162,22 @@ it("preserves live ordering across one shared import and retires superseded pane
   });
   const history = await harness();
   const { loadChatHistory } = await import("./chat-history.ts");
-  vi.spyOn(history.state.client!, "request").mockResolvedValue({
-    messages: [{ role: "user", content: "Old history" }],
-    sessionId: "selected-session",
-    sessionInfo: {
-      key: history.state.sessionKey,
-      sessionId: "selected-session",
-      hasActiveRun: true,
-      activeRunIds: ["history-run"],
-      status: "running",
-    },
-    inFlightRun: {
-      runId: "history-run",
-      text: "Old snapshot",
-      events: [{ runId: "history-run", seq: 1, stream: "usage", ts: 1, data: { outputTokens: 3 } }],
-    },
-  });
+  vi.spyOn(history.state.client!, "request").mockResolvedValue(
+    activeHistory(history.state.sessionKey, "history-run", "Old history", "Old snapshot"),
+  );
   const loadingHistory = loadChatHistory(history.state);
   const cutHistories = [];
   for (const reason of ["reset", "new", "rewind", "branch-switch"]) {
     const pane = await harness();
     vi.spyOn(pane.state.client!, "request")
-      .mockResolvedValueOnce({
-        messages: [{ role: "user", content: "Before transcript cut" }],
-        sessionId: "selected-session",
-        sessionInfo: {
-          key: pane.state.sessionKey,
-          sessionId: "selected-session",
-          hasActiveRun: true,
-          activeRunIds: ["pre-cut-run"],
-          status: "running",
-        },
-        inFlightRun: {
-          runId: "pre-cut-run",
-          text: "Old branch reply",
-          events: [
-            { runId: "pre-cut-run", seq: 1, stream: "usage", ts: 1, data: { outputTokens: 3 } },
-          ],
-        },
-      })
+      .mockResolvedValueOnce(
+        activeHistory(
+          pane.state.sessionKey,
+          "pre-cut-run",
+          "Before transcript cut",
+          "Old branch reply",
+        ),
+      )
       .mockResolvedValue({ messages: [], sessionId: "selected-session" });
     cutHistories.push({ pane, reason, loading: loadChatHistory(pane.state) });
   }
@@ -190,8 +186,7 @@ it("preserves live ordering across one shared import and retires superseded pane
     expect(pane.state.chatRunId, `before ${reason}`).toBeNull();
     pane.send("sessions.changed", { key: pane.state.sessionKey, reason });
   }
-  // The foreground import was already requested. Let the resolved history request
-  // enter the same held tool import before replacing its connection ownership.
+  // Wait until history joins the held tool import before retiring its connection.
   await pendingImport.started;
   expect(history.state.chatMessages).toEqual([]);
   expect(history.state.chatRunId).toBeNull();
@@ -212,12 +207,10 @@ it("preserves live ordering across one shared import and retires superseded pane
   expect(foreign.state.chatRunId).toBe("run-1");
   expect(foreign.state.chatStream).toBe("Current reply");
   for (const pane of [...resetPanes, ...terminalPanes, ...retiredPanes]) {
-    expect(pane.state.chatRunId).toBeNull();
-    expect(pane.state.chatStream).toBeNull();
+    expect(pane.state).toMatchObject({ chatRunId: null, chatStream: null });
   }
   expect(JSON.stringify(terminalPanes[1]!.state.chatMessages)).toContain("Durable final");
-  expect(history.state.chatMessages).toEqual([]);
-  expect(history.state.chatRunId).toBeNull();
+  expect(history.state).toMatchObject({ chatMessages: [], chatRunId: null });
   for (const { pane, reason } of cutHistories) {
     expect(JSON.stringify(pane.state.chatMessages), reason).not.toContain("Before transcript cut");
     expect(pane.state.chatRunId, reason).toBeNull();

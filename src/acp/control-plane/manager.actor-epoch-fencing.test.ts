@@ -16,6 +16,7 @@ import {
   installAcpSessionManagerTestLifecycle,
   installMutableAcpSessionMetaUpsert,
   readySessionMeta,
+  runtimeHandle,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 import type { WriteManagerSessionMeta } from "./manager.types.js";
@@ -51,12 +52,9 @@ function createFixture(beforeCommit?: () => Promise<void>, initialMeta?: Session
   });
   runtimeState.ensureSession.mockImplementation(async (input) => {
     const callNumber = ++ensureCount;
-    return {
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `runtime-${callNumber}`,
+    return runtimeHandle(input.sessionKey, `runtime-${callNumber}`, {
       backendSessionId: `backend-${callNumber}`,
-    };
+    });
   });
   hoisted.readAcpSessionEntryMock.mockImplementation(
     ({ sessionKey: key }: { sessionKey: string }) => stored(key),
@@ -414,7 +412,7 @@ it("captures the expected owner before waiting for the session actor", async () 
   const ensure = barrier();
   state.ensureSession.mockImplementation(async () => {
     await ensure.wait();
-    return { sessionKey, backend: "acpx", runtimeSessionName: meta.runtimeSessionName };
+    return runtimeHandle(sessionKey, meta.runtimeSessionName);
   });
   const manager = new AcpSessionManager();
   const status = manager.getSessionStatus({ cfg: baseCfg, sessionKey });

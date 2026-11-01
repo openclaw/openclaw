@@ -4,6 +4,7 @@ import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-h
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -210,7 +211,7 @@ test.each([50, 150])(
       goal,
       totalTokens,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
     const materialized = materializeSessionRow(inputs);
     for (const now of TIMES) {

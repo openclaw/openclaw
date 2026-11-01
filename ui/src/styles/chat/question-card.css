@@ -148,6 +148,24 @@ openclaw-chat-question-panel {
   transform: rotate(180deg);
 }
 
+.chat-question-panel__header {
+  display: grid;
+  gap: 2px;
+}
+
+.chat-question-panel__source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-question-panel__heading {
   display: flex;
   align-items: flex-start;
@@ -507,6 +525,15 @@ openclaw-chat-question-panel {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
+}
+
+/* The live region wraps the question lines, so it has to keep participating in the parent
+   grid: as a plain block it would collapse every question into a single grid item and drop
+   the row gap between them. */
+.chat-question-summary__announcement {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .chat-question-summary__item {

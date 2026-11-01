@@ -48,6 +48,43 @@ private func userTexts(_ vm: OpenClawChatViewModel) async -> [String] {
     }
 }
 
+private func startupAdmissionRefusalFromWire() async throws -> GatewayResponseError {
+    let socketSession = FakeGatewayWebSocketSession()
+    let gateway = GatewayNodeSession()
+    try await gateway.connect(
+        url: #require(URL(string: "ws://startup-outbox-test.invalid")),
+        credentials: .init(),
+        connectOptions: GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "ui",
+            clientDisplayName: "Outbox Test",
+            includeDeviceIdentity: false,
+            allowStoredDeviceAuth: false),
+        sessionBox: WebSocketSessionBox(session: socketSession),
+        onConnected: {},
+        onDisconnected: { _ in },
+        onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+    let socket = try #require(socketSession.latestTask())
+    let request = Task { try await gateway.request(method: "chat.send", paramsJSON: "{}") }
+    await socket.waitForSentRequests(method: "chat.send", count: 1)
+    let frame = try #require(socket.sentRequests(method: "chat.send").first)
+    try socket.emitResponse(id: #require(frame["id"] as? String), payload: [:], error: [
+        "code": "UNAVAILABLE", "message": "Agent is preparing", "retryable": true,
+        "details": ["reason": "startup-sidecars", "method": "chat.send"],
+    ])
+    let result = await request.result
+    await gateway.disconnect()
+    let error: Error? = if case let .failure(error) = result {
+        error
+    } else { nil }
+    return try #require(error as? GatewayResponseError)
+}
+
 private struct OutboxSendError: Error, LocalizedError {
     var errorDescription: String? {
         "transport unreachable"
@@ -73,6 +110,7 @@ actor OutboxTransportState {
     var sendRejects = false
     var sendResponseErrors = false
     var sendRestartRejections = false
+    var sendStartupRejections = false
     var restartRejectedKeys: [String] = []
     var sendRoutingChanged = false
     var sendSettingsChanged = false
@@ -395,6 +433,10 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
                 code: "INVALID_REQUEST",
                 message: "rejected",
                 details: nil)
+        }
+        if await self.state.sendStartupRejections {
+            await self.state.update { $0.restartRejectedKeys.append(idempotencyKey) }
+            throw try await startupAdmissionRefusalFromWire()
         }
         if await self.state.sendRestartRejections {
             await self.state.update { $0.restartRejectedKeys.append(idempotencyKey) }
@@ -2142,12 +2184,15 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentIdempotencyKeys.isEmpty)
     }
 
-    @Test(arguments: [false, true])
-    func `restart admission rejection resumes the same send after reconnect`(liveSend: Bool) async throws {
+    @Test(arguments: [false, true], ["gateway-restarting", "startup-sidecars"])
+    func `admission rejection resumes the same send after reconnect`(liveSend: Bool, reason: String) async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: liveSend)
-        await transport.state.update { $0.sendRestartRejections = true }
+        await transport.state.update {
+            $0.sendRestartRejections = reason == "gateway-restarting"
+            $0.sendStartupRejections = reason == "startup-sidecars"
+        }
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { vm.load() }
         await vm.bootstrapTask?.value
@@ -2161,7 +2206,11 @@ struct ChatViewModelOutboxTests {
             await transport.goOnline()
         }
         await transport.state.waitForState { !$0.restartRejectedKeys.isEmpty }
-        try await waitForOutboxState { !vm.healthOK }
+        if liveSend { try #require(await store.loadCommands().count == 1) }
+        try await waitForOutboxState {
+            !vm.healthOK || vm.messages.contains { vm.outboxState(for: $0.id)?.isFailed == true }
+        }
+        try #require(await MainActor.run { !vm.healthOK })
         // Task handles are not observable; join reconnect's coalesced flushes directly.
         while let flush = await vm.outboxFlushTask {
             await flush.value
@@ -2178,6 +2227,7 @@ struct ChatViewModelOutboxTests {
         let sendGate = OutboxTestGate()
         await transport.state.update {
             $0.sendRestartRejections = false
+            $0.sendStartupRejections = false
             $0.sendGate = sendGate
         }
         await transport.goOnline()
@@ -2185,6 +2235,64 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentIdempotencyKeys == [queued.id])
         #expect(await userTexts(vm) == ["survive the restart"])
         #expect(await store.loadCommands().isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func `startup rejection retains the original send after typing or switching chats`(
+        switchSession: Bool) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let sendGate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendStartupRejections = true
+            $0.sendGate = sendGate
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        await MainActor.run { vm.load() }
+        await vm.bootstrapTask?.value
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+        let send = await MainActor.run {
+            vm.input = "retain the first draft"
+            return vm.send()
+        }
+        await sendGate.waitUntilStarted()
+        await MainActor.run {
+            if switchSession { vm.switchSession(to: "other") }
+            vm.input = "keep the newer draft"
+        }
+        if switchSession {
+            await vm.bootstrapTask?.value
+            try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+            try #require(await MainActor.run { vm.healthOK })
+        }
+        await sendGate.release()
+        await send?.value
+        #expect(await MainActor.run { vm.input } == "keep the newer draft")
+        try #require(await MainActor.run { !vm.healthOK })
+        let queued = try #require(await store.loadCommands().first)
+        #expect(queued.status == .queued)
+        #expect(queued.text == "retain the first draft")
+        #expect(queued.sessionKey == "main")
+        #expect(queued.retryCount == 0)
+        #expect(await transport.state.restartRejectedKeys == [queued.id])
+        #expect(await transport.state.sentIdempotencyKeys.isEmpty)
+
+        let retryGate = OutboxTestGate()
+        await transport.state.update {
+            $0.sendStartupRejections = false
+            $0.sendGate = retryGate
+        }
+        await transport.goOnline()
+        try await finishOutboxFlush(vm, at: retryGate)
+        #expect(await transport.state.sentIdempotencyKeys == [queued.id])
+        #expect(await transport.state.sentMessages == ["retain the first draft"])
+        #expect(await transport.state.sentThinkingLevels == [queued.thinking])
+        #expect(await userTexts(vm) == (switchSession ? [] : ["retain the first draft"]))
+        #expect(await store.loadCommands().isEmpty)
+        #expect(await MainActor.run { vm.sessionKey } == (switchSession ? "other" : "main"))
+        #expect(await MainActor.run { vm.input } == "keep the newer draft")
     }
 
     @Test func `definitive live-send rejection restores draft without queueing`() async throws {
