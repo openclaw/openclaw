@@ -235,6 +235,7 @@ suite.define(() => {
 
           await page.reload();
           await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+          await collapsedToggle.waitFor();
           expect(await collapsedToggle.count()).toBe(1);
           expect(await collapsedToggle.isDisabled()).toBe(true);
           await collapsedToggle.evaluate((button: HTMLButtonElement) => button.click());

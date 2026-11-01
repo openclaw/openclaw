@@ -395,15 +395,20 @@ const runtimeConsumers = [
   })),
 ] as const;
 
-function includesRuntimeConfig(configs: readonly string[] | undefined, config: string) {
-  return configs?.some(
-    (selected) =>
-      selected === config ||
-      selected === "vitest.config.ts" ||
-      selected === "test/vitest/vitest.config.ts" ||
-      fullSuiteVitestShards.some(
-        (shard) => shard.config === selected && shard.projects.includes(config),
-      ),
+export function includesRuntimeConfig(
+  configs: readonly string[] | undefined,
+  config: string,
+): boolean {
+  return (
+    configs?.some(
+      (selected) =>
+        selected === config ||
+        selected === "vitest.config.ts" ||
+        selected === "test/vitest/vitest.config.ts" ||
+        fullSuiteVitestShards.some(
+          (shard) => shard.config === selected && shard.projects.includes(config),
+        ),
+    ) ?? false
   );
 }
 

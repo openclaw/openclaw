@@ -539,6 +539,7 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   const unexpectedAsync = async () => unexpected();
   return {
     get: vi.fn(() => undefined),
+    ensureRetainedRunning: vi.fn(unexpectedAsync),
     // Launcher-only fixtures assume a recognized lease; the service suite owns provider outcomes.
     inspectTurnLease: vi.fn(async () => {}),
     createGatewayTools: prepareGatewayTools,
