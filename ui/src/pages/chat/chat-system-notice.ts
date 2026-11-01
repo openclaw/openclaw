@@ -199,7 +199,7 @@ export function projectChatSystemNotice(
     {
       kind: "notice",
       key: item.key,
-      icon: noticeKind?.icon ?? "cpu",
+      icon: "cpu",
       ...(pending ? {} : { systemEvent: "info" as const }),
       label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
       ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
