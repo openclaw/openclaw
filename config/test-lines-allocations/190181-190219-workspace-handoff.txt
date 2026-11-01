@@ -1,0 +1,2 @@
+662
+# Rewind/branch-switch managed-workspace handoff: 615 source regression/support lines plus 47 adaptation lines. Real handler/SQLite/Git boundaries cover retained edits, invalid selection, revocation, receipt recovery, and reset/delete isolation.

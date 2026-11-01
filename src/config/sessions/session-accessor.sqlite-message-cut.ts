@@ -38,6 +38,7 @@ import type {
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import { prepareMessageCutLocalWorkspace } from "./session-message-cut-local-workspace.js";
 import { planSessionMessageCut } from "./session-message-cut-plan.js";
 import { readSessionMessageCut } from "./session-message-cut-read.js";
 import type {
@@ -214,6 +215,21 @@ export async function mutateSqliteSessionAtMessage(
             storePath: memory.path,
             env: params.env,
           });
+          const prepared = await prepareMessageCutLocalWorkspace(
+            {
+              agentId: memory.agentId,
+              sessionKey: sourceKey,
+              storePath: memory.path,
+              env: target.env,
+            },
+            entry,
+            () => memory.authority.assertCurrent(),
+            { intent, sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
+          );
+          if (prepared.status !== "settled") {
+            return prepared;
+          }
+          intent.settledLocalWorkspace = prepared.workspace;
           return withSqliteSessionContextReset(
             {
               agentId: memory.agentId,
@@ -300,6 +316,24 @@ export async function mutateSqliteSessionAtMessage(
       assertPreparedCurrent,
       preconditions,
     );
+  if (mode !== "fork" && preparedEntry) {
+    intent.expectedState = preparedExpectedState;
+    const prepared = await prepareMessageCutLocalWorkspace(
+      {
+        agentId: resolved.agentId,
+        sessionKey: sourceKey,
+        storePath: resolved.path,
+        env: resolved.env,
+      },
+      preparedEntry,
+      assertCurrent,
+      { intent, sourceRepositoryWorkspaceId: preconditions?.sourceRepositoryWorkspaceId },
+    );
+    if (prepared.status !== "settled") {
+      return prepared;
+    }
+    intent.settledLocalWorkspace = prepared.workspace;
+  }
   return mode !== "fork" && preparedEntry
     ? await withSqliteSessionContextReset(
         resolved,
