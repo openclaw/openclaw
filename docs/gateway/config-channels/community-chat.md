@@ -63,7 +63,7 @@ title: "Configuration — community chat channels"
       textChunkLimit: 2000,
       suppressEmbeds: true,
       streaming: {
-        mode: "progress", // default for Discord and Matrix
+        mode: "progress", // default for Discord
         chunkMode: "length", // length | newline
         progress: {
           label: "auto",
