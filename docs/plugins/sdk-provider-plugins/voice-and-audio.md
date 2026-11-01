@@ -125,6 +125,36 @@ Register each capability inside `register(api)` alongside your existing
     speech and is returned unchanged; the media runner records a nonfatal skip.
     Missing or non-string values still throw with the supplied message.
 
+    Finite utterances are an additive capability, separate from continuous VAD
+    sessions. Advertise `utterance: {formats, models?}` on the provider and accept
+    `createSession({..., agentId, utterance: {format, signal}})`. The returned
+    session must support awaited `writeAudio()` and `finishInput(): Promise<{text}>`.
+    `finishInput` covers every accepted sample, includes late transcript segments,
+    succeeds for empty text, rejects further input, and is idempotent. `close()`
+    cancels finite input; it is not an implicit successful finish.
+
+    Official provider plugins can reuse `createFiniteRealtimeTranscriptionSession`
+    from the private-local
+    `openclaw/plugin-sdk/realtime-transcription-session` for serialized bounded
+    writes and acknowledged segments. The provider supplies frame/segment limits,
+    framing and commit messages; the common helper owns completion and cleanup.
+    Use `lifecycle: "utterance"` on the WebSocket session to reject connection
+    loss and overflow instead of reconnecting with incomplete audio. Existing
+    continuous consumers keep their current VAD/close behavior.
+
+    Consumers use `api.runtime.mediaUnderstanding.transcribeAudioStream`
+    through the existing typed plugin runtime, not a private-local import. Check
+    for the optional method on older hosts and retain batch when absent. It selects
+    the first configured explicit audio model using existing media selection rules,
+    honors disabled/scope
+    policy and configured byte/time limits, and does not choose another provider
+    just to obtain streaming. Omitted models and batch-only profile, request,
+    headers, prompt, or provider options retain the batch path without consuming
+    input. Continuous sessions keep their synchronous `sendAudio()` contract.
+    `{supported:false, reason}` guarantees the input iterator was not touched,
+    so the caller may use its existing batch path. Once streaming is admitted,
+    failures throw: do not automatically replay partially sent audio elsewhere.
+
     Official plugins can use the private `blob-runtime` helper
     `bufferToBlobPart(buffer)` for other multipart uploads. Pass it directly to
     `new Blob(...)` to preserve the Buffer range without an intermediate copy;

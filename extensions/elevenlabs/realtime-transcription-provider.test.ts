@@ -5,7 +5,7 @@ import {
   type RealtimeTranscriptionSessionCreateRequest,
 } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
 const { resolveApiKeyMock } = vi.hoisted(() => ({ resolveApiKeyMock: vi.fn() }));
@@ -34,6 +34,7 @@ async function createSession(
   eventsByConnection: Record<string, unknown>[][],
   sessionOptions: Partial<RealtimeTranscriptionSessionCreateRequest> = {},
   initialEvent = { message_type: "session_started" },
+  onMessage?: (message: Record<string, unknown>, ws: WebSocket) => void,
 ) {
   const server = createServer();
   const wss = new WebSocketServer({ server, maxPayload: 1024 * 1024 });
@@ -41,6 +42,14 @@ async function createSession(
   let connectionCount = 0;
   wss.on("connection", (ws, request) => {
     requests.push(new URL(request.url ?? "/", "http://127.0.0.1"));
+    ws.on("message", (data) => {
+      const buffer = Buffer.isBuffer(data)
+        ? data
+        : Array.isArray(data)
+          ? Buffer.concat(data)
+          : Buffer.from(data);
+      onMessage?.(JSON.parse(buffer.toString()) as Record<string, unknown>, ws);
+    });
     for (const event of [initialEvent, ...(eventsByConnection[connectionCount++] ?? [])]) {
       ws.send(JSON.stringify(event));
     }
@@ -178,4 +187,90 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       "ElevenLabs API key missing",
     );
   });
+
+  it("transcribes finite PCM input with ordered manual segment acknowledgments", async () => {
+    const frames: Buffer[] = [];
+    const commits: number[] = [];
+    const { session, requests } = await createSession(
+      [[]],
+      {
+        utterance: {
+          format: { encoding: "pcm_s16le", sampleRate: 16000, channels: 1 },
+          signal: new AbortController().signal,
+        },
+      },
+      undefined,
+      (message, ws) => {
+        expect(message.sample_rate).toBe(16000);
+        if (message.commit === true) {
+          expect(message.audio_base_64).toBe("");
+          commits.push(Buffer.concat(frames).length);
+          ws.send(
+            JSON.stringify({ message_type: "committed_transcript", text: `part${commits.length}` }),
+          );
+        } else {
+          expect(message.commit).toBe(false);
+          const audio = Buffer.from(String(message.audio_base_64), "base64");
+          expect(audio.length).toBeLessThanOrEqual(32000);
+          frames.push(audio);
+        }
+      },
+    );
+    const input = Buffer.alloc(32000 * 40 + 40, 11);
+    await session.connect();
+    await session.writeAudio!(input);
+    await expect(session.finishInput!()).resolves.toEqual({
+      text: "part1 part2 part3 part4 part5 part6",
+    });
+    expect(Buffer.concat(frames).equals(input)).toBe(true);
+    expect(commits).toEqual([256000, 512000, 768000, 1024000, 1280000, 1280040]);
+    expect(requests[0]?.searchParams.get("audio_format")).toBe("pcm_16000");
+    expect(requests[0]?.searchParams.get("commit_strategy")).toBe("manual");
+    expect(requests[0]?.searchParams.get("include_timestamps")).toBe("false");
+  });
+
+  it.each(["empty", "error", "disconnect"] as const)(
+    "handles finite %s after the final commit",
+    async (outcome) => {
+      const onError = vi.fn();
+      const { session, requests } = await createSession(
+        [[]],
+        {
+          utterance: {
+            format: { encoding: "pcm_s16le", sampleRate: 16000, channels: 1 },
+            signal: new AbortController().signal,
+          },
+          onError,
+        },
+        undefined,
+        (message, ws) => {
+          if (message.commit !== true) {
+            return;
+          }
+          if (outcome === "empty") {
+            ws.send(JSON.stringify({ message_type: "committed_transcript", text: "" }));
+          }
+          if (outcome === "error") {
+            ws.send(JSON.stringify({ message_type: "input_error", error: "invalid finite audio" }));
+          }
+          if (outcome === "disconnect") {
+            ws.close(1011, "upstream lost");
+          }
+        },
+      );
+      await session.connect();
+      await session.writeAudio!(Buffer.alloc(32000));
+      const result = session.finishInput!();
+      if (outcome === "empty") {
+        await expect(result).resolves.toEqual({ text: "" });
+        expect(onError).not.toHaveBeenCalled();
+      } else {
+        await expect(result).rejects.toThrow(
+          outcome === "error" ? "invalid finite audio" : "connection lost",
+        );
+        expect(onError).toHaveBeenCalledOnce();
+      }
+      expect(requests).toHaveLength(1);
+    },
+  );
 });

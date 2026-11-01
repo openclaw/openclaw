@@ -88,6 +88,7 @@ export type TranscribeAudioFileParams = DescribeVideoFileParams & {
 };
 
 export type MediaUnderstandingRuntime = {
+  transcribeAudioStream: typeof import("../realtime-transcription/utterance-runtime.js").transcribeAudioStream;
   resolveAudioInputBudget: (params: {
     cfg: OpenClawConfig;
   }) => Promise<{ enabled: false } | { enabled: true; maxBytes: number }>;

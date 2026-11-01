@@ -9,6 +9,8 @@ import type { PluginRegistry } from "../registry-types.js";
 import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
 
 export type PluginRuntimeGatewayRequestScope = {
+  /** Host-bound stream owner; providers retain this through awaited transport effects. */
+  transcriptionOwner?: { assertCurrent: () => void; signal?: AbortSignal };
   /** Exact registration and Gateway owner retained across awaited system operations. */
   assertSystemOwnerCurrent?: () => void;
   /** Recheck the admitted HTTP device or cookie grant before effects/disclosure; rejection sends HTTP 401 and throws. */

@@ -151,6 +151,21 @@ For Google Meet agent mode, set
 `"elevenlabs"` and configure the same provider block under
 `plugins.entries.google-meet.config.realtime.providers.elevenlabs`.
 
+## Finite utterances for streaming consumers
+
+The realtime provider also advertises finite mono PCM16 input at 16 kHz for
+explicitly selected `scribe_v2_realtime`. SDK consumers use the generic `transcribeAudioStream`
+interface; they do not send ElevenLabs commit messages themselves. The adapter
+uses manual commits and serial acknowledged segments below the upstream
+automatic-commit limit, then returns the combined final transcript after input
+ends. Empty committed text is valid; cancellation, connection loss and timeout
+fail the request rather than returning an incomplete transcript.
+
+This mode is separate from the existing continuous Voice Call/Google Meet VAD
+sessions. Selecting `scribe_v2` keeps the batch model; it is not silently changed
+to `scribe_v2_realtime` just to obtain streaming. An omitted media model also
+retains batch selection.
+
 ## Related
 
 - [Text-to-speech](/tools/tts)

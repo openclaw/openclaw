@@ -11,6 +11,7 @@ import type { MediaUnderstandingProvider } from "../media-understanding/types.js
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
+  RealtimeTranscriptionAudioFormat,
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
   RealtimeTranscriptionProviderId,
@@ -572,6 +573,10 @@ export type RealtimeTranscriptionProviderPlugin = {
   defaultModel?: string;
   models?: readonly string[];
   autoSelectOrder?: number;
+  utterance?: {
+    formats: readonly RealtimeTranscriptionAudioFormat[];
+    models?: readonly string[];
+  };
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;

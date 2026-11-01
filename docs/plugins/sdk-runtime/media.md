@@ -91,6 +91,20 @@ JavaScript-only host export; its declarations are excluded from the package.
     });
 
     // Describe a video
+    // Optional on older hosts. Unsupported means input has not been consumed.
+    const transcribe = api.runtime.mediaUnderstanding.transcribeAudioStream;
+    if (transcribe) {
+      const result = await transcribe({
+        cfg: api.config,
+        agentId: "main",
+        audio: pcmChunks, // AsyncIterable<Uint8Array>, mono PCM16, <=32768 bytes/chunk
+        format: { encoding: "pcm_s16le", sampleRate: 16000, channels: 1 },
+        signal: abortController.signal,
+      });
+      // result.supported === false: retain the existing batch path.
+      // Errors after admission throw; do not automatically replay uploaded audio.
+    }
+
     const video = await api.runtime.mediaUnderstanding.describeVideoFile({
       filePath: "/tmp/inbound-video.mp4",
       cfg: api.config,

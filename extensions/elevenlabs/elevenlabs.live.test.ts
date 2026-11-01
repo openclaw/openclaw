@@ -24,6 +24,57 @@ const registerElevenLabsPlugin = () =>
   });
 
 describeLive("elevenlabs plugin live", () => {
+  it("finalizes finite PCM input through the generic session contract", async () => {
+    const { realtimeTranscriptionProviders } = await registerElevenLabsPlugin();
+    const provider = requireRegisteredProvider(realtimeTranscriptionProviders, "elevenlabs");
+    const phrase =
+      "The kitchen lights are on. This is a synthetic test of complete speech recognition. " +
+      "Please retain the final words of this recording. The final word is starlight.";
+    const audio = await synthesizeElevenLabsLiveSpeech({
+      text: phrase,
+      apiKey: ELEVENLABS_KEY,
+      outputFormat: "pcm_16000",
+      timeoutMs: 30_000,
+    });
+    const controller = new AbortController();
+    const errors: Error[] = [];
+    const session = provider.createSession({
+      providerConfig: { apiKey: ELEVENLABS_KEY, modelId: "scribe_v2_realtime", languageCode: "en" },
+      utterance: {
+        format: { encoding: "pcm_s16le", sampleRate: 16000, channels: 1 },
+        signal: controller.signal,
+      },
+      onError: (error) => errors.push(error),
+    });
+    const started = performance.now();
+    try {
+      if (!session.finishInput) {
+        throw new Error("Provider did not expose finite-input completion");
+      }
+      await session.connect();
+      for (let offset = 0; offset < audio.length; offset += 16000) {
+        await session.writeAudio!(audio.subarray(offset, offset + 16000));
+      }
+      const finishedInput = performance.now();
+      const result = await session.finishInput();
+      expect(normalizeTranscriptForMatch(result.text)).toContain("starlight");
+      expect(errors).toHaveLength(0);
+      console.info(
+        "FINITE_STT_RESULT",
+        JSON.stringify({
+          audioBytes: audio.length,
+          audioSeconds: audio.length / 32000,
+          elapsedMs: Math.round(performance.now() - started),
+          afterInputMs: Math.round(performance.now() - finishedInput),
+          transcript: result.text,
+        }),
+      );
+    } finally {
+      controller.abort();
+      session.close();
+    }
+  }, 90_000);
+
   it("synthesizes speech through the registered provider with eleven_v3", async () => {
     const { speechProviders } = await registerElevenLabsPlugin();
     const provider = requireRegisteredProvider(speechProviders, "elevenlabs");

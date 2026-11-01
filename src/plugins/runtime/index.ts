@@ -41,6 +41,9 @@ const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/tt
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
+const loadFiniteTranscriptionRuntime = createLazyRuntimeModule(
+  () => import("../../realtime-transcription/utterance-runtime.js"),
+);
 const loadGatewayPluginRuntime = createLazyRuntimeModule(
   () => import("../../gateway/server-plugins.js"),
 );
@@ -107,6 +110,9 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
+    transcribeAudioStream: createLazyRuntimeMethodBinder(loadFiniteTranscriptionRuntime)(
+      (runtime) => runtime.transcribeAudioStream,
+    ),
   };
 }
 

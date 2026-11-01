@@ -33,7 +33,7 @@ export async function waitForLiveExpectation(expectation: () => void, timeoutMs 
 export async function synthesizeElevenLabsLiveSpeech(params: {
   text: string;
   apiKey: string;
-  outputFormat: "mp3_44100_128" | "ulaw_8000";
+  outputFormat: "mp3_44100_128" | "ulaw_8000" | "pcm_16000";
   timeoutMs?: number;
 }): Promise<Buffer> {
   const baseUrl = process.env.ELEVENLABS_BASE_URL?.trim() || "https://api.elevenlabs.io";
