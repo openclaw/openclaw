@@ -512,7 +512,6 @@ suite.define(() => {
     await progress("first", "Search sessions for release notes", "running");
     await page.locator(".chat-tool-row--running .chat-tool-row__title").waitFor();
     await expect.poll(shimmering).toEqual(["Search sessions for release notes"]);
-    await captureToolActivityProof(page, "tool-row-running-purpose-wave");
 
     await progress("first", "Search sessions for release notes", "completed");
     await expect.poll(shimmering).toEqual([]);

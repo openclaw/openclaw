@@ -140,9 +140,10 @@ fixture.describe("Control UI shimmer", () => {
       expect(active.map(([, transparent]) => transparent)).toEqual(
         active.map(([shimmer]) => shimmer),
       );
-      for (let index = 0; index < active.length; index += 2) {
-        expect(active[index].slice(2)).toEqual(active[index + 1].slice(2));
-      }
+      const dimensions = active.map(([, , width, height]) => [width, height]);
+      expect(dimensions.filter((_, index) => index % 2 === 0)).toEqual(
+        dimensions.filter((_, index) => index % 2 === 1),
+      );
       for (const media of [
         { reducedMotion: "reduce" },
         { reducedMotion: "no-preference", forcedColors: "active" },
