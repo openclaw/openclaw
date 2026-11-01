@@ -105,8 +105,9 @@ describe("PaletteSessionDraft", () => {
     policy.resolve({ sessionPlacement: { requiredProfile: profile } });
     await context.agents.refreshList();
     await host.coldOutcome.promise;
-    expect(host.draft.submitting).toBe(true);
-    expect(host.draft.error).toBeNull();
+    // The cold Send starts once and releases the launcher to its own draft.
+    expect(host.paletteOpen).toBe(false);
+    expect(host.draft).toMatchObject({ submitting: false, messageLocked: false, error: null });
     await submitted.promise;
     expect(create).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
@@ -275,40 +276,59 @@ describe("PaletteSessionDraft", () => {
     ).toBe(false);
   });
 
-  it("releases the launcher once create is sent and reopens a failed prompt from its notice", async () => {
+  it("frees the launcher for another start while one is pending and retries a failed start", async () => {
     const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
     const { host, create } = await mount();
-    const created = createDeferred<SessionCreateOutcome>();
-    create.mockReturnValueOnce(created.promise);
+    const first = createDeferred<SessionCreateOutcome>();
+    const second = createDeferred<SessionCreateOutcome>();
+    create.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     host.draft.setMessage("Start this while I keep working");
     await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
-    const submission = host.draft.submit();
+    const firstSubmission = host.draft.submit();
     await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(host.paletteOpen).toBe(false);
-    expect(host.draft).toMatchObject({
-      submitting: true,
-      message: "Start this while I keep working",
-    });
-    created.reject(new Error("Gateway refused the session"));
-    await submission;
+    expect(host.draft).toMatchObject({ message: "", submitting: false, messageLocked: false });
+
+    host.paletteOpen = true;
+    host.draft.open();
+    host.draft.setMessage("A second task in parallel");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    const secondSubmission = host.draft.submit();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls.map(([params]) => params?.message)).toEqual([
+      "Start this while I keep working",
+      "A second task in parallel",
+    ]);
+
+    first.reject(new Error("Gateway refused the session"));
+    await firstSubmission;
     const notice = showToast.mock.calls.at(-1)?.[0];
     expect(notice).toMatchObject({
       message: "Session didn't start: Gateway refused the session",
-      actionLabel: "Edit prompt",
+      actionLabel: "Try again",
+    });
+    create.mockResolvedValueOnce({
+      key: "agent:main:dashboard:retried",
+      initialRun: { status: "started", runId: "retried-run" },
     });
     notice?.onAction?.();
-    await host.updateComplete;
-    expect(host.paletteOpen).toBe(true);
-    expect(host.draft).toMatchObject({
-      message: "Start this while I keep working",
-      error: "Gateway refused the session",
-      submitting: false,
-    });
-    expect(create).toHaveBeenCalledOnce();
+    // A retry while the first attempt is still settling must not start twice.
+    notice?.onAction?.();
+    await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+    expect(create.mock.calls[2]?.[0]?.message).toBe("Start this while I keep working");
+    await vi.waitFor(() =>
+      expect(showToast).toHaveBeenLastCalledWith(
+        expect.objectContaining({ actionLabel: "Open session" }),
+      ),
+    );
+    second.resolve({ key: "agent:main:dashboard:second", initialRun: { status: "idle" } });
+    await secondSubmission;
+    expect(create).toHaveBeenCalledTimes(3);
+    expect(host.draft.message).toBe("");
   });
 
   it.each(["unchanged", "connection", "account"] as const)(
-    "settles one locked creation when its owner is %s",
+    "settles one released creation when its owner is %s",
     async (change) => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
       const { host, context, create, publish } = await mount();
@@ -317,17 +337,12 @@ describe("PaletteSessionDraft", () => {
       host.draft.setMessage("Hold my creation");
       await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
       const submission = host.draft.submit();
-      await vi.waitFor(() => expect(host.draft.submitting).toBe(true));
+      await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
       try {
         if (change === "unchanged") {
-          await host.draft.submit();
-          host.paletteOpen = false;
-          host.draft.close();
           host.paletteOpen = true;
           host.draft.open();
-          expect(host.draft).toMatchObject({ message: "Hold my creation", submitting: true });
-          host.draft.setMessage("must not replace the submitted intent");
-          expect(host.draft.message).toBe("Hold my creation");
+          expect(host.draft).toMatchObject({ message: "", submitting: false });
         } else {
           if (change === "connection") {
             Object.assign(context.gateway, { connectionRevision: 2 });
@@ -342,6 +357,7 @@ describe("PaletteSessionDraft", () => {
           publish();
           await host.updateComplete;
           await host.updateComplete;
+          host.paletteOpen = true;
           host.draft.open();
           expect(host.draft.message).toBe("");
         }
@@ -350,17 +366,16 @@ describe("PaletteSessionDraft", () => {
         await submission;
       }
       expect(create).toHaveBeenCalledOnce();
-      // Dispatch releases the launcher; acceptance closes only the reopened pending view.
-      expect(host.started).toHaveBeenCalledTimes(change === "unchanged" ? 2 : 1);
+      // Release closes the launcher once; acceptance never closes a newer prompt.
+      expect(host.started).toHaveBeenCalledOnce();
+      expect(host.paletteOpen).toBe(true);
       expect(context.navigateAndWait).not.toHaveBeenCalled();
-      if (change !== "unchanged") {
-        expect(showToast).not.toHaveBeenCalled();
-      }
+      expect(showToast).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
     },
   );
 
   it.each(["same-owner", "gateway-object", "disconnected"])(
-    "keeps rejected-session recovery bound to its owner after %s reconnect",
+    "keeps a rejected session's notice bound to its owner after %s reconnect",
     async (reconnect) => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
       const { host, context, create, publish } = await mount();
@@ -369,8 +384,10 @@ describe("PaletteSessionDraft", () => {
         initialRun: { status: "rejected", error: "Initial turn rejected" },
       });
       await submit(host, "Keep the rejected task recoverable");
-      const open = showToast.mock.calls.at(-1)?.[0].onAction;
-      expect(open).toBeTypeOf("function");
+      // The destination session owns the rejected prompt and its retry.
+      expect(host.draft.message).toBe("");
+      const notice = showToast.mock.calls.at(-1)?.[0];
+      expect(notice?.message).toContain("Initial turn rejected");
       context.gateway.snapshot.phase = "reconnecting";
       publish();
       context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;
@@ -380,21 +397,11 @@ describe("PaletteSessionDraft", () => {
       }
       publish();
       await host.updateComplete;
+      notice?.onAction?.();
       if (reconnect === "same-owner") {
-        expect(host.draft).toMatchObject({
-          message: "Keep the rejected task recoverable",
-          canSubmit: false,
-        });
-        const recovery = [...host.querySelectorAll("button")].find(
-          (button) => button.textContent?.trim() === "Open session",
-        );
-        expect(recovery).toBeDefined();
-        recovery?.click();
         expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:main:dashboard:rejected");
         expect(context.navigate).toHaveBeenCalledOnce();
-        expect(host.started).toHaveBeenCalledTimes(2);
       } else {
-        open?.();
         expect(context.navigate).not.toHaveBeenCalled();
         expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
       }
