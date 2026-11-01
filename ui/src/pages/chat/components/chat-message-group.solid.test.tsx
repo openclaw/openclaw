@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
@@ -19,7 +20,7 @@ import { buildLocalUserMessage } from "../user-message-content.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { dismissConfirmedActionPopovers } from "./chat-message-confirmation-view.tsx";
-import { prepareGroupMessage } from "./chat-message-group-frame.ts";
+import { prepareGroupMessage, prepareMessageGroupFrame } from "./chat-message-group-frame.ts";
 import {
   ActivityGroup,
   MessageGroup,
@@ -247,6 +248,24 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.ownsActions).toBe(false);
   expect(prepared.actions?.replyTarget).toBeUndefined();
   expect(prepared.source.displayMarkdown).toBe(speech.content);
+});
+
+it("tints user bubbles only for peers the viewer identity distinguishes", () => {
+  const message = { role: "user", content: "Hello", timestamp: 1000 };
+  const frame = (sender: MessageGroupData["sender"], userId?: string) =>
+    prepareMessageGroupFrame(createMessageGroup(message, "user", { sender }), {
+      showReasoning: false,
+      userId,
+    });
+  const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
+  // Profile access: own turns keep the accent skin; a distinguished peer gets its identity hue.
+  expect(frame(profile("viewer"), "viewer").senderHue).toBeNull();
+  expect(frame(profile("peer"), "viewer").senderHue).not.toBeNull();
+  // Trusted-proxy or Tailscale access without a profile stamps only an id. With no viewer
+  // identity the turn renders as the viewer's own, so it keeps the same accent skin.
+  const proxied = frame({ id: "pat@example.com" });
+  expect(proxied.isPeerGroup).toBe(false);
+  expect(proxied.senderHue).toBeNull();
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
