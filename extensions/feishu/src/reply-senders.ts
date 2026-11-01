@@ -33,6 +33,7 @@ import {
   sendStructuredCardFeishu,
   type CardHeaderConfig,
 } from "./send.js";
+import { combineFeishuStreamText, formatReasoningPrefix } from "./streaming-update.js";
 
 type FeishuReplySenderContext = {
   core: ReturnType<typeof getFeishuRuntime>;
@@ -54,6 +55,7 @@ type FeishuReplySenderContext = {
   tableNeedsPostPath: (value: string) => boolean;
   answerTableNeedsPostPath: (value: string) => boolean;
   resolveCardChrome: () => { header?: CardHeaderConfig; note?: string };
+  waitForStreamingStart: () => Promise<boolean>;
   readIdleSideEffects: () => Promise<void>;
   readVisibleReplySent: () => boolean;
   readReplyOutcome: () => { kind: string; reason?: string } | undefined;
@@ -339,6 +341,102 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     return delivery;
   };
 
+  let leadingPreview = false;
+  const leadingBlockProse = (answer: string, reasoning = "") => {
+    const first = blockPostDeliveries[0];
+    const at = leadingPreview && first ? answer.indexOf(first[0]) : -1;
+    if (at <= 0) {
+      return undefined;
+    }
+    const text = answer.slice(0, at).trimEnd();
+    if (!text) {
+      return undefined;
+    }
+    const combined = combineFeishuStreamText(reasoning, text, "");
+    const keepsReasoning =
+      !tableNeedsPostPath(combined) &&
+      chunkFeishuCardMarkdown(cardChunkOptions(combined)).length === 1;
+    return {
+      text,
+      cardText: keepsReasoning ? combined : text,
+      supplementalReasoningText: keepsReasoning ? undefined : formatReasoningPrefix(reasoning),
+      settle: async (result: FeishuReplyDeliveryResult, error?: unknown) => {
+        if (error === undefined && result.visibleReplySent && result.finalTextAccepted !== false) {
+          blockPostDeliveries.unshift([text, Promise.resolve(result)]);
+          return { result, error };
+        }
+        const posts = await Promise.allSettled(blockPostDeliveries.map(([, pending]) => pending));
+        const retained = mergeFeishuReplyDeliveryResults([
+          result,
+          ...posts.flatMap<FeishuReplyDeliveryResult>((post) =>
+            post.status === "fulfilled"
+              ? [post.value]
+              : isChannelPartialDeliveryError(post.reason)
+                ? [post.reason.deliveryResult]
+                : [],
+          ),
+        ]);
+        return {
+          result: retained,
+          error: createFeishuPartialReplyDeliveryError(
+            error ?? new Error("Opening preview prose was not accepted"),
+            retained,
+          ),
+        };
+      },
+    };
+  };
+
+  const prepareBlockPost = async (preview: string, text: string) => {
+    // The opening prose can stay above the posts only if the card exists first.
+    const active = await ctx.waitForStreamingStart();
+    let remaining = preview;
+    const leading = leadingBlockProse(preview);
+    if (leading) {
+      remaining = remaining.slice(leading.text.length).replace(/^\s*\n/u, "");
+    }
+    for (const [blockText, pending] of blockPostDeliveries) {
+      if (!remaining.startsWith(blockText)) {
+        continue;
+      }
+      try {
+        await pending;
+      } catch (error: unknown) {
+        if (isChannelPartialDeliveryError(error)) {
+          throw error;
+        }
+        continue;
+      }
+      remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
+    }
+    const at = remaining.indexOf(text);
+    const before = (at < 0 ? remaining : remaining.slice(0, at)).trimEnd();
+    if (tableNeedsPostPath(before) || answerTableNeedsPostPath(before)) {
+      return { text, answer: preview };
+    }
+    if (blockPostDeliveries.length === 0) {
+      leadingPreview = Boolean(
+        active &&
+        before.trim() &&
+        !tableNeedsPostPath(before) &&
+        chunkFeishuCardMarkdown(cardChunkOptions(before)).length === 1,
+      );
+    }
+    // Prose between posts has no earlier editable message. Put it ahead of the next
+    // table now, rather than trying to repair its position after that table is sent.
+    const posted =
+      leadingPreview && blockPostDeliveries.length === 0
+        ? text
+        : at >= 0
+          ? remaining.slice(0, at + text.length)
+          : [before, text].filter(Boolean).join("\n\n");
+    return {
+      text: posted,
+      answer:
+        at >= 0 || preview.includes(text) ? preview : [preview, text].filter(Boolean).join("\n\n"),
+    };
+  };
+
   const sendMediaReplies = async (
     payload: ReplyPayload,
     options?: { fallbackText?: string },
@@ -481,6 +579,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
 
   return {
     cardKeepsWholeTable,
+    prepareBlockPost,
+    leadingBlockProse,
     sendChunkedTextReply,
     sendPostReply,
     sendMediaReplies,

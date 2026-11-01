@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => ({
   addTypingIndicator: vi.fn(async () => ({ messageId: "om_msg" })),
   removeTypingIndicator: vi.fn(async () => {}),
   streamingInstances: [] as StreamingSessionStub[],
+  streamingStart: vi.fn<() => Promise<void> | undefined>(),
   shouldSuppressFeishuTextForVoiceMedia: (params: {
     mediaUrl?: string;
     audioAsVoice?: boolean;
@@ -104,6 +105,10 @@ vi.mock("./streaming-card.js", async (importOriginal) => ({
     active = false;
     credentials: unknown;
     start = vi.fn(async () => {
+      const pending = mocks.streamingStart();
+      if (pending) {
+        await pending;
+      }
       this.active = true;
     });
     updated = Promise.withResolvers<void>();
@@ -147,6 +152,7 @@ export const {
   sendMediaFeishu: sendMediaFeishuMock,
   createFeishuClient: createFeishuClientMock,
   streamingInstances,
+  streamingStart: streamingStartMock,
 } = mocks;
 
 export const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
@@ -165,6 +171,7 @@ export function installTableDispatcherHarness() {
     vi.clearAllMocks();
     streamingStartBackoffUntilByAccount.clear();
     mocks.streamingInstances.length = 0;
+    mocks.streamingStart.mockReset();
     mocks.sendMessageFeishu.mockReset();
     mocks.sendMediaFeishu.mockReset().mockResolvedValue(undefined);
     mocks.sendStructuredCardFeishu.mockReset().mockResolvedValue(undefined);
