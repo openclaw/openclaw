@@ -266,14 +266,16 @@ function ProviderAccess(props: ModelProvidersViewProps) {
               </SettingsGroup>
             </Show>
             <Show when={unconnected().length > 0}>
-              <h3 class="provider-list__title">{t("modelProviders.row.notConnected")}</h3>
-              <SettingsGroup carapace>
-                <ul class="provider-list provider-list--quiet">
-                  <For each={unconnected()} keyed={(card) => card.id}>
-                    {(card) => <UnconnectedProviderRow {...props} card={card()} />}
-                  </For>
-                </ul>
-              </SettingsGroup>
+              <section class="settings-section provider-list__section">
+                <h3 class="settings-section__heading">{t("modelProviders.row.notConnected")}</h3>
+                <SettingsGroup carapace>
+                  <ul class="provider-list provider-list--quiet">
+                    <For each={unconnected()} keyed={(card) => card.id}>
+                      {(card) => <UnconnectedProviderRow {...props} card={card()} />}
+                    </For>
+                  </ul>
+                </SettingsGroup>
+              </section>
             </Show>
           </>
         )}

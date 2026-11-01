@@ -459,11 +459,6 @@ a.activity-current-work__row:hover {
 
 .activity-feed__day > h3 {
   margin: 0 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .activity-feed__sessions,
