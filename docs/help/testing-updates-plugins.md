@@ -206,6 +206,7 @@ sudo "$(command -v node)" scripts/e2e/lib/upgrade-survivor/native-systemd.mjs \
 
 Each baseline gets a new guest account and canonical home/state, the published
 package's actual user service, and the shared survivor state and approval seeds.
+The installed baseline's Doctor prepares the legacy seed before service startup.
 Before updating, the flow requires native unit/cgroup ownership, health,
 readiness, and authenticated baseline RPC build identity. It invokes the installed
 updater with restart enabled, selecting `--channel stable` when leaving an

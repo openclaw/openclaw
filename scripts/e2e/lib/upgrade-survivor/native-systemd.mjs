@@ -182,6 +182,9 @@ try {
         agents: { defaults: { workspace, heartbeat: { every: "0m" } } },
       });
       run("seed-owner", "chown", ["-R", `${user}:${user}`, state, workspace]);
+      // The shared seed includes legacy sessions. Prepare them with the actual
+      // baseline before requiring a healthy native predecessor for the update.
+      asUser("baseline-doctor", cli, ["doctor", "--fix", "--non-interactive"]);
       asUser("service-install", cli, [
         "gateway",
         "install",
