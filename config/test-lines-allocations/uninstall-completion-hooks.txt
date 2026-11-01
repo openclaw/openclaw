@@ -1,0 +1,2 @@
+# Literal completion hook removal and atomic profile preservation; consolidated fixtures offset regression coverage.
+4
