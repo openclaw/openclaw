@@ -31,13 +31,13 @@ describe("buildCodeSpanIndex", () => {
 // then reports isInside() for every absolute offset in [0, text.length].
 function chunkedInside(text: string, cuts: readonly number[]): boolean[] {
   const bounds = [0, ...cuts.filter((c) => c > 0 && c < text.length), text.length];
-  const unique = [...new Set(bounds)].sort((a, b) => a - b);
+  const unique = [...new Set(bounds)].toSorted((a, b) => a - b);
   let inlineState = createInlineCodeState();
-  let fenceState: ReturnType<typeof buildCodeSpanIndex>["fenceState"];
-  const inside: boolean[] = new Array(text.length + 1).fill(false);
+  let fenceState: Parameters<typeof buildCodeSpanIndex>[2];
+  const inside: boolean[] = Array.from({ length: text.length + 1 }, () => false);
   for (let k = 0; k < unique.length - 1; k += 1) {
-    const start = unique[k];
-    const end = unique[k + 1];
+    const start = unique[k] ?? 0;
+    const end = unique[k + 1] ?? text.length;
     const result = buildCodeSpanIndex(text.slice(start, end), inlineState, fenceState);
     for (let j = 0; j < end - start; j += 1) {
       inside[start + j] = result.isInside(j);
