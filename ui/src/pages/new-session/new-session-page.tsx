@@ -117,10 +117,10 @@ function DraftAgentSelect(props: {
           agentIdentity: props.page().context?.agentIdentity,
           disabled: submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
           onSelect: (agentId) => place().selectAgentId(agentId),
-          onOpenChange: (open) => {
-            props.page().agentPickerOpen = open;
-            props.page().changed();
+          identityTargetsRef: (read) => {
+            props.page().readAgentIdentityTargets = read;
           },
+          onIdentityTargetsChange: () => props.page().changed(),
         }}
       />
     </Show>

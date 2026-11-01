@@ -1,6 +1,7 @@
 import { createSignal } from "@solidjs/signals";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
+import type { ShellView } from "./app-shell-view-state.ts";
 import { readNativeHistoryState } from "./native-web-chrome.ts";
 
 /** Synchronous shell state publishes revisions; Solid commits settle its DOM waiters. */
@@ -13,6 +14,9 @@ export abstract class ShellPresentation {
   private connectionFlagTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly revision = createSignal(0, { ownedWrite: true });
   readonly shellRevision = this.revision[0];
+  private readonly navigation = createSignal(0, { ownedWrite: true });
+  readonly navigationRevision = this.navigation[0];
+  private shellCommitPending = false;
   private disposed = false;
   private presentationMounted = false;
   private commitPromise: Promise<boolean> = Promise.resolve(true);
@@ -26,7 +30,10 @@ export abstract class ShellPresentation {
       return;
     }
     this.currentNavDrawerOpen = value;
-    this.invalidate();
+    if (!this.disposed) {
+      this.requestCommit();
+      this.navigation[1]((revision) => revision + 1);
+    }
   }
   private currentDesktopNavigationExpanded = false;
   get desktopNavigationExpanded(): boolean {
@@ -141,24 +148,34 @@ export abstract class ShellPresentation {
   }
 
   protected abstract afterCommit(): void;
+  protected abstract afterNavigationCommit(view: ShellView): void;
 
-  commitRenderedPresentation(): void {
+  commitRenderedPresentation(view: ShellView): void {
     if (this.disposed || !this.presentationMounted || !this.resolveCommit) {
       return;
     }
-    this.afterCommit();
+    if (this.shellCommitPending) {
+      this.afterCommit();
+    } else {
+      this.afterNavigationCommit(view);
+    }
   }
 
   invalidate(): void {
     if (this.disposed) {
       return;
     }
+    this.shellCommitPending = true;
+    this.requestCommit();
+    this.revision[1]((revision) => revision + 1);
+  }
+
+  private requestCommit(): void {
     if (!this.resolveCommit) {
       this.commitPromise = new Promise((resolve) => {
         this.resolveCommit = resolve;
       });
     }
-    this.revision[1]((revision) => revision + 1);
   }
 
   protected resumePresentation(): void {
@@ -174,6 +191,7 @@ export abstract class ShellPresentation {
   }
 
   protected commitPresentation(): void {
+    this.shellCommitPending = false;
     const resolve = this.resolveCommit;
     this.resolveCommit = undefined;
     this.commitPromise = Promise.resolve(true);

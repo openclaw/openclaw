@@ -1817,8 +1817,10 @@ src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
+src/process/spawn-broker/commands.ts
 src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-protocol.ts
+src/process/spawn-broker/file-output.ts
 src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
@@ -1830,6 +1832,7 @@ src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-broker/resource-socket.ts
 src/process/spawn-diagnostics.ts
+src/process/spawn-to-file.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/darwin-process-command.ts

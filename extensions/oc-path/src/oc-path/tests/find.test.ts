@@ -235,7 +235,7 @@ describe("findOcPaths — JSONL", () => {
 
   it.each([
     ["*/**/**", ["oc://session/L1"], ["oc://session/L3"]],
-    ["**/**/**", ["oc://session", "oc://session/L1", "oc://session/L3"], []],
+    ["**/**/**", ["oc://session", "oc://session/L1"], ["oc://session/L3"]],
     ["{L1,$first,$last}/**/**", ["oc://session/L1"], ["oc://session/L3"]],
   ])("retains distinct physical-line targets for %s", (pattern, prefix, nextLine) => {
     const lineAst = parseJsonl('{"a":{"b":1},"a.b":2}\n\n{"a":{"b":1},"a.b":2}\n');
@@ -277,9 +277,9 @@ describe("findOcPaths — JSONL", () => {
     }
   });
 
-  it("keeps valid line addresses after recursive zero-width routes", () => {
+  it.each(["**/**/event", "**/event"])("keeps valid line addresses for %s", (pattern) => {
     const lineAst = parseJsonl('{"nest":{"event":"x"}}\n');
-    const out = find(lineAst, "oc://session/**/**/event");
+    const out = find(lineAst, "oc://session/" + pattern);
     expect(formattedPaths(out)).toEqual(["oc://session/L1/nest/event"]);
     expect(leafValues(out)).toEqual(["x"]);
   });

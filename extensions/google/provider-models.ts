@@ -65,11 +65,13 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
   return GOOGLE_FORWARD_COMPAT_CASES.some((entry) => entry.match(lower));
 }
 
-export function isGoogleFlashTextModelId(id: string): boolean {
+/**
+ * Gemini text models (not Gemma, tuned, image, speech, Live, or embedding models):
+ * on AI Studio they default to Interactions and accept native video.
+ */
+export function isGoogleGeminiTextModelId(id: string): boolean {
   const lower = normalizeOptionalLowercaseString(googleFamilyModelId(id)) ?? "";
-  return (
-    isGoogleTextGenerationModelId(lower) && /^gemini-(?:\d+(?:\.\d+)?-)?flash(?:-|$)/.test(lower)
-  );
+  return lower.startsWith("gemini-") && isGoogleTextGenerationModelId(lower);
 }
 
 export function resolveGoogleModelApi(params: {
@@ -100,14 +102,9 @@ export function resolveGoogleModelApi(params: {
     return params.api;
   }
   const baseUrl = model?.baseUrl ?? params.providerConfig?.baseUrl ?? params.baseUrl;
-  return isOfficialGoogleAiStudioBaseUrl(baseUrl) && isGoogleFlashTextModelId(params.modelId)
+  return isOfficialGoogleAiStudioBaseUrl(baseUrl) && isGoogleGeminiTextModelId(params.modelId)
     ? "google-interactions"
     : "google-generative-ai";
-}
-
-export function isGoogleNativeVideoModelId(id: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(googleFamilyModelId(id)) ?? "";
-  return normalized.startsWith("gemini-") && isGoogleTextGenerationModelId(normalized);
 }
 
 type GoogleForwardCompatFamily = readonly [

@@ -9,7 +9,7 @@ import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import googleProviderDiscovery from "./provider-discovery.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import {
-  isGoogleNativeVideoModelId,
+  isGoogleGeminiTextModelId,
   isModernGoogleModel,
   resolveGoogleGeminiForwardCompatModel,
   resolveGoogleModelApi,
@@ -97,7 +97,7 @@ export function buildGoogleProvider(): ProviderPlugin {
         ctx.provider === "google" &&
         (ctx.model.api === "google-generative-ai" || ctx.model.api === "google-interactions") &&
         isOfficialGoogleAiStudioBaseUrl(ctx.model.baseUrl) &&
-        isGoogleNativeVideoModelId(ctx.modelId);
+        isGoogleGeminiTextModelId(ctx.modelId);
       return {
         ...ctx.model,
         api: resolveGoogleModelApi({

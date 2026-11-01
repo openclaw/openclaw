@@ -894,7 +894,6 @@ describe("Feishu attachment intent", () => {
         : { threadId: "om_parent" }),
     });
     expect(args(sender).mediaAccess).toBe(mediaAccess);
-    expect(args(sender).mediaAccess).not.toBe(forgedMediaAccess);
     expect(details(result).messageId).toBe("om_sent");
   });
 });

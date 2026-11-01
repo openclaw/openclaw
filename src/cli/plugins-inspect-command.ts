@@ -3,6 +3,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
@@ -185,9 +186,11 @@ export async function runPluginsInspectCommand(
     () => buildPluginSnapshotReport(reportParams),
     { command: "inspect" },
   );
+  const canonicalId = metadataSnapshot.normalizePluginId(normalizePluginId(id));
   const targetPlugin =
     snapshotReport.plugins.find((entry) => entry.id === id) ??
-    snapshotReport.plugins.find((entry) => entry.name === id);
+    snapshotReport.plugins.find((entry) => entry.name === id) ??
+    snapshotReport.plugins.find((entry) => entry.id === canonicalId);
   if (!targetPlugin) {
     process.stderr.write(formatGlobalPluginDiagnostics(snapshotReport.diagnostics));
     failPluginInspect(formatMissingPluginMessage({ id, includeSearch: true }), opts.json);

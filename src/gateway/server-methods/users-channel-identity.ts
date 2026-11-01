@@ -8,7 +8,8 @@ import {
   GATEWAY_OWNER_PROFILE_ID,
   type UsersChannelIdentityResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { resolveChannelPluginRegistration } from "../../channels/plugins/registry.js";
+import { resolveChannelConfigRecord } from "../../config/channel-config-activation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
 import {
@@ -46,7 +47,13 @@ export const usersChannelIdentityHandlers: GatewayRequestHandlers = {
           throw new Error("Sign in with your own profile to link a channel account.");
         }
         const { params, context, client } = options;
-        const plugin = getChannelPlugin(params.channelId);
+        // An unconfigured channel must not load its bundled runtime just to report status.
+        const resolvePlugin = () =>
+          resolveChannelPluginRegistration(params.channelId, {
+            loadedOnly:
+              resolveChannelConfigRecord(context.getRuntimeConfig(), params.channelId) === null,
+          })?.plugin;
+        const plugin = resolvePlugin();
         const links = await listCanonicalUserChannelIdentities(action.owner);
         action.assertCurrent();
         if (params.action === "status") {
@@ -148,7 +155,7 @@ export const usersChannelIdentityHandlers: GatewayRequestHandlers = {
           if (
             pending.get(key) !== flow ||
             !adapter.isCurrent(context.getRuntimeConfig()) ||
-            getChannelPlugin(channelId) !== plugin
+            resolvePlugin() !== plugin
           ) {
             throw new Error("Account linking changed. Connect again from your profile.");
           }
