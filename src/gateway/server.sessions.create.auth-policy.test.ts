@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { readReplySourceInput } from "../auto-reply/reply/reply-source-binding.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -30,7 +31,7 @@ import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-it("retains committed initial turns through fencing and denies their final write after grant revocation", async () => {
+it("retains committed initial turns through fencing and denies inference after grant revocation", async () => {
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
   testState.gatewayAuth = undefined;
   const token = "initial-turn-source-fixture-token";
@@ -42,17 +43,22 @@ it("retains committed initial turns through fencing and denies their final write
   });
   const postAttach = await import("./server-startup-post-attach.js");
   const startPostAttach = postAttach.startGatewayPostAttachRuntime;
-  let inputRecoverySettled: Promise<void> | undefined;
-  const captureRecovery = vi
+  const startupReady = createDeferredCore();
+  const captureStartup = vi
     .spyOn(postAttach, "startGatewayPostAttachRuntime")
-    .mockImplementation(async (...args) => {
-      const runtime = await startPostAttach(...args);
-      inputRecoverySettled = runtime.subagentRecoverySettled;
-      return runtime;
+    .mockImplementation(async (params) => {
+      const unlockStartupMethods = params.unlockStartupMethods;
+      return startPostAttach({
+        ...params,
+        unlockStartupMethods: () => {
+          unlockStartupMethods();
+          startupReady.resolve();
+        },
+      });
     });
   const gateway = await createGatewaySuiteHarness({
     serverOptions: { bind: "loopback" },
-  }).finally(() => captureRecovery.mockRestore());
+  }).finally(() => captureStartup.mockRestore());
   const applyConfig = async (
     gatewayPatch: NonNullable<Parameters<typeof configIO.writeConfigFile>[0]["gateway"]>,
   ) => {
@@ -108,7 +114,7 @@ it("retains committed initial turns through fencing and denies their final write
     pluginId: "initial-turn-source-fixture",
     hookName: "before_message_write",
     source: "test",
-    // Keep input pending until the real approval writer promotes it before inference.
+    // Initial input approval runs through the real writer before dispatch.
     handler: () => {},
   };
   registry.typedHooks.push(hook);
@@ -120,11 +126,19 @@ it("retains committed initial turns through fencing and denies their final write
       assert(scenario);
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
       assert(recorder);
+      const input = readReplySourceInput(params.replyOptions);
+      assert(input);
+      const authority = input.sourceAdapter?.authority;
+      assert(authority);
+      expect(recorder.getPersistedMessage?.()).toBeDefined();
       scenario.dispatchStarted = true;
       scenario.dispatchEntered.resolve();
       await scenario.allowWrite.promise;
       try {
-        if (await recorder.persistApproved()) {
+        const persisted = await recorder.persistApproved();
+        input.abortSignal.throwIfAborted();
+        authority.assertCurrent();
+        if (persisted) {
           scenario.provider();
         }
         return {};
@@ -141,8 +155,7 @@ it("retains committed initial turns through fencing and denies their final write
     });
   try {
     await gateway.server.startupSettled;
-    assert(inputRecoverySettled);
-    await inputRecoverySettled;
+    await startupReady.promise;
     for (const scenario of cases) {
       const ws = await gateway.openWs({ origin: `http://127.0.0.1:${gateway.port}` });
       sockets.push(ws);
@@ -207,7 +220,7 @@ it("retains committed initial turns through fencing and denies their final write
           isRecord(event.message) &&
           event.message.role === "user",
       );
-      expect(userMessages).toHaveLength(revoke ? 0 : 1);
+      expect(userMessages).toHaveLength(1);
     }
   } finally {
     resumeTurns.resolve();

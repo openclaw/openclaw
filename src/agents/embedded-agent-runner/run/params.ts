@@ -106,10 +106,6 @@ export type RunEmbeddedAgentParams = Pick<
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** Restrict this reconstructed run to restart-safe tools. */
-  forceRestartSafeTools?: boolean;
-  /** Preserve Code Mode controls for a replay-safe restart recovery turn. */
-  forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */

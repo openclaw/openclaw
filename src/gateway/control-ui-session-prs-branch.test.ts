@@ -134,6 +134,7 @@ describe("session branch diff stats", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
     vi.unstubAllGlobals();
@@ -201,6 +202,7 @@ describe("session branch diff stats", () => {
   });
 
   it("keeps PR facts when unrelated snapshot refs change or refs are packed", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     await initializeFeatureWork({ trackFeature: true });
     await connectGithub();
     stubGithub();
@@ -218,7 +220,7 @@ describe("session branch diff stats", () => {
     // File-only edits still refresh statistics, without repeating unchanged ancestry.
     await writeFile("a.txt", "three\n", true);
     await writeFile("new.txt", "new\n");
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60_000 + 1);
+    vi.advanceTimersByTime(5 * 60_000 + 1);
     const [first, concurrent] = await Promise.all([load(), load()]);
     expect(first).toEqual(concurrent);
     expect(first.branch).toMatchObject({ additions: 3, changedFiles: 2 });

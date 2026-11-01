@@ -37,7 +37,6 @@ beforeEach(() => {
     },
   });
   vi.stubEnv("OPENCLAW_TTS_PREFS", path.join(tempDirs.make("tagged-tts-"), "prefs.json"));
-  ttsMocks.state.statusSnapshot.autoMode = "tagged";
   ttsMocks.resolveTtsConfig.mockImplementation((cfg) => ({ mode: cfg.tts?.mode ?? "final" }));
   ttsMocks.maybeApplyTtsToPayload.mockImplementation((params) =>
     maybeApplyTtsToPayloadCore(
@@ -113,7 +112,6 @@ it.each([
 it.each([true, false])(
   "does not replay all-mode block speech (directive parsing: %s)",
   async (enabled) => {
-    ttsMocks.state.statusSnapshot.autoMode = "always";
     vi.spyOn(ttsConfig, "shouldCleanTtsDirectiveText").mockReturnValue(enabled);
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),

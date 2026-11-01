@@ -20,6 +20,7 @@ import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  repositoryBranchPrefix: "Repository Branch Prefix",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   ...ENVIRONMENT_FIELD_LABELS,
@@ -475,6 +476,7 @@ export const FIELD_LABELS: Record<string, string> = {
   ...SESSION_FIELD_LABELS,
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
+  "cron.defaultTools": "Automation Default Tools",
   "cron.skipMissedJobs": "Skip Missed Recurring Automations",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",

@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
+import { normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
 const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set(["codex", "openclaw", "steipete"]);
@@ -14,7 +15,7 @@ const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = new Set([
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
-type ThanksOptions = { strictBotHandle?: boolean; docsMirror?: boolean };
+type ThanksOptions = { docsMirror?: boolean };
 
 export function isForbiddenChangelogThanksHandle(handle: string, options: ThanksOptions = {}) {
   const normalized = handle.toLowerCase();
@@ -46,11 +47,14 @@ export function findForbiddenChangelogThanks(content: string, options: ThanksOpt
   return content
     .split(/\r?\n/u)
     .map((text, index) => {
-      if (!THANKS_PATTERN.test(text)) {
+      const thanksStart = text.search(THANKS_PATTERN);
+      if (thanksStart < 0) {
         return null;
       }
-      // A single changelog line may thank multiple handles; scan all of them.
-      for (const match of text.matchAll(THANKED_HANDLE_PATTERN)) {
+      // Author credit may precede a Thanks clause. Only classify handles that
+      // the line actually thanks.
+      const thanksText = text.slice(thanksStart);
+      for (const match of thanksText.matchAll(THANKED_HANDLE_PATTERN)) {
         const handle = match[1];
         if (handle && isForbiddenChangelogThanksHandle(handle, options)) {
           return { line: index + 1, handle: handle.toLowerCase(), text };
@@ -84,11 +88,7 @@ export function findChangelogAttributionViolations(
 
 export async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "--is-forbidden-handle") {
-    process.exitCode = isForbiddenChangelogThanksHandle(argv[1] ?? "", {
-      strictBotHandle: true,
-    })
-      ? 0
-      : 1;
+    process.exitCode = isForbiddenChangelogThanksHandle(argv[1] ?? "") ? 0 : 1;
     return;
   }
 
@@ -104,7 +104,7 @@ export async function main(argv = process.argv.slice(2)) {
   const artifacts = path.join(root, "CHANGELOG");
   if (path.basename(absolutePath) === "CHANGELOG.md" && fs.existsSync(artifacts)) {
     for (const { relativePath: entry } of listDirectoryTreeStrictSync(artifacts)) {
-      const relative = `CHANGELOG/${entry}`;
+      const relative = normalizeChangedPath(path.join("CHANGELOG", entry));
       if (isReleaseChangelogPath(relative)) {
         paths.push(path.join(root, relative));
       }
@@ -112,7 +112,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const violations = findChangelogAttributionViolations(
     paths.map((file) => ({
-      path: path.relative(process.cwd(), file),
+      path: normalizeChangedPath(path.relative(process.cwd(), file)),
       content: fs.readFileSync(file, "utf8"),
     })),
   );

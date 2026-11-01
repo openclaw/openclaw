@@ -104,7 +104,8 @@ export function applyUpdateRunStep(
     record.finishedAtMs !== null &&
     (record.status === "succeeded" ||
       (record.status === "skipped" && record.reason === "already-current") ||
-      isNeverActivatedFailedUpdate(record)) &&
+      isNeverActivatedFailedUpdate(record) ||
+      (record.status === "failed" && record.reason === "handoff-terminated")) &&
     step.status === "completed" &&
     [
       "recovery-artifact-cleanup",

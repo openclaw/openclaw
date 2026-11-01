@@ -134,7 +134,6 @@ export async function resolveWorkerToolAuthority(params: {
         toolsEnabled: supportsModelTools(params.model ?? {}),
         forceDirectMessageTool: messageToolOwnsVisibleReply(turn),
         isRawModelRun: turn.modelRun === true || turn.promptMode === "none",
-        forceCodeModeControls: turn.forceCodeModeTools,
       });
       const installedSkills = prepareInstalledSkillCatalog({
         snapshot: turn.skillsSnapshot,

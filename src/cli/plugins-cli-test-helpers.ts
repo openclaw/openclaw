@@ -18,7 +18,10 @@ import {
   createPluginCliConfigIO,
   createPluginCliConfigSnapshot,
 } from "./plugins-cli-config.test-support.js";
+import { updateNpmInstalledHookPacksMock } from "./plugins-cli-install-mocks.test-support.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
+
+export { updateNpmInstalledHookPacksMock } from "./plugins-cli-install-mocks.test-support.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -36,8 +39,6 @@ type ResolveMarketplaceInstallShortcutFn =
   (typeof import("../plugins/marketplace.js"))["resolveMarketplaceInstallShortcut"];
 type UpdateNpmInstalledPluginsFn =
   (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"];
-type UpdateNpmInstalledHookPacksFn =
-  (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
 type ReadPersistedInstalledPluginIndexFn =
   (typeof import("../plugins/installed-plugin-index-store.js"))["readPersistedInstalledPluginIndex"];
 type RestorePersistedInstalledPluginIndexIfCurrentFn =
@@ -186,7 +187,6 @@ export const planPluginUninstallMock =
 export const applyPluginUninstallDirectoryRemovalMock =
   vi.fn<(typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"]>();
 export const updateNpmInstalledPluginsMock: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
-export const updateNpmInstalledHookPacksMock: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNoMock: AsyncUnknownMock = vi.fn();
 const promptText: AsyncUnknownMock = vi.fn();
 export class PromptInputClosedError extends Error {
@@ -671,19 +671,6 @@ vi.mock("../plugins/update.js", async (importOriginal) => {
       )) as (typeof import("../plugins/update.js"))["updateNpmInstalledPlugins"],
   };
 });
-
-vi.mock("../hooks/update.js", () => ({
-  updateNpmInstalledHookPacks: ((
-    ...args: Parameters<(typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"]>,
-      ReturnType<(typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"]>
-    >(
-      updateNpmInstalledHookPacksMock,
-      ...args,
-    )) as (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"],
-}));
 
 vi.mock("./prompt.js", () => ({
   PromptInputClosedError,

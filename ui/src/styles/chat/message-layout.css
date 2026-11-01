@@ -377,11 +377,6 @@
 
 .chat-image-actions .oc-menu {
   min-width: 164px;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .chat-image-action {
@@ -688,7 +683,6 @@
 
   width: 100%;
   max-width: 100%;
-  box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--chat-attachment-border);
   border-radius: var(--radius-md);
@@ -716,6 +710,21 @@
 
 :root[data-theme-mode="light"] .chat-assistant-attachment-card__action:hover {
   background: color-mix(in srgb, var(--media-bg) 6%, transparent);
+}
+
+/* Full attachment cards sit close to the chat canvas, independently of sent chips. */
+:root .chat-bubble .chat-assistant-attachment-card {
+  --chat-attachment-surface: color-mix(in srgb, var(--text) 2.5%, var(--bg-content, var(--bg)));
+
+  background: var(--chat-attachment-surface);
+}
+
+.chat-bubble .chat-assistant-attachment-card:hover {
+  background-color: color-mix(in srgb, var(--media-foreground) 4%, var(--chat-attachment-surface));
+}
+
+:root[data-theme-mode="light"] .chat-bubble .chat-assistant-attachment-card:hover {
+  background-color: color-mix(in srgb, var(--media-bg) 3%, var(--chat-attachment-surface));
 }
 
 .chat-assistant-attachment-card--audio,

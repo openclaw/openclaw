@@ -8,7 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 
 function installPackageActivationFault({ journal, evidence, cut, terminate }) {
   assert(path.isAbsolute(journal) && path.isAbsolute(evidence));
-  assert(["publication-complete", "verification"].includes(cut));
+  assert(["publication-complete", "verification", "verification-rollback"].includes(cut));
   // oxlint-disable-next-line typescript/unbound-method -- Capture for interception/restoration; every call supplies the intercepted database through .call.
   const prepare = DatabaseSync.prototype.prepare;
   // oxlint-disable-next-line typescript/unbound-method -- Capture for interception/restoration; every call supplies the intercepted database through .call.
@@ -24,7 +24,7 @@ function installPackageActivationFault({ journal, evidence, cut, terminate }) {
       return;
     }
     fs.writeFileSync(evidence, JSON.stringify({ cut, pid: process.pid, journal, row }));
-    if (cut !== "verification") {
+    if (cut === "publication-complete") {
       terminate();
     }
   };
@@ -61,14 +61,16 @@ if (specPath) {
   const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
   // A real post-publication Doctor child fails, not a fabricated update result.
   if (
-    spec.cut === "verification" &&
-    process.argv.includes("doctor") &&
+    ["verification", "verification-rollback"].includes(spec.cut) &&
+    (process.argv.includes("doctor") || process.argv.includes("--doctor")) &&
     fs.existsSync(spec.evidence)
   ) {
-    // Change actual rollback bytes before failing verification, so the updater
-    // must refuse rollback rather than successfully restoring the old tree.
     const previousManifest = path.join(spec.previousRoot, "package.json");
-    fs.appendFileSync(previousManifest, "\n");
+    // The refusal case damages rollback bytes; the recovery case must leave the
+    // real retained tree intact so only the updater can authorize restoration.
+    if (spec.cut === "verification") {
+      fs.appendFileSync(previousManifest, "\n");
+    }
     const manifestDigest = createHash("sha256")
       .update(fs.readFileSync(previousManifest))
       .digest("hex");

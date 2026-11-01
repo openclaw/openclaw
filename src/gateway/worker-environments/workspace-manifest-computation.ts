@@ -76,6 +76,8 @@ export type WorkspaceStageInputSource<Raw = Uint8Array<ArrayBuffer>> =
       currentManifestRef: string;
       baseManifestRaw: Raw;
       currentManifestRaw: Raw;
+      /** Immutable blob facts supplied by the accepted checkpoint owner, never the worker. */
+      existingObjects?: Array<[string, string]>;
     }
   | {
       publication: {
@@ -172,6 +174,7 @@ export type WorkspaceManifestComputationOperations = {
   };
   "workspace.manifest.pair": {
     input: {
+      buildCacheInputs?: string[];
       baseRaw: Uint8Array<ArrayBuffer>;
       baseRef: string;
       currentRaw: Uint8Array<ArrayBuffer>;

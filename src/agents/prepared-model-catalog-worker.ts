@@ -24,6 +24,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { getActiveSkillEnvKeysCore } from "../skills/runtime/env-overrides.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
@@ -480,12 +481,7 @@ export function createPreparedModelCatalogWorker(
         shared?.pool ??
         pool ??
         new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
-      let acknowledged = acknowledgedContexts.get(requestPool);
-      if (!acknowledged) {
-        acknowledged = new Map();
-        acknowledgedContexts.set(requestPool, acknowledged);
-      }
-      const contexts = acknowledged;
+      const contexts = getOrCreateWeakOwnerMap(acknowledgedContexts, requestPool);
       pending = requestPool.run(
         () => {
           assertCurrent();

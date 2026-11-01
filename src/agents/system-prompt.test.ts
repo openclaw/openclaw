@@ -51,6 +51,23 @@ function expectPromptCase(
 }
 
 describe("buildAgentSystemPrompt", () => {
+  it.each<Partial<PromptParams>>([
+    {},
+    { promptMode: "minimal", promptSurface: "subagent" },
+    { promptSurface: "cli_backend" },
+    {
+      promptContribution: {
+        sectionOverrides: { execution_bias: "Provider execution guidance." },
+      },
+    },
+  ])("keeps verified permission recovery guidance in the shared prompt %#", (params) => {
+    const prompt = renderPrompt(params);
+    expect(prompt).toContain(
+      "When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.",
+    );
+    expect(prompt.match(/Permission blocks:/g)).toHaveLength(1);
+  });
+
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");

@@ -119,7 +119,6 @@ export type UpdateInstalledPluginsParams = {
   skipIds?: Set<string>;
   skipDisabledPlugins?: boolean;
   syncOfficialPluginInstalls?: boolean;
-  disableOnFailure?: boolean;
   retainOnUnavailable?: boolean;
   timeoutMs?: number;
   /** Null removes the forward-work deadline while metadata remains bounded. */

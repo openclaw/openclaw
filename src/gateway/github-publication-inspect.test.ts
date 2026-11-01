@@ -262,7 +262,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       f.pr.user = { id: 42, login: "publisher" };
       const before = session();
       await expect(f.invoke({}, raw)).rejects.toThrow(
-        "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For this session's published PR, use edit without title or body; for a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr.",
+        "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr; continue it in the session that published it.",
       );
       expect(session()).toEqual(before);
       expect(f.externalWrites).toEqual([]);

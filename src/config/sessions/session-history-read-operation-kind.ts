@@ -20,8 +20,8 @@ const historyReadKinds = [
   "transcript-latest-assistant",
   "session-memory-capture",
   "session-pending-input-receipts",
+  "session-pending-input-orphans",
   "session-pending-input-source",
-  "session-harness-completion-source",
 ] as const;
 const historyReadKindSet: ReadonlySet<string> = new Set(historyReadKinds);
 

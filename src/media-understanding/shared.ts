@@ -178,8 +178,7 @@ export function resolveProviderOperationTimeoutMs(params: {
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
-  // Monotonic readings are fractional; request and timer budgets stay whole milliseconds.
-  return Math.max(1, Math.min(defaultTimeoutMs, Math.ceil(remainingMs)));
+  return resolveTimerTimeoutMs(Math.min(defaultTimeoutMs, remainingMs), 1);
 }
 
 /** Builds the canonical error for an exhausted provider operation deadline. */

@@ -257,53 +257,33 @@ describe("secret redaction scenario proof", () => {
     },
   );
 
-  it.each(redactionScenarioCases)(
-    "rejects a successful unrelated read in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
+  for (const { name, transcriptEvidence } of [
+    {
+      name: "rejects a successful unrelated read in $scenarioId under $providerMode",
+      transcriptEvidence: "unrelated-file",
+    },
+    {
+      name: "rejects an uncorrelated fixture result in $scenarioId under $providerMode",
+      transcriptEvidence: "uncorrelated-result",
+    },
+    {
+      name: "rejects a fixture result without secret material in $scenarioId under $providerMode",
+      transcriptEvidence: "missing-secret",
+    },
+    {
+      name: "rejects failed fixture reads in $scenarioId under $providerMode",
+      transcriptEvidence: "failed-result",
+    },
+  ] as const) {
+    it.each(redactionScenarioCases)(name, async ({ scenarioId, providerMode }) => {
       await expect(
         runSecretRedactionScenario(scenarioId, {
           providerMode,
-          transcriptEvidence: "unrelated-file",
+          transcriptEvidence,
         }),
       ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects an uncorrelated fixture result in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "uncorrelated-result",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects a fixture result without secret material in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "missing-secret",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects failed fixture reads in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "failed-result",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
+    });
+  }
 
   it.each(redactionScenarioIds)(
     "rejects leaked fixture material in %s after a nested read",

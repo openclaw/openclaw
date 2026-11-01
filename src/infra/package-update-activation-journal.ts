@@ -92,12 +92,25 @@ function openJournal(anchor: string, settlementOnly: boolean) {
   const parentIdentity = packageActivationIdentity(parent, "parent");
   const control = resolvePackageActivationControl(anchor);
   const journalParentIdentity = assertPrivate(control, "control");
-  const journalIdentity = assertPrivate(journalPath, "journal");
+  // Historical hard links may be inspected only to establish completed custody.
+  // Such a handle can archive evidence, but cannot write or recover the journal.
+  const completedOnly = settlementOnly && fs.lstatSync(journalPath).nlink > 1;
+  const journalFileIdentity = (file: string) => {
+    if (!completedOnly) {
+      return assertPrivate(file, "journal");
+    }
+    const identity = packageActivationIdentity(file, false);
+    if ((fs.lstatSync(file).mode & 0o077) !== 0) {
+      throw new Error("Completed package recovery evidence requires owner-only permissions.");
+    }
+    return identity;
+  };
+  const journalIdentity = journalFileIdentity(journalPath);
   const assertFiles = () => {
     if (
       packageActivationIdentity(parent, "parent") !== parentIdentity ||
       assertPrivate(control, "control") !== journalParentIdentity ||
-      assertPrivate(journalPath, "journal") !== journalIdentity ||
+      journalFileIdentity(journalPath) !== journalIdentity ||
       fs.realpathSync(control) !== control
     ) {
       throw new Error("Package publication journal identity changed");
@@ -106,8 +119,11 @@ function openJournal(anchor: string, settlementOnly: boolean) {
   const withDatabase = <T>(
     write: boolean,
     operation: (db: DatabaseSync, transact: ExistingSqliteTransaction) => T,
-  ): T =>
-    withExistingSqliteRollbackDatabase(
+  ): T => {
+    if (completedOnly && write) {
+      throw new Error("Completed package evidence inspection cannot admit a journal writer.");
+    }
+    return withExistingSqliteRollbackDatabase(
       journalPath,
       {
         write,
@@ -128,6 +144,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
         return operation(db, transact);
       },
     );
+  };
   const matchesInstallation = (descriptor: PackageActivationDescriptor) =>
     descriptor.parentIdentity === parentIdentity &&
     descriptor.journalParentIdentity === journalParentIdentity &&
@@ -290,6 +307,10 @@ function openJournal(anchor: string, settlementOnly: boolean) {
       descriptor,
       publications,
     };
+    if (completedOnly && !isPackageActivationComplete(anchor, record)) {
+      assertPrivate(journalPath, "journal");
+      throw new Error("Only completed package recovery evidence can be archived.");
+    }
     // Closed history conveys no authority over today's package, helper, or
     // lease store. Only unfinished recovery needs its original identities.
     if (!matchesInstallation(descriptor) && !isPackageActivationComplete(anchor, record)) {
@@ -501,8 +522,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
           fs.realpathSync(retained) !== retained ||
           packageActivationIdentity(retained, true) !== retainedIdentity ||
           assertPrivate(archive, "control") !== journalParentIdentity ||
-          assertPrivate(path.join(archive, PACKAGE_ACTIVATION_JOURNAL), "journal") !==
-            journalIdentity
+          journalFileIdentity(path.join(archive, PACKAGE_ACTIVATION_JOURNAL)) !== journalIdentity
         ) {
           throw new Error("Package settlement control archive identity changed.");
         }

@@ -1,5 +1,11 @@
+import path from "node:path";
 import { z } from "zod";
-import type { UpdateDoctorInput, UpdatePostCoreInput } from "./update-command-migrated-types.js";
+import type {
+  UpdateDoctorInput,
+  UpdatePostCoreInput,
+  UpdatePluginCohortSettlementInput,
+  UpdatePluginCohortCommitInput,
+} from "./update-command-migrated-types.js";
 
 export type DecodedUpdatePostCoreInput = Omit<UpdatePostCoreInput, "executor"> & {
   executor: unknown;
@@ -7,6 +13,10 @@ export type DecodedUpdatePostCoreInput = Omit<UpdatePostCoreInput, "executor"> &
 export type DecodedUpdateDoctorInput = Omit<UpdateDoctorInput, "executor"> & {
   executor: unknown;
 };
+export type DecodedUpdatePluginCohortSettlementInput = Omit<
+  UpdatePluginCohortSettlementInput,
+  "executor"
+> & { executor: unknown };
 
 const base = {
   // The delegated-executor owner admits this separately from the command's data.
@@ -45,6 +55,7 @@ const doctorInput = z.object({
   ...base,
   configInputHash: z.string(),
   repair: z.boolean(),
+  retirementOnly: z.literal(true).optional(),
   fullIntegrityCheck: z.boolean().optional(),
   yes: z.boolean().optional(),
   workspaceSuggestions: z.boolean().optional(),
@@ -63,6 +74,20 @@ const doctorInput = z.object({
     )
     .optional(),
 });
+const pluginCohortSettlementInput = z.strictObject({
+  executor: z.unknown(),
+  runId: z.uuid(),
+  transactionId: z.uuid(),
+});
+const pluginCohortCommitInput = z.strictObject({
+  runId: z.uuid(),
+  transactionId: z.uuid(),
+  installKey: z
+    .string()
+    .min(1)
+    .max(32_768)
+    .refine((value) => path.isAbsolute(value)),
+});
 
 /** Decode command data once; transported identity never grants execution authority. */
 export function readUpdatePostCoreInput(value: unknown): DecodedUpdatePostCoreInput {
@@ -71,4 +96,14 @@ export function readUpdatePostCoreInput(value: unknown): DecodedUpdatePostCoreIn
 
 export function readUpdateDoctorInput(value: unknown): DecodedUpdateDoctorInput {
   return doctorInput.parse(value);
+}
+
+export function readUpdatePluginCohortSettlementInput(
+  value: unknown,
+): DecodedUpdatePluginCohortSettlementInput {
+  return pluginCohortSettlementInput.parse(value);
+}
+
+export function readUpdatePluginCohortCommitInput(value: unknown): UpdatePluginCohortCommitInput {
+  return pluginCohortCommitInput.parse(value);
 }

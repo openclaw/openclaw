@@ -69,6 +69,16 @@
       "file": "fragment-worker_environment_session_attachments.postgres.sql"
     },
     {
+      "id": "durable_background_processes",
+      "tables": [
+        "durable_background_processes"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-durable_background_processes.postgres.sql"
+    },
+    {
       "id": "sandbox_persistent_execs",
       "tables": [
         "sandbox_persistent_execs"

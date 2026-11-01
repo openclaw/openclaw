@@ -18,6 +18,7 @@ it.each([
       profileId: "development",
       state,
       leaseId,
+      resourceReceipt: null,
       destroyRequestedAtMs,
       error,
       ownerEpoch: 1,

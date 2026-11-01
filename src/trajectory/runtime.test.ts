@@ -428,6 +428,26 @@ describe("trajectory runtime", () => {
     expect(parsed.data.truncated).toBeUndefined();
   });
 
+  it("omits replay state before inspecting its contents", async () => {
+    const recorder = await createCapturedRuntimeRecorder();
+    const readReplay = vi.fn(() => ({ data: "opaque replay" }));
+    const message = {
+      role: "assistant",
+      content: "done",
+      get providerReplay() {
+        return readReplay();
+      },
+    };
+    recorder.recordEvent("context.compiled", { messages: [message] });
+    recorder.recordEvent("tool.result", { result: message, success: true });
+    expect(captured().data).toEqual({ messages: [{ role: "assistant", content: "done" }] });
+    expect(captured(1).data).toEqual({
+      result: { role: "assistant", content: "done" },
+      success: true,
+    });
+    expect(readReplay).not.toHaveBeenCalled();
+  });
+
   it("preserves non-JSON leaves and custom JSON results in captured events", async () => {
     const recorder = await createCapturedRuntimeRecorder();
     const error = new Error("synthetic failure");

@@ -81,7 +81,13 @@
   opacity: 1;
 }
 
-.board-session-surface:has(.board-tabs) .chat-dashboard-menu__trigger {
+.board-session-surface:has(
+    > :where(.board-session-surface__board)
+      > :where(openclaw-board-view)
+      > :where(.board-view)
+      > .board-tabs
+  )
+  .chat-dashboard-menu__trigger {
   border: 1px solid var(--border);
   background: transparent;
   opacity: 1;
@@ -211,11 +217,6 @@
   width: 16px;
   height: 16px;
   color: var(--accent);
-}
-
-.chat-dashboard-menu__panel .board-widget__menu-separator {
-  margin: 7px 2px;
-  border-top: 1px solid var(--details-separator);
 }
 
 .chat-dashboard-menu__panel .board-widget__menu-heading {

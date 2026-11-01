@@ -161,14 +161,6 @@ describe("provider operation deadlines", () => {
     );
   });
 
-  it("keeps sub-millisecond monotonic budgets in whole milliseconds", () => {
-    const deadline = makeDeadline(60_000);
-
-    vi.advanceTimersByTime(0.25);
-
-    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
-  });
-
   it.each([false, true])("keeps admitted budgets monotonic (cloned=%s)", (cloned) => {
     const created = makeDeadline(60_000);
     const deadline = cloned ? structuredClone(created) : created;
@@ -194,6 +186,13 @@ describe("provider operation deadlines", () => {
     deadline.deadlineAtMs = 7_000;
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(2_750);
     expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes fractional remaining budgets before passing them to Node timers", () => {
+    const deadline = makeDeadline(5_000);
+    vi.advanceTimersByTime(1.25);
+
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(4_998);
   });
 
   it.each([

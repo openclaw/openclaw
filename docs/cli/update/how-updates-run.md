@@ -738,6 +738,13 @@ you to `openclaw update repair` and `openclaw gateway status --deep`.
 Only named data risks, such as unsettled Doctor writers or unverified migrated
 state, instruct you to keep the Gateway stopped.
 
+On Windows, recovery re-enables the Scheduled Task before starting the Gateway
+and retains that recovery handle until final readiness verification completes.
+Re-enabling autostart alone does not count as a Gateway start. This also applies
+when post-update verification fails during a same-version npm reinstall. The
+running updater must contain this fix; installing a newer candidate cannot
+change an older updater's recovery orchestration.
+
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing
 five-minute startup lease. If that lease ends while the same Gateway is still
@@ -1316,7 +1323,7 @@ the sentinel.
 
     Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
 
-    Git fetches and remote-ref probes, including dry runs, retry once after a transient transport failure or incomplete ref advertisement. The retry shares an explicit timeout budget; omitted work deadlines remain unbounded. Cancellation, authentication failures, and ref-lock conflicts are not retried. This behavior belongs to the installed updater, so an older updater may still need a manual retry to obtain the fix.
+    Update Git fetches and transactional clones retry transient transport failures (including EOF, connection resets, timeouts, and HTTP 5xx) after 1, 5, and 15 seconds, for at most four attempts. Remote-ref probes and dry runs retain one retry. All attempts share the original explicit timeout budget; omitted fetch deadlines remain unbounded. A failed clone is cleaned before a new attempt; uncertain cleanup stops retries with a warning. Cancellation, authentication, certificate, integrity, and ref-lock failures are not retried. Each retry logs a warning. This behavior belongs to the installed updater, so an older updater may still need a manual retry to obtain the fix.
 
     An explicit detached full commit ID already present locally skips optional remote discovery. This does not skip candidate validation or promise an offline update: missing tree/blob objects in partial clones are still hydrated privately before activation. Symbolic and tracked targets retain their remote freshness and ancestry checks.
 
@@ -1327,6 +1334,10 @@ the sentinel.
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+
+    Dev skips local commit replay with a warning when shallow boundaries or unrelated history hide a shared ancestor with the target. Optional local checkout and rebase each have a ten-minute deadline, shortened by an explicit `--timeout`. If replay times out, that candidate is validated without local replay; conflicts retain the existing walk back through older candidates, and interruption stops the attempt.
+
+    Before moving `main`, commits outside the validated candidate are kept at `refs/openclaw/update-preserved/main-<sha>`. The warning names the ref and its inspection/removal commands. If the ref cannot be written, activation uses a detached HEAD and leaves `main` unchanged; interruption is not downgraded to this fallback. The installed updater must contain this fix: candidate code cannot repair an older updater's already-running preflight.
 
     When switching a package installation to a new Git checkout, POSIX builds use artifact storage inside the private clone transaction on the destination filesystem. Publishing the checkout leaves the build directory in place until runtime preparation and cleanup finish.
 
@@ -1463,6 +1474,15 @@ use `openclaw doctor --fix` for load problems.
 A failed plugin operation retains previous payloads and install records where
 possible and preserves registry choices, plugin settings, enable/disable choices,
 and active slots. A plugin can remain unavailable until repaired.
+
+Plugin finalization re-reads config under the config write lock and retries
+publication up to five times. It preserves unrelated edits and accepts changes
+that are already applied. If a field being finalized conflicts with another edit,
+or publication keeps racing another writer, finalization rolls back its pending
+plugin transaction and records a warning with `openclaw plugins doctor` and
+`openclaw doctor --fix` follow-up guidance. That warning does not fail the core
+update or prevent Gateway recovery. The candidate must contain this repair;
+older candidates retain their previous finalization behavior.
 
 After installing the core and before restarting the managed Gateway,
 `openclaw update` runs mandatory **post-core convergence**: it repairs missing

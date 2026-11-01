@@ -159,3 +159,40 @@ it.each([
     expect(releaseAttempts).toBe(2);
   },
 );
+
+it("revalidates delayed quiescence admission but retains release custody after revocation", async () => {
+  let current = true;
+  const authorize = () => {
+    if (!current) {
+      throw new Error("caller revoked");
+    }
+  };
+  const native = createDeferred<boolean>();
+  const run = vi.fn(async (command: WorkerWorkspaceCommand) => {
+    command.assertCurrent?.();
+    return result({
+      stdout:
+        (command.quiescence?.action === "acquire" ? "quiesced " : "renewed ") +
+        command.quiescence?.nonce +
+        "\n",
+    });
+  });
+  const acquire = quiescence(run, { nativeWatchdog: () => native.promise });
+  const rejected = acquire("/workspace", authorize);
+  current = false;
+  native.resolve(true);
+  await expect(rejected).rejects.toThrow("caller revoked");
+  expect(run).not.toHaveBeenCalled();
+  current = true;
+  const lease = await acquire("/workspace", authorize);
+  current = false;
+  await expect(lease.assertActive()).rejects.toThrow("caller revoked");
+  await lease.resume();
+  expect(
+    run.mock.calls.map(([command]) => [command.quiescence?.action, command.assertCurrent]),
+  ).toEqual([
+    ["acquire", authorize],
+    ["renew", authorize],
+    ["release", undefined],
+  ]);
+});

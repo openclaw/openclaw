@@ -385,6 +385,8 @@ describe("agent lifecycle registry", () => {
     await setProvenance();
     const binding = await captureAgentLifecycleBinding(() => config, "main", options);
     await readAgentDeletionJournalStatusInWorker("main", options);
+    await readAgentDeletionJournalStatusInWorker("peer", options);
+    const peerBlocked = prepareAgentDeletionBlocked("peer", options);
     let retainedGuard: (() => boolean) | undefined;
     let retainedPreparedGuard: (() => boolean) | undefined;
     const preparedBlocked = prepareAgentDeletionBlocked("main", options);
@@ -397,6 +399,7 @@ describe("agent lifecycle registry", () => {
         const deletion = await begin(createEntry());
         expect(blocked()).toBe(true);
         expect(preparedBlocked()).toBe(true);
+        expect(peerBlocked()).toBe(false);
         expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();
         expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
         await withoutHostSql(() => deletion.assertCurrentAsync(), true);
@@ -412,6 +415,7 @@ describe("agent lifecycle registry", () => {
     expect(retainedPreparedGuard).toThrow("read scope is closing or closed");
     await closeStateDatabaseForTest();
     expect(preparedBlocked).toThrow();
+    expect(peerBlocked).toThrow();
   });
 
   it("uses committed journal authority for filesystem effects without host SQL", async () => {

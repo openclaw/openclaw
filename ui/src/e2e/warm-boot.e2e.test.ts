@@ -156,6 +156,278 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it("rebuilds stable-format history without losing independent draft or queued input on reload", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const key = "agent:main:thread:stable-reload";
+      const physicalSession = "stable-reload-session";
+      const draftText = "Synthetic stable unsent draft";
+      const queueText = "Synthetic stable held input";
+      const attachmentText = "Exact synthetic stable attachment bytes.";
+      const messages = Array.from({ length: 120 }, (_, index) => ({
+        role: index % 2 ? "assistant" : "user",
+        content: `Stable history ${index + 1}`,
+        __openclaw: { id: `stable-${index + 1}`, seq: index + 1 },
+      }));
+      const tail = messages.slice(-80);
+      const gateway = await installMockGateway(page, {
+        sessionKey: key,
+        subscriptionInitialHistory: false,
+        heldMethods: ["connect"],
+        sessions: [{ key, sessionId: physicalSession, kind: "direct", updatedAt: 1 }],
+        methodResponses: {
+          "chat.startup": {
+            messages: tail,
+            sessionId: physicalSession,
+            hasMore: true,
+            nextOffset: 80,
+            totalMessages: messages.length,
+            olderCursor: "stable-before-tail",
+            deltaCursor: "stable-current-delta",
+            metadata: { models: [] },
+          },
+          "chat.history": {
+            cases: [
+              {
+                match: { cursor: "stable-before-tail" },
+                response: { messages: messages.slice(0, 40), sessionId: physicalSession },
+              },
+            ],
+          },
+        },
+      });
+      await page.route("**/stable-data-seed", (route) =>
+        route.fulfill({ contentType: "text/html", body: "Synthetic stable persisted data" }),
+      );
+      await page.goto(`${suite.server.baseUrl}stable-data-seed`);
+      // Literal v2026.10.8 storage shapes: snapshot schema 4/projection 1 and
+      // the independent schema-2 draft owner plus v4 queue metadata.
+      const seeded = await page.evaluate(
+        async (stored) => {
+          const request = <T>(value: IDBRequest<T>) =>
+            new Promise<T>((resolve, reject) => {
+              value.addEventListener("success", () => resolve(value.result));
+              value.addEventListener("error", () =>
+                reject(value.error ?? new Error("Stable storage request failed")),
+              );
+            });
+          const complete = (value: IDBTransaction) =>
+            new Promise<void>((resolve, reject) => {
+              value.oncomplete = () => resolve();
+              const failed = () =>
+                reject(value.error ?? new Error("Stable input transaction failed"));
+              value.addEventListener("abort", failed);
+              value.addEventListener("error", failed);
+            });
+          const gatewayOwner = `ws://${location.host}`;
+          const recoveryScope = "e2e-recovery-scope";
+          const cacheKey = `scope:${JSON.stringify([gatewayOwner, recoveryScope])}\u0000${stored.key}`;
+          const envelope = {
+            projectionVersion: 1,
+            savedAt: Date.now(),
+            sessionId: stored.physicalSession,
+            sessionKey: cacheKey,
+          };
+          const snapshot = {
+            messages: stored.tail,
+            sessionId: stored.physicalSession,
+            pagination: { hasMore: true, nextOffset: 80, totalMessages: 120 },
+            deltaCursor: "stable-retired-delta",
+          };
+          const oldCache = indexedDB.open("openclaw-chat-snapshots", 4);
+          oldCache.onupgradeneeded = () => {
+            for (const name of ["snapshots", "snapshotMetadata"]) {
+              oldCache.result.createObjectStore(name, { keyPath: "sessionKey" });
+            }
+          };
+          const cache = await request(oldCache);
+          const cached = cache.transaction(["snapshots", "snapshotMetadata"], "readwrite");
+          const cacheDone = complete(cached);
+          cached.objectStore("snapshots").put({ ...envelope, snapshot });
+          cached.objectStore("snapshotMetadata").put({
+            savedAt: envelope.savedAt,
+            sessionKey: cacheKey,
+            weight: JSON.stringify(snapshot).length + JSON.stringify(envelope).length,
+          });
+          await cacheDone;
+          cache.close();
+          const scopeKey = `chat:v3:${stored.key}\u0000agent:main`;
+          const draftKey = JSON.stringify([gatewayOwner, recoveryScope, scopeKey]);
+          const oldInputs = indexedDB.open("openclaw-control-ui", 2);
+          oldInputs.onupgradeneeded = () => {
+            oldInputs.result
+              .createObjectStore("composerDrafts", { keyPath: "key" })
+              .createIndex("ownerKey", "ownerKey", { unique: false });
+            oldInputs.result.createObjectStore("outboxPayloads", { keyPath: "key" });
+          };
+          const inputs = await request(oldInputs);
+          const writing = inputs.transaction("composerDrafts", "readwrite");
+          const inputDone = complete(writing);
+          writing.objectStore("composerDrafts").put({
+            key: draftKey,
+            ownerKey: JSON.stringify([gatewayOwner, recoveryScope]),
+            gatewayOwner,
+            recoveryScope,
+            scopeKey,
+            updatedAt: Date.now(),
+            writeId: "stable-draft-write",
+            text: stored.draftText,
+            revision: 1,
+            attachments: [
+              {
+                mimeType: "text/plain",
+                fileName: "stable-draft.txt",
+                blob: new Blob([stored.attachmentText], { type: "text/plain" }),
+              },
+            ],
+          });
+          await inputDone;
+          inputs.close();
+          const queueKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(recoveryScope)}`;
+          sessionStorage.setItem(
+            queueKey,
+            JSON.stringify({
+              version: 4,
+              gatewayOwner,
+              recovery: {},
+              sessions: {
+                [`${stored.key}\u0000agent:main`]: {
+                  updatedAt: Date.now(),
+                  queue: [
+                    {
+                      id: "stable-held-input",
+                      text: stored.queueText,
+                      createdAt: Date.now(),
+                      sessionKey: stored.key,
+                      agentId: "main",
+                      storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
+                      sendState: "held",
+                      sendRunId: "stable-held-run",
+                      sendAttempts: 0,
+                    },
+                  ],
+                },
+              },
+            }),
+          );
+          return { cacheKey, draftKey, queueKey };
+        },
+        { key, physicalSession, tail, draftText, queueText, attachmentText },
+      );
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const composer = pane.locator(".agent-chat__composer-combobox textarea");
+      const retainedInputs = async () => {
+        await expect.poll(() => composer.inputValue()).toBe(draftText);
+        await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(1);
+        await expect
+          .poll(() =>
+            page.evaluate((queueKey) => {
+              const value = JSON.parse(sessionStorage.getItem(queueKey)!);
+              return Object.values(value.sessions).flatMap(
+                (session) => (session as { queue?: unknown[] }).queue ?? [],
+              );
+            }, seeded.queueKey),
+          )
+          .toMatchObject([
+            {
+              id: "stable-held-input",
+              text: queueText,
+              sendRunId: "stable-held-run",
+              sendAttempts: 0,
+            },
+          ]);
+        await expect
+          .poll(() => pane.locator(".chat-queue__item").filter({ hasText: queueText }).count())
+          .toBe(1);
+        expect(
+          await page.evaluate(async (draftKey) => {
+            const database = await new Promise<IDBDatabase>((resolve, reject) => {
+              const open = indexedDB.open("openclaw-control-ui");
+              open.addEventListener("success", () => resolve(open.result));
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Stable storage request failed")),
+              );
+            });
+            try {
+              const value = await new Promise<{ attachments: Array<{ blob: Blob }> }>(
+                (resolve, reject) => {
+                  const read = database
+                    .transaction("composerDrafts")
+                    .objectStore("composerDrafts")
+                    .get(draftKey);
+                  read.addEventListener("success", () => resolve(read.result));
+                  read.addEventListener("error", () =>
+                    reject(read.error ?? new Error("Stable storage request failed")),
+                  );
+                },
+              );
+              return Promise.all(value.attachments.map(({ blob }) => blob.text()));
+            } finally {
+              database.close();
+            }
+          }, seeded.draftKey),
+        ).toEqual([attachmentText]);
+        expect(await gateway.getRequests("chat.send")).toEqual([]);
+      };
+      const url = controlUiSessionUrl(suite.server.baseUrl, key) + "#token=test-token";
+      await page.goto(url);
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      const startup = await gateway.waitForRequest("chat.startup");
+      expect(startup.params).not.toHaveProperty("cursor");
+      await pane.getByText("Stable history 120", { exact: true }).waitFor();
+      await retainedInputs();
+      await expect
+        .poll(() =>
+          page.evaluate(async (cacheKey) => {
+            const database = await new Promise<IDBDatabase>((resolve, reject) => {
+              const open = indexedDB.open("openclaw-chat-snapshots");
+              open.addEventListener("success", () => resolve(open.result));
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Stable storage request failed")),
+              );
+            });
+            try {
+              return await new Promise<number | undefined>((resolve, reject) => {
+                const read = database
+                  .transaction("snapshots")
+                  .objectStore("snapshots")
+                  .get(cacheKey);
+                read.addEventListener("success", () => resolve(read.result?.projectionVersion));
+                read.addEventListener("error", () =>
+                  reject(read.error ?? new Error("Stable storage request failed")),
+                );
+              });
+            } finally {
+              database.close();
+            }
+          }, seeded.cacheKey),
+        )
+        .toBe(13);
+      await page.reload();
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
+      await pane.getByText("Stable history 120", { exact: true }).waitFor();
+      await retainedInputs();
+      await waitForChatScrollIdle(page);
+      const thread = pane.locator(".chat-thread");
+      await thread.hover();
+      await page.mouse.wheel(0, -100_000);
+      const older = await gateway.waitForRequest("chat.history", {
+        match: { cursor: "stable-before-tail" },
+      });
+      expect(older.params).not.toHaveProperty("offset");
+      await expect
+        .poll(() =>
+          pane.evaluate((element) =>
+            Reflect.get(element, "state").chatMessages.map(
+              (message: { content: string }) => message.content,
+            ),
+          ),
+        )
+        .toEqual(messages.map((message) => message.content));
+      await retainedInputs();
+    }));
+
   it.each(reloadProfiles)(
     "reconciles the cached shell, roster, and transcript with a %s profile",
     (profile) =>
@@ -581,19 +853,37 @@ suite.define(() => {
             },
           ];
           const pageSize = imported ? 50 : 1_000;
-          const firstPage = messages.slice(-pageSize);
+          const heldStart = messages.length - 80;
+          const firstStart = Math.max(0, heldStart - pageSize);
+          const firstPage = messages.slice(firstStart, heldStart);
           await gateway.setMethodResponse("chat.history", {
-            // Every long-history fixture spans two pages: 1,100/1,000 or 120/50.
-            cases: [firstPage, messages.slice(0, -pageSize)].map((pageMessages, index) => ({
-              match: { offset: index * pageSize },
-              response: {
-                messages: pageMessages,
-                sessionId: currentRow.sessionId,
-                totalMessages: messages.length,
-                hasMore: index === 0,
-                ...(index === 0 ? { nextOffset: pageSize } : {}),
+            // Disk trimming retains 80 groups but no certified page edge. Reopen
+            // that held source, then fetch strictly before it without replacing rows.
+            cases: [
+              {
+                match: { messageId: `older-${heldStart + 1}`, limit: 1 },
+                response: {
+                  messages: [messages[heldStart]],
+                  sessionId: currentRow.sessionId,
+                  olderCursor: "warm-before-held",
+                },
               },
-            })),
+              {
+                match: { cursor: "warm-before-held" },
+                response: {
+                  messages: firstPage,
+                  sessionId: currentRow.sessionId,
+                  ...(firstStart ? { olderCursor: "warm-before-first" } : {}),
+                },
+              },
+              {
+                match: { cursor: "warm-before-first" },
+                response: {
+                  messages: messages.slice(0, firstStart),
+                  sessionId: currentRow.sessionId,
+                },
+              },
+            ],
           });
           const messageCount = () =>
             page
@@ -602,28 +892,36 @@ suite.define(() => {
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
           await thread.hover();
           await page.mouse.wheel(0, -100_000);
-          const history = await gateway.waitForRequest("chat.history", { match: { offset: 0 } });
-          expect(history.params).toMatchObject({ offset: 0 });
-          await expect.poll(messageCount).toBe(firstPage.length);
+          const history = await gateway.waitForRequest("chat.history", {
+            match: { messageId: `older-${heldStart + 1}` },
+          });
+          expect(history.params).toMatchObject({ messageId: `older-${heldStart + 1}`, limit: 1 });
+          expect(history.params).not.toHaveProperty("offset");
+          await gateway.waitForRequest("chat.history", { match: { cursor: "warm-before-held" } });
+          await expect.poll(messageCount).toBe(firstPage.length + 80);
           await page
-            .getByText(
-              `Older history ${Math.max(messages.length - pageSize + 1, olderMessages.length - 79)}`,
-              { exact: true },
-            )
+            .getByText(`Older history ${heldStart}`, { exact: true })
             .waitFor({ state: "attached" });
           await waitForChatScrollIdle(page);
           await page.mouse.wheel(0, -1_000_000);
-          const older = await gateway.waitForRequest("chat.history", {
-            match: { offset: pageSize },
-          });
-          expect(older.params).toMatchObject({ offset: pageSize });
+          if (firstStart) {
+            const older = await gateway.waitForRequest("chat.history", {
+              match: { cursor: "warm-before-first" },
+            });
+            expect(older.params).not.toHaveProperty("offset");
+          }
           await expect.poll(messageCount).toBe(messages.length);
+          // An exhausted imported page only scrolls to the top on the second wheel;
+          // otherwise the second prepend preserves its own adjacent source boundary.
+          const finalBoundary = Math.max(1, firstStart);
+          if (!firstStart) {
+            await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+            expect(await gateway.getRequests("chat.history")).toHaveLength(2);
+          }
           await page
-            .getByText(`Older history ${messages.length - pageSize}`, { exact: true })
+            .getByText(`Older history ${finalBoundary}`, { exact: true })
             .waitFor({ state: "attached" });
-          await page
-            .getByText(`Older history ${messages.length - pageSize + 1}`, { exact: true })
-            .waitFor();
+          await page.getByText(`Older history ${finalBoundary + 1}`, { exact: true }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);

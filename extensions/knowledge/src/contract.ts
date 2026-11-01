@@ -72,6 +72,7 @@ import { withSearchDetail } from "./search-detail.js";
 import { SessionActivityInput, SessionActivityOutput } from "./session-activity.js";
 import {
   AgentProxyInput,
+  GrantChangeInput,
   StoreState,
   StoresChangeInput,
   StoresChangeOutput,
@@ -103,7 +104,7 @@ export const contract = defineFeatureContract({
     timeline: {
       kind: "query",
       description:
-        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
+        "Chronological structured records, optionally scoped to an entity page ID and date range. Defaults to occurrence time; choose recorded_at/updated_at for when Knowledge changed or due_at for commitments. No dates inferred from prose or ingestion. Explicit source-event claims fold matching meeting pages. group=source with entity returns its Timeline: one row per dated source with their relationship note and claim count. Unknown dates excluded. Follow nextOffset with the same filters and returned snapshot; restart on change.",
       input: TimelineInput,
       output: ChronicleOutput,
       tool: { name: "knowledge_timeline", label: "Read knowledge timeline" },
@@ -321,7 +322,7 @@ export const contract = defineFeatureContract({
     recall: {
       kind: "action",
       description:
-        "Owner-private agent tool for explicit automatic-recall approval. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
+        "Agent tool for explicit automatic-recall approval, in owner-private conversations or conversations an owner granted saves to private knowledge. Set a short summary plus optional trigger phrases, importance and host project keys on one exact active record; the service supplies approval identity/time. Source and agent-inference claims cannot be approved. Clear removes recall metadata. Revision/hash preconditions and exact request replay use the normal publication receipt and local Git checkpoint path. Corrections do not inherit approval.",
       input: RecallInput,
       output: Receipt,
       tool: { name: "knowledge_recall", label: "Curate automatic recall" },
@@ -563,6 +564,13 @@ export const contract = defineFeatureContract({
       description:
         "Operator settings: change one agent's store assignment (share its store, use a shared store, or use its own). Requires operator admin access and the current settings revision.",
       input: StoresChangeInput,
+      output: StoresChangeOutput,
+    },
+    stores_grant: {
+      kind: "action",
+      description:
+        "Operator settings: grant, change or revoke one conversation's read, write or read-write access to its agent's private knowledge. Requires operator admin access and the current grants revision.",
+      input: GrantChangeInput,
       output: StoresChangeOutput,
     },
     stores_change_status: {

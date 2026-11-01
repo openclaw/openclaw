@@ -30,7 +30,6 @@ openclaw-session-progress-hovercard-provider {
   /* Generic lazy views retain their shimmer; the critical connection frame is static. */
   --skeleton-highlight: color-mix(in srgb, var(--text) 18%, transparent);
   --skeleton-duration: 2s;
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 32px;
@@ -67,6 +66,11 @@ openclaw-session-progress-hovercard-provider {
   gap: 48px;
   width: min(100%, 760px);
   margin: 24px auto 0;
+}
+
+.loading-skeleton__content {
+  min-height: 0;
+  overflow: auto;
 }
 
 .loading-skeleton__message {
@@ -145,8 +149,34 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .sidebar-recent-session .session-owner-chip--row {
+  width: 18px;
+  height: 18px;
   border: 0;
   box-shadow: none;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.sidebar-recent-session .session-glyph--circular .session-glyph__content {
+  width: 18px;
+  height: 18px;
+}
+
+/* An emoji agent owner sits on the same disc as a photo avatar. */
+.sidebar .identity-avatar--agent.is-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.sidebar-recent-session .identity-avatar--agent.is-fallback {
+  font-size: 10px;
+}
+
+.sidebar-recent-session .session-glyph__content:has(> .identity-avatar--agent) {
+  width: 18px;
+  height: 18px;
 }
 
 .session-owner-stack {
@@ -298,22 +328,26 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   height: 16px;
 }
 
+.sidebar-recent-session .session-glyph__icon .session-css-icon {
+  width: 15px;
+  height: 15px;
+}
+
 .session-glyph__icon img {
   object-fit: contain;
 }
 
 .session-glyph__icon {
   display: inline-flex;
-  color: inherit;
+  color: var(--muted);
 }
 
-/* Keep artwork at its resting size inside a consistent 25px circular ring.
+/* Keep artwork at its resting size inside a consistent 24px circular ring.
    Owner pairs retain their fitted trace below rather than shrinking their faces. */
 .session-glyph__ring {
   position: absolute;
-  inset: -2.5px;
-  box-sizing: border-box;
-  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  inset: -2px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
   pointer-events: none;
@@ -344,7 +378,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .session-glyph__trace-track {
-  stroke: color-mix(in srgb, var(--accent) 28%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* The arc covers the same share of its outline as the ring's quarter turn and
@@ -359,13 +393,16 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .session-glyph__badge {
   position: absolute;
   z-index: 1;
-  top: -2px;
-  right: -2px;
-  width: 7px;
-  height: 7px;
+  top: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
   background: currentColor;
-  box-shadow: 0 0 0 1.5px var(--bg);
+  /* Two equal rings: the row fill over the sidebar, so the cut holds in every state. */
+  box-shadow:
+    0 0 0 1.5px var(--session-row-bg, transparent),
+    0 0 0 1.5px var(--sidebar-bg, var(--bg));
 }
 
 .session-glyph__badge--unread {
@@ -521,7 +558,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   justify-content: center;
   gap: 6px;
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--btn-bg, var(--bg-elevated));
   padding: 8px 14px;
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -537,7 +574,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 }
 
 .btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: var(--bg-hover);
+  background: var(--btn-bg-hover, var(--bg-hover));
   border-color: var(--border-strong);
 }
 
@@ -640,11 +677,12 @@ openclaw-toast-host[popover] {
   width: max-content;
   max-width: min(370px, calc(100vw - 32px));
   padding: 7px 7px 7px 13px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--popover);
+  border: 1px solid transparent;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
   color: var(--popover-foreground);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
 }
 
 .shell--chat {
@@ -740,11 +778,11 @@ openclaw-toast-host[data-toast-placement="shell"]
 .app-toast__dismiss {
   flex: 0 0 auto;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--menu-item-radius);
 }
 
 .app-toast__action {
-  min-height: 32px;
+  min-height: var(--overlay-modal-close-size);
   max-width: 35%;
   padding: 5px 10px;
   background: var(--accent-subtle);
@@ -757,8 +795,8 @@ openclaw-toast-host[data-toast-placement="shell"]
 
 .app-toast__dismiss {
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
   padding: 0;
   place-items: center;
   background: transparent;
@@ -1073,6 +1111,110 @@ select.settings-select:not([multiple]) {
   }
 }
 
+/* Native selects join the Select family where the engine can style their popup. */
+@supports (appearance: base-select) {
+  @media not (forced-colors: active) {
+    .field select:not([multiple], [size]),
+    select.settings-select:not([multiple], [size]) {
+      appearance: base-select;
+      display: inline-flex;
+      align-items: center;
+      padding-right: 10px;
+      background-image: none;
+
+      &::picker-icon {
+        content: "";
+        width: 16px;
+        height: 16px;
+        margin-inline-start: auto;
+        background: var(--text-tertiary);
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+          center / contain no-repeat;
+        transition: none;
+      }
+
+      &::picker(select) {
+        appearance: base-select;
+        box-sizing: border-box;
+        min-width: anchor-size(width);
+        max-width: calc(100dvw - 16px);
+        max-height: min(400px, calc(100dvh - 16px));
+        margin-block: 4px;
+        padding: var(--menu-padding);
+        border: 0;
+        border-radius: var(--menu-radius);
+        background: var(--menu-surface);
+        box-shadow: var(--menu-shadow);
+        backdrop-filter: var(--menu-backdrop);
+        color: var(--text);
+        corner-shape: superellipse(1.5);
+        opacity: 0;
+        scale: 0.95;
+        transition:
+          opacity var(--select-exit-duration) var(--overlay-ease-exit),
+          scale var(--select-exit-duration) var(--overlay-ease-exit),
+          display var(--select-exit-duration) allow-discrete,
+          overlay var(--select-exit-duration) allow-discrete;
+      }
+
+      &:open::picker(select) {
+        opacity: 1;
+        scale: 1;
+        transition-duration: var(--select-enter-duration);
+        transition-timing-function: var(--overlay-ease-enter);
+      }
+
+      & option {
+        gap: 8px;
+        min-height: 32px;
+        padding: 6px 8px;
+        border-radius: var(--menu-item-radius);
+        font-size: calc(13px * var(--control-ui-text-scale));
+        line-height: calc(1.25 / 0.875);
+      }
+
+      & option:is(:hover, :focus-visible):not(:disabled) {
+        outline: 0;
+        background: var(--surface-hover);
+      }
+
+      & option:checked {
+        background: transparent;
+        font-weight: var(--control-ui-font-weight-semibold);
+      }
+
+      & option:checked:is(:hover, :focus-visible) {
+        background: var(--surface-hover);
+      }
+
+      & option::checkmark {
+        order: 1;
+        margin-inline-start: auto;
+        color: var(--accent);
+      }
+
+      & option:disabled {
+        opacity: 0.5;
+      }
+    }
+
+    @starting-style {
+      .field select:not([multiple], [size]):open::picker(select),
+      select.settings-select:not([multiple], [size]):open::picker(select) {
+        opacity: 0;
+        scale: 0.95;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .field select:not([multiple], [size])::picker(select),
+      select.settings-select:not([multiple], [size])::picker(select) {
+        transition: none;
+      }
+    }
+  }
+}
+
 .field textarea {
   font-family: var(--mono);
   min-height: 160px;
@@ -1262,7 +1404,7 @@ select.settings-select:not([multiple]) {
 .lazy-element-loading-modal {
   --openclaw-modal-width: 360px;
   --openclaw-modal-backdrop-filter: none;
-  --openclaw-modal-backdrop-color: color-mix(in srgb, var(--text) 12%, transparent);
+  --openclaw-modal-backdrop-color: var(--overlay-palette-backdrop);
 }
 
 .lazy-element-loading {
@@ -1404,84 +1546,94 @@ select.settings-select:not([multiple]) {
   background: var(--bg);
 }
 
-:is(.code-block .hljs, .code-block-wrapper pre code.hljs) {
+:is(
+  .code-block .hljs,
+  .code-block-wrapper pre code.hljs,
+  :where(.chat-group.user .chat-text) pre code.hljs
+) {
   color: var(--text);
 }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-comment,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-quote {
-  color: var(--muted);
-  font-style: italic;
-}
+:is(
+  .code-block,
+  .code-block-wrapper pre code.hljs,
+  :where(.chat-group.user .chat-text) pre code.hljs
+) {
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--hljs-comment);
+    font-style: italic;
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-keyword,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-tag,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-subst {
-  color: var(--hljs-keyword);
-}
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-subst {
+    color: var(--hljs-keyword);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-number,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-literal,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-variable,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-template-variable,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-tag .hljs-attr {
-  color: var(--hljs-number);
-}
+  .hljs-number,
+  .hljs-literal,
+  .hljs-variable,
+  .hljs-template-variable,
+  .hljs-tag .hljs-attr {
+    color: var(--hljs-number);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-string,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-doctag {
-  color: var(--hljs-string);
-}
+  .hljs-string,
+  .hljs-doctag {
+    color: var(--hljs-string);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-title,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-section,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-id,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-function .hljs-title {
-  color: var(--hljs-title);
-}
+  .hljs-title,
+  .hljs-section,
+  .hljs-selector-id,
+  .hljs-function .hljs-title {
+    color: var(--hljs-title);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-type,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-class .hljs-title,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-built_in,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-builtin-name {
-  color: var(--hljs-type);
-}
+  .hljs-type,
+  .hljs-class .hljs-title,
+  .hljs-built_in,
+  .hljs-builtin-name {
+    color: var(--hljs-type);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-attr,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-attribute,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-name,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-class,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-attr,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-selector-pseudo {
-  color: var(--hljs-attribute);
-}
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-name,
+  .hljs-selector-class,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: var(--hljs-attribute);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-symbol,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-bullet,
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-link {
-  color: var(--accent-2);
-}
+  .hljs-symbol,
+  .hljs-bullet,
+  .hljs-link {
+    color: var(--hljs-link);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-meta {
-  color: var(--hljs-meta);
-}
+  .hljs-meta {
+    color: var(--hljs-meta);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion {
-  color: var(--hljs-deletion);
-  background: var(--danger-subtle);
-}
+  .hljs-deletion {
+    color: var(--hljs-deletion);
+    background: var(--danger-subtle);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition {
-  color: var(--hljs-addition);
-  background: var(--ok-subtle);
-}
+  .hljs-addition {
+    color: var(--hljs-addition);
+    background: var(--ok-subtle);
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-emphasis {
-  font-style: italic;
-}
+  .hljs-emphasis {
+    font-style: italic;
+  }
 
-:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-strong {
-  font-weight: 600;
+  .hljs-strong {
+    font-weight: 600;
+  }
 }
 
 .markdown-plain-text-fallback {
@@ -1496,13 +1648,12 @@ select.settings-select:not([multiple]) {
 
 .code-block-wrapper {
   position: relative;
-  box-sizing: border-box;
   width: 100%;
   margin-block: 1em;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border: 1px solid var(--inline-code-border, var(--border-strong));
   border-radius: var(--radius-md);
-  background: transparent;
+  background: var(--inline-code-bg, var(--bg-muted));
 }
 
 .code-block-wrapper pre {
@@ -1588,12 +1739,17 @@ select.settings-select:not([multiple]) {
   height: 28px;
   padding: 6px;
   margin-block: 8px 4px;
-  background: color-mix(in srgb, var(--text) 3%, var(--bg));
+  background:
+    linear-gradient(var(--inline-code-bg, var(--bg-muted)), var(--inline-code-bg, var(--bg-muted))),
+    var(--chat-bubble-background, var(--bg));
 }
 
 .code-block-wrapper--long :is(.code-block-copy, .code-block-wrap):hover,
 .code-block-wrapper--long .code-block-wrap[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--text) 8%, var(--bg));
+  background:
+    linear-gradient(var(--surface-hover), var(--surface-hover)),
+    linear-gradient(var(--inline-code-bg, var(--bg-muted)), var(--inline-code-bg, var(--bg-muted))),
+    var(--chat-bubble-background, var(--bg));
   color: var(--text);
 }
 
@@ -2025,7 +2181,7 @@ select.settings-select:not([multiple]) {
   background: var(--data-table-row-bg);
 }
 
-.data-table tbody tr:last-child td {
+.data-table tbody:last-child tr:last-child td {
   border-bottom: none;
 }
 
@@ -2033,7 +2189,6 @@ select.settings-select:not([multiple]) {
   width: var(--data-table-checkbox-col-width);
   min-width: var(--data-table-checkbox-col-width);
   max-width: var(--data-table-checkbox-col-width);
-  box-sizing: border-box;
   padding-left: 12px !important;
   padding-right: 4px !important;
   text-align: center;
@@ -2141,8 +2296,13 @@ td.data-table-key-col {
   background: color-mix(in srgb, var(--exec-approval-accent) 5%, var(--card));
   border: 1px solid color-mix(in srgb, var(--exec-approval-accent) 45%, var(--border));
   border-radius: var(--radius-lg);
-  padding: 20px;
+  padding: var(--overlay-modal-padding);
   animation: scale-in 0.2s var(--ease-out);
+}
+
+.oc-modal-dialog__body > .exec-approval-card {
+  border: 0;
+  background: var(--overlay-modal-surface);
 }
 
 .exec-approval-modal-stack {
@@ -2166,7 +2326,7 @@ td.data-table-key-col {
 }
 
 .exec-approval-title {
-  font-size: 14px;
+  font-size: var(--overlay-modal-title-size);
   font-weight: 600;
 }
 
@@ -2264,7 +2424,7 @@ td.data-table-key-col {
   padding: 4px 8px 2px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: var(--control-ui-font-weight-semibold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -2272,12 +2432,10 @@ td.data-table-key-col {
 .agent-select__menu.oc-menu {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
-  border: 1px solid var(--overlay-border);
-  box-shadow: var(--overlay-shadow);
 }
 
 @starting-style {
-  .agent-select__menu.oc-menu:popover-open {
+  .agent-select__menu.oc-menu.oc-overlay:popover-open {
     opacity: 1;
   }
 }
@@ -2414,8 +2572,6 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
-  padding: 6px 8px;
-  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -2423,10 +2579,6 @@ td.data-table-key-col {
 
 .agent-select__option > .oc-menu-item__check {
   display: none;
-}
-
-.agent-select__option[data-selected] {
-  background: var(--menu-selected);
 }
 
 .agent-select__option-state {
@@ -2487,10 +2639,6 @@ td.data-table-key-col {
   width: 100%;
   max-height: calc(100dvh - min(20dvh, 160px) - 24px);
   overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
 }
 
 .cmd-palette__entry {
@@ -2509,7 +2657,6 @@ td.data-table-key-col {
 
 .cmd-palette__input {
   display: block;
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: 24px;
@@ -2632,10 +2779,6 @@ td.data-table-key-col {
   max-height: var(--openclaw-modal-height-limit);
   flex-direction: column;
   overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: color-mix(in srgb, var(--card) 96%, black 4%);
-  box-shadow: var(--shadow-xl);
 }
 
 .device-pair-setup__header {
@@ -2750,14 +2893,9 @@ td.data-table-key-col {
 
 .session-row-draft-indicator {
   display: inline-grid;
-  width: 18px;
-  height: 18px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-  font-size: 12px;
+  color: var(--muted);
 }
 
 /* Unread indicator shared by the sidebar recents list, the chat session
@@ -2770,6 +2908,12 @@ td.data-table-key-col {
   border-radius: var(--radius-full);
   background: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.sidebar-recent-session .session-unread-dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
 }
 
 .session-row-aside {
@@ -2787,9 +2931,8 @@ td.data-table-key-col {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--session-row-muted, var(--muted));
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  letter-spacing: 0;
   white-space: nowrap;
   transition: opacity var(--duration-fast) ease;
   /* Display-only, and its opacity transition forms a stacking context that
@@ -2799,15 +2942,15 @@ td.data-table-key-col {
 
 .sidebar-session-fork-indicator {
   display: inline-flex;
-  margin-right: 4px;
+  margin-right: 6px;
   color: var(--muted);
   vertical-align: -2px;
 }
 
 .sidebar-session-fork-indicator svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 1.6px;
+  width: 13px;
+  height: 13px;
+  stroke-width: 2px;
 }
 
 /* Attribute badges (approval, cloud placement):
@@ -2815,19 +2958,26 @@ td.data-table-key-col {
 .session-row-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
-/* Counts (PRs, outbox) sit beside the 12px glyph as compact metadata,
+/* Counts (outbox) sit beside the 12px glyph as compact metadata,
    not at the row's title size. */
 .session-row-badge {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  color: var(--muted);
-  font-size: 10px;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+/* Trailing signals stay quieter than secondary text unless their state adds color. */
+.session-row-trail,
+.session-row-badges,
+.sidebar-child-session-toggle {
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
 }
 
 .session-row-badge--attention,
@@ -2835,41 +2985,34 @@ td.data-table-key-col {
   color: var(--warn);
 }
 
-.session-row-badge--pull-request[data-pull-request-state="open"],
-.session-row-badge--cloud[data-placement-state="active"] {
+/* Later rules win: a placement's failure or warning overrides its healthy color. */
+[data-pull-request-state="open"] {
   color: var(--ok);
 }
 
-.session-row-badge--pull-request[data-pull-request-state="merged"] {
+[data-pull-request-state="merged"] {
   color: var(--pr-merged);
 }
 
-.session-row-badge--pull-request[data-pull-request-state="closed"],
-.session-row-badge--cloud[data-placement-state="failed"],
-.session-row-badge--cloud[data-disk-space-status="critical"] {
-  color: var(--danger);
-}
-
-.session-row-badge--cloud:is(
-  [data-placement-state="requested"],
-  [data-placement-state="provisioning"],
-  [data-placement-state="syncing"],
-  [data-placement-state="starting"],
-  [data-placement-state="draining"],
-  [data-placement-state="reconciling"]
-) {
+[data-placement-state] {
   color: var(--accent);
 }
 
-.session-row-badge--cloud[data-workspace-conflicts],
-.session-row-badge--cloud[data-disk-space-status="warning"] {
+[data-pull-request-state="closed"],
+[data-placement-state="failed"],
+[data-disk-space-status="critical"] {
+  color: var(--danger);
+}
+
+[data-workspace-conflicts],
+[data-disk-space-status="warning"] {
   color: var(--warn);
 }
 
 .session-row-actions {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
 }
 
 /* Shared icon-button box; each surface retains positioning, paint, and state. */
@@ -2892,6 +3035,7 @@ td.data-table-key-col {
 
 .session-action {
   background: transparent;
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
   opacity: 0;
   pointer-events: none;
   transition:
@@ -2967,7 +3111,6 @@ td.data-table-key-col {
 }
 
 .session-run-spinner {
-  box-sizing: border-box;
   display: inline-block;
   width: 12px;
   height: 12px;
@@ -2986,6 +3129,16 @@ td.data-table-key-col {
 .session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background {
+  opacity: 0.6;
+}
+
+.session-glyph__ring--background,
+.session-glyph__trace--background .session-glyph__trace-run {
+  animation-duration: 3.2s;
 }
 
 @keyframes session-run-trace {
@@ -3255,4 +3408,43 @@ td.data-table-key-col {
 .person-activity-avatar-link {
   display: block;
   line-height: 0;
+}
+
+.session-row-trail--snooze {
+  gap: 4px;
+}
+
+/* Sidebar numbers stay tabular so counts and elapsed times hold their column. */
+:is(
+  .session-row-badge,
+  .session-row-trail,
+  .sidebar-child-session-toggle__count,
+  .sidebar-session-group-count,
+  .sidebar-agent-roster__unread,
+  .sidebar-issues-button__count,
+  .viewer-avatar--overflow,
+  .sidebar-session-tree__show-more
+) {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.sidebar-child-session-toggle,
+.session-action,
+.sidebar-session-group-actions {
+  border-radius: var(--radius-sm);
+  corner-shape: superellipse(1.5);
+}
+
+.sidebar-recent-session .hover-marquee {
+  --hover-marquee-fade-width: 24px;
+}
+
+/* Text on a tag fill keeps its readable tone; only icons take the quieter one. */
+.sidebar-recent-session--colored .session-row-trail {
+  color: var(--session-row-muted, var(--muted));
+}
+
+/* A tighter pair leaves room between its run outline and the title. */
+.sidebar-recent-session .session-owner-stack {
+  width: 26px;
 }

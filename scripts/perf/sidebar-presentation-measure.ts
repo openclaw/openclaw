@@ -24,6 +24,8 @@
  * measures full-page packing under writes. Call latency excludes the write;
  * CPU/allocation include it. Use identical churn on both revisions.
  * --repeats N reuses fixture setup, writing <output>.<1-based repeat>.json.
+ * --row-mode compact|full measures recipient diagnostics; --sandbox-required
+ * selects a role that cannot read the fixture's unsandboxed host workspace.
  * With --barrier-dir <fresh directory> --side base|fix, publish <side>.ready
  * after warmup and wait for <repeat>.<side>.go before each measured repeat.
  * A controller can alternate the two prepared processes without overlapping measured reads.
@@ -46,6 +48,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
 import { transformSync } from "esbuild";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
@@ -65,6 +68,8 @@ const { values } = parseArgs({
     repeats: { type: "string", default: "1" },
     sessions: { type: "string", default: "10000" },
     "page-size": { type: "string", default: "100" },
+    "row-mode": { type: "string", default: "sidebar" },
+    "sandbox-required": { type: "boolean", default: false },
     churn: { type: "boolean", default: false },
     clients: { type: "string", default: "10" },
     operations: { type: "string", default: "1000" },
@@ -74,6 +79,12 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(global.gc, "run with --expose-gc");
+assert(
+  values["row-mode"] === "sidebar" ||
+    values["row-mode"] === "compact" ||
+    values["row-mode"] === "full",
+);
+const rowMode = values["row-mode"] === "full" ? undefined : values["row-mode"];
 const integer = (
   name: "sessions" | "clients" | "operations" | "repeats" | "page-size",
   min: number,
@@ -144,6 +155,7 @@ const cfg: OpenClawConfig = {
       default: "view",
       definitions: {
         view: {
+          ...(values["sandbox-required"] ? { sandbox: "required" } : {}),
           sessions: { others: "view" },
           agents: "*",
           scopes: ["operator.read", "operator.write"],
@@ -282,12 +294,19 @@ try {
     },
     { agentId: "main" },
   );
+  const coldStart = performance.now();
+  const coldCpu = process.cpuUsage();
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.prepareSelection();
   await projection.ensureMaterialized();
+  const coldUsedCpu = process.cpuUsage(coldCpu);
+  const coldProjection = {
+    elapsedMs: performance.now() - coldStart,
+    cpuMs: (coldUsedCpu.user + coldUsedCpu.system) / 1000,
+  };
   const revisions: (string | undefined)[] = Array.from({ length: clients });
-  const opts = {
-    rowMode: "sidebar" as const,
+  const opts: SessionsListParams = {
+    rowMode,
     source: "sidebar" as const,
     limit: pageSize,
     archived: "all" as const,
@@ -297,12 +316,14 @@ try {
     const result = await listProjectedSessions({
       projection: projection!,
       client: recipients[slot],
-      opts: { ...opts, ifRowsRevision: conditional ? revisions[slot] : undefined },
+      opts: { ...opts, ifRowsRevision: conditional ? (revisions[slot] ?? "") : undefined },
       acceptsSerializedJson: true,
     });
     assert.equal(result.count, pageSize);
     assert.equal(result.totalCount, sessions);
-    revisions[slot] = result.rowsRevision;
+    if (result.rowsRevision !== undefined) {
+      revisions[slot] = result.rowsRevision;
+    }
     // Exercise the real response encoder without a socket or a retained response backlog.
     serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result });
     return result;
@@ -561,9 +582,12 @@ try {
       clients,
       identities: profiles.length,
       pageSize,
+      rowMode: values["row-mode"],
+      sandboxRequired: values["sandbox-required"],
       operations,
       warmCalls,
       preparedBackfillRows: pageSize,
+      coldProjection,
       repeat,
       repeats,
       churn: values.churn,

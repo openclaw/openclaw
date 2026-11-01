@@ -320,20 +320,11 @@ openclaw-chat-detail-panel,
   width: max-content;
   min-width: 0;
   max-width: min(320px, calc(100vw - 24px));
-  padding: var(--menu-padding);
-  border-radius: var(--menu-radius);
-  box-shadow: var(--shadow-md);
 }
 
 .side-panel-type-menu__item {
-  padding: 9px 8px;
-  background: color-mix(in srgb, var(--text) 3%, transparent);
   font-size: calc(13px * var(--control-ui-text-scale));
   white-space: nowrap;
-}
-
-.side-panel-type-menu__item > .oc-menu-item__icon {
-  margin-inline-end: 0;
 }
 
 .side-panel-type-menu__item + .side-panel-type-menu__item {
@@ -658,12 +649,6 @@ openclaw-chat-detail-panel,
   background: var(--bg-elevated);
   border-color: var(--border);
   box-shadow: var(--shadow-sm);
-}
-
-.side-panel-position-menu__separator {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--details-separator);
 }
 
 .side-panel-position-menu .oc-menu-item__icon svg {

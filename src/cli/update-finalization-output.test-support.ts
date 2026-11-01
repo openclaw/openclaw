@@ -233,7 +233,7 @@ const blockedPhase = repairDeadline
         : undefined;
 if (blockedPhase) {
   // Doctor needs time for native admission; its output markers advance the deadline.
-  // Keep real phase ownership and the short budget for other blocked phases.
+  // Repair freezes admission time until the guarded plugin mutation is ready.
   stub(
     "./update-cli/update-finalization-lifecycle.ts",
     `import { once } from 'node:events';
@@ -256,10 +256,10 @@ export class UpdateFinalizationLifecycle extends RealLifecycle {
       },
     });
   }`
-      : doctorDeadline || scenario === "borrowed-phase"
+      : repairDeadline || doctorDeadline || scenario === "borrowed-phase"
         ? `async run(phase, operation, outcome, custody) {
-    if (phase !== 'doctor' && !(phase === 'configSnapshot' && ${scenario === "borrowed-phase"})) return super.run(phase, operation, outcome, custody);
-    startFinalizationFixtureClock();
+    if (phase !== ${JSON.stringify(repairDeadline ? "plugins" : "doctor")} && !(phase === 'configSnapshot' && ${scenario === "borrowed-phase"})) return super.run(phase, operation, outcome, custody);
+    startFinalizationFixtureClock(${repairDeadline});
     try { return await super.run(phase, operation, outcome, custody); }
     finally { restoreFinalizationFixtureClock(); }
   }`

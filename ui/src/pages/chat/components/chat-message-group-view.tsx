@@ -61,6 +61,7 @@ function MessageActionsRow(props: {
   options: NativeMessageGroupOptions;
   class?: string;
   reactionGroup?: MessageGroupData;
+  timestamp?: number;
 }) {
   let owner: HTMLDivElement | undefined;
   return (
@@ -87,6 +88,9 @@ function MessageActionsRow(props: {
         actionOwner={() => owner}
         messageKey={props.messageKey}
       />
+      <Show when={props.timestamp !== undefined}>
+        <MessageMeta timestamp={props.timestamp!} meta={null} />
+      </Show>
     </div>
   );
 }
@@ -137,7 +141,6 @@ function PreparedMessage(props: {
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
-      ownsTerminalStatus: props.item.presentationOwnsTerminalStatus,
       entryId,
       // Tool-row file links carry their message like rendered markdown links, so earlier
       // messages keep reading their original source; sender-owned links stay session-scoped.
@@ -447,6 +450,11 @@ function FramedMessage(props: {
               options={frame().options}
               class="chat-message-actions-row"
               reactionGroup={frame().group}
+              timestamp={
+                frame().normalizedRole === "user"
+                  ? prepared().source.normalizedMessage.timestamp
+                  : undefined
+              }
             />
           }
         >
@@ -528,7 +536,11 @@ function FramedMessageGroup(props: {
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
+              <TurnRecapRow
+                recap={options().turnRecap!}
+                presentation="continuation"
+                hideDuration={options().hideTurnRecapDuration}
+              />
             ) : undefined
           }
         >
@@ -575,21 +587,27 @@ function FramedMessageGroup(props: {
                 {frame().normalizedRole === "user" &&
                 frame().showAvatar &&
                 frame().avatarPlacement === "footer" ? (
-                  <Show
-                    when={options().mediaReadAllowed !== false}
-                    fallback={<span class="chat-author-avatar" aria-hidden="true" />}
-                  >
-                    <ChatAuthorAvatar
-                      sender={props.group.sender}
-                      channelAvatar={options().channelAvatar}
-                    />
-                  </Show>
+                  <ChatAuthorAvatar
+                    sender={props.group.sender}
+                    channelAvatar={options().channelAvatar}
+                    mediaReadAllowed={options().mediaReadAllowed}
+                  />
                 ) : undefined}
                 <SenderIdentity frame={frame()} />
                 {/* Keep delivery status and timestamp in one slot to avoid wrapping them together. */}
                 <Show
                   when={frame().sendStatus}
-                  fallback={<MessageMeta timestamp={props.group.timestamp} meta={frame().meta} />}
+                  fallback={
+                    <MessageMeta
+                      timestamp={
+                        frame().normalizedRole === "user"
+                          ? frame().preparedMessages[frame().lastMessageIndex]!.source
+                              .normalizedMessage.timestamp
+                          : props.group.timestamp
+                      }
+                      meta={frame().meta}
+                    />
+                  }
                 >
                   <ChatSendStatus status={frame().sendStatus} actions={options()} />
                 </Show>

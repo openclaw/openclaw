@@ -418,7 +418,7 @@ describe("gateway agent caller authority custody", () => {
       );
       expect(runtime[Symbol.asyncDispose]).toHaveBeenCalledOnce();
       expect(preparedInput?.recorder?.finishPendingInput).toHaveBeenCalledExactlyOnceWith(
-        "interrupted",
+        "cancelled",
       );
     } finally {
       caller.release();

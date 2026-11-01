@@ -19,7 +19,7 @@ import type {
 } from "./capability-catalog-context.types.js";
 import { createCatalogContextFixture } from "./capability-catalog.test-support.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
-import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
@@ -81,14 +81,11 @@ async function withFactoryPlugin(
     };`,
   });
   if (manifest) {
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false },
-        ...manifest,
-      }),
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false },
+      ...manifest,
+    });
   }
   await withEnvAsync(
     {

@@ -28,9 +28,8 @@ import {
 } from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { withToolEffectBoundary } from "../tool-effect-receipt.js";
-import { bindAgentToolReplaySafety } from "../tool-replay-safety.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
-import { AUTOMATIONS_TOOL_NAME, CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
+import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -51,6 +50,7 @@ import {
   stripExistingContext,
 } from "./cron-tool-context.js";
 import {
+  applyCronToolDefaults,
   assertInheritedCronToolCaptureReady,
   capCronJobToolsAllowOnCreate,
   cronCreateRequiresCreatorAuthority,
@@ -140,7 +140,6 @@ function isOlderGatewayRejectingParam(error: unknown, method: string, param: str
 
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const config = opts?.config ?? getRuntimeConfigSnapshot() ?? undefined;
-  const readOnly = opts?.readOnly === true;
   const assertStreamConfigCurrent = captureCronStreamPolicyConfigCurrentness(opts);
   const managementAuthority = bindCronManagementGrant(opts?.runId, config);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
@@ -156,11 +155,10 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
-    displaySummary: readOnly ? "Inspect recorded automation state." : CRON_TOOL_DISPLAY_SUMMARY,
+    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: buildCronToolDescription({
       triggersEnabled,
       callerScoped: !isCronModelManagementAllowed(config),
-      readOnly,
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
@@ -169,7 +167,6 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
     }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
-      readOnly,
       allowCommandJobs,
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
@@ -199,11 +196,6 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         );
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
-      if (readOnly && !CRON_SCOPED_READ_ACTIONS.includes(action)) {
-        throw new Error(
-          "The automation tool is read-only during recovery; only caller-scoped inspections are available. It cannot create, change, remove, run, or wake work. This restriction does not establish the outcome of an earlier action.",
-        );
-      }
       if (
         managementAuthority?.managementOnly &&
         !CRON_MANAGEMENT_METHODS.some((method) => method === `cron.${action}`)
@@ -450,6 +442,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               ) {
                 delete job.enabled;
               }
+              applyCronToolDefaults(job, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               const requiresCreatorAuthority = cronCreateRequiresCreatorAuthority(
                 job,
                 opts?.creatorToolAllowlist,
@@ -574,6 +567,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 throw new Error("displayName must be a non-empty string or null");
               }
               const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+              applyCronToolDefaults(patch, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
                 throw new Error("job required");
               }
@@ -723,8 +717,5 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
         : executeAction());
     },
   };
-  if (readOnly) {
-    bindAgentToolReplaySafety(tool, "bounded-read");
-  }
   return setToolTerminalPresentation(tool, formatCronTerminalPresentation);
 }

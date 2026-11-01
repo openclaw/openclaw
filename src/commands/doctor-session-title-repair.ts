@@ -6,7 +6,7 @@ import {
   readSessionTranscriptMessageEventPage,
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";

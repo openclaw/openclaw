@@ -65,6 +65,7 @@ suite.define(() => {
                 sessionId: "uncached",
                 hasMore: true,
                 nextOffset: 40,
+                olderCursor: "older-cold-load",
                 totalMessages: 2040,
               },
             },
@@ -142,7 +143,9 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         }
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
-        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
+        expect(
+          await gateway.getRequests("chat.history", { cursor: "older-cold-load" }),
+        ).toHaveLength(0);
         const frames = await page.evaluate(() => window.coldLoadSamples!);
         expect(frames[0]!.max).toBeGreaterThan(1000);
         expect(
@@ -257,7 +260,7 @@ suite.define(() => {
         await page
           .getByText("Synthetic final reply: the report is ready.", { exact: true })
           .waitFor();
-        await page.getByText("Done in 3 minutes", { exact: true }).waitFor();
+        await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
         await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
         const progress = await openChatTaskProgress(page);
         await progress
@@ -302,7 +305,7 @@ suite.define(() => {
                 pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? null,
               top: thread.scrollTop,
               max: thread.scrollHeight - thread.clientHeight,
-              duration: thread.textContent.includes("Done in 3 minutes"),
+              duration: thread.textContent.includes("Worked for 3 minutes"),
               reply: Array.from(thread.querySelectorAll(".chat-reply-attribution__name")).some(
                 (element) => element.textContent?.trim() === "Avery",
               ),

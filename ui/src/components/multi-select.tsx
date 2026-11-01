@@ -11,6 +11,7 @@ import { MenuNavigationError } from "./solid/menu-navigation-error.tsx";
 import { useOverlayControl } from "./solid/overlay-control.ts";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
 import "./solid/overlay.css";
+import "../styles/select-picker.css";
 import "../styles/multi-select.css";
 
 type MultiSelectProps = {
@@ -66,7 +67,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
     const taken = new Set(props.value.map((value) => props.getValueKey(value)));
     const custom = query().trim();
     const customKey = props.getValueKey(custom);
-    const search = custom.toLowerCase();
+    const search = custom.toLowerCase().normalize("NFC");
     const result: MultiSelectRow[] = [];
     let exact: MultiSelectRow | undefined;
     for (const option of props.options) {
@@ -79,7 +80,7 @@ export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: strin
       } else if (
         !search ||
         [option.label, option.value, option.provider, option.description].some((text) =>
-          text?.toLowerCase().includes(search),
+          text?.toLowerCase().normalize("NFC").includes(search),
         )
       ) {
         result.push(option);

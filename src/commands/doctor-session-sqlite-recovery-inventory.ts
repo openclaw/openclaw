@@ -173,11 +173,11 @@ export function collectRecoveryInventory(params: {
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
     const stat = refs.every((ref) => ref.trusted)
-      ? fs.lstatSync(archivePath, { bigint: true, throwIfNoEntry: false })
+      ? statMigrationPath(archivePath, { bigint: true })
       : undefined;
     const claim =
       refs.every((ref) => ref.trusted) && evidence?.disposal.state === "pending-disposal"
-        ? fs.lstatSync(evidence.disposal.claimPath, { bigint: true, throwIfNoEntry: false })
+        ? statMigrationPath(evidence.disposal.claimPath, { bigint: true })
         : undefined;
     const current = stat ?? claim;
     if (

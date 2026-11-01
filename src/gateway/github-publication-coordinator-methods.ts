@@ -16,7 +16,6 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
-  type PublicationSessionIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
@@ -35,6 +34,7 @@ import {
   type GitHubPublicationRequester,
   type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {

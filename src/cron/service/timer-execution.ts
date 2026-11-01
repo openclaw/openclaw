@@ -3,6 +3,7 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
@@ -54,6 +55,10 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  const ownerTransferError = resolveCronOwnerTransferRecoveryError(job);
+  if (ownerTransferError) {
+    return { status: "error", error: ownerTransferError, executionStarted: false };
   }
   const executionBlockReason = describeCronHostExecutionRestriction(
     job,
@@ -281,10 +286,15 @@ export async function executeJobCore(
         return resolveAbortError();
       }
       if (evaluation.kind === "busy") {
-        state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation skipped while busy");
+        state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation deferred while busy");
         return {
-          status: "ok",
-          triggerEval: { fired: false, stateChanged: false, busy: true },
+          status: "skipped",
+          summary: "Automation deferred while condition evaluations are busy",
+          admissionDeferred: true,
+          admissionDeferredReason: "busy",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
         };
       }
       if (evaluation.kind === "error") {

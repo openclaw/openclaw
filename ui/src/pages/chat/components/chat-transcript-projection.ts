@@ -71,12 +71,7 @@ export function projectChatTranscript(
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const { showReasoning, reasoning } = projectChatReasoning(props);
   const assistantAgentId = props.currentAgentId ?? props.fullMessageAgentId;
-  const assistantAvatar = resolveAssistantDisplayAvatar({
-    currentAgentId: assistantAgentId,
-    agents: props.agents,
-    assistantAvatar: props.assistantAvatar,
-    assistantAvatarUrl: props.assistantAvatarUrl,
-  });
+  const assistantAvatar = resolveAssistantDisplayAvatar(props, assistantAgentId);
   const assistantIdentity = {
     agentId: assistantAgentId,
     name: props.assistantName,
@@ -91,7 +86,7 @@ export function projectChatTranscript(
   const chatItemsInput = {
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    archiveNotice: buildChatArchiveNotice(activeSession),
+    archiveNotice: buildChatArchiveNotice(props.transcriptMetadata ?? activeSession),
     runId: props.runId ?? null,
     compactionStatus: props.compactionStatus,
     locale,
@@ -165,6 +160,7 @@ export function projectChatTranscript(
     runWorking: Boolean(props.runWorking),
     searchActive: searchFiltering,
     bubbleMode: props.chatBubbleMode === true,
+    session: props.transcriptMetadata ?? activeSession,
   });
   const { collapsedItems, transcriptItems, continuations } = transcriptChain;
   const replyNavigationId = props.replyMessageAccess?.navigationId;
@@ -235,6 +231,7 @@ export function projectChatTranscript(
           assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
         ? lastTranscriptItem
         : null;
+  const recapRow = props.transcriptMetadata ?? activeSession;
   const resolvedRecap = resolveTurnRecap(state, {
     sessionKey: props.sessionKey,
     agentId: props.currentAgentId,
@@ -248,7 +245,7 @@ export function projectChatTranscript(
         shouldRenderQueuedSendInThread(item),
     ),
     activeRunId: props.runActive ? props.runId : undefined,
-    row: props.transcriptMetadata ?? activeSession,
+    row: recapRow?.key === props.sessionKey ? recapRow : undefined,
     completedRunId: tailStatusOwner?.runId,
     usageByRun: props.runUsageById,
   });
@@ -284,10 +281,12 @@ export function projectChatTranscript(
     handoffSessionLinks: subagents.links,
     boardProvider: props.boardProvider,
     widgetLayout: props.widgetLayout,
+    displayFacts: props.displayFacts,
     agentId: assistantAgentId,
     runActive: props.runActive,
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onFindWorkspaceFile: props.onFindWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
     mediaOwner: props.mediaOwner,
     mediaReadAllowed: props.mediaReadAllowed,
@@ -296,7 +295,7 @@ export function projectChatTranscript(
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    getTurnVideoMessages: (key) => state.transcriptRenderContext.turnVideoMessages?.get(key),
+    getTurnMediaMessages: (key) => state.transcriptRenderContext.turnMediaMessages?.get(key),
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
@@ -652,7 +651,7 @@ export function projectChatTranscript(
     });
   }
   const transcriptRows = projectTranscriptRows(rows, workPreviews, contentRows);
-  state.transcriptRenderContext.turnVideoMessages = snapshot.turnVideoMessages;
+  state.transcriptRenderContext.turnMediaMessages = snapshot.turnMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     // Search removes rows from the index, not from loaded history. Resolve the
@@ -668,6 +667,7 @@ export function projectChatTranscript(
             runWorking: Boolean(props.runWorking),
             searchActive: false,
             bubbleMode: props.chatBubbleMode === true,
+            session: activeSession,
           },
         )
       : transcriptChain;

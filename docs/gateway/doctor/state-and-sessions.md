@@ -61,7 +61,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     Automatic discovery no longer imports the pre-agent `~/.openclaw/sessions/` layout. An explicit session-store path remains supported, including a configured path at that location.
 
-    Legacy session-file import and repair belong to Doctor. Gateway startup checks readiness without importing those files; runtime session access uses only SQLite. An unreadable legacy session index and its transcripts remain at their original paths, and repeated startups refuse readiness with the Doctor command for the active profile. Stop the Gateway, back up its state, repair the named source, and run `openclaw doctor --fix` before restarting it. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
+    Legacy session-file import and repair belong to Doctor. Gateway startup checks readiness without importing those files; runtime session access uses the configured database engine. An unreadable legacy session index and its transcripts remain at their original paths, and repeated startups refuse readiness with the Doctor command for the active profile. Stop the Gateway, back up its state, repair the named source, and run `openclaw doctor --fix` before restarting it. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
 
     Session routing repair preserves an explicit user-selected model and runtime when the installed, enabled runtime supports that model, even if the default route uses a different runtime. This also applies to archived sessions and the Doctor pass during `openclaw update`. Doctor removes the runtime selection if its plugin is unavailable or the selection is invalid. It still clears legacy CLI runtime residue that live routing ignored after the old backend and model were removed; changing defaults alone does not invalidate a current explicit session choice.
 
@@ -170,7 +170,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     Schedule maintenance and run outcomes preserve stored ownership and authored
     fields; intentional enable/disable transitions change only the enabled field.
 
-    The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared SQLite state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
+    The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
 
     Gateway startup normalizes the runtime projection and ignores the top-level `notify` marker, but leaves persisted cron state for doctor repair. Doctor removes inert markers for jobs with no migration target (`delivery.mode` none/absent, an unusable legacy webhook target, or existing announce/chat delivery), leaving existing delivery untouched, so repeated `doctor --fix` runs no longer re-warn about the same job.
 

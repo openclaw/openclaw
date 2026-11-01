@@ -1,6 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import type { AgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
@@ -11,12 +10,11 @@ import {
   resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
 import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
-import { resolveCompletionAfterHardRunDeadline } from "./subagent-run-timeout.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 const COLLECTOR_YIELD_ERROR =
   "Collector yielded under a build that predates the admission gate, so it has no recorded collectorCompletion and nothing can continue it. Rerun the collector and have it end its turn normally instead of calling sessions_yield.";
@@ -45,74 +43,6 @@ export function isCompletionHeldByYield(
   return request.settleYielded === true
     ? !isYieldedSubagentRun(entry)
     : entry.pauseReason === "sessions_yield" && request.reason !== SUBAGENT_ENDED_REASON_KILLED;
-}
-
-/** Return the admitted observation so delayed lifecycle classification retains its attempt. */
-export async function preserveSubagentRunForRestart(params: {
-  entry: SubagentRunRecord;
-  terminal: AgentRunTerminalOutcome;
-  runs: Map<string, SubagentRunRecord>;
-  context?: OpenClawStateWorkerContext;
-  assertCurrent?: () => void;
-}): Promise<{ preserved: boolean; observedEntry: SubagentRunRecord }> {
-  return mutateSubagentRuns(
-    [params.entry.runId],
-    (rows) => {
-      const entry = rows.get(params.entry.runId);
-      if (!entry || !isSameSubagentRunOwner(entry, params.entry)) {
-        throw new Error("Subagent restart preservation lost its original run");
-      }
-      // A failed wait cannot replace a recorded interruption with an invented terminal.
-      if (
-        entry.execution.status === "interrupted" &&
-        entry.execution.interruptionReason === "gateway-restart" &&
-        params.terminal.endedAt === undefined &&
-        (params.terminal.reason === "failed" || params.terminal.reason === "timed_out")
-      ) {
-        return { value: { preserved: true, observedEntry: entry } };
-      }
-      if (params.terminal.reason !== "cancelled" || params.terminal.stopReason !== "restart") {
-        return { value: { preserved: false, observedEntry: entry } };
-      }
-      if (
-        entry.execution.status === "terminal" ||
-        typeof entry.execution.endedAt === "number" ||
-        (shouldSuppressSubagentRecoverySessionEffects(entry) &&
-          resolveSubagentChildAuthority(entry).status !== "legacy-unverified")
-      ) {
-        return { value: { preserved: true, observedEntry: entry } };
-      }
-      if (
-        entry.killIntent ||
-        entry.killReconciliation ||
-        resolveCompletionAfterHardRunDeadline({
-          entry,
-          observedStartedAt: params.terminal.startedAt,
-          observedEndedAt: params.terminal.endedAt,
-          now: Date.now(),
-        }) !== undefined
-      ) {
-        return { value: { preserved: false, observedEntry: entry } };
-      }
-      if (entry.execution.status === "interrupted") {
-        return { value: { preserved: true, observedEntry: entry } };
-      }
-      const interrupted: SubagentRunRecord = {
-        ...entry,
-        execution: {
-          ...entry.execution,
-          status: "interrupted",
-          interruptedAt: params.terminal.endedAt ?? Date.now(),
-          interruptionReason: "gateway-restart",
-        },
-      };
-      return {
-        value: { preserved: true, observedEntry: interrupted },
-        postimages: new Map([[entry.runId, interrupted]]),
-      };
-    },
-    { runs: params.runs, context: params.context, assertCurrent: params.assertCurrent },
-  );
 }
 
 type SubagentYieldClaim = "nothing-pending" | "pending-work" | { messageWaitRegistered: boolean };
@@ -231,8 +161,7 @@ export function markSubagentRunPausedAfterYield(params: {
 }): boolean {
   const { entry } = params;
   if (
-    entry.terminalOwner === "interrupted-recovery" ||
-    (shouldSuppressSubagentRecoverySessionEffects(entry) &&
+    (shouldSuppressSubagentSessionEffects(entry) &&
       (resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
         (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield"))) ||
     entry.endedReason === SUBAGENT_ENDED_REASON_KILLED ||

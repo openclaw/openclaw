@@ -11,6 +11,9 @@
   --radius-lg: 4px;
   --radius-xl: 6px;
   --radius: 3px;
+  --radius-menu: 3px;
+  --radius-menu-item: 2px;
+  --radius-tooltip: 2px;
   --openclaw-corner-radius-scale: 0.25;
 
   .identity-avatar--agent {
@@ -75,6 +78,10 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.65);
 
   --grid-line: rgba(235, 235, 235, 0.04);
+
+  --link: var(--accent);
+
+  --link-on-tint: var(--link);
 }
 
 :root[data-theme="crt-light"] {
@@ -115,4 +122,8 @@
   --shadow-lg: 0 12px 28px rgba(20, 20, 20, 0.09);
 
   --grid-line: rgba(20, 20, 20, 0.04);
+
+  --link: var(--accent);
+
+  --link-on-tint: var(--link);
 }
