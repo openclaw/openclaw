@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectGarbageForTest } from "../../../test-helpers/garbage-collection.ts";
+import { buildChatItems } from "../chat-thread-build.ts";
 import {
   cacheChatSessionSnapshot,
   createChatWidgetLayout,
@@ -12,6 +13,7 @@ import {
   phases,
   scheduledCallbacks,
 } from "./chat-transcript-layout.test-support.ts";
+import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   installTranscriptDomMocks,
@@ -59,33 +61,43 @@ describe("transcript layout lifetime", () => {
     host.layout.rowWidth = 768;
     host.layout.paneWidth = 1100;
     const renderAndDisconnect = () => {
-      const message = { body: "obsolete transcript body" };
+      const message = {
+        role: "assistant",
+        content: [{ type: "text", text: "obsolete transcript body" }],
+        timestamp: 10,
+        __openclaw: { id: "retired-row", seq: 1 },
+      };
+      const props = threadProps("layout-retirement", undefined, [message]);
+      const items = buildChatItems(props);
+      const chain = projectTranscriptChain(items, {
+        sessionKey: props.sessionKey,
+        runWorking: false,
+        searchActive: false,
+      });
+      const index = projectTranscriptIndex(chain, new Map(), props);
+      const rows = index.rows.filter((row) => row.kind === "item");
+      expect(index.rows).toHaveLength(1);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.revision).toEqual(expect.any(String));
       const content = document.createElement("div");
       content.textContent = "obsolete content row";
-      host.render(
-        [
-          { kind: "item", key: "row", revision: "revision", item: message },
-          { kind: "content", key: "content", content },
-        ],
-        () => null,
-        null,
-        false,
-      );
+      host.render([...rows, { kind: "content", key: "content", content }], () => null, null, false);
       host.disconnect();
       return {
-        obsolete: [new WeakRef(message), new WeakRef(content)],
+        obsolete: [new WeakRef(message), new WeakRef(items[0]!), new WeakRef(content)],
+        geometry: [
+          ...rows.map(({ key, revision }) => ({ key, revision })),
+          { key: "content", revision: undefined },
+        ],
         control: new WeakRef({ unowned: true }),
       };
     };
-    const { obsolete, control } = renderAndDisconnect();
+    const { obsolete, geometry, control } = renderAndDisconnect();
     try {
       await collectGarbageForTest();
       expect(hasLiveTarget(control)).toBe(false);
-      expect(obsolete.map(hasLiveTarget)).toEqual([false, false]);
-      expect(host.layout.rows).toEqual([
-        { key: "row", revision: "revision" },
-        { key: "content", revision: undefined },
-      ]);
+      expect(obsolete.map(hasLiveTarget)).toEqual([false, false, false]);
+      expect(host.layout.rows).toEqual(geometry);
       expect(host.layout.rowMinimum(0)).toBe(300);
     } finally {
       host.dispose();

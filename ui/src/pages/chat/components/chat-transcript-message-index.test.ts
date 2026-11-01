@@ -1,9 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as historyIdentity from "../../../lib/chat/history-message-identity.ts";
+import * as fingerprint from "../../../lib/fnv1a.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
 import { makeMessage } from "../chat-thread.test-support.ts";
-import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
+import {
+  buildCachedChatItems,
+  resetChatThreadState,
+  retireChatThreadSources,
+  setExpansionState,
+} from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
   projectTranscriptChain,
@@ -125,6 +132,88 @@ it.each([
   }
 });
 
+it.each(["older", "newer"] as const)(
+  "reuses retained terminal footprint work after %s history retirement",
+  (direction) => {
+    const sources = Array.from({ length: 480 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Footprint source ${index + 1}. ${"Stable transcript content. ".repeat(160)}`,
+      timestamp: (index + 1) * 10,
+      __openclaw: { id: `footprint-${index + 1}`, seq: index + 1 },
+    }));
+    const before = direction === "older" ? sources.slice(80) : sources.slice(0, 400);
+    const after = direction === "older" ? sources.slice(0, 400) : sources.slice(80);
+    const retained = before.filter((message) => after.includes(message));
+    const fresh = after.filter((message) => !before.includes(message));
+    const retainedSources = new Set<unknown>(retained);
+    const freshSources = new Set<unknown>(fresh);
+    const input = chatProps({ paneId: `footprint-${direction}`, messages: before });
+    const firstItems = buildCachedChatItems(input);
+    const firstChain = chainFor(firstItems, { messages: before });
+    const identity = vi.spyOn(historyIdentity, "nativeHistoryMessageIdentity");
+    const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+    try {
+      const firstIndex = indexFor(firstChain);
+      const firstRows = firstIndex.rows.filter((row) => row.kind === "item");
+      expect(firstRows).toHaveLength(400);
+      expect(messagesIn(firstRows.map((row) => row.item))).toEqual(before);
+      const hashInputs = new Map(
+        hash.mock.calls.map(([content], index) => [
+          `${content.length}:${hash.mock.results[index]!.value}`,
+          content,
+        ]),
+      );
+      const priorRows = new Map(before.map((message, index) => [message, firstRows[index]!]));
+      const retainedHashes = new Set(
+        retained.map((message) => hashInputs.get(priorRows.get(message)!.revision!)),
+      );
+      expect(retainedHashes.size).toBe(320);
+      expect(retainedHashes.has(undefined)).toBe(false);
+      identity.mockClear();
+      hash.mockClear();
+      retireChatThreadSources(
+        input.paneId,
+        before.filter((message) => !after.includes(message)),
+      );
+      const nextItems = buildCachedChatItems({ ...input, messages: after });
+      const nextChain = chainFor(nextItems, { messages: after });
+      const nextIndex = indexFor(nextChain);
+      const rows = nextIndex.rows.filter((row) => row.kind === "item");
+      expect(nextChain).not.toBe(firstChain);
+      expect(rows).toHaveLength(400);
+      expect(messagesIn(rows.map((row) => row.item))).toEqual(after);
+      expect(nextIndex.positionIndex.markers.map((marker) => marker.message)).toEqual(after);
+      for (const [index, message] of after.entries()) {
+        const row = rows[index]!;
+        expect(nextIndex.messageRowKeysById.get(message["__openclaw"].id)).toBe(row.key);
+        expect(nextIndex.loadedReplySources.get(message["__openclaw"].id)?.message).toBe(message);
+        const sourceKey = chatItemGroups(row.item)[0]!.messages[0]!.key;
+        expect(nextIndex.transcriptMessageKeys.get(sourceKey)).toBe(row.key);
+        const prior = priorRows.get(message);
+        if (prior) {
+          expect(row.item).toBe(prior.item);
+          expect(row.key).toBe(prior.key);
+          expect(row.revision).toBe(prior.revision);
+        }
+      }
+      expect(
+        identity.mock.calls.filter(([message]) => freshSources.has(message)).length,
+      ).toBeGreaterThan(0);
+      expect(
+        hash.mock.calls.filter(([content]) => !retainedHashes.has(content)).length,
+      ).toBeGreaterThan(0);
+      expect({
+        identityCalls: identity.mock.calls.filter(([message]) => retainedSources.has(message))
+          .length,
+        hashCalls: hash.mock.calls.filter(([content]) => retainedHashes.has(content)).length,
+      }).toEqual({ identityCalls: 0, hashCalls: 0 });
+    } finally {
+      identity.mockRestore();
+      hash.mockRestore();
+    }
+  },
+);
+
 it("changes the footprint revision when the same message ID receives new content", () => {
   const before = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
     .rows[0]!;
@@ -138,6 +227,56 @@ it("changes the footprint revision when the same message ID receives new content
   expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
 });
 
+it.each(["content array", "content block"] as const)(
+  "invalidates a retained terminal item after same-envelope %s replacement",
+  (replacement) => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Before" }],
+      timestamp: 10,
+      __openclaw: { id: "replacement", seq: 1 },
+    };
+    const items = chatItems({ messages: [message] });
+    const project = () => {
+      const rows = indexFor(chainFor([...items])).rows.filter((row) => row.kind === "item");
+      expect(rows).toHaveLength(1);
+      return rows[0]!;
+    };
+    const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+    try {
+      const before = project();
+      expect(messagesIn(items)).toEqual([message]);
+      expect(before.kind).toBe("item");
+      hash.mockClear();
+      const unchanged = project();
+      expect(unchanged.kind === "item" && unchanged.item).toBe(
+        before.kind === "item" && before.item,
+      );
+      expect(unchanged.revision).toBe(before.revision);
+      expect(hash).not.toHaveBeenCalled();
+      const previousContent = message.content;
+      const previousBlock = message.content[0];
+      if (replacement === "content array") {
+        message.content = [{ type: "text", text: "After" }];
+      } else {
+        message.content[0] = { type: "text", text: "After" };
+      }
+      const after = project();
+      expect(message.content === previousContent).toBe(replacement === "content block");
+      expect(message.content[0]).not.toBe(previousBlock);
+      expect(after.kind === "item" && after.item).toBe(before.kind === "item" && before.item);
+      expect(after.key).toBe(before.key);
+      expect(after.revision).not.toBe(before.revision);
+      expect(hash).toHaveBeenCalledTimes(1);
+      hash.mockClear();
+      expect(project().revision).toBe(after.revision);
+      expect(hash).not.toHaveBeenCalled();
+    } finally {
+      hash.mockRestore();
+    }
+  },
+);
+
 it("invalidates only a changed reaction row while retaining other cached footprints", () => {
   const chain = projectHistory([
     finalAnswer("answer", 2),
@@ -149,21 +288,31 @@ it("invalidates only a changed reaction row while retaining other cached footpri
     projectTranscriptIndex(chain, expanded, { ...labels, messageReactions: reactions }).rows.filter(
       (row) => row.kind === "item",
     );
-  const before = project(new Map());
-  const reacted = project(new Map([["answer", summaries]]));
-  expect(reacted.map((row) => row.key)).toEqual(before.map((row) => row.key));
-  expect(reacted[0]!.revision).not.toBe(before[0]!.revision);
-  expect(reacted[1]!.revision).toBe(before[1]!.revision);
-  const replay = project(
-    new Map([
-      ["answer", summaries],
-      ["outside-window", summaries],
-    ]),
-  );
-  expect(replay.map((row) => row.revision)).toEqual(reacted.map((row) => row.revision));
-  expect(project(new Map([["answer", []]])).map((row) => row.revision)).toEqual(
-    before.map((row) => row.revision),
-  );
+  const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+  try {
+    const before = project(new Map());
+    hash.mockClear();
+    const reacted = project(new Map([["answer", summaries]]));
+    expect(reacted.map((row) => row.key)).toEqual(before.map((row) => row.key));
+    expect(reacted[0]!.revision).not.toBe(before[0]!.revision);
+    expect(reacted[1]!.revision).toBe(before[1]!.revision);
+    expect(hash).toHaveBeenCalledTimes(1);
+    hash.mockClear();
+    const replay = project(
+      new Map([
+        ["answer", summaries],
+        ["outside-window", summaries],
+      ]),
+    );
+    expect(replay.map((row) => row.revision)).toEqual(reacted.map((row) => row.revision));
+    expect(hash).not.toHaveBeenCalled();
+    expect(project(new Map([["answer", []]])).map((row) => row.revision)).toEqual(
+      before.map((row) => row.revision),
+    );
+    expect(hash).toHaveBeenCalledTimes(1);
+  } finally {
+    hash.mockRestore();
+  }
 });
 
 it("leaves an attached live continuation out of reusable row geometry", () => {
@@ -175,11 +324,24 @@ it("leaves an attached live continuation out of reusable row geometry", () => {
   const settled = chainFor(items);
   const active = chainFor([...items, { kind: "reading-indicator", key: "waiting", startedAt: 32 }]);
   expect(active.continuations.size).toBe(1);
-  const before = indexFor(settled).rows[0]!;
-  const during = indexFor(active).rows[0]!;
-  expect(during.key).toBe(before.key);
-  expect(before.kind === "item" && before.revision).toEqual(expect.any(String));
-  expect(during.kind === "item" && during.revision).toBeUndefined();
+  const hash = vi.spyOn(fingerprint, "fnv1aUtf16");
+  try {
+    const before = indexFor(settled).rows[0]!;
+    hash.mockClear();
+    const during = indexFor(active).rows[0]!;
+    expect(during.key).toBe(before.key);
+    expect(before.kind === "item" && before.revision).toEqual(expect.any(String));
+    expect(during.kind === "item" && during.revision).toBeUndefined();
+    expect(hash).not.toHaveBeenCalled();
+    const restored = indexFor(chainFor([...items])).rows[0]!;
+    expect(restored.kind === "item" && restored.item).toBe(before.kind === "item" && before.item);
+    expect(restored.kind === "item" && restored.revision).toBe(
+      before.kind === "item" && before.revision,
+    );
+    expect(hash).not.toHaveBeenCalled();
+  } finally {
+    hash.mockRestore();
+  }
 });
 
 it("distinguishes terminal frame geometry when a hidden terminal changes its outcome", () => {

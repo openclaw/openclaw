@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
@@ -86,6 +87,7 @@ type ChainEntry = {
 // invalidate the chain and its immutable indexes.
 const chains = new WeakMap<object, ChainEntry>();
 const indexes = createTranscriptMemo<TranscriptIndex>();
+const rowRevisions = createTranscriptMemo<string>();
 const presentationRows = createTranscriptMemo<readonly TranscriptRow<ChatRenderItem>[]>();
 
 // Fold only the final presentation, after causal run/turn ownership is settled.
@@ -284,20 +286,39 @@ export function projectTranscriptIndex(
       ) {
         return { kind: "item", key, item };
       }
-      const messages = groups.flatMap((group) =>
-        group.messages.map(({ message }) => [
-          nativeHistoryMessageIdentity(message) ?? message,
-          props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
-        ]),
+      const sources = groups.flatMap((group) => group.messages.map(({ message }) => message));
+      // Weak item ownership bounds reuse to its lifetime. Snapshots are immutable except
+      // supported content/block replacement, which must invalidate the existing digest.
+      const revisionInputs: unknown[] = [
+        key,
+        item.kind === "agent-run-frame" ? item.outcome.kind : undefined,
+      ];
+      for (const message of item.kind === "message" ? [item.message] : sources) {
+        const content = asNullableRecord(message)?.content;
+        revisionInputs.push(message, content, ...(Array.isArray(content) ? content : []));
+      }
+      revisionInputs.push(
+        ...sources.map((message) =>
+          props.messageReactions?.get(persistedMessageEntryId(message) ?? ""),
+        ),
       );
-      const content = JSON.stringify(
-        item.kind === "agent-run-frame"
-          ? [item.outcome.kind, messages]
-          : messages.length
-            ? messages
-            : item,
-      );
-      return { kind: "item", key, item, revision: `${content.length}:${fnv1aUtf16(content)}` };
+      const revision = rowRevisions(item, revisionInputs, () => {
+        const messages = groups.flatMap((group) =>
+          group.messages.map(({ message }) => [
+            nativeHistoryMessageIdentity(message) ?? message,
+            props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+          ]),
+        );
+        const content = JSON.stringify(
+          item.kind === "agent-run-frame"
+            ? [item.outcome.kind, messages]
+            : messages.length
+              ? messages
+              : item,
+        );
+        return `${content.length}:${fnv1aUtf16(content)}`;
+      });
+      return { kind: "item", key, item, revision };
     };
     for (const item of chain.transcriptItems) {
       rows.push(row(item));
