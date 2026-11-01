@@ -304,7 +304,9 @@ The logical-turn owner removes unaccepted admissions when the run ends, includin
 when it exits before reporting a terminal transcript boundary. Recovery after a
 Gateway interruption also removes admissions without host acceptance and logs
 the skipped advancement; it never infers success from later transcript entries.
-Accepted work remains queued until the engine acknowledges it. No migration or
+Accepted work remains queued until the engine acknowledges it. Bounded retries
+select only sessions whose first pending turn is ready; unresolved heads do not
+consume other sessions’ retry slots or allow later turns to overtake them. No migration or
 configuration change is required for existing outbox rows.
 
 After accepted-turn finalization acknowledges `committed` or `duplicate`, the host
