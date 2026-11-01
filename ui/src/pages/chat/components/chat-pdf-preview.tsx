@@ -180,7 +180,9 @@ export function ChatPdfPreview(props: {
             <iframe
               class="sidebar-pdf-preview__frame"
               title={props.label}
-              src={url()}
+              // The native viewer's toolbar download names the file from the URL
+              // fragment; a bare blob URL would suggest its UUID instead.
+              src={`${url()}#${encodeURIComponent(props.label)}`}
               referrerpolicy="no-referrer"
             />
           </Show>
