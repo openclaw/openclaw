@@ -158,6 +158,40 @@ describe("chat transcript full-message recovery", () => {
     );
   });
 
+  it("recovers an oversized reply from its preview on each mount without retaining it", async () => {
+    const markdown = `${"🦞".repeat(20_000)} COMPLETE_REPLY`;
+    const cache: ChatMessageCache = new Map();
+    const host = { assistantAgentId: "work", settings: { gatewayUrl: "wss://cache.example" } };
+    const target = { sessionKey: "agent:work:main", agentId: "work" };
+    cacheChatSessionSnapshot(cache, host, target, {
+      messages: [previewMessage],
+      pagination: { hasMore: false },
+      sessionId: "physical-session",
+    });
+    const displayFacts = createChatDisplayFacts(cache, host, target);
+    for (let mount = 0; mount < 2; mount++) {
+      const pending = createDeferred<FullMessageResult>();
+      const pane = document.createElement("test-recovery-transcript") as RecoveryTranscriptElement;
+      pane.props = threadProps("bounded-recovery", target.sessionKey, [previewMessage], {
+        fullMessageAgentId: target.agentId,
+        displayFacts,
+        loadFullAssistantMessage: () => pending.promise,
+      });
+      document.body.append(pane);
+      await pane.settleUpdates();
+      expect(bubble(pane)?.textContent).toContain("Preview");
+      pending.resolve(fullMessage(markdown));
+      await pending.promise;
+      await pane.settleUpdates();
+      expect(bubble(pane)?.textContent).toContain("COMPLETE_REPLY");
+      expect(
+        displayFacts.forRow("assistant-full-1")?.read()?.facts?.recoveredMessage,
+      ).toBeUndefined();
+      expect(readChatSessionSnapshot(cache, host, target)?.messages).toEqual([previewMessage]);
+      pane.remove();
+    }
+  });
+
   it("updates an unchanged search when a hidden reply finishes recovering", async () => {
     const pending = createDeferred<FullMessageResult>();
     const load = vi.fn<SidebarFullMessageLoader>().mockImplementation(() => pending.promise);

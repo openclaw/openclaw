@@ -192,6 +192,13 @@ export function createChatDisplayFacts(
           if (!row) {
             return;
           }
+          // Oversized replies recover live instead of becoming a first-paint payload.
+          if (
+            row.recoveredMessage &&
+            new TextEncoder().encode(JSON.stringify(row.recoveredMessage)).byteLength > 64 * 1024
+          ) {
+            delete row.recoveredMessage;
+          }
           const { recoveredMessage: _recoveredMessage, ...display } = row;
           if (JSON.stringify(display).length > 8192) {
             return;

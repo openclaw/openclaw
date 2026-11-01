@@ -1,2 +1,2 @@
-# Accepted transcript recovery persistence/privacy and native reload fidelity; existing media test covers cached and changed source.
-156
+# Accepted transcript recovery persistence/privacy, bounded replay, native reload fidelity; consolidated media and source validation.
+188
