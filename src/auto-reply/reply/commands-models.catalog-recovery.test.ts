@@ -154,7 +154,7 @@ it("lists bound models as unavailable when the native-auth plugin is disabled de
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
-        modelPolicy: { allow: [] },
+        modelPolicy: { allow: ["anthropic/*", "anthropic/claude-sonnet-4-6"] },
         models: {
           "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
         },
