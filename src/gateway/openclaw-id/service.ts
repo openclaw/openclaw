@@ -13,6 +13,7 @@ import type {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 import type { OpenClawIdAccount } from "./account-sign-in.js";
 import type {
   AuthorityAccepted,
@@ -73,15 +74,12 @@ export type OpenClawIdRemovalSummary = {
   runsCancelled: number;
 };
 
+export { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
+
 type OpenClawIdLogger = {
   info: (message: string) => void;
   warn: (message: string) => void;
 };
-
-/** True only for an explicit `gateway.openclawId.enabled: true`. */
-export function isOpenClawIdEnabled(config: GatewayOpenClawIdConfig | undefined): boolean {
-  return config?.enabled === true;
-}
 
 /** The settings a tunnel runtime needs, or the config keys still missing. */
 function resolveSettings(
@@ -292,6 +290,9 @@ export function createOpenClawIdService(params: {
   // Publishes the descriptor and a fresh snapshot; best effort, never authority.
   const publish = async (enrollmentCode?: string): Promise<PublishOutcome | undefined> => {
     const config = params.getConfig();
+    if (!isOpenClawIdEnabled(config)) {
+      return undefined;
+    }
     const owner = await getAuthority();
     let record = owner.current();
     if (!config?.discoveryUrl || !config.relayUrl || !record?.authority) {
@@ -303,6 +304,9 @@ export function createOpenClawIdService(params: {
       import("./gateway-key.js"),
     ]);
     const { signer } = await loadGatewaySigner(params.getStateDir());
+    if (!isOpenClawIdEnabled(params.getConfig())) {
+      return undefined;
+    }
     const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer });
     const { reconcileRegistration } = await import("./registration-recovery.js");
     const recoveryFailure = await reconcileRegistration(owner, client);

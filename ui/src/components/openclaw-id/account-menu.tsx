@@ -1,6 +1,5 @@
 // Connection-aware OpenClaw ID account menu. Gateway-verified identity owns the
 // header; local browser sign-in controls only the loopback onboarding actions.
-import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -29,18 +28,6 @@ const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
 const DEVICES = `${VALUE_PREFIX}devices`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
-
-/** Reads the Gateway-owned menu summary once for this open menu. */
-export function createOpenClawIdMenuStatus(client: GatewayBrowserClient | null | undefined) {
-  const [status, setStatus] = createSignal<OpenClawIdStatusResult | null>(null);
-  if (client) {
-    void client
-      .request<OpenClawIdStatusResult>("openclawId.status", {})
-      .then((result) => setStatus(result.status.state === "off" ? null : result))
-      .catch(() => setStatus(null));
-  }
-  return status;
-}
 
 /** Derives the compact account header without ever displaying an account ID. */
 export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
@@ -266,7 +253,7 @@ export function selectOpenClawIdMenuValue(
     basePath: string;
   },
 ): boolean {
-  if (!value.startsWith(VALUE_PREFIX)) {
+  if (!value.startsWith(VALUE_PREFIX) || !context.status || context.status.status.state === "off") {
     return false;
   }
   const { client, status } = context;

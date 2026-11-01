@@ -72,12 +72,6 @@ export function LabsPage() {
   };
   onSettled(() => {
     void context.runtimeConfig.ensureLoaded();
-    // A full page load mounts Labs before the Gateway connects; load the editable config once it does.
-    const stopGateway = context.gateway.subscribe((snapshot) => {
-      if (snapshot.phase === "connected") {
-        void context.runtimeConfig.ensureLoaded();
-      }
-    });
     const stopRoute = context.router.subscribe(() => {
       const route = context.router.getState();
       if ((route.pendingMatches[0] ?? route.matches[0])?.routeId !== "labs") {
@@ -86,7 +80,6 @@ export function LabsPage() {
       }
     });
     return () => {
-      stopGateway();
       stopRoute();
       lifetime.resolve();
     };

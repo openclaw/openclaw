@@ -100,3 +100,43 @@ describe("verified account profile RPC boundary", () => {
     },
   );
 });
+
+it.each([undefined, false])(
+  "rejects every authority action before touching its service while disabled: %s",
+  async (enabled) => {
+    const service = {
+      publish: vi.fn(),
+      submitStatement: vi.fn(),
+      registerInvite: vi.fn(),
+      prepareRegeneration: vi.fn(),
+      regenerateOwnerKey: vi.fn(),
+    };
+    for (const action of [
+      "publish",
+      "submit",
+      "register_invite",
+      "prepare_regeneration",
+      "regenerate",
+      "account_begin",
+      "device_mail",
+    ]) {
+      const respond = vi.fn();
+      await openclawIdHandlers["openclawId.authority"]!({
+        params: { action },
+        context: {
+          openclawIdService: service,
+          getRuntimeConfig: () => ({ gateway: { openclawId: { enabled } } }),
+        },
+        respond,
+      } as unknown as GatewayRequestHandlerOptions);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE" }),
+      );
+    }
+    for (const call of Object.values(service)) {
+      expect(call).not.toHaveBeenCalled();
+    }
+  },
+);

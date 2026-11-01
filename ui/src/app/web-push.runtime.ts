@@ -6,6 +6,7 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { hasEmbedderTransport } from "./remote-ingress.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 
 const SW_READY_TIMEOUT = 10_000;
@@ -160,10 +161,11 @@ async function reconcileWebPushCapability(
   canManage: boolean,
   publish: (patch: WebPushCapabilityPatch) => void,
 ): Promise<WebPushCapabilityPatch> {
-  // A push subscription requires granted notification permission. WebKit stops running
-  // the page's script while this passive PushManager read is pending, so skip it otherwise.
+  // The ID loader owns its service worker; WebKit can suspend a passive PushManager read there.
   const subscription =
-    Notification.permission === "granted" ? await getExistingSubscription() : null;
+    hasEmbedderTransport() && Notification.permission !== "granted"
+      ? null
+      : await getExistingSubscription();
   if (subscription && !canManage) {
     publish({ subscription: "local" });
     return {

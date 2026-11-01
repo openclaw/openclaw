@@ -12,6 +12,7 @@ import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { fetchClawHubPluginDetail } from "../infra/clawhub-plugin-catalog.js";
+import { isOpenClawIdPluginVisible } from "../shared/openclaw-id-policy.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
@@ -538,8 +539,9 @@ export const listManagedPlugins = withManagedPluginCache(
         message: `Official plugin catalog fallback: ${officialCatalog.error}`,
       });
     }
+    const visible = plugins.filter((p) => isOpenClawIdPluginVisible(p.id, params.config));
     return {
-      plugins: plugins.toSorted(compareCatalogEntries),
+      plugins: visible.toSorted(compareCatalogEntries),
       diagnostics,
       mutationAllowed: !resolveIsConfigReadOnly(env),
     };

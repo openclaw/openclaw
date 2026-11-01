@@ -81,6 +81,8 @@ export type ControlUiBootstrapConfig = {
   automaticallyFetchFavicons?: boolean;
   /** Whether experimental speech-bubble presentation is available. */
   chatBubblesEnabled?: boolean;
+  /** Explicit Labs opt-in; absence leaves every OpenClaw ID surface inert. */
+  openclawIdEnabled?: boolean;
   /** Whether optional composer prediction inference is enabled. */
   composerPredictionsEnabled?: boolean;
   seamColor?: string;

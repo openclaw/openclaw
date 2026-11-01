@@ -73,6 +73,7 @@ export function ShellSettingsSidebar(props: {
       searchQuery: props.sidebarProps.presentation === "embed-list" ? "" : host.settingsSearchQuery,
       searchParams: {
         query: host.settingsSearchQuery,
+        openclawIdEnabled: config.openclawIdEnabled,
         schema: runtimeConfig.configSchema,
         value: runtimeConfig.configForm ?? runtimeConfig.configSnapshot?.config ?? null,
         uiHints: runtimeConfig.configUiHints,

@@ -21,6 +21,7 @@ import { hasCanonicalPluginDistribution } from "../plugins/plugin-runtime-artifa
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
+import { isOpenClawIdPluginVisible } from "../shared/openclaw-id-policy.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
   controlUiPluginAssetPrefix,
@@ -89,6 +90,7 @@ function browserOwners(registry: PluginRegistry): PluginRecord[] {
   return registry.plugins
     .filter(
       (record) =>
+        isOpenClawIdPluginVisible(record.id, getRuntimeConfigSnapshot()) &&
         record.enabled &&
         record.status === "loaded" &&
         record.controlUi &&

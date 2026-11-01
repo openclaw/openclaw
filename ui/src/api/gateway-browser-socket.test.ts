@@ -159,11 +159,19 @@ describe("createBrowserGatewaySocket", () => {
 });
 
 describe("createBrowserGatewaySocket with an embedder transport", () => {
+  beforeEach(() => {
+    vi.stubGlobal("window", globalThis);
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("uses the embedder's socket for URLs it carries and the browser socket otherwise", () => {
+    vi.stubGlobal("document", {
+      documentElement: {
+        getAttribute: () => JSON.stringify({ basePath: "", openclawIdEnabled: true }),
+      },
+    });
     sockets.length = 0;
     vi.stubGlobal("WebSocket", MockWebSocket);
     const carried = new MockWebSocket("wss://claw.example/");
@@ -179,6 +187,23 @@ describe("createBrowserGatewaySocket with an embedder transport", () => {
     expect(sockets).toHaveLength(0);
 
     createBrowserGatewaySocket("wss://other.example/", handlers);
+    expect(sockets).toHaveLength(1);
+  });
+  it.each([undefined, false])("ignores a stale embedder while ID is %s", (openclawIdEnabled) => {
+    vi.stubGlobal("document", {
+      documentElement: { getAttribute: () => JSON.stringify({ basePath: "", openclawIdEnabled }) },
+    });
+    sockets.length = 0;
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const createWebSocket = vi.fn();
+    vi.stubGlobal("__openclawTransport", { createWebSocket });
+    createBrowserGatewaySocket("ws://127.0.0.1:19872/", {
+      open: vi.fn(),
+      message: vi.fn(),
+      close: vi.fn(),
+      error: vi.fn(),
+    });
+    expect(createWebSocket).not.toHaveBeenCalled();
     expect(sockets).toHaveLength(1);
   });
 });

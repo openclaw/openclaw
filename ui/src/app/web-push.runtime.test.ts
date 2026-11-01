@@ -78,40 +78,6 @@ it("treats a registration without PushManager as unsupported instead of throwing
   await expect(getExistingSubscription()).resolves.toBeNull();
 });
 
-it("does not read the browser subscription before notification permission is granted", async () => {
-  vi.stubGlobal("Notification", { permission: "default" });
-  const getSubscription = vi.fn().mockResolvedValue(existingSubscription());
-  installServiceWorker(
-    new Promise<ServiceWorkerRegistration>(() => {}),
-    async () => ({ pushManager: { getSubscription } }) as unknown as ServiceWorkerRegistration,
-  );
-  const { client, request } = gatewayClient();
-  const { gateway } = createApplicationGateway(
-    createApplicationGatewaySnapshot({
-      phase: "connected",
-      client,
-      hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
-    } as unknown as Parameters<typeof createApplicationGatewaySnapshot>[0]),
-  );
-  let read: Promise<unknown> | undefined;
-  let subscription: string | undefined;
-  const runtime = createWebPushCapabilityRuntime({
-    gateway,
-    publish: (patch) => {
-      read ??= patch.read;
-      subscription = patch.subscription ?? subscription;
-    },
-  });
-  try {
-    await Promise.resolve(read).catch(() => undefined);
-    expect(getSubscription).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-    expect(subscription).toBe("missing");
-  } finally {
-    runtime.dispose();
-  }
-});
-
 it("still rejects when service worker readiness times out", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   installServiceWorker(new Promise<ServiceWorkerRegistration>(() => {}));
@@ -217,5 +183,48 @@ it.each(["loading", "native denied", "storage unavailable"])(
       [],
     ]);
     expect(storage.getItem("openclaw.control.notificationsAutoPrompt.v1")).toBeNull();
+  },
+);
+
+it.each([false, true])(
+  "preserves ordinary push reads and protects the enabled ID loader: %s",
+  async (enabled) => {
+    document.documentElement.setAttribute(
+      "data-openclaw-bootstrap-config",
+      JSON.stringify({ basePath: "", openclawIdEnabled: enabled }),
+    );
+    vi.stubGlobal("__openclawTransport", { createWebSocket: vi.fn() });
+    vi.stubGlobal("Notification", { permission: "default" });
+    const getSubscription = vi.fn().mockResolvedValue(null);
+    installServiceWorker(
+      new Promise<ServiceWorkerRegistration>(() => {}),
+      async () => ({ pushManager: { getSubscription } }) as unknown as ServiceWorkerRegistration,
+    );
+    const { client, request } = gatewayClient();
+    const { gateway } = createApplicationGateway(
+      createApplicationGatewaySnapshot({
+        phase: "connected",
+        client,
+        hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+      } as unknown as Parameters<typeof createApplicationGatewaySnapshot>[0]),
+    );
+    let read: Promise<unknown> | undefined;
+    let subscription: string | undefined;
+    const runtime = createWebPushCapabilityRuntime({
+      gateway,
+      publish: (patch) => {
+        read ??= patch.read;
+        subscription = patch.subscription ?? subscription;
+      },
+    });
+    try {
+      await Promise.resolve(read).catch(() => undefined);
+      expect(getSubscription).toHaveBeenCalledTimes(enabled ? 0 : 1);
+      expect(request).not.toHaveBeenCalled();
+      expect(subscription).toBe("missing");
+    } finally {
+      runtime.dispose();
+      document.documentElement.removeAttribute("data-openclaw-bootstrap-config");
+    }
   },
 );

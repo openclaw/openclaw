@@ -1,12 +1,13 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { Ed25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 // OpenClaw ID remote access methods. The root ceremonies (the link ceremony "Make
 // reachable" and owner-key regeneration) run only for a direct-loopback client;
 // relayed clients can read status and send owner-signed membership changes, which
 // the authority verifies itself. Status is the same small summary for every client;
 // people, devices and activity come only from openclawId.people, for an owner.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type { Ed25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { isEd25519PublicKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 import { createOpenClawIdSignIn, type OpenClawIdSignIn } from "../openclaw-id/account-sign-in.js";
 import {
   resolveOpenClawIdClientChannel,
@@ -230,6 +231,10 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
   //   generates the new recovery kit and shows it once; the Gateway never sees it.
   // - account_*: the Control UI's OpenClaw ID sign-in (see handleAccount).
   "openclawId.authority": async (opts) => {
+    if (!isOpenClawIdEnabled(opts.context.getRuntimeConfig().gateway?.openclawId)) {
+      opts.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "OpenClaw ID is off"));
+      return;
+    }
     const service = requireService(opts);
     if (!service) {
       return;

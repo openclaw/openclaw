@@ -20,6 +20,7 @@ import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
+import { isOpenClawIdEnabled } from "../../../shared/openclaw-id-policy.js";
 import { hasMultipleResidentSessionSharingIdentities } from "../../../state/user-profile-list.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
@@ -182,10 +183,16 @@ export async function sendGatewayHello(
       connId,
     },
     features: {
-      methods: resolveBrowserAuthOrigin(context.browserOrigin)
-        ? gatewayMethods
-        : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
-      events,
+      methods: gatewayMethods.filter(
+        (method) =>
+          (method !== "mcp.authLogin" ||
+            Boolean(resolveBrowserAuthOrigin(context.browserOrigin))) &&
+          (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
+            !method.startsWith("openclawId.")),
+      ),
+      events: isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId)
+        ? events
+        : events.filter((event) => !event.startsWith("openclawId.")),
       capabilities: [
         GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,

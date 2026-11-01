@@ -1187,7 +1187,7 @@
 .sidebar-identity-menu__name {
   color: var(--text);
   font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .sidebar-identity-menu__email {

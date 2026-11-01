@@ -335,18 +335,6 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
-  it("loads the editable config when the Gateway connects after a full page load", async () => {
-    const { runtimeConfig, gateway, unmount } = await mountPage({});
-    runtimeConfig.ensureLoaded.mockClear();
-    gateway.setPhase("connecting");
-    expect(runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
-    gateway.setPhase("connected");
-    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledTimes(1);
-    unmount();
-    gateway.setPhase("connected");
-    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledTimes(1);
-  });
-
   it("shows default provenance", async () => {
     const inherited = await mountPage({});
     expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");

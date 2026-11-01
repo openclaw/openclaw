@@ -103,6 +103,7 @@ describe("OpenClaw ID with the Labs switch off", () => {
     await service.reconcileRuntimePolicy();
 
     expect(service.status()).toEqual({ state: "off" });
+    await expect(service.publish()).resolves.toBeUndefined();
     expectNoEffects();
   });
 });

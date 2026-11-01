@@ -1,6 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -8,17 +7,10 @@ import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
-import type { OpenClawIdStatusResult } from "../lib/openclaw-id/types.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
-import {
-  openClawIdMenuEntries,
-  openClawIdMenuIdentity,
-  openClawIdSignOutEntries,
-  selectOpenClawIdMenuValue,
-} from "./openclaw-id/account-menu.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import {
   COMMAND_VALUE_PREFIX,
@@ -82,7 +74,7 @@ declare module "@solidjs/web" {
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
 
-type SidebarIdentityMenuParams = {
+export type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number; placement?: "right-end" };
   anchor?: HTMLElement;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
@@ -99,9 +91,13 @@ type SidebarIdentityMenuParams = {
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
   onRetryConnect?: () => void;
-  /** OpenClaw ID status for this menu; null hides the section (Labs flag off). */
-  openclawIdStatus?: OpenClawIdStatusResult | null;
-  gatewayClient?: GatewayBrowserClient | null;
+  /** Optional feature-owned extension; the ordinary menu has no feature runtime. */
+  extension?: {
+    identity: { name: string; detail: string | null } | null;
+    entries: MenuEntry[];
+    signOut: MenuEntry[];
+    onSelect: (value: string) => boolean;
+  };
 };
 
 // The slot shares the command icon column so dots, glyphs, and labels line up.
@@ -214,8 +210,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
   const helpSeparator = separator("help-separator");
   const retrySeparator = separator("retry-separator");
   const footerSeparator = separator("footer-separator");
-  const openclawIdentity = () =>
-    params.openclawIdStatus ? openClawIdMenuIdentity(params.openclawIdStatus) : null;
+  const openclawIdentity = () => params.extension?.identity;
   const profileName = () =>
     openclawIdentity()?.name ??
     params.profileViewer?.name ??
@@ -265,8 +260,8 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         ),
       },
       profileSeparator,
-      ...openClawIdMenuEntries(params.openclawIdStatus ?? null),
-      ...(params.openclawIdStatus ? [openclawSeparator] : []),
+      ...(params.extension?.entries ?? []),
+      ...(params.extension ? [openclawSeparator] : []),
       ...(gateways ? [gatewayTitle, gateways, gatewaySeparator] : []),
       renderSidebarMenuAction("command:settings", t("nav.settings"), "settings", {
         details: (
@@ -277,7 +272,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
           />
         ),
       }),
-      ...openClawIdSignOutEntries(params.openclawIdStatus ?? null),
+      ...(params.extension?.signOut ?? []),
       {
         ...renderSidebarMenuAction("command:updates", titleForRoute("updates"), "download", {
           details: params.updateAvailable ? (
@@ -380,13 +375,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): So
         if (selectSidebarHelpLink(value)) {
           return;
         }
-        if (
-          selectOpenClawIdMenuValue(value, {
-            status: params.openclawIdStatus ?? null,
-            client: params.gatewayClient,
-            basePath: params.basePath,
-          })
-        ) {
+        if (params.extension?.onSelect(value)) {
           return;
         }
         const capability = nativeGatewaysCapability();
