@@ -8,7 +8,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { readUndispatchedChannelText } from "../../sessions/undispatched-channel-text.js";
 import { readSessionMessagesAsync } from "../session-transcript-readers.js";
 
-export async function readOriginalUndispatchedInput(params: {
+async function readOriginalUndispatchedInput(params: {
   sourceTurnId: string;
   expected?: InternalSessionEntry;
   current?: InternalSessionEntry;

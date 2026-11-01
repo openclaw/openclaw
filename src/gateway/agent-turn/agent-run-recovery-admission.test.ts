@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
+import { commitMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { readSessionMessagesAsync } from "../session-transcript-readers.js";
-import { readOriginalUndispatchedInput } from "./agent-run-recovery-admission.js";
+import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 
+vi.mock("../../agents/main-session-recovery/main-session-recovery-store.js", () => ({
+  commitMainSessionRecovery: vi.fn(),
+}));
 vi.mock("../session-transcript-readers.js", () => ({ readSessionMessagesAsync: vi.fn() }));
 const saved: InternalSessionEntry = {
   sessionId: "session",
@@ -19,14 +23,27 @@ const saved: InternalSessionEntry = {
   restartRecoveryRequesterSenderId: "U1",
   restartRecoveryRequesterAccountId: "account",
 };
-const read = (current: InternalSessionEntry, expected = saved) =>
-  readOriginalUndispatchedInput({
-    current,
-    expected,
-    sourceTurnId: "source",
+async function read(current: InternalSessionEntry, expected = saved) {
+  const identity = {
+    lifecycleGeneration: "generation",
+    runId: "recovery",
+    sessionId: saved.sessionId,
+  };
+  vi.mocked(commitMainSessionRecovery).mockResolvedValueOnce({
+    entry: current,
+    transition: {
+      kind: "admitted_recovery",
+      undispatchedSourceTurnId: "source",
+      admission: { ...identity, cycleId: "cycle", attempt: 1 },
+    },
+  });
+  const admission = await admitAgentRestartRecovery({
+    ...identity,
     sessionKey: "agent:main:main",
     storePath: "/unused",
   });
+  return admission.readUndispatchedInput(expected);
+}
 
 describe("undispatched channel input ownership", () => {
   it.each([
