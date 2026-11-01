@@ -44,6 +44,18 @@ export function isCodexThreadReadMissingError(error: unknown, threadId: string):
   );
 }
 
+/** Native rejects this exact resume before adding the connection as a subscriber. */
+export function isCodexThreadResumeClosingError(error: unknown, threadId: unknown): boolean {
+  return (
+    typeof threadId === "string" &&
+    error instanceof CodexAppServerRpcError &&
+    error.method === "thread/resume" &&
+    error.code === -32_600 &&
+    error.message ===
+      `thread ${threadId} is closing; retry thread/resume after the thread is closed`
+  );
+}
+
 function formatCodexAppServerRpcErrorMessage(
   error: { message: string; data?: JsonValue },
   method: string,

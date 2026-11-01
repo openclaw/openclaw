@@ -3301,65 +3301,72 @@ describe("Codex app-server thread lifecycle bindings", () => {
     }
   });
 
-  it("preserves the bound thread and shared client after an exact overload rejection", async () => {
-    const sessionFile = path.join(tempDir, "overloaded-session.jsonl");
-    const workspaceDir = path.join(tempDir, "overloaded-workspace");
-    const agentDir = path.join(tempDir, "agent");
-    const overload = new CodexAppServerRpcError(
-      { code: -32_001, message: "queue full" },
-      "thread/resume",
-    );
-    const wire = await createLeasedLifecycleWireClient(agentDir, (request) => {
-      if (request.method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (request.method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (request.method === "thread/read") {
-        return {
-          thread: {
-            ...threadStartResult("thread-overloaded").thread,
-            status: { type: "notLoaded" },
-          },
-        };
-      }
-      if (request.method === "thread/resume") {
-        throw overload;
-      }
-      throw new Error(`unexpected method: ${request.method}`);
-    });
-    try {
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-overloaded",
-        clientId: wire.client.getInstanceId(),
-        cwd: workspaceDir,
-        model: "gpt-5.4-codex",
-        modelProvider: "openai",
-        dynamicToolsFingerprint: "[]",
+  it.each([
+    { code: -32_001, message: "queue full" },
+    {
+      code: -32_600,
+      message:
+        "thread thread-overloaded is closing; retry thread/resume after the thread is closed",
+    },
+  ])(
+    "preserves the bound thread and shared client after retry exhaustion ($code)",
+    async (error) => {
+      const sessionFile = path.join(tempDir, "overloaded-session.jsonl");
+      const workspaceDir = path.join(tempDir, "overloaded-workspace");
+      const agentDir = path.join(tempDir, "agent");
+      const overload = new CodexAppServerRpcError(error, "thread/resume");
+      const wire = await createLeasedLifecycleWireClient(agentDir, (request) => {
+        if (request.method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (request.method === "configRequirements/read") {
+          return { requirements: null };
+        }
+        if (request.method === "thread/read") {
+          return {
+            thread: {
+              ...threadStartResult("thread-overloaded").thread,
+              status: { type: "notLoaded" },
+            },
+          };
+        }
+        if (request.method === "thread/resume") {
+          throw overload;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
       });
-      const originalBinding = await readCodexAppServerBinding(sessionFile);
-      await expect(wire.start(sessionFile, workspaceDir)).rejects.toMatchObject({
-        name: "CodexAppServerRpcError",
-        code: -32_001,
-        message: overload.message,
-      });
+      try {
+        await writeCodexAppServerBinding(sessionFile, {
+          threadId: "thread-overloaded",
+          clientId: wire.client.getInstanceId(),
+          cwd: workspaceDir,
+          model: "gpt-5.4-codex",
+          modelProvider: "openai",
+          dynamicToolsFingerprint: "[]",
+        });
+        const originalBinding = await readCodexAppServerBinding(sessionFile);
+        await expect(wire.start(sessionFile, workspaceDir)).rejects.toMatchObject({
+          name: "CodexAppServerRpcError",
+          code: error.code,
+          message: overload.message,
+        });
 
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(originalBinding);
-      expect(
-        new Set(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)),
-      ).toEqual(
-        new Set(["config/read", "configRequirements/read", "thread/read", "thread/resume"]),
-      );
-      const retained = retainSharedCodexAppServerClientIfCurrent(wire.client);
-      expect(retained).toBeTypeOf("function");
-      retained?.();
-      expect(wire.stdinDestroyed).toBe(false);
-    } finally {
-      releaseLeasedSharedCodexAppServerClient(wire.client);
-      wire.client.close();
-    }
-  });
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(originalBinding);
+        expect(
+          new Set(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)),
+        ).toEqual(
+          new Set(["config/read", "configRequirements/read", "thread/read", "thread/resume"]),
+        );
+        const retained = retainSharedCodexAppServerClientIfCurrent(wire.client);
+        expect(retained).toBeTypeOf("function");
+        retained?.();
+        expect(wire.stdinDestroyed).toBe(false);
+      } finally {
+        releaseLeasedSharedCodexAppServerClient(wire.client);
+        wire.client.close();
+      }
+    },
+  );
 
   it("keeps the bound local provider when stale fingerprints force a fresh thread", async () => {
     const { sessionFile, workspaceDir } = createPaths();
