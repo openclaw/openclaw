@@ -1235,6 +1235,19 @@ a.activity-current-work__row:hover {
     outline: none;
   }
 
+  /* Live rows separate by spacing, not hairlines. */
+  .activity-stream {
+    border-top: 0;
+  }
+
+  .activity-entry {
+    border-bottom: 0;
+  }
+
+  .activity-entry + .activity-entry {
+    margin-top: var(--space-1);
+  }
+
   /* Feedback keeps its reserved box but no longer holds a gap open: it floats over
      the content when there is something to say, so results still never shift. */
   .activity-feed__feedback {

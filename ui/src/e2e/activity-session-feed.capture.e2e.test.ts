@@ -267,6 +267,19 @@ suite.define(() => {
         const entries = activity.locator(".activity-entry");
         await expectCount(entries).toBe(2);
 
+        // Rows separate by spacing, with no hairline on the rows or above the stream.
+        expect(
+          await entries.evaluateAll((rows) => {
+            const [first, second] = rows.map((row) => row.getBoundingClientRect());
+            return {
+              gap: second!.top - first!.bottom,
+              borders: [
+                getComputedStyle(rows[0]!).borderBottomWidth,
+                getComputedStyle(rows[0]!.parentElement!).borderTopWidth,
+              ],
+            };
+          }),
+        ).toEqual({ gap: 4, borders: ["0px", "0px"] });
         // Search and filter share one row; the other controls wait behind them.
         const toolbar = activity.locator(".activity-live-toolbar");
         const trigger = activity.locator("#activity-live-filter-trigger");
