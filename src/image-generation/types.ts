@@ -2,15 +2,7 @@ import type { MediaNormalizationEntry } from "../../packages/media-generation-co
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-
-/** Non-empty binary image asset returned by an image-generation provider. */
-export type GeneratedImageAsset = {
-  buffer: Buffer;
-  mimeType: string;
-  fileName?: string;
-  revisedPrompt?: string;
-  metadata?: Record<string, unknown>;
-};
+import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./asset-types.js";
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
@@ -37,8 +29,6 @@ export type ImageGenerationIgnoredOverride = {
   key: "size" | "aspectRatio" | "resolution" | "quality" | "outputFormat" | "background";
   value: string;
 };
-
-export type ImageGenerationSourceImage = Omit<GeneratedImageAsset, "revisedPrompt">;
 
 export type ImageGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
