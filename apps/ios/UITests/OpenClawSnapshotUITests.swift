@@ -1284,6 +1284,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
+        let result = app.buttons["chat-tool-activity-fixture-long-review"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
         let earlier = app.staticTexts.matching(NSPredicate(
             format: "label BEGINSWITH %@", "Earlier response context.")).firstMatch
         XCTAssertTrue(earlier.waitForExistence(timeout: 5))
