@@ -1,5 +1,9 @@
 import { discoverOpenAICompatibleLocalModels } from "openclaw/plugin-sdk/provider-setup";
-import { LLAMA_SERVER_DISCOVERY_TIMEOUT_MS } from "./defaults.js";
+import {
+  LLAMA_CPP_SERVER,
+  LLAMA_SERVER_DISCOVERY_TIMEOUT_MS,
+  type LlamaServerIdentity,
+} from "./defaults.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { mapLlamaServerModel } from "./models.js";
 
@@ -7,6 +11,7 @@ export type LlamaServerDiscoveryResult = Awaited<ReturnType<typeof discoverLlama
 
 /** Discovers llama-server models without loading, waking, or unloading them. */
 export async function discoverLlamaServer(params: {
+  server?: LlamaServerIdentity;
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -14,7 +19,7 @@ export async function discoverLlamaServer(params: {
   signal?: AbortSignal;
   useRuntimeDefaults?: boolean;
 }) {
-  const endpoint = resolveLlamaServerEndpoint(params.baseUrl);
+  const endpoint = resolveLlamaServerEndpoint(params.baseUrl, params.server ?? LLAMA_CPP_SERVER);
   const result = await discoverOpenAICompatibleLocalModels({
     baseUrl: endpoint.inferenceBaseUrl,
     serverBaseUrl: endpoint.origin,

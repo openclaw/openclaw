@@ -9,19 +9,21 @@ import {
   LiveModelCatalogHttpError,
   runLiveProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
 import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
 import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
+import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
 
 export async function discoverLlamaServerProvider(
   ctx: ProviderCatalogContext,
+  server: LlamaServerIdentity = LLAMA_CPP_SERVER,
 ): Promise<ProviderCatalogResult> {
-  const configured = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const auth = ctx.resolveProviderApiKey(LLAMA_CPP_PROVIDER_ID);
+  const configured = ctx.config.models?.providers?.[server.id];
+  const auth = ctx.resolveProviderApiKey(server.id);
   const headers = await resolveLlamaServerProviderHeaders({
+    server,
     config: ctx.config,
     env: ctx.env,
     headers: configured?.headers,
@@ -33,10 +35,11 @@ export async function discoverLlamaServerProvider(
       ? undefined
       : authApiKey;
   return await runLiveProviderCatalog({
-    providerId: LLAMA_CPP_PROVIDER_ID,
+    providerId: server.id,
     profileId: apiKey ? auth.profileId : undefined,
     run: async () => {
       const discovery = await discoverLlamaServer({
+        server,
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,
@@ -47,11 +50,12 @@ export async function discoverLlamaServerProvider(
           return null;
         }
         throw discovery.kind === "http-error"
-          ? new LiveModelCatalogHttpError(LLAMA_CPP_PROVIDER_ID, discovery.status)
+          ? new LiveModelCatalogHttpError(server.id, discovery.status)
           : discovery.error;
       }
       return {
         provider: buildLlamaServerProviderConfig({
+          server,
           configured,
           discoveredModels: discovery.models,
         }),
@@ -62,18 +66,22 @@ export async function discoverLlamaServerProvider(
 
 export async function prepareLlamaServerDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
+  server: LlamaServerIdentity = LLAMA_CPP_SERVER,
 ): Promise<ProviderRuntimeModel | undefined> {
   const apiKey = await resolveLlamaServerRuntimeApiKey({
+    server,
     config: ctx.config,
     agentDir: ctx.agentDir,
     profileId: ctx.authProfileId,
   });
   const headers = await resolveLlamaServerProviderHeaders({
+    server,
     config: ctx.config,
     env: process.env,
     headers: ctx.providerConfig?.headers,
   });
   const discovery = await discoverLlamaServer({
+    server,
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
@@ -88,8 +96,8 @@ export async function prepareLlamaServerDynamicModel(
   }
   return {
     ...model.config,
-    provider: LLAMA_CPP_PROVIDER_ID,
+    provider: server.id,
     api: ctx.providerConfig?.api ?? "openai-completions",
-    baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl).inferenceBaseUrl,
+    baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl, server).inferenceBaseUrl,
   };
 }
