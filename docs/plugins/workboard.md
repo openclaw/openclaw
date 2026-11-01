@@ -294,7 +294,9 @@ sessions or its Board agent conversation.
 | linked refs | optional task, run, session, or source URL                                                                                             |
 | `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status)                          |
 
-Longer values are rejected with an error such as `labels must be 40 characters or fewer.`
+Values over a length limit are rejected with an error such as `labels must be 40 characters or fewer.`
+Labels after the 12th distinct one are ignored without being checked, so an over-long label in that
+position does not cause an error.
 When creating cards (for example with `workboard_create`), `parents` (card ids, up to 120 characters
 each) and `skills` (up to 80 characters each) accept at most 20 distinct entries; more
 are rejected.
