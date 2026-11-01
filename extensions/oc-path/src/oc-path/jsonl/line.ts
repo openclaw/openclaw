@@ -29,11 +29,12 @@ export function pickJsonlLineIndex(ast: JsonlAst, addr: string): number {
  * line. Only the line address belongs in the section slot; move the rest into
  * the value slots, merging so emitted paths keep at most three slots.
  */
-export function keepOnlyLineAddressInSection(runs: readonly string[][]): string[][] {
-  const [lineRun = [], ...rest] = runs;
-  if (lineRun.length <= 1) {
-    return [...runs];
+export function keepOnlyLineAddressInSection(runs: string[][]): string[][] {
+  const lineRun = runs[0];
+  if (lineRun === undefined || lineRun.length <= 1) {
+    return runs;
   }
+  const rest = runs.slice(1);
   const [head = [], ...tail] = rest.length < 2 ? [[], ...rest] : rest;
   return [lineRun.slice(0, 1), [...lineRun.slice(1), ...head], ...tail];
 }
