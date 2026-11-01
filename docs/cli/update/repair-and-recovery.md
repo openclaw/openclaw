@@ -335,6 +335,33 @@ outcome. An earlier nonzero exit remains nonzero while workers are draining.
 Mutation and recovery owners must still drain; their failures produce a nonzero
 exit even if the printed command result was successful.
 
+The next update and `openclaw doctor --fix` reclaim retained runtimes, preflight
+worktrees (`.openclaw-update-preflight-*`, or `ocu-pf-*` on Windows) and inspection
+repositories (`openclaw-git-admission-*`) from earlier runs, including runs
+interrupted by a signal or crash. Each run records its owner in these directories.
+A directory stays while that owner is running or while a process has its working
+directory, command line, executable or a mapped file inside it. Other OpenClaw
+processes on the host do not hold it. The report and log list what was removed,
+what stayed, and why. Cleanup stops starting new work after about 10 seconds and
+finishes removals in the background, and a cleanup failure is a warning that never
+fails the update.
+
+Git updates also write pre-migration database snapshots to
+`.artifacts/*.openclaw-update-<id>.tmp.databases`. Verified activation removes
+them unless restoration was refused. The next update reclaims one when its run
+succeeded or never activated. A snapshot stays while its run is in progress, while
+any update recovery is pending, and after a failed run until a later update
+succeeds. Copies kept for manual recovery stay for 7 days, as do copies no run records
+if they hold this state directory's database. A copy of another state directory's
+database waits for that state directory's next update.
+
+A directory with no recorded owner, or on a host that cannot show which processes
+use it (Windows, containers), stays for 24 hours and is then removed by age with
+a warning. If process inspection fails on a host that normally supports it, the
+directory stays until a later cleanup succeeds, or for at most 7 days. A hardlinked
+file does not count as use on macOS, where a file mapped from the installation can
+be listed under a retained path.
+
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
 validation. Other runtime files remain hardlinked when supported.

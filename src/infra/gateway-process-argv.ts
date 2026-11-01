@@ -166,6 +166,71 @@ export function readProcessWorkingDirectories(pids: readonly number[]): Map<numb
   return directories;
 }
 
+function isSharedHardlink(file: string): boolean {
+  try {
+    const stat = fs.statSync(file);
+    return !stat.isDirectory() && stat.nlink > 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which of this user's processes have a file inside the directory mapped or open.
+ * A foreign account cannot reach the update artifacts' mode 0700 directories.
+ * Darwin names a hardlinked vnode by its latest lookup, so a process that mapped the
+ * installed copy can appear under a retained hardlink. Such a file proves nothing about
+ * this directory, and deleting one link neither unmaps it nor removes its other names.
+ */
+export function readProcessesUsingDirectory(
+  directory: string,
+  pids: readonly number[],
+): { pids: Set<number> } | { unavailable: string } {
+  const inside = `${directory.replace(/[\\/]+$/u, "")}${path.sep}`;
+  const users = new Set<number>();
+  if (process.platform === "linux") {
+    for (const pid of pids) {
+      try {
+        if (fs.readFileSync(`/proc/${pid}/maps`, "utf8").includes(inside)) {
+          users.add(pid);
+        }
+      } catch {
+        // A disappearing or foreign PID has no readable mappings; argv and cwd still count.
+      }
+    }
+    return { pids: users };
+  }
+  if (process.platform !== "darwin") {
+    return { unavailable: `mapped-file inspection is unavailable on ${process.platform}` };
+  }
+  // One per-user listing stays well under a second; lsof +D stats the whole tree.
+  const result = spawnSync(
+    "/usr/sbin/lsof",
+    ["-nP", "-w", "-u", String(process.getuid?.()), "-F0pn"],
+    {
+      encoding: "utf8",
+      timeout: 3_000,
+      maxBuffer: 64 * 1024 * 1024,
+      env: resolveDiagnosticProcessEnv(),
+    },
+  );
+  if (result.error || (result.status !== 0 && result.status !== 1) || !result.stdout) {
+    return { unavailable: "mapped-file inspection with lsof did not complete" };
+  }
+  let pid: number | undefined;
+  for (const raw of result.stdout.split("\0")) {
+    const field = raw.replace(/^\n/, "");
+    if (field.startsWith("p")) {
+      pid = Number(field.slice(1));
+    } else if (pid !== undefined && field.startsWith("n") && field.startsWith(inside, 1)) {
+      if (!isSharedHardlink(field.slice(1))) {
+        users.add(pid);
+      }
+    }
+  }
+  return { pids: users };
+}
+
 /** Generic script names identify OpenClaw only inside a verified package root. */
 function classifyEntrypoint(
   args: string[],

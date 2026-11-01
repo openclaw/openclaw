@@ -123,6 +123,10 @@ export async function captureUpdateDatabases(params: {
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
       });
+      if (execution.updateInstallKind === "git") {
+        // Git installs have no package journal, so their transaction retires this root too.
+        transaction.databaseBackupRoot = backupRoot;
+      }
       params.assertCurrent();
       maintenance?.assertCurrent();
       return captured;

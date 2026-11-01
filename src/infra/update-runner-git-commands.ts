@@ -3,6 +3,7 @@ import path from "node:path";
 import { parseDocument } from "yaml";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { ignoreMissingPath } from "./errno.js";
+import { resolveWindowsUpdatePreflightBaseDirectory } from "./temp-artifact-cleanup.js";
 import { isFullGitObjectId } from "./update-dev-target.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
@@ -19,7 +20,6 @@ const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
 
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : ".openclaw-update-preflight-";
-const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 
 export type StepFactory = (
   name: string,
@@ -60,7 +60,7 @@ export async function createPreflightRoot(artifactRoot: string) {
   // Honor existing redirects like build-all-cache; only the mkdtemp child is private.
   const baseDir =
     process.platform === "win32" && path.sep === "\\"
-      ? path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR)
+      ? resolveWindowsUpdatePreflightBaseDirectory()
       : path.join(await fs.realpath(artifactRoot), ".artifacts");
   await fs.mkdir(baseDir, { recursive: true });
   return fs.mkdtemp(path.join(baseDir, PREFLIGHT_TEMP_PREFIX));

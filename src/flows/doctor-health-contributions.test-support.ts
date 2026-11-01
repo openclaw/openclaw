@@ -72,5 +72,8 @@ export function createDoctorRuntimeProjection(root: string, packageRoot: string,
   const projectedRoot = doctorRuntimeProjectedPath(directory, packageRoot);
   fs.mkdirSync(projectedRoot, { recursive: true });
   fs.copyFileSync(path.join(packageRoot, "package.json"), path.join(projectedRoot, "package.json"));
+  // Abandoned by an earlier updater that recorded no owner, long enough ago to be reclaimable.
+  const abandonedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(directory, abandonedAt, abandonedAt);
   return directory;
 }

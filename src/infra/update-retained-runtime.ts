@@ -18,8 +18,8 @@ import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
+  claimUpdateArtifact,
   maintainRetainedUpdateRuntimes,
-  registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
   resolveRetainedUpdateRuntimeParents,
@@ -57,6 +57,8 @@ export type RetainUpdateRuntime = (params: {
   timeoutMs: number;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  /** Cleanup of prior runs' artifacts, for the run report. It never affects the update. */
+  onArtifactCleanup?: (report: { lines: string[]; warnings: string[] }) => void;
 }) => Promise<RetainedUpdateRuntimeMetrics | void>;
 
 /** The command retains its own workers through reporting, rollback, and native settlement. */
@@ -139,12 +141,23 @@ async function runWithRetainedUpdateRuntime<T>(
           ) {
             return undefined;
           }
-          await maintainRetainedUpdateRuntimes({
+          const warnings: string[] = [];
+          const { readDatabaseSnapshotCustody } =
+            await import("./update-database-snapshot-custody.js");
+          const lines = await maintainRetainedUpdateRuntimes({
             packageRoots: [sourceRoot],
             temporaryDirectories: temporaryRoot ? [temporaryRoot] : undefined,
             repair: true,
             assertCurrent,
+            onWarning: (warning) => warnings.push(warning),
+            decideDatabaseSnapshot: readDatabaseSnapshotCustody(env ?? process.env),
+          }).catch((error: unknown) => {
+            const warning = `Could not clean up earlier update artifacts: ${formatErrorMessage(error)}`;
+            log.warn(warning);
+            warnings.push(warning);
+            return [warning];
           });
+          params.onArtifactCleanup?.({ lines, warnings });
           assertCurrent();
           // Package inventories include their module owner, and native activation
           // replaces its whole project. Scratch must stay outside both boundaries.
@@ -165,7 +178,7 @@ async function runWithRetainedUpdateRuntime<T>(
               const parentStat = await fs.stat(parent);
               if (sourceStat.dev === parentStat.dev) {
                 directory = await fs.mkdtemp(path.join(parent, "openclaw-update-runtime-"));
-                unregister = registerRetainedUpdateRuntime(directory);
+                unregister = await claimUpdateArtifact(directory);
               }
             } catch (error) {
               if (
@@ -188,7 +201,7 @@ async function runWithRetainedUpdateRuntime<T>(
             }
             assertCurrent();
             directory = await fs.mkdtemp(path.join(temporary, "openclaw-update-runtime-"));
-            unregister = registerRetainedUpdateRuntime(directory);
+            unregister = await claimUpdateArtifact(directory);
           }
           const privateRoot = await fs.realpath(directory);
           assertCurrent();

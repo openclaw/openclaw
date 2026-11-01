@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { maintainRetainedUpdateRuntimes } from "./temp-artifact-cleanup.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { createGitAdmissionFixture as createFixture } from "./update-runner-git-admission.test-support.js";
@@ -34,6 +36,32 @@ const forbidden = (operation: string) => async () => {
   throw new Error(`Refused transport must not ${operation}`);
 };
 afterEach(() => vi.restoreAllMocks());
+
+it("a sweep during the run keeps its inspection repository under a symlinked temp path", async () => {
+  const state = createFixture();
+  const realTemp = fs.realpathSync(fs.mkdtempSync(path.join(state.root, "temp-")));
+  const linkedTemp = path.join(state.root, "linked-temp");
+  fs.symlinkSync(realTemp, linkedTemp, process.platform === "win32" ? "junction" : "dir");
+  vi.spyOn(os, "tmpdir").mockReturnValue(linkedTemp);
+  let temporaryRoot = "";
+  await withGitTargetInspectionRoot(
+    { root: state.install, runCommand: state.runCommand, timeoutMs: 15_000, onWarning: () => {} },
+    async (root) => {
+      temporaryRoot = path.join(realTemp, path.basename(path.dirname(root)));
+      expect(
+        await maintainRetainedUpdateRuntimes({
+          packageRoots: [],
+          repair: true,
+          assertCurrent() {},
+        }),
+      ).toEqual([
+        expect.stringContaining(`${temporaryRoot}: the creating update still owns this runtime`),
+      ]);
+      expect(state.git(root, "rev-parse", "HEAD")).toBeTruthy();
+    },
+  );
+  expect(fs.existsSync(temporaryRoot)).toBe(false);
+});
 
 function fixture(...options: Parameters<typeof createFixture>) {
   const state = createFixture(...options);

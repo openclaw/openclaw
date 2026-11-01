@@ -13,3 +13,9 @@ export function isGitRuntimeStagingName(name: string): boolean {
   const marker = name.lastIndexOf(STAGING_MARKER);
   return marker > 0 && STAGING_ID.test(name.slice(marker + STAGING_MARKER.length));
 }
+
+/** Git pre-migration database snapshots are named after their update's staging directory. */
+export function isGitDatabaseSnapshotName(name: string): boolean {
+  const suffix = ".databases";
+  return name.endsWith(suffix) && isGitRuntimeStagingName(name.slice(0, -suffix.length));
+}

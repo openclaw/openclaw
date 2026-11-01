@@ -17,6 +17,7 @@ import {
   classifyOpenClawArgv,
   classifyOpenClawEntrypointPath,
   readProcessPackageIdentity,
+  readProcessesUsingDirectory,
   readProcessWorkingDirectories,
   referencesRetainedArtifact,
 } from "./gateway-process-argv.js";
@@ -253,21 +254,34 @@ function classifyWindowsHandoffAncestry(
   return "unknown";
 }
 
-/** Default custody decisions stay conservative; reference inspection also reports partial evidence. */
+/**
+ * Without arguments, any other OpenClaw process counts, which suits shared-state cleanup.
+ * With a directory, only actual use counts: argv, cwd, executable or mapped files inside it.
+ * `incomplete` names evidence this host could not provide, so absence proves less there.
+ */
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
 export function inspectOtherOpenClawProcesses(
-  runtimeDirectory?: string,
-): { pids: number[]; warnings?: string[] } | { error: string };
+  artifactDirectory?: string,
+): { pids: number[]; incomplete?: string; warnings?: string[] } | { error: string };
 export function inspectOtherOpenClawProcesses(references?: HandoffReferences | string) {
   const handoff = typeof references === "object" ? references : undefined;
-  const runtimeDirectory = typeof references === "string" ? references : undefined;
+  const artifactDirectory = typeof references === "string" ? references : undefined;
   const warnings: string[] = [];
+  let incomplete: string | undefined;
+  if (artifactDirectory && !["darwin", "linux"].includes(process.platform)) {
+    // This host cannot show holders at all, so this is missing evidence rather than a failure.
+    return { pids: [], incomplete: `process inspection is unavailable on ${process.platform}` };
+  }
   const result: CensusResult = { matchingPids: [], unverifiedPids: [] };
   try {
     if (process.platform === "linux" && isContainerEnvironment()) {
-      throw new Error(
-        "Host process visibility cannot be established from this container. Run Doctor on the host after stopping OpenClaw containers that share its temporary directory.",
-      );
+      if (!artifactDirectory) {
+        throw new Error(
+          "Host process visibility cannot be established from this container. Run Doctor on the host after stopping OpenClaw containers that share its temporary directory.",
+        );
+      }
+      // Processes visible in this namespace still count; only the others are unknown.
+      incomplete = "processes in other containers are not visible from this one";
     }
     const windows = process.platform === "win32";
     const deadline = Date.now() + (handoff ? 15_000 : 1_000);
@@ -290,7 +304,16 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         // so the service marker cannot change the outcome. Skip that environment read.
         readDarwinCommand: handoff
           ? (pid, owner) => readDarwinProcessCommand(pid, owner, { serviceMarker: false })
-          : readDarwinProcessCommand,
+          : artifactDirectory
+            ? (pid, owner) => {
+                // One process caught mid-exec must not hide the evidence of a real holder.
+                try {
+                  return readDarwinProcessCommand(pid, owner);
+                } catch {
+                  return undefined;
+                }
+              }
+            : readDarwinProcessCommand,
       }),
     ];
     const byPid = new Map(processes.map((entry) => [entry.pid, entry]));
@@ -298,6 +321,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
     if (
       !current ||
       (!handoff &&
+        !artifactDirectory &&
         ((!current.command && process.platform !== "darwin") ||
           (process.platform === "linux" &&
             processes.some((entry) => entry.command && !("argv" in entry.command)))))
@@ -315,7 +339,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       const parent = byPid.get(parentPid);
       if (!parent?.command || ancestors.has(parentPid)) {
         // An observed process with unavailable argv remains unknown custody below.
-        if (handoff || (parent && !parent.command)) {
+        if (handoff || artifactDirectory || (parent && !parent.command)) {
           break;
         }
         throw new Error("OpenClaw process ancestry is incomplete.");
@@ -366,7 +390,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         `(?:^|[^\\w-])(?:${handoff ? literal(handoff.runId) : "(?!)"}(?=$|[^\\w-])|(?:${paths.map(literal).join("|") || "(?!)"})(?=$|[/\\s"'\x60);,\\]]))`,
       );
     };
-    const artifactPaths = handoff?.artifactPaths ?? (runtimeDirectory ? [runtimeDirectory] : []);
+    const artifactPaths = handoff?.artifactPaths ?? (artifactDirectory ? [artifactDirectory] : []);
     const matches = referencePattern(artifactPaths);
     const rootKey = (value: string) => normalize(value.replace(/[\\/]+$/, ""));
     const sharedRoots = new Set(handoff?.sharedRoots?.map(rootKey));
@@ -374,6 +398,18 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       artifactPaths.filter((value) => !sharedRoots.has(rootKey(value))),
     );
     const inspectorUid = process.getuid?.();
+    const isForeignUid = (uid: number | undefined) =>
+      uid !== undefined && inspectorUid !== undefined && uid !== inspectorUid;
+    const inspected = artifactDirectory
+      ? readProcessesUsingDirectory(
+          artifactDirectory,
+          processes.map(({ pid }) => pid),
+        )
+      : undefined;
+    const fileUse = inspected && "pids" in inspected ? inspected.pids : undefined;
+    if (inspected && "unavailable" in inspected) {
+      incomplete ??= inspected.unavailable;
+    }
     // Positive start-ordered ancestry proves work is not the handoff family's:
     // this inspector's own descendants, or work whose whole live ancestry began
     // after the family deadline. Missing or unreadable ancestry proves nothing.
@@ -492,16 +528,42 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
-      if (custody.kind === "not-holder") {
+      const cwd = directories.get(pid);
+      if (artifactDirectory) {
+        // Artifact names end in a random suffix, so the name also finds relative
+        // references and module specifiers, whose paths this census cannot resolve.
+        const name = path.basename(artifactDirectory);
+        if (
+          fileUse?.has(pid) ||
+          [
+            ...(argv ?? []),
+            cwd ?? "",
+            command && "executable" in command ? (command.executable ?? "") : "",
+          ].some((value) => value.includes(name))
+        ) {
+          result.matchingPids.push(pid);
+          continue;
+        }
+        const custody = classifyProcessArtifactCustody(command, pid, cwd);
+        if (
+          custody.kind === "holder" &&
+          custody.paths?.some((value) => matches.test(normalize(value)))
+        ) {
+          result.matchingPids.push(pid);
+        } else if (
+          custody.kind === "unknown" &&
+          cwd === undefined &&
+          command?.owner !== "different" &&
+          !isForeignUid(command?.uid)
+        ) {
+          // An unknown identity alone says nothing about this path; a hidden cwd could.
+          incomplete ??= `could not verify PID ${pid}: ${custody.reason}`;
+          warnings.push(`Could not verify runtime custody for PID ${pid}: ${custody.reason}`);
+        }
         continue;
       }
-      if (
-        custody.kind === "holder" &&
-        runtimeDirectory &&
-        custody.paths &&
-        !custody.paths.some((value) => matches.test(normalize(value)))
-      ) {
+      const custody = classifyProcessArtifactCustody(command, pid, cwd);
+      if (custody.kind === "not-holder") {
         continue;
       }
       result.matchingPids.push(pid);
@@ -526,6 +588,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       ? { error: result.error }
       : {
           pids: result.matchingPids,
+          ...(incomplete ? { incomplete } : {}),
           ...(warnings.length ? { warnings } : {}),
         };
 }

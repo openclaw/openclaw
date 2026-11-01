@@ -77,6 +77,7 @@ type Process = {
   state?: string;
   flags?: number;
   cwd?: string | Error;
+  maps?: string;
   environment?: string;
   uid?: number;
   commandError?: Error;
@@ -135,7 +136,7 @@ beforeEach(() => {
         scripts: { start: "node service.js" },
       });
     }
-    const match = /^\/proc\/(\d+)\/(stat|cmdline|environ|status)$/.exec(file);
+    const match = /^\/proc\/(\d+)\/(stat|cmdline|environ|status|maps)$/.exec(file);
     const pid = Number(match?.[1]);
     const row = rows.get(pid);
     if (!row) {
@@ -143,6 +144,9 @@ beforeEach(() => {
     }
     if (match?.[2] === "environ") {
       return row.environment ?? "";
+    }
+    if (match?.[2] === "maps") {
+      return row.maps ?? "";
     }
     if (match?.[2] === "status") {
       const uid = row.uid ?? 1000;
@@ -188,22 +192,137 @@ it.each([
 });
 
 it.each([
-  { argv: ["node", "worker.js"], uid: 1000 },
-  { argv: ["/usr/bin/node", "-e", "1"], uid: 0 },
-])("retains unavailable cwd for $argv without losing scoped holders", ({ argv, uid }) => {
-  const held = "/tmp/openclaw-update-runtime-Held01";
-  const free = "/tmp/openclaw-update-runtime-Free01";
-  processRow(peer, argv, { uid, cwd: denied() });
-  processRow(peer + 1, ["node", `${held}/worker.js`]);
-  for (const [runtime, pids] of [
-    [undefined, [peer, peer + 1]],
-    [free, [peer]],
-    [held, [peer, peer + 1]],
-  ] as const) {
-    expectPids(pids, `PID ${peer}: working directory is unavailable`, runtime);
-  }
-  rows.delete(peer);
-  expectPids([], undefined, free);
+  { argv: ["node", "worker.js"], uid: 1000, incomplete: true },
+  { argv: ["/usr/bin/node", "-e", "1"], uid: 0, incomplete: false },
+])(
+  "scopes a hidden cwd for $argv to missing evidence, not to use of every artifact",
+  ({ argv, uid, incomplete }) => {
+    const held = "/tmp/openclaw-update-runtime-Held01";
+    const free = "/tmp/openclaw-update-runtime-Free01";
+    processRow(peer, argv, { uid, cwd: denied() });
+    processRow(peer + 1, ["node", `${held}/worker.js`]);
+    // Shared-state cleanup treats any unverified process as a possible owner.
+    expectPids([peer, peer + 1], `PID ${peer}: working directory is unavailable`);
+    const evidence = incomplete
+      ? {
+          incomplete: `could not verify PID ${peer}: working directory is unavailable`,
+          warnings: [expect.stringContaining(`PID ${peer}: working directory is unavailable`)],
+        }
+      : {};
+    expect(inspectOtherOpenClawProcesses(free)).toEqual({ pids: [], ...evidence });
+    expect(inspectOtherOpenClawProcesses(held)).toEqual({ pids: [peer + 1], ...evidence });
+    rows.delete(peer);
+    expect(inspectOtherOpenClawProcesses(free)).toEqual({ pids: [] });
+  },
+);
+
+it("does not count an OpenClaw process running elsewhere as using an artifact", () => {
+  const artifact = "/tmp/openclaw-update-runtime-Free01";
+  processRow(peer, ["node", "/app/dist/index.js", "gateway"]);
+  processRow(peer + 1, ["openclaw"]);
+  processRow(peer + 2, ["node", "/unrelated-app/dist/index.js"]);
+  // Unnamed package: its identity stays unknown, which is no evidence about this path.
+  const inspect = read.getMockImplementation()!;
+  read.mockImplementation((file: string) =>
+    file === "/unrelated-app/package.json" ? "{}" : inspect(file),
+  );
+  expect(inspectOtherOpenClawProcesses(artifact)).toEqual({ pids: [] });
+  expect(inspectOtherOpenClawProcesses()).toMatchObject({ pids: [peer, peer + 1, peer + 2] });
+});
+
+it("counts Linux mappings, argv and cwd inside the artifact, and nothing beside it", () => {
+  const artifact = "/tmp/.openclaw-update-preflight-Used01";
+  processRow(peer, ["openclaw"], {
+    maps: `7f00-7f10 r-xp 0 01:02 3 /tmp/openclaw-other/native.node\n7f10-7f20 r-xp 0 01:02 4 ${artifact}/native.node\n`,
+  });
+  processRow(peer + 1, ["git", "-C", `${artifact}/worktree`, "status"]);
+  processRow(peer + 2, ["/bin/sh"], { cwd: `${artifact}/worktree` });
+  const other = "/tmp/.openclaw-update-preflight-Other1";
+  processRow(peer + 3, ["openclaw"], { maps: `7f10-7f20 r-xp 0 01:02 4 ${other}/native.node\n` });
+  processRow(peer + 4, ["/bin/sh"], { cwd: other });
+  // A reference to another artifact that no longer resolves says nothing about this one.
+  processRow(peer + 5, ["node", `${other}/gone.js`]);
+  expect(inspectOtherOpenClawProcesses(artifact)).toEqual({ pids: [peer, peer + 1, peer + 2] });
+});
+
+it("keeps a holder's evidence when another process cannot be read", () => {
+  const artifact = "/tmp/openclaw-update-runtime-Used01";
+  processRow(peer, ["openclaw"]);
+  processRow(peer + 1, ["node", `${artifact}/worker.js`]);
+  mockDarwinBatch({ status: 0, stdout: `p${peer}\0\nfcwd\0n/tmp/elsewhere\0\n` });
+  darwinCommand.mockImplementation((pid: number) => {
+    if (pid === peer) {
+      throw new Error(`Could not classify PID ${pid}: cannot inspect Darwin arguments`);
+    }
+    return { argv: rows.get(pid)!.argv };
+  });
+  expect(inspectOtherOpenClawProcesses(artifact)).toMatchObject({ pids: [peer + 1] });
+});
+
+it("reports Windows as missing evidence without inspecting processes", () => {
+  mockProcessPlatform("win32");
+  expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Free01")).toEqual({
+    pids: [],
+    incomplete: "process inspection is unavailable on win32",
+  });
+  expect(directory).not.toHaveBeenCalled();
+});
+
+it("keeps visible holders in a container, and reports the other containers as missing", () => {
+  const artifact = "/tmp/openclaw-update-runtime-Used01";
+  container.mockReturnValue(true);
+  processRow(peer, ["openclaw"], { maps: `7f10-7f20 r-xp 0 01:02 4 ${artifact}/native.node\n` });
+  processRow(peer + 1, ["openclaw"]);
+  expect(inspectOtherOpenClawProcesses(artifact)).toEqual({
+    pids: [peer],
+    incomplete: "processes in other containers are not visible from this one",
+  });
+});
+
+it("does not count a Darwin file that lsof names here but other hard links share", () => {
+  const artifact = "/tmp/openclaw-update-runtime-Link01";
+  processRow(peer, ["openclaw"]);
+  processRow(peer + 1, ["openclaw"]);
+  mockProcessPlatform("darwin");
+  darwinCommand.mockImplementation((pid: number) => ({ argv: rows.get(pid)!.argv }));
+  stat.mockImplementation((file: string) => ({
+    isDirectory: () => false,
+    nlink: file.endsWith("shared.node") ? 3 : 1,
+  }));
+  const output = `p${peer}\0\nftxt\0n${artifact}/shared.node\0\np${peer + 1}\0\nftxt\0n${artifact}/copied.node\0\n`;
+  census.mockImplementation((command: string, args: string[]) => ({
+    status: 0,
+    stdout: args.includes("-u") ? output : "",
+  }));
+  expect(inspectOtherOpenClawProcesses(artifact)).toMatchObject({ pids: [peer + 1] });
+});
+
+it("counts Darwin mapped files, and reports missing evidence when lsof fails", () => {
+  const artifact = "/tmp/openclaw-git-admission-Used01";
+  processRow(peer, ["openclaw"]);
+  processRow(peer + 1, ["openclaw"]);
+  processRow(peer + 2, ["git", "-C", artifact, "fetch"]);
+  mockProcessPlatform("darwin");
+  darwinCommand.mockImplementation((pid: number) => ({ argv: rows.get(pid)!.argv }));
+  const lsofOutput = `p${peer}\0\nftxt\0n${artifact}/repository.git/pack.idx\0\np${peer + 1}\0\nftxt\0n/tmp/openclaw-git-admission-Other1/repository.git/pack.idx\0\n`;
+  census.mockImplementation((command: string, args: string[]) =>
+    args.includes("-u") ? { status: 0, stdout: lsofOutput } : { status: 0, stdout: "" },
+  );
+  expect(inspectOtherOpenClawProcesses(artifact)).toMatchObject({ pids: [peer, peer + 2] });
+  expect(inspectOtherOpenClawProcesses(artifact)).not.toHaveProperty("incomplete");
+  census.mockImplementation((command: string, args: string[]) =>
+    args.includes("-u")
+      ? {
+          status: null,
+          stdout: "",
+          error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+        }
+      : { status: 0, stdout: "" },
+  );
+  expect(inspectOtherOpenClawProcesses(artifact)).toMatchObject({
+    pids: [peer + 2],
+    incomplete: "mapped-file inspection with lsof did not complete",
+  });
 });
 
 it.each(["relative", "alias", "cwd-and-preload"])(

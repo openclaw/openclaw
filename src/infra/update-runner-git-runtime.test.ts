@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertRealOutputRoot } from "../../scripts/lib/output-root-guard.mjs";
 import { resolveRuntimePostBuildRequirement } from "../../scripts/run-node.mts";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   BUILD_STAMP,
   RUNTIME_POSTBUILD_STAMP,
@@ -31,7 +32,10 @@ import {
   readText,
   runFixtureGit,
 } from "./update-runner-git-candidate.test-support.js";
-import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
+import {
+  createGitRuntimeTransaction,
+  prepareGitRuntimePromotion,
+} from "./update-runner-git-runtime.js";
 
 const removeTree = (target: string) => fs.rm(target, { recursive: true, force: true });
 const inode = async (target: string) => (await fs.lstat(target, { bigint: true })).ino;
@@ -41,6 +45,64 @@ async function initCandidate(candidate: string, ignored = "node_modules/\ndist/\
   await runFixtureGit(candidate, "init", "--initial-branch=main");
   await writeFixtureTree(candidate, { ".gitignore": ignored });
 }
+
+describe("Git runtime transaction database snapshots", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
+  async function transaction() {
+    const root = await fs.realpath(dirs.make("git-transaction-snapshots-"));
+    const databaseRoot = path.join(root, ".artifacts", "dist-runtime.openclaw-update-id.tmp");
+    const snapshot = path.join(`${databaseRoot}.databases`, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(snapshot), { recursive: true });
+    await fs.writeFile(snapshot, "pre-migration");
+    const created = createGitRuntimeTransaction({
+      root,
+      promotion: { backupRoot: path.join(root, "staging"), cleanup: async () => undefined },
+      assertRollbackSafe: async () => {},
+      restoreRuntime: async () => {
+        throw new Error("unused");
+      },
+    });
+    created.databaseBackupRoot = databaseRoot;
+    return { created, snapshot };
+  }
+  const exists = (file: string) =>
+    fs.stat(file).then(
+      () => true,
+      () => false,
+    );
+
+  it("removes restorable snapshots after verified activation", async () => {
+    const { created, snapshot } = await transaction();
+    await created.complete({ activationVerified: true }, () => {});
+    expect(await exists(path.dirname(path.dirname(snapshot)))).toBe(false);
+  });
+
+  it("keeps snapshots whose restoration was refused during capture or finalization", async () => {
+    const { created, snapshot } = await transaction();
+    created.databaseBackupRoot = undefined;
+    await created.complete({ activationVerified: true }, () => {});
+    expect(await fs.readFile(snapshot, "utf8")).toBe("pre-migration");
+  });
+
+  it("keeps snapshots when activation was not verified", async () => {
+    const { created, snapshot } = await transaction();
+    await created.rollback(() => {}).catch(() => undefined);
+    await created.complete({ activationVerified: false }, () => {}).catch(() => undefined);
+    expect(await fs.readFile(snapshot, "utf8")).toBe("pre-migration");
+  });
+
+  it("reports a failed removal as a warning, without failing the update", async () => {
+    const { created, snapshot } = await transaction();
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+    const step = await created.complete({ activationVerified: true }, () => {});
+    expect(step).toMatchObject({
+      advisory: { kind: "recoverable-maintenance", message: expect.stringContaining("denied") },
+    });
+    expect(await fs.readFile(snapshot, "utf8")).toBe("pre-migration");
+  });
+});
 
 describe("Git runtime promotion", () => {
   let directory: string;

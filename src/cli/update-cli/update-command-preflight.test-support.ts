@@ -80,12 +80,15 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       linked: 4,
       copied: 1,
     };
-    f.retainUpdateRuntime.mockImplementationOnce(async ({ assertCurrent }) => {
+    const removed = "Removed abandoned updater runtime: /fixture/openclaw-update-runtime-Old001";
+    const failed = "Runtime retained at /fixture/openclaw-update-runtime-Old002: cleanup failed";
+    f.retainUpdateRuntime.mockImplementationOnce(async ({ assertCurrent, onArtifactCleanup }) => {
       assertCurrent();
       expectLatestStep({
         step: "updater-runtime-retention",
         status: "in_progress",
       });
+      onArtifactCleanup?.({ lines: [removed, failed], warnings: [failed] });
       return retention;
     });
 
@@ -95,7 +98,8 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       steps: containingStep({
         name: "updater-runtime-retention",
         exitCode: 0,
-        diagnostics: [JSON.stringify(retention)],
+        diagnostics: [JSON.stringify(retention), removed, failed],
+        warnings: [failed],
       }),
     });
     expectLatestStep({ step: "updater-runtime-retention", status: "completed" });
@@ -103,6 +107,7 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
       step: "diagnostic:updater-runtime-retention",
       detail: JSON.stringify(retention),
     });
+    expectLatestStep({ step: "warning:updater-runtime-retention", detail: failed });
   });
 
   it("ends unfinished retention at --timeout with the installed package untouched", async () => {

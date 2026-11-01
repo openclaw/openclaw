@@ -30,8 +30,13 @@ it("retains a PID with no command and continues to later holders", () => {
     { pid: missing, state: "S" },
     { pid: holder, state: "S", command: { ppid: 0, argv: ["openclaw-gateway"] } },
   ]);
+  const warnings = [expect.stringContaining(`PID ${missing}: process command is unavailable`)];
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [missing, holder], warnings });
+  // Use of one artifact needs evidence about that path: the Gateway has none, the unknown
+  // process could not be checked, and neither stops the census.
   expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual({
-    pids: [missing, holder],
-    warnings: [expect.stringContaining(`PID ${missing}: process command is unavailable`)],
+    pids: [],
+    incomplete: `could not verify PID ${missing}: process command is unavailable`,
+    warnings,
   });
 });

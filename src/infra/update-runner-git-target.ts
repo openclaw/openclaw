@@ -10,6 +10,7 @@ import {
   normalizeGitPathForFilesystem,
   quoteGitConfig,
 } from "./git-exec.js";
+import { claimUpdateArtifact } from "./temp-artifact-cleanup.js";
 import {
   DEV_BRANCH,
   isBetaTag,
@@ -114,6 +115,7 @@ export async function withGitTargetInspectionRoot<T>(
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-admission-"));
+  const releaseTemporaryRoot = await claimUpdateArtifact(temporaryRoot);
   const inspectionRoot = path.join(temporaryRoot, "repository.git");
   const command = async (
     root: string,
@@ -278,6 +280,7 @@ export async function withGitTargetInspectionRoot<T>(
             return params.onWarning(warning);
           },
         });
+        releaseTemporaryRoot();
         return removed;
       };
       if (!params.retainCleanup?.(cleanup)) {

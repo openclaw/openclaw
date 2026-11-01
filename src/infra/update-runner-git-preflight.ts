@@ -9,6 +9,7 @@ import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
+import { claimUpdateArtifact } from "./temp-artifact-cleanup.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import { resolveGitUpdateTrackingRef, type GitFetchTarget } from "./update-git-metadata.js";
@@ -603,6 +604,7 @@ export async function runGitCandidatePreflight(params: {
         : "preflight-worktree-failed",
     };
   }
+  const releasePreflightRoot = await claimUpdateArtifact(preflightRoot);
   const worktreeDir = path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
   let tested: PreflightCandidateResult | undefined;
   let cleanupUncertain = false;
@@ -674,18 +676,20 @@ export async function runGitCandidatePreflight(params: {
   } finally {
     if (!cleanupUncertain) {
       const cleanup = () =>
-        cleanupGitPreflight(params, worktreeDir, preflightRoot).catch(async (error: unknown) => {
-          await warnOnUpdateCleanupFailure(error, preflightRoot, async (message) => {
-            const warning = params.steps.findLast((entry) => entry.name === "preflight-cleanup");
-            if (!warning) {
-              return console.warn(message);
-            }
-            warning.advisory = { kind: "recoverable-maintenance", message };
-            const { progress, stepIndex: index, totalSteps: total } = step(warning.name);
-            await progress?.onStepComplete?.({ ...warning, index, total });
-          });
-          return false;
-        });
+        cleanupGitPreflight(params, worktreeDir, preflightRoot)
+          .catch(async (error: unknown) => {
+            await warnOnUpdateCleanupFailure(error, preflightRoot, async (message) => {
+              const warning = params.steps.findLast((entry) => entry.name === "preflight-cleanup");
+              if (!warning) {
+                return console.warn(message);
+              }
+              warning.advisory = { kind: "recoverable-maintenance", message };
+              const { progress, stepIndex: index, totalSteps: total } = step(warning.name);
+              await progress?.onStepComplete?.({ ...warning, index, total });
+            });
+            return false;
+          })
+          .finally(releasePreflightRoot);
       if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
         await cleanup();
       }

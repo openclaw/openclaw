@@ -477,7 +477,7 @@ export function createGitRuntimeTransaction({
     stderrTail: message,
     ...(warning ? { advisory: { kind: "recoverable-maintenance" as const, message } } : {}),
   });
-  return {
+  const transaction: PackageUpdateTransaction = {
     backupRoot: promotion.backupRoot,
     assertRollbackSafe,
     rollback: (assertCurrent) => {
@@ -500,7 +500,17 @@ export function createGitRuntimeTransaction({
           );
         }
         try {
-          return await promotion.cleanup(assertCurrent);
+          const retired = await promotion.cleanup(assertCurrent);
+          // Verified activation ends automatic database restoration. The capture clears this
+          // root when its snapshots must outlive activation for manual recovery.
+          if (outcome.activationVerified && transaction.databaseBackupRoot) {
+            assertCurrent();
+            await fs.rm(`${transaction.databaseBackupRoot}.databases`, {
+              recursive: true,
+              force: true,
+            });
+          }
+          return retired;
         } catch (error) {
           assertCurrent();
           if (
@@ -517,4 +527,5 @@ export function createGitRuntimeTransaction({
       })());
     },
   };
+  return transaction;
 }
