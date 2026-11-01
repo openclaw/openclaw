@@ -274,6 +274,12 @@ describe("Slack platform-authoritative automatic room history", () => {
     f.ctx.historyLimit = 0;
     const active = await f.prepare();
     expect(active?.RawBody).toContain("current request");
+    expect(active).toMatchObject({
+      MessageThreadId: undefined,
+      ReplyToId: undefined,
+      ThreadStarterBody: undefined,
+    });
+    expect(active?.ThreadLabel).toBeUndefined();
     expect(active?.InboundHistory).toBeUndefined();
     expect(f.history).not.toHaveBeenCalled();
     expect(f.replies).not.toHaveBeenCalled();
@@ -344,6 +350,12 @@ describe("Slack platform-authoritative automatic room history", () => {
     expect(prepared?.Body).toContain("thread history two");
     expect(prepared?.Body).not.toMatch(/outside thread cap|other channel discussion|future thread/);
     expect(prepared?.ThreadHistoryBody).toBeUndefined();
+    expect(prepared).toMatchObject({
+      MessageThreadId: "10.000",
+      ReplyToId: "10.000",
+      ThreadStarterBody: "thread root",
+    });
+    expect(prepared?.ThreadLabel).toContain("thread root");
     expect(f.history).not.toHaveBeenCalled();
     expect(f.replies).toHaveBeenLastCalledWith(
       expect.objectContaining({ channel: "C1", ts: "10.000", latest: "20.000" }),
