@@ -224,6 +224,8 @@ async function transportFailureAlert(
       payload: params.payload,
       runAtMs: params.runAtMs,
       channel: params.route.channel,
+      target: params.route.target,
+      directPolicy: params.route.directPolicy,
       to: params.route.to,
       mode: params.route.mode,
       accountId: params.route.accountId,

@@ -165,6 +165,7 @@ Failure notification routes resolve in this order:
 1. Route fields in the job's `failureAlert` object.
 2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
 3. The job's primary announce target.
+   When this tier applies, failure alerts keep the primary target's owner targeting and `directPolicy`.
 
 - `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.
 - Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.

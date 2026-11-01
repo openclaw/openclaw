@@ -169,6 +169,11 @@ export function resolveFailureAlert(
     job.delivery?.failureDestination?.to !== undefined ||
     globalConfig?.channel !== undefined ||
     globalConfig?.to !== undefined;
+  const hasAlertRouteSelector =
+    hasAnnounceRouteSelector ||
+    jobConfig?.accountId !== undefined ||
+    job.delivery?.failureDestination?.accountId !== undefined ||
+    globalConfig?.accountId !== undefined;
   const channel =
     mode === "announce" && !hasAnnounceRouteSelector && primaryChannel
       ? primaryChannel
@@ -199,6 +204,7 @@ export function resolveFailureAlert(
       !job.delivery?.failureDestination ||
       primaryAnnounceRoute?.threadId == null ||
       jobConfig?.to !== undefined);
+  const inheritsPrimaryTarget = primaryRouteMatches && !hasAlertRouteSelector;
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -210,6 +216,8 @@ export function resolveFailureAlert(
     to,
     mode,
     accountId,
+    target: inheritsPrimaryTarget ? primaryAnnounceRoute?.target : undefined,
+    directPolicy: inheritsPrimaryTarget ? primaryAnnounceRoute?.directPolicy : undefined,
     threadId: primaryRouteMatches ? primaryAnnounceRoute.threadId : undefined,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
     alternateRoute: alternateRoute !== null && !primaryRouteMatches,
@@ -368,6 +376,7 @@ function failureIncident(params: {
         params.route.to,
         params.route.accountId,
         params.route.threadId,
+        ...(params.route.target !== undefined ? [params.route.target] : []),
       ]),
     ),
     scope,
