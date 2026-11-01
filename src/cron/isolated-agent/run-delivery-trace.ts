@@ -8,11 +8,8 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  hasExplicitCronDeliveryTarget,
-  resolveCronDeliveryPlan,
-  type CronDeliveryPlan,
-} from "../delivery-plan.js";
+import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import {
   createCronRunDiagnosticsFromMissingWebSearchProvider,
   toolsAllowRequestsWebSearch,
@@ -25,6 +22,7 @@ import type {
   CronDeliveryTraceTarget,
   CronJob,
   CronRunDiagnostics,
+  CronStoredJob,
 } from "../types.js";
 import { logWarn } from "./run.runtime.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
@@ -179,6 +177,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   provider: string;
   model: string;
   modelApi?: string;
+  modelBaseUrl?: string;
+  modelParams?: Record<string, unknown>;
   agentId?: string;
   agentDir?: string;
   sessionKey?: string;
@@ -199,6 +199,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
         config: params.cfg,
         modelProvider: params.provider,
         modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
+        modelParams: params.modelParams,
         modelId: params.model,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -219,7 +221,7 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
       lateBindRuntimeConfig: true,
     });
     const { hasUsableWebSearchProvider } = await webSearchRuntimeLoader.load();
-    const hasWebSearchProvider = hasUsableWebSearchProvider({
+    const hasWebSearchProvider = await hasUsableWebSearchProvider({
       config,
       agentDir: params.agentDir,
       runtimeWebSearch,
@@ -240,7 +242,7 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
 /** Resolves the delivery plan and concrete target for one isolated cron run. */
 export async function resolveCronDeliveryContext(params: {
   cfg: OpenClawConfig;
-  job: CronJob;
+  job: CronStoredJob;
   agentId: string;
 }) {
   const deliveryPlan = resolveCronDeliveryPlan(params.job);
@@ -269,6 +271,8 @@ export async function resolveCronDeliveryContext(params: {
           ...deliveryPlan,
           sessionTarget:
             params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined,
+          sourceConversation:
+            deliveryPlan.mode === "announce" ? params.job.sourceConversation : undefined,
           // Match preview's sessionTarget precedence: custom jobs resolve their own
           // delivery session rather than the creator's last conversation.
           sessionKey: resolveCronDeliverySessionKey(params.job),

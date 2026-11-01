@@ -8,13 +8,13 @@ import type {
   DevicePairingForbiddenResult,
 } from "./device-pairing-core.types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import { publishDevicePairingResolution } from "./device-pairing-resolution.js";
 import { resolvePairingRequestExpiry } from "./device-pairing-state.kernel.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
 } from "./device-pairing-worker.js";
 
-/** Format a device-pairing authorization failure for CLI/API callers. */
 export function formatDevicePairingForbiddenMessage(result: DevicePairingForbiddenResult): string {
   switch (result.reason) {
     case "caller-scopes-required":
@@ -62,6 +62,17 @@ function approvalAdmission(
   };
 }
 
+function publishApproval(requestId: string, result: ApproveDevicePairingResult, baseDir?: string) {
+  if (result?.status === "approved") {
+    publishDevicePairingResolution(
+      { requestId, deviceId: result.device.deviceId },
+      "approved",
+      baseDir,
+    );
+  }
+  return result;
+}
+
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -81,7 +92,7 @@ export async function approveDevicePairing(
   const { isApprovalCurrent: _isApprovalCurrent, ...wireOptions } = options ?? {};
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
-    return await executeDevicePairingMutation(
+    const result = await executeDevicePairingMutation(
       {
         type: "devicePairing.approve",
         input: { requestId, options: wireOptions, nowMs: Date.now() },
@@ -92,28 +103,16 @@ export async function approveDevicePairing(
         admit: admission.admit,
       },
     );
-  });
+    return publishApproval(requestId, result, baseDir);
+  }, "devicePairing.approve");
 }
 
 export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
+  options: DeviceBootstrapApprovalOptions = {},
   baseDir?: string,
-): Promise<ApproveDevicePairingResult>;
-export async function approveBootstrapDevicePairing(
-  requestId: string,
-  bootstrapProfile: DeviceBootstrapProfile,
-  options: DeviceBootstrapApprovalOptions,
-  baseDir?: string,
-): Promise<ApproveDevicePairingResult>;
-export async function approveBootstrapDevicePairing(
-  requestId: string,
-  bootstrapProfile: DeviceBootstrapProfile,
-  optionsOrBaseDir?: DeviceBootstrapApprovalOptions | string,
-  maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
-  const options = typeof optionsOrBaseDir === "object" ? optionsOrBaseDir : undefined;
-  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
     const { result } = await executeDevicePairingMutation(
@@ -133,6 +132,6 @@ export async function approveBootstrapDevicePairing(
         admit: admission.admit,
       },
     );
-    return result;
-  });
+    return publishApproval(requestId, result, baseDir);
+  }, "devicePairing.approveBootstrap");
 }

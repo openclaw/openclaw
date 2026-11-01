@@ -1,12 +1,8 @@
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { isMatrixNotFoundError } from "./errors.js";
-import {
-  listMatrixOwnDevices,
-  resolveMatrixCrossSigningPublicationStatus,
-} from "./sdk/client-device-info.js";
 import {
   emitMatrixMembershipForRoom,
   refreshMatrixDmRoomIds,
@@ -52,6 +48,15 @@ export type {
 } from "./sdk/types.js";
 
 export class MatrixClient extends MatrixClientVerification {
+  private async resolveCryptoControlPlane(): Promise<MatrixCryptoBootstrapApi | string> {
+    if (!this.encryptionEnabled) {
+      return "Matrix encryption is disabled for this client";
+    }
+    await this.ensureStartedForCryptoControlPlane();
+    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
+    return crypto || "Matrix crypto is not available (start client with encryption enabled)";
+  }
+
   async verifyWithRecoveryKey(
     rawRecoveryKey: string,
   ): Promise<MatrixRecoveryKeyVerificationResult> {
@@ -67,15 +72,9 @@ export class MatrixClient extends MatrixClientVerification {
       };
     };
 
-    if (!this.encryptionEnabled) {
-      return await fail("Matrix encryption is disabled for this client");
-    }
-
-    await this.ensureStartedForCryptoControlPlane();
-    await this.ensureCryptoSupportInitialized();
-    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    if (!crypto) {
-      return await fail("Matrix crypto is not available (start client with encryption enabled)");
+    const crypto = await this.resolveCryptoControlPlane();
+    if (typeof crypto === "string") {
+      return await fail(crypto);
     }
 
     const backupUsableBeforeStagedRecovery =
@@ -152,23 +151,18 @@ export class MatrixClient extends MatrixClientVerification {
       await cryptoBootstrapper.bootstrap(crypto, {
         allowAutomaticCrossSigningReset: false,
       });
-      await this.enableTrustedRoomKeyBackupIfPossible(crypto);
+      await crypto.checkKeyBackupAndEnable();
       const status = await this.getOwnDeviceVerificationStatus();
       const backupUsable =
         resolveMatrixRoomKeyBackupReadinessError(status.backup, {
           requireServerBackup: true,
         }) === null;
       const stagedRecoveryKeyUsed = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
-      const secretStorageStatus =
-        typeof crypto.getSecretStorageStatus === "function"
-          ? await crypto.getSecretStorageStatus().catch(() => null)
-          : null;
-      const stagedRecoveryKeyConfirmedBySecretStorage =
-        Boolean(stagedKeyId) &&
-        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === true;
-      const stagedRecoveryKeyRejectedBySecretStorage =
-        Boolean(stagedKeyId) &&
-        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === false;
+      const stagedKeyValid = await this.checkSecretStorageKey(stagedKeyId ?? undefined).catch(
+        () => undefined,
+      );
+      const stagedRecoveryKeyConfirmedBySecretStorage = stagedKeyValid === true;
+      const stagedRecoveryKeyRejectedBySecretStorage = stagedKeyValid === false;
       const stagedRecoveryKeyUnlockedBackup =
         stagedRecoveryKeyUsed &&
         !stagedRecoveryKeyRejectedBySecretStorage &&
@@ -205,14 +199,9 @@ export class MatrixClient extends MatrixClientVerification {
       };
     };
 
-    if (!this.encryptionEnabled) {
-      return await fail("Matrix encryption is disabled for this client");
-    }
-
-    await this.ensureStartedForCryptoControlPlane();
-    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    if (!crypto) {
-      return await fail("Matrix crypto is not available (start client with encryption enabled)");
+    const crypto = await this.resolveCryptoControlPlane();
+    if (typeof crypto === "string") {
+      return await fail(crypto);
     }
 
     try {
@@ -234,11 +223,6 @@ export class MatrixClient extends MatrixClientVerification {
         await this.recoveryKeyStore.discardStagedRecoveryKey();
         return await fail(backupError);
       }
-      if (typeof crypto.restoreKeyBackup !== "function") {
-        await this.recoveryKeyStore.discardStagedRecoveryKey();
-        return await fail("Matrix crypto backend does not support full key backup restore");
-      }
-
       const restore = await crypto.restoreKeyBackup();
       if (rawRecoveryKey) {
         await this.recoveryKeyStore.commitStagedRecoveryKey({
@@ -249,8 +233,8 @@ export class MatrixClient extends MatrixClientVerification {
       return {
         success: true,
         backupVersion: backup.serverVersion,
-        imported: typeof restore.imported === "number" ? restore.imported : 0,
-        total: typeof restore.total === "number" ? restore.total : 0,
+        imported: restore.imported,
+        total: restore.total,
         loadedFromSecretStorage,
         restoredAt: new Date().toISOString(),
         backup: finalBackup,
@@ -278,14 +262,9 @@ export class MatrixClient extends MatrixClientVerification {
       };
     };
 
-    if (!this.encryptionEnabled) {
-      return await fail("Matrix encryption is disabled for this client");
-    }
-
-    await this.ensureStartedForCryptoControlPlane();
-    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    if (!crypto) {
-      return await fail("Matrix crypto is not available (start client with encryption enabled)");
+    const crypto = await this.resolveCryptoControlPlane();
+    if (typeof crypto === "string") {
+      return await fail(crypto);
     }
 
     await this.recoveryKeyStore.drainPendingPersistence();
@@ -323,7 +302,7 @@ export class MatrixClient extends MatrixClientVerification {
         // error (e.g. bad MAC from a different SSSS entry).
         allowSecretStorageRecreateWithoutRecoveryKey: true,
       });
-      await this.enableTrustedRoomKeyBackupIfPossible(crypto);
+      await crypto.checkKeyBackupAndEnable();
 
       const backup = await this.getRoomKeyBackupStatus();
       const createdVersion = backup.serverVersion;
@@ -365,18 +344,34 @@ export class MatrixClient extends MatrixClientVerification {
   }
 
   async getOwnCrossSigningPublicationStatus(): Promise<MatrixOwnCrossSigningPublicationStatus> {
-    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
-    return await resolveMatrixCrossSigningPublicationStatus({
+    const requestedUserId = this.client.getUserId() ?? this.selfUserId ?? null;
+    const query = async () =>
+      (await this.doRequest("POST", "/_matrix/client/v3/keys/query", undefined, {
+        device_keys: requestedUserId ? { [requestedUserId]: [] as string[] } : {},
+      })) as {
+        master_keys?: Record<string, unknown>;
+        self_signing_keys?: Record<string, unknown>;
+        user_signing_keys?: Record<string, unknown>;
+      };
+    let response: Awaited<ReturnType<typeof query>> | undefined;
+    if (requestedUserId) {
+      try {
+        response = await query();
+      } catch {
+        // Failed diagnostics report unpublished keys.
+      }
+    }
+    const userId = requestedUserId || null;
+    const masterKeyPublished = Boolean(userId && response?.master_keys?.[userId]);
+    const selfSigningKeyPublished = Boolean(userId && response?.self_signing_keys?.[userId]);
+    const userSigningKeyPublished = Boolean(userId && response?.user_signing_keys?.[userId]);
+    return {
       userId,
-      query: async () =>
-        (await this.doRequest("POST", "/_matrix/client/v3/keys/query", undefined, {
-          device_keys: userId ? { [userId]: [] as string[] } : {},
-        })) as {
-          master_keys?: Record<string, unknown>;
-          self_signing_keys?: Record<string, unknown>;
-          user_signing_keys?: Record<string, unknown>;
-        },
-    });
+      masterKeyPublished,
+      selfSigningKeyPublished,
+      userSigningKeyPublished,
+      published: masterKeyPublished && selfSigningKeyPublished && userSigningKeyPublished,
+    };
   }
 
   async bootstrapOwnDeviceVerification(params?: {
@@ -403,7 +398,6 @@ export class MatrixClient extends MatrixClientVerification {
     let rawRecoveryKey: string | undefined;
     try {
       await this.ensureStartedForCryptoControlPlane();
-      await this.ensureCryptoSupportInitialized();
       const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
       if (!crypto) {
         throw new Error("Matrix crypto is not available (start client with encryption enabled)");
@@ -472,7 +466,20 @@ export class MatrixClient extends MatrixClientVerification {
   }
 
   async listOwnDevices(): Promise<MatrixOwnDeviceInfo[]> {
-    return await listMatrixOwnDevices(this.client);
+    const client = this.client;
+    const currentDeviceId = client.getDeviceId()?.trim() || null;
+    const devices = await client.getDevices();
+    const entries = Array.isArray(devices?.devices) ? devices.devices : [];
+    return entries.map((device) => ({
+      deviceId: device.device_id,
+      displayName: device.display_name?.trim() || null,
+      lastSeenIp: device.last_seen_ip?.trim() || null,
+      lastSeenTs:
+        typeof device.last_seen_ts === "number" && Number.isFinite(device.last_seen_ts)
+          ? device.last_seen_ts
+          : null,
+      current: currentDeviceId !== null && device.device_id === currentDeviceId,
+    }));
   }
 
   async deleteOwnDevices(deviceIds: string[]): Promise<MatrixOwnDeviceDeleteResult> {
@@ -534,9 +541,9 @@ export class MatrixClient extends MatrixClientVerification {
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
       setCurrentSyncState: (state, error, fromCache) => {
         this.currentSyncState = state;
+        materializeErrorStack(error);
         this.currentSyncError = error;
         this.currentSyncFromCache = fromCache;
-        this.currentSyncRevision += 1;
       },
     });
   }

@@ -12,12 +12,13 @@ export type PackageActivationOptions = {
   runtime: PackageActivationRuntime;
   onPrepared: (command: string) => void;
   onUnavailable?: (message: string) => void;
+  onWarning?: (message: string) => void;
 };
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
 export type PackageUpdateTransaction = {
   backupRoot: string;
-  /** Migration snapshots must outlive the journal's package-only retirement. */
+  /** Capture root outside journal retirement; cleared when snapshots must be retained. */
   databaseBackupRoot?: string;
   assertRollbackSafe?: () => Promise<void>;
   rollback: (

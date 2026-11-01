@@ -28,39 +28,22 @@ export function hasTelegramBotEndpointApiRoot(apiRoot: unknown): boolean {
   if (typeof apiRoot !== "string" || !apiRoot.trim()) {
     return false;
   }
-  try {
-    const url = new URL(apiRoot.trim());
-    const segments = url.pathname.split("/").filter(Boolean);
-    const last = segments[segments.length - 1];
-    return Boolean(last && isTelegramBotEndpointSegment(last));
-  } catch {
-    return false;
-  }
-}
-
-function readRequestUrl(input: unknown): string | null {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  if (input instanceof Request) {
-    return input.url;
-  }
-  return null;
+  const segments = URL.parse(apiRoot.trim())?.pathname.split("/").filter(Boolean);
+  const last = segments?.at(-1);
+  return Boolean(last && isTelegramBotEndpointSegment(last));
 }
 
 export function extractTelegramApiMethod(input: unknown): string | null {
-  const url = readRequestUrl(input);
-  if (!url) {
-    return null;
-  }
-  try {
-    const pathname = new URL(url).pathname;
-    const segments = pathname.split("/").filter(Boolean);
-    return segments.at(-1)?.toLowerCase() ?? null;
-  } catch {
-    return null;
-  }
+  const url =
+    typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input instanceof Request
+          ? input.url
+          : null;
+  const segments = URL.parse(url ?? "")
+    ?.pathname.split("/")
+    .filter(Boolean);
+  return segments?.at(-1)?.toLowerCase() ?? null;
 }

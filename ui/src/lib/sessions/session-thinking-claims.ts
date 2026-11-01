@@ -1,13 +1,13 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCreateOutcome } from "./create.ts";
 import type { readSessionChangedEvent, SessionChangedResult } from "./reconcile.ts";
-import type { SessionGateway } from "./session-capability.ts";
 import {
   normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
+import type { SessionGateway } from "./session-types.ts";
 
 /** Created thinking choices remain claimed until their canonical row catches up. */
 export function createSessionThinkingClaims(

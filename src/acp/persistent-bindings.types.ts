@@ -100,26 +100,22 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
 export function parseConfiguredAcpSessionKey(
   sessionKey: string,
 ): { channel: ConfiguredAcpBindingChannel; accountId: string } | null {
-  const trimmed = sessionKey.trim();
-  if (!trimmed.startsWith("agent:")) {
+  const tokens = sessionKey.trim().split(":");
+  if (
+    tokens.length !== 7 ||
+    tokens[0] !== "agent" ||
+    tokens[2] !== "acp" ||
+    tokens[3] !== "binding"
+  ) {
     return null;
   }
-  const rest = trimmed.slice(trimmed.indexOf(":") + 1);
-  const nextSeparator = rest.indexOf(":");
-  if (nextSeparator === -1) {
-    return null;
-  }
-  const tokens = rest.slice(nextSeparator + 1).split(":");
-  if (tokens.length !== 5 || tokens[0] !== "acp" || tokens[1] !== "binding") {
-    return null;
-  }
-  const channel = normalizeOptionalLowercaseString(tokens[2]);
+  const channel = normalizeOptionalLowercaseString(tokens[4]);
   if (!channel) {
     return null;
   }
   return {
     channel: channel as ConfiguredAcpBindingChannel,
-    accountId: normalizeAccountId(tokens[3] ?? "default"),
+    accountId: normalizeAccountId(tokens[5] ?? "default"),
   };
 }
 

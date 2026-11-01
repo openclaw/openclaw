@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   isSessionDefaultDirectiveValue,
   normalizeVerboseLevel,
@@ -15,6 +16,8 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatCommandResultsEnglish } from "../../i18n/locales/en-chat-command-results.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
@@ -42,33 +45,31 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import { normalizeChatSendAckStatus } from "./chat-send-ack.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
+
+registerChatCommandResultsEnglish();
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh";
-  /** Model-dependent tools need refreshing after a confirmed selection. */
-  modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
-  /** When set, the caller should surface a visible pending item tied to the current run. */
-  pendingCurrentRun?: boolean;
   /** The command did not complete and a durable queued invocation may be retried. */
   failed?: boolean;
 };
 
 type SlashCommandContext = {
+  attachments?: readonly ChatAttachment[];
   sessions: SessionCapability;
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
+  runRequest?: { runId: string; signal: AbortSignal };
   chatModelCatalog?: ModelCatalogEntry[];
-  modelCatalog?: ModelCatalogEntry[];
-  sessionsResult?: SessionsListResult | null;
-  sessionsResultAgentId?: string | null;
   defaultAgentId?: string;
   agentId?: string;
   ownsModelOverride?: () => boolean;
@@ -102,7 +103,7 @@ async function patchSession(
   context: SlashCommandContext,
   sessionKey: string,
   patch: Parameters<typeof patchChatCommandSessionSettings>[2],
-  success: () => Pick<SlashCommandResult, "content" | "modelChanged">,
+  success: () => Pick<SlashCommandResult, "content">,
   failureKey: string,
   options?: Parameters<typeof patchChatCommandSessionSettings>[3],
 ): Promise<SlashCommandResult> {
@@ -129,22 +130,22 @@ export async function executeSlashCommand(
     case "help":
       return executeHelp();
     case "compact":
-      return await executeCompact(sessionKey, context);
+      return executeCompact(sessionKey, context);
     case "model":
-      return await executeModel(client, sessionKey, args, context);
+      return executeModel(client, sessionKey, args, context);
     case "think":
-      return await executeThink(client, sessionKey, args, context);
+      return executeThink(client, sessionKey, args, context);
     case "fast":
-      return await executeFast(sessionKey, args, context);
+      return executeFast(sessionKey, args, context);
     case "verbose":
-      return await executeVerbose(sessionKey, args, context);
+      return executeVerbose(sessionKey, args, context);
     case "usage":
-      return await executeUsage(sessionKey, context);
+      return executeUsage(sessionKey, context);
     case "agents":
-      return await executeAgents(client);
+      return executeAgents(client);
     case "steer":
     case "redirect":
-      return await executeRunCommand(client, sessionKey, args, context, commandName);
+      return executeRunCommand(client, sessionKey, args, context, commandName);
     default:
       return {
         content: t("chat.commandResults.unknownCommand", { command: `/${commandName}` }),
@@ -258,7 +259,6 @@ async function executeModel(
     { model: requestedModel },
     () => ({
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-      modelChanged: true,
     }),
     "chat.commandResults.model.setFailed",
     { ownsModelOverride: context.ownsModelOverride },
@@ -305,19 +305,14 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const modelCatalog = context.chatModelCatalog ?? [];
     const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
-    if (!level) {
+    if (
+      !level ||
+      isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false
+    ) {
       return {
-        content: t("chat.commandResults.thinking.unrecognized", {
-          level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
-        }),
-      };
-    }
-    if (isThinkingLevelOptionForSession(session, defaults, level, modelCatalog) === false) {
-      return {
-        content: t("chat.commandResults.thinking.unsupported", {
+        content: t(`chat.commandResults.thinking.${level ? "unsupported" : "unrecognized"}`, {
           level: rawLevel,
           options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
@@ -397,17 +392,9 @@ async function executeFast(
     }
   }
 
-  if (isSessionDefaultDirectiveValue(rawMode)) {
-    return patchSession(
-      context,
-      sessionKey,
-      { fastMode: null },
-      () => ({ content: t("chat.commandResults.fast.reset") }),
-      "chat.commandResults.fast.resetFailed",
-    );
-  }
-
-  const nextMode = normalizeChatFastModeInput(rawMode);
+  const nextMode = isSessionDefaultDirectiveValue(rawMode)
+    ? null
+    : normalizeChatFastModeInput(rawMode);
   if (nextMode === undefined) {
     return {
       content: t("chat.commandResults.fast.unrecognized", { mode: args.trim() }),
@@ -420,11 +407,17 @@ async function executeFast(
     { fastMode: nextMode },
     () => ({
       content:
-        nextMode === "auto"
-          ? t("chat.commandResults.fast.setAuto")
-          : t(nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled"),
+        nextMode === null
+          ? t("chat.commandResults.fast.reset")
+          : nextMode === "auto"
+            ? t("chat.commandResults.fast.setAuto")
+            : t(
+                nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled",
+              ),
     }),
-    "chat.commandResults.fast.setFailed",
+    nextMode === null
+      ? "chat.commandResults.fast.resetFailed"
+      : "chat.commandResults.fast.setFailed",
   );
 }
 
@@ -433,13 +426,13 @@ async function executeUsage(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const sessions = await listSessions(context);
-    const session = resolveCurrentSession(sessions, sessionKey);
+    const { session } = await loadCurrentSessionState(context, sessionKey);
     if (!session) {
       return { content: t("chat.commandResults.usage.noActiveThread") };
     }
-    const hasInputTokens = Number.isFinite(session.inputTokens);
-    const hasOutputTokens = Number.isFinite(session.outputTokens);
+    const usageAvailable = session.usageReport?.state !== "unavailable";
+    const hasInputTokens = usageAvailable && Number.isFinite(session.inputTokens);
+    const hasOutputTokens = usageAvailable && Number.isFinite(session.outputTokens);
     const input = hasInputTokens ? (session.inputTokens ?? 0) : 0;
     const output = hasOutputTokens ? (session.outputTokens ?? 0) : 0;
     const cumulativeTotal = hasInputTokens || hasOutputTokens ? input + output : null;
@@ -461,10 +454,10 @@ async function executeUsage(
     const lines = [
       `**${t("chat.commandResults.usage.title")}**`,
       t("chat.commandResults.usage.inputTokens", {
-        count: `**${formatCompactTokenCount(input)}**`,
+        count: `**${hasInputTokens ? formatCompactTokenCount(input) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.outputTokens", {
-        count: `**${formatCompactTokenCount(output)}**`,
+        count: `**${hasOutputTokens ? formatCompactTokenCount(output) : t("chat.commandResults.usage.notAvailable")}**`,
       }),
       t("chat.commandResults.usage.totalTokens", { count: `**${totalDisplay}**` }),
     ];
@@ -513,15 +506,6 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
   }
 }
 
-function selectedAgentListScope(
-  sessionKey: string,
-  context: SlashCommandContext,
-): { agentId?: string } {
-  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-  const agentId = parsedAgentId ?? normalizeOptionalLowercaseString(context.agentId);
-  return agentId ? { agentId } : {};
-}
-
 function resolveSelectedAgentId(
   sessionKey: string,
   context: SlashCommandContext,
@@ -536,42 +520,8 @@ function resolveSelectedAgentId(
   );
 }
 
-function resolveEquivalentSessionKeys(
-  currentSessionKey: string,
-  currentAgentId: string | undefined,
-): Set<string> {
-  const keys = new Set<string>([currentSessionKey]);
-  if (currentAgentId && currentAgentId !== DEFAULT_AGENT_ID) {
-    const agentMainKey = `agent:${currentAgentId}:${DEFAULT_MAIN_KEY}`;
-    const agentGlobalKey = `agent:${currentAgentId}:global`;
-    if (currentSessionKey === agentMainKey || currentSessionKey === agentGlobalKey) {
-      keys.add("global");
-    }
-  }
-  if (currentAgentId === DEFAULT_AGENT_ID) {
-    const canonicalDefaultMain = `agent:${DEFAULT_AGENT_ID}:main`;
-    if (currentSessionKey === DEFAULT_MAIN_KEY) {
-      keys.add(canonicalDefaultMain);
-    } else if (currentSessionKey === canonicalDefaultMain) {
-      keys.add(DEFAULT_MAIN_KEY);
-    }
-  }
-  return keys;
-}
-
 function formatDirectiveOptions(text: string, options: string): string {
   return `${text}\n${t("chat.commandResults.options", { options })}`;
-}
-
-async function listSessions(
-  context: SlashCommandContext,
-  options?: Parameters<SessionCapability["list"]>[0],
-): Promise<SessionsListResult> {
-  const result = await context.sessions.list(options);
-  if (!result) {
-    throw new Error(t("chat.commandResults.sessionUnavailable"));
-  }
-  return result;
 }
 
 async function loadCurrentSessionState(
@@ -581,49 +531,24 @@ async function loadCurrentSessionState(
   session: GatewaySessionRow | undefined;
   defaults: SessionsListResult["defaults"] | undefined;
 }> {
-  const sessions = await listSessions(context, selectedAgentListScope(sessionKey, context));
-  return resolveCommandSessionState(context, sessionKey, sessions);
-}
-
-function resolveCommandSessionState(
-  context: SlashCommandContext,
-  sessionKey: string,
-  sessions: SessionsListResult,
-): {
-  session: GatewaySessionRow | undefined;
-  defaults: SessionsListResult["defaults"] | undefined;
-} {
   const selectedAgentId = resolveSelectedAgentId(sessionKey, context);
+  const { session } = await context.sessions.describe({
+    key: sessionKey,
+    agentId: selectedAgentId,
+  });
+  assertCurrentSlashCommand(context);
   const defaultAgentId =
     normalizeOptionalLowercaseString(context.defaultAgentId) ?? DEFAULT_AGENT_ID;
-  const cachedAgentId = normalizeOptionalLowercaseString(context.sessionsResultAgentId);
-  const cachedSession =
-    context.sessionsResult && selectedAgentId && cachedAgentId === selectedAgentId
-      ? resolveCurrentSession(context.sessionsResult, sessionKey)
-      : undefined;
-  return {
-    session: resolveCurrentSession(sessions, sessionKey) ?? cachedSession,
-    // sessions.list scopes rows by agent, but its defaults remain global.
-    defaults:
-      !selectedAgentId || selectedAgentId === defaultAgentId ? sessions.defaults : undefined,
-  };
-}
-
-function resolveCurrentSession(
-  sessions: SessionsListResult | undefined,
-  sessionKey: string,
-): GatewaySessionRow | undefined {
-  const normalizedSessionKey = normalizeOptionalLowercaseString(sessionKey);
-  const currentAgentId =
-    parseAgentSessionKey(normalizedSessionKey ?? "")?.agentId ??
-    (normalizedSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
-  const aliases = normalizedSessionKey
-    ? resolveEquivalentSessionKeys(normalizedSessionKey, currentAgentId)
-    : new Set<string>();
-  return sessions?.sessions?.find((session) => {
-    const key = normalizeOptionalLowercaseString(session.key);
-    return key ? aliases.has(key) : false;
-  });
+  if (session || (selectedAgentId && selectedAgentId !== defaultAgentId)) {
+    return { session: session ?? undefined, defaults: undefined };
+  }
+  // Before the default agent's first session exists, commands still expose its defaults.
+  const listed = await context.sessions.list({ agentId: selectedAgentId, limit: 1 });
+  assertCurrentSlashCommand(context);
+  if (!listed) {
+    throw new Error(t("chat.commandResults.sessionUnavailable"));
+  }
+  return { session: undefined, defaults: listed.defaults };
 }
 
 async function loadModelCommandState(
@@ -631,16 +556,16 @@ async function loadModelCommandState(
   context: SlashCommandContext,
   sessionKey: string,
 ) {
-  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const modelCatalog = context.chatModelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
-  const [sessions, models] = await Promise.all([
-    listSessions(context, selectedAgentListScope(sessionKey, context)),
+  const [state, models] = await Promise.all([
+    loadCurrentSessionState(context, sessionKey),
     modelCatalog
       ? Promise.resolve(modelCatalog)
       : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
   ]);
   return {
-    ...resolveCommandSessionState(context, sessionKey, sessions),
+    ...state,
     models,
   };
 }
@@ -656,18 +581,30 @@ async function executeRunCommand(
   try {
     const message = args.trim();
     if (!message) {
-      return { content: t(`chat.commandResults.${command}.usage`) };
+      return {
+        content: t(`chat.commandResults.${command}.usage`),
+        ...(context.attachments?.length ? { failed: true } : {}),
+      };
     }
     assertCurrentSlashCommand(context);
-    const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
-      sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
-      message,
-      ...(command === "steer"
-        ? { deliver: false, queueMode: "steer" }
-        : { queueMode: "interrupt" }),
-      idempotencyKey: generateUUID(),
-    });
+    const response = await client.request<{ runId?: unknown; status?: unknown }>(
+      "chat.send",
+      {
+        sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        message,
+        attachments: buildChatApiAttachments(context.attachments),
+        ...(command === "steer"
+          ? { deliver: false, queueMode: "steer" }
+          : { queueMode: "interrupt" }),
+        idempotencyKey: context.runRequest?.runId ?? generateUUID(),
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: context.runRequest?.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
     const ackStatus = normalizeChatSendAckStatus(response?.status);
     if (ackStatus === "timeout" || ackStatus === "error") {
       return {
@@ -678,12 +615,8 @@ async function executeRunCommand(
       };
     }
     const result: SlashCommandResult = { content: t(`chat.commandResults.${command}.succeeded`) };
-    if (ackStatus === "started" || ackStatus === "in_flight") {
-      if (command === "steer") {
-        result.pendingCurrentRun = true;
-      } else {
-        result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
-      }
+    if (command === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
+      result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
     }
     return result;
   } catch (err) {

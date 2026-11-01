@@ -14,6 +14,7 @@ import type { StartupInstallStatus } from "./update-install-status.types.js";
 export async function resolveStartupInstallStatus(
   fetchRemoteGit: boolean,
   signal: AbortSignal,
+  discovered?: StartupInstallStatus,
 ): Promise<StartupInstallStatus> {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
@@ -23,19 +24,23 @@ export async function resolveStartupInstallStatus(
     }),
     readVerifiedGitUpdateReceipt(),
   ]);
-  const gitUpstreamFallback =
-    installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
-      ? { currentSha: installReceipt.sha, upstreamRef: installReceipt.upstreamRef }
-      : undefined;
   const timeoutMs = resolveGatewayStartupTiming().deadlineMs;
+  const git = discovered?.status.git;
+  // Carry completed discovery, not an obsolete receipt, into read-only admission.
+  // The source resolver still verifies root/revision and prefers live Git configuration.
+  const gitSourceHint =
+    discovered?.root && !discovered.status.error && git?.fetchOk === true && git.sha && git.upstream
+      ? { root: discovered.root, sha: git.sha, upstreamRef: git.upstream }
+      : installReceipt;
   const options = {
     root,
     signal,
     ...(fetchRemoteGit ? {} : { timeoutMs }),
     fetchGit: fetchRemoteGit,
     includeRegistry: false,
-    ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
-    ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
+    ...(gitSourceHint ? { gitSourceHint } : {}),
+    // Read-only admission must use the same live source policy as a remote refresh.
+    useDetachedDevUpstream: true,
   };
   for (let attempt = 0; ; attempt++) {
     let status: UpdateCheckResult | undefined;
@@ -69,7 +74,7 @@ export async function resolveStartupInstallStatus(
     }
     const message = failure
       ? formatErrorMessage(failure)
-      : `Git update facts unavailable after two ${timeoutMs / 1000}s probes`;
+      : `Git update facts unavailable after two ${timeoutMs / 1000}s checks`;
     status = {
       ...(status ?? { root, installKind: "unknown", packageManager: "unknown" }),
       ...(status?.git ? { git: { ...status.git, error: message } } : {}),
@@ -117,21 +122,7 @@ export async function prepareStartupUpdateInstall(
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
 
-function resolveGitInstalledAtMs(
-  git: NonNullable<UpdateCheckResult["git"]>,
-  installReceipt: VerifiedGitUpdateReceipt | null,
-  root: string | null,
-): number | undefined {
-  return installReceipt &&
-    root !== null &&
-    updateInstallRootsMatch(root, installReceipt.root) &&
-    git.sha &&
-    gitCommitPrefixesMatch(installReceipt.sha, git.sha)
-    ? installReceipt.installedAtMs
-    : undefined;
-}
-
-function resolveGitScheduleStatus(
+export function resolveGitScheduleStatus(
   update: UpdateCheckResult,
   installReceipt: VerifiedGitUpdateReceipt | null,
   root: string | null,
@@ -143,7 +134,15 @@ function resolveGitScheduleStatus(
     return undefined;
   }
   const git = update.git;
-  const installedAtMs = git ? resolveGitInstalledAtMs(git, installReceipt, root) : undefined;
+  const installedAtMs =
+    git &&
+    installReceipt &&
+    root !== null &&
+    updateInstallRootsMatch(root, installReceipt.root) &&
+    git.sha &&
+    gitCommitPrefixesMatch(installReceipt.sha, git.sha)
+      ? installReceipt.installedAtMs
+      : undefined;
   const metadata = git
     ? {
         ...(git.sha ? { currentSha: git.sha } : {}),

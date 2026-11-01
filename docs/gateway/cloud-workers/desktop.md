@@ -56,13 +56,19 @@ machine is disposable: save required outputs before stopping it. Attaching a
 machine does not automatically synchronize the primary workspace; the agent
 must copy the required files or prepare the project on the machine.
 
+The machine's effective total TTL still bounds desktop use. OpenClaw heartbeats
+the effective idle window while it owns the worker, but desktop input, open
+viewers, and those heartbeats do not extend total lifetime. `keep` does not make
+the desktop persistent. Save required outputs before expiry; see
+[lease lifetime](/gateway/cloud-workers#lease-lifetime).
+
 If stopping a conversation environment fails, cleanup retries with exponential
 backoff from 30 seconds to five minutes, on the next reconciliation sweep.
 After ten attempts or one hour, whichever comes first, cleanup is parked for
 the rest of that Gateway process. Environment status reports an error with the
 lease ID, last failure, and recovery instructions; the lease stays owned and
 blocks replacement until cleanup is confirmed. For Crabbox, inspect it with
-`crabbox leases list` and run `crabbox stop <lease>` as needed, then retry Stop
+`crabbox inspect --id <lease> --json` and run `crabbox stop <lease>` as needed, then retry Stop
 in the conversation. An explicit Stop or Gateway restart starts a fresh retry
 budget. A text-only 404 from Crabbox is an unknown cleanup outcome, not proof
 that the lease was released.
@@ -85,13 +91,13 @@ Changing the lab does not provision or replace workers.
 
 The bundled Crabbox plugin supports direct AWS and Azure profiles. Coordinator-backed AWS, Azure, and Hetzner profiles are supported when the selected coordinator supports that target's desktop. OpenClaw keeps worker execution node-only: `openclaw worker`, workspace transfer, desktop observation, and app launch all use the authenticated outbound node connection. It does not restore SSH execution, a reverse tunnel, or rsync. Direct Hetzner rejects OpenClaw's fixed lease ID, so desktop profiles fail before allocation unless Hetzner uses a capable managed coordinator.
 
-Each node connects to its desktop's authenticated RFB server through `127.0.0.1:5900`. The desktop also has a browser with loopback CDP on port `9222` and provider-owned Browser and Terminal launchers. OpenClaw installs a worker wallpaper so the disposable desktop is easy to identify. Setup is idempotent and completes before the cloud desktop becomes available, including on provisioning replay. Project image preparation keeps desktop setup before project setup and capture.
+Each node connects to its desktop's authenticated RFB server through `127.0.0.1:5900`. The desktop also has a browser with loopback CDP on port `9222` and provider-owned Browser and Terminal launchers. OpenClaw installs a worker wallpaper so the disposable desktop is easy to identify. Setup is safe to repeat and completes before the cloud desktop becomes available, including on provisioning replay. Project image preparation keeps desktop setup before project setup and capture.
 
 Linux uses Crabbox's XFCE session on display `:99`. Native Windows uses Crabbox's interactive-session launcher so the enrolled node and CUA run as the desktop user, with the same account and session checked on replay. macOS uses the dedicated signed **OpenClaw Cloud Worker** app to host CUA and the enrolled node in the worker account's GUI session; see the image prerequisites below.
 
 A vision-capable agent whose tool policy permits `computer` controls this desktop through the session's exact placement; it cannot select another node. This works for both OpenClaw workers and Codex remote execution. See [Desktop and computer control](/gateway/cloud-sessions#desktop-and-computer-control) for tool enablement and manual-control guidance.
 
-The desktop never gains public ingress. The node reads the lease's password file locally, inspects the loopback RFB security offer, and keeps that same connection for the viewer. Linux and Windows use VNC password authentication. macOS uses Apple Remote Desktop account authentication with the inspected worker username and a private copy of Crabbox's managed password. These credentials pass transiently through the authenticated node connection for preauthentication; the viewer does not enter the worker password. The node redeems a single-use Gateway broker ticket over its already-connected origin. Opening viewers therefore creates no extra unauthenticated probe connections. TLS deployments pin the same Gateway certificate used by the node connection. The Gateway revalidates the durable environment, lease, node, owner epoch, desktop descriptor, connection, and pairing both before dispatch and after attach; drain, replacement, or teardown aborts the stream and any pending app launch. The shared desktop session owner performs RFB preauthentication, view-only input filtering, and single-controller arbitration. Browser protocol negotiation overlaps worker authentication, but authentication success and desktop traffic wait for both sides to finish.
+The desktop never gains public ingress. The node reads the lease's password file locally, inspects the loopback RFB security offer, and keeps that same connection for the viewer. Linux and Windows use VNC password authentication. macOS uses Apple Remote Desktop account authentication with the inspected worker username and a private copy of Crabbox's managed password. These credentials pass transiently through the authenticated node connection for preauthentication; the viewer does not enter the worker password. The node redeems a single-use Gateway broker ticket over its already-connected origin. Opening viewers therefore creates no extra unauthenticated check connections. TLS deployments pin the same Gateway certificate used by the node connection. The Gateway revalidates the durable environment, lease, node, owner epoch, desktop descriptor, connection, and pairing both before dispatch and after attach; drain, replacement, or teardown aborts the stream and any pending app launch. The shared desktop session owner performs RFB preauthentication, view-only input filtering, and single-controller arbitration. Browser protocol negotiation overlaps worker authentication, but authentication success and desktop traffic wait for both sides to finish.
 
 An open chat updates its desktop target when committed session placement events arrive, including worker replacement and teardown, without waiting for a sidebar refresh.
 

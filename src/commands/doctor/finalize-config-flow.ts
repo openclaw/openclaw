@@ -1,8 +1,6 @@
-// Final doctor config-write decision after preview/repair mode has collected mutations.
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 
-/** Decide whether doctor should write the repaired candidate config or only print hints. */
 export async function finalizeDoctorConfigFlow(params: {
   cfg: OpenClawConfig;
   candidate: OpenClawConfig;

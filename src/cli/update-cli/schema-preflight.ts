@@ -4,8 +4,9 @@ import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../../config/sessions/targets.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { preflightOpenClawDatabaseSchemaContexts } from "../../state/openclaw-database-preflight-contexts.js";
 import {
   OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -26,9 +27,45 @@ type TargetDatabaseSchemaContext = {
 
 export type TargetDatabaseSchemaContextOptions = {
   legacyConfigPlan?: LegacyConfigUpdatePlan;
-  /** Candidate admission owns schema validation; the installed process still pins source bytes. */
-  configValidation?: "candidate";
-};
+} & (
+  | {
+      /** Read-only candidate validation; the result must never become a config write plan. */
+      validateConfigForAdmission: (
+        snapshot: ConfigFileSnapshot,
+      ) => Promise<OpenClawConfig | undefined>;
+      configValidation?: never;
+    }
+  | {
+      validateConfigForAdmission?: never;
+      /** Candidate admission owns schema validation; the installed process still pins source bytes. */
+      configValidation?: "candidate";
+    }
+);
+
+export function assertReadableGitMetadata(
+  metadataUnreadable: string | undefined,
+  code: Parameters<typeof createUpdatePreflightFailure>[0] = "target-git-metadata",
+): void {
+  if (metadataUnreadable) {
+    const failure = createUpdatePreflightFailure(code, metadataUnreadable);
+    throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
+      failureFacts: failure.failureFacts,
+    });
+  }
+}
+
+// Doctor's input hash stays root-only; activation also fences include bytes and targets.
+export function updateConfigSource(snapshot: ConfigFileSnapshot) {
+  return {
+    path: snapshot.path,
+    exists: snapshot.exists,
+    raw: snapshot.raw,
+    hash: snapshot.hash,
+    includedPaths: snapshot.includedPaths ?? [],
+    includeProvenance: snapshot.includeProvenance ?? [],
+    sourceConfig: snapshot.sourceConfig,
+  };
+}
 
 /** Candidate admission sees only the invoking process's config and shared-state selectors. */
 export function isCandidateAdmissionContextCovered(
@@ -86,34 +123,33 @@ export async function captureTargetDatabaseSchemaContext(
   const before = planned?.snapshot;
   let legacyConfigPlan =
     before &&
-    before.path === snapshot.path &&
-    before.exists === snapshot.exists &&
-    before.raw === snapshot.raw &&
-    before.hash === snapshot.hash &&
-    isDeepStrictEqual(before.includedPaths ?? [], snapshot.includedPaths ?? []) &&
-    isDeepStrictEqual(before.includeProvenance ?? [], snapshot.includeProvenance ?? []) &&
-    isDeepStrictEqual(before.sourceConfig, snapshot.sourceConfig) &&
-    isDeepStrictEqual(
-      planned.includeIdentity.includeFileHashesForWrite ?? {},
-      writeOptions.includeFileHashesForWrite ?? {},
-    ) &&
-    isDeepStrictEqual(
-      planned.includeIdentity.includeFileTargetsForWrite ?? {},
-      writeOptions.includeFileTargetsForWrite ?? {},
+    isDeepStrictEqual(updateConfigSource(before), updateConfigSource(snapshot)) &&
+    (["includeFileHashesForWrite", "includeFileTargetsForWrite"] as const).every((key) =>
+      isDeepStrictEqual(planned.includeIdentity[key] ?? {}, writeOptions[key] ?? {}),
     )
       ? planned
       : undefined;
-  if (before?.path === snapshot.path && !legacyConfigPlan) {
+  if (before?.path === snapshot.path && !legacyConfigPlan && !snapshot.valid) {
     // This is read-only admission. A concurrent save needs a fresh projection,
     // never reuse of the old source's plan or refusal merely because it changed.
-    if (!snapshot.valid) {
-      const { planLegacyConfigForUpdateChannel } =
-        await import("../../commands/doctor/legacy-config-repair.js");
-      legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
-    }
+    const { planLegacyConfigForUpdateChannel } =
+      await import("../../commands/doctor/legacy-config-repair.js");
+    legacyConfigPlan = planLegacyConfigForUpdateChannel(snapshot, writeOptions);
   }
+  const validateConfigForAdmission = options?.validateConfigForAdmission;
+  if (validateConfigForAdmission && !isArtifactPreservingStateRead()) {
+    throw new Error("Candidate config projection requires artifact-preserving admission.");
+  }
+  // Validate the freshly read source, never a projection captured before an awaited read.
+  const admissionConfig =
+    validateConfigForAdmission && !legacyConfigPlan
+      ? await validateConfigForAdmission(snapshot)
+      : undefined;
   if (
-    (!snapshot.valid && !legacyConfigPlan && configValidation !== "candidate") ||
+    ((!snapshot.valid || validateConfigForAdmission) &&
+      !legacyConfigPlan &&
+      !admissionConfig &&
+      configValidation !== "candidate") ||
     snapshot.readError
   ) {
     throw createUpdateConfigFailure(snapshot);
@@ -123,10 +159,13 @@ export async function captureTargetDatabaseSchemaContext(
     config:
       configValidation === "candidate"
         ? snapshot.sourceConfig
-        : (legacyConfigPlan?.config ?? snapshot.sourceConfig ?? snapshot.config),
+        : (legacyConfigPlan?.config ?? admissionConfig ?? snapshot.sourceConfig ?? snapshot.config),
     configSnapshot: snapshot,
     readEnv,
     ...(legacyConfigPlan ? { legacyConfigPlan } : {}),
+    ...(admissionConfig && !isDeepStrictEqual(admissionConfig, snapshot.sourceConfig)
+      ? { configProjectedForAdmission: true }
+      : {}),
     ...(configValidation ? { configValidation } : {}),
   };
 }
@@ -139,22 +178,29 @@ export async function checkTargetDatabaseSchemasForContexts(
   if (!supportedVersions) {
     return { incompatible: [], indeterminate: [] };
   }
-  const inspectionContexts = contexts.map((context) => {
-    try {
-      return {
-        env: context.env,
-        configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
-          context.config,
-          { env: context.env },
-        ),
-      };
-    } catch (error) {
-      throw new UpdatePreMutationError(
-        "database-schema-preflight",
-        `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
-      );
-    }
-  });
+  const { resolveDatabaseEngineSelection } = await import("../../infra/database-engine/config.js");
+  const inspectionContexts = await Promise.all(
+    contexts.map(async (context) => {
+      try {
+        return {
+          env: context.env,
+          databaseEngineSelection: await resolveDatabaseEngineSelection(
+            context.config,
+            context.env,
+          ),
+          configuredAgentDatabaseCandidatePaths: resolveConfiguredAgentDatabaseCandidatePaths(
+            context.config,
+            { env: context.env },
+          ),
+        };
+      } catch (error) {
+        throw new UpdatePreMutationError(
+          "database-schema-preflight",
+          `Update refused: could not inspect configured database paths: ${formatErrorMessage(error)}`,
+        );
+      }
+    }),
+  );
   return preflightOpenClawDatabaseSchemaContexts({
     contexts: inspectionContexts,
     supportedVersions,

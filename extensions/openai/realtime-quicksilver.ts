@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 // Realtime voice uses browser or Gateway-owned WebRTC when the host owns delegation,
 // and the Platform-key direct WebSocket transport elsewhere.
 
-const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
+export const OPENAI_GPT_LIVE_MODEL_PREFIX = "gpt-live";
 
 export const OPENAI_GPT_LIVE_MODELS = ["gpt-live-1", "gpt-live-1-codex"] as const;
 const OPENAI_GPT_LIVE_API_VOICES = [

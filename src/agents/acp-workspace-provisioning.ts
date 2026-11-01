@@ -32,37 +32,23 @@ export async function resolveAcpAgentWorkspaceProvisioningForTurn(params: {
     return "standard";
   }
   const invocation = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
-  if (params.cwd) {
-    return resolveAgentWorkspaceProvisioning(params.cfg, params.agentId, {
-      ...invocation,
-      cwd: params.cwd,
-    });
-  }
   // A live ACP session carries this invocation's effective cwd.
-  const metaCwd = resolveAcpSessionCwd(params.sessionEntry?.acp);
-  if (metaCwd) {
-    return resolveAgentWorkspaceProvisioning(params.cfg, params.agentId, {
-      ...invocation,
-      cwd: metaCwd,
-    });
-  }
+  let cwd = params.cwd || resolveAcpSessionCwd(params.sessionEntry?.acp);
   // Configured conversation bindings are conversation-scoped: resolve the one
   // binding that owns this session key rather than scanning every binding.
-  if (params.sessionKey) {
+  if (!cwd && params.sessionKey) {
     const { resolveConfiguredAcpBindingSpecBySessionKey } =
       await import("../acp/persistent-bindings.resolve.js");
-    const bindingCwd = resolveConfiguredAcpBindingSpecBySessionKey({
+    cwd = resolveConfiguredAcpBindingSpecBySessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
     })?.cwd;
-    if (bindingCwd) {
-      return resolveAgentWorkspaceProvisioning(params.cfg, params.agentId, {
-        ...invocation,
-        cwd: bindingCwd,
-      });
-    }
   }
   // No invocation cwd known: the agent-global runtime acp.cwd default (if any)
   // still applies; otherwise the run falls back to the workspace as cwd.
-  return resolveAgentWorkspaceProvisioning(params.cfg, params.agentId, invocation);
+  return resolveAgentWorkspaceProvisioning(
+    params.cfg,
+    params.agentId,
+    cwd ? { ...invocation, cwd } : invocation,
+  );
 }

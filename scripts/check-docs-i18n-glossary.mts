@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Validates docs i18n glossary terms against configured usage rules.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -114,7 +113,7 @@ function isGlossaryCandidate(term: string, maxWords: number) {
     /[A-Za-z]/.test(term) &&
     !term.includes("`") &&
     term.length <= MAX_TERM_LENGTH &&
-    term.trim().split(/\s+/).filter(Boolean).length <= maxWords
+    term.split(/\s+/).length <= maxWords
   );
 }
 

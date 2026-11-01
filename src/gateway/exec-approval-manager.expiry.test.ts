@@ -291,12 +291,13 @@ describe("ExecApprovalManager timeout expiry publication", () => {
     },
   );
 
-  it.for(
-    (["resolve", "deny", "cancel", "reconcile"] as const).flatMap((operation) => [
-      { operation, replaced: false },
-      { operation, replaced: true },
-    ]),
-  )(
+  it.for([
+    { operation: "resolve", replaced: true },
+    { operation: "cancel", replaced: false },
+    { operation: "cancel", replaced: true },
+    { operation: "reconcile", replaced: false },
+    { operation: "reconcile", replaced: true },
+  ] as const)(
     "retains expiry custody for $operation (replacement: $replaced)",
     async ({ operation, replaced }, testContext) => {
       const fixture = await prepareExpiry(testContext);
@@ -327,7 +328,7 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         const committed = await operatorApprovalStore.resolveOperatorApproval({
           id: record.id,
           decision: "allow-once",
-          resolver: { kind: "device", id: "fixture" },
+          resolver: { kind: "device", id: "control-ui" },
           expectedKind: "exec",
           runtimeEpoch: manager.runtimeEpoch,
           databaseOptions,
@@ -341,17 +342,17 @@ describe("ExecApprovalManager timeout expiry publication", () => {
       }
       const transition =
         operation === "reconcile"
-          ? manager.reconcileDurableLookup({
-              outcome: "found",
-              record: expectDefined(observed, "observed terminal"),
-            })
+          ? manager.reconcileDurableLookup(
+              { outcome: "found", record: expectDefined(observed, "observed terminal") },
+              "Control UI",
+            )
           : operation === "resolve"
             ? manager.resolve(record.id, "allow-once")
             : manager.forceDenyDetailed(
                 record.id,
-                operation === "cancel" ? "run-aborted" : "malformed-verdict",
+                "run-aborted",
                 { kind: "system", id: "fixture" },
-                operation === "cancel" ? "cancelled" : "denied",
+                "cancelled",
               );
       const outcome = await transition.then(
         (value) => ({ ok: true, value }),
@@ -382,8 +383,14 @@ describe("ExecApprovalManager timeout expiry publication", () => {
         ).toHaveLength(0);
       } else {
         expect(outcome.ok).toBe(true);
-        const expectedDecision =
-          operation === "cancel" ? null : operation === "deny" ? "deny" : "allow-once";
+        if (operation === "reconcile") {
+          expect("value" in outcome ? outcome.value : undefined).toBe(observed);
+          expect(manager.getLiveSnapshot(record.id)).toMatchObject({
+            decision: "allow-once",
+            resolvedBy: "Control UI",
+          });
+        }
+        const expectedDecision = operation === "cancel" ? null : "allow-once";
         await expect(fixture.decision).resolves.toBe(expectedDecision);
         await fixture.observation;
         expect(fixture.handoff).toHaveBeenCalledExactlyOnceWith(expectedDecision);

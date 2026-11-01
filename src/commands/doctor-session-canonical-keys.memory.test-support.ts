@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.test-support.js";
 
 export const canonicalMemoryTestSupportModuleUrl = import.meta.url;
 

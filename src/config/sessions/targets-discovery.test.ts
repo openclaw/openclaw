@@ -7,11 +7,11 @@ import * as sessionDirs from "../../agents/session-dirs.js";
 import type { OpenClawConfig } from "../config.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import { resolveExistingAgentSessionStoreTargetsSync } from "./targets-discovery.native.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
-  resolveExistingAgentSessionStoreTargetsSync,
 } from "./targets.js";
 import {
   countMatching,
@@ -264,6 +264,13 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
         expect.objectContaining({ agentId: "ops", storePath: storePaths.ops }),
       );
       expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
+      const scoped = resolveAllAgentSessionStoreTargetsSync(
+        createCustomRootCfg(path.join(home, "custom-state")),
+        { env: process.env, agentIds: new Set(["retired-agent"]) },
+      );
+      expect(scoped).toEqual([
+        { agentId: "retired-agent", storePath: storePaths["Retired Agent"] },
+      ]);
     });
   });
 

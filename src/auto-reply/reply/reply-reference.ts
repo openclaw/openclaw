@@ -1,17 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
 
-type ReplyReferencePlanner = {
-  /** Returns the effective reply/thread id for the next send without updating state. */
-  peek(): string | undefined;
-  /** Returns the effective reply/thread id for the next send and updates state. */
-  use(): string | undefined;
-  /** Mark that a reply was sent (needed when no reference is used). */
-  markSent(): void;
-  /** Whether a reply has been sent in this flow. */
-  hasReplied(): boolean;
-};
-
 export function isSingleUseReplyToMode(mode: ReplyToMode): boolean {
   return mode === "first" || mode === "batched";
 }
@@ -24,9 +13,8 @@ export function createReplyReferencePlanner(options: {
   startId?: string;
   /** Disable reply references entirely (e.g., when posting inside a new thread). */
   allowReference?: boolean;
-  /** Seed the planner with prior reply state. */
   hasReplied?: boolean;
-}): ReplyReferencePlanner {
+}) {
   let hasReplied = options.hasReplied ?? false;
   const allowReference = options.allowReference !== false;
   const existingId = normalizeOptionalString(options.existingId);
@@ -44,6 +32,7 @@ export function createReplyReferencePlanner(options: {
   };
 
   return {
+    /** Read the next reference without consuming the first-reply slot. */
     peek: resolve,
     use() {
       const id = resolve();
@@ -52,6 +41,7 @@ export function createReplyReferencePlanner(options: {
       }
       return id;
     },
+    /** Mark a reply sent even when it used no reference. */
     markSent() {
       hasReplied = true;
     },

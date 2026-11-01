@@ -16,19 +16,15 @@ export { readImageProbeFromHeader };
 
 export type { ImageMetadata, ImageProbe };
 
-/** OpenClaw-facing image backend availability error, preserving the failed operation and causes. */
+/** OpenClaw-facing image backend availability error, retaining its standard cause. */
 class ImageProcessorUnavailableError extends Error {
   readonly code = "IMAGE_PROCESSOR_UNAVAILABLE";
-  readonly operation: string;
-  readonly causes: unknown[];
 
-  constructor(operation: string, message?: string, causes: unknown[] = []) {
-    super(message ?? `Image processor unavailable for ${operation}`, {
+  constructor(message: string, causes: unknown[]) {
+    super(message, {
       cause: causes.find((cause): cause is Error => cause instanceof Error),
     });
     this.name = "ImageProcessorUnavailableError";
-    this.operation = operation;
-    this.causes = causes;
   }
 }
 
@@ -114,42 +110,61 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
 /** Resizes or encodes image bytes as JPEG through the shared image processor. */
 export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   return (
-    await encodeImage(
-      params.buffer,
-      {
-        format: "jpeg",
-        resize: {
-          maxSide: params.maxSide,
-          enlarge: params.withoutEnlargement === false,
-        },
-        quality: params.quality,
+    await encodeImage(params.buffer, {
+      format: "jpeg",
+      resize: {
+        maxSide: params.maxSide,
+        enlarge: params.withoutEnlargement === false,
       },
-      "resizeToJpeg",
-    )
+      quality: params.quality,
+    })
   ).data;
 }
 
-async function encodeImage(
-  buffer: Buffer,
-  options: EncodeOptions,
-  operation: string,
-): Promise<EncodedImage> {
+async function encodeImage(buffer: Buffer, options: EncodeOptions): Promise<EncodedImage> {
   try {
     return await createImageProcessor().encode(buffer, options);
   } catch (error) {
     if (error instanceof RastermillUnavailableError) {
-      throw new ImageProcessorUnavailableError(operation, error.message, error.causes);
+      throw new ImageProcessorUnavailableError(error.message, error.causes);
     }
     throw error;
   }
 }
 
+const WITHIN_BYTES_QUALITY_STEPS = [92, 85, 78, 70, 62, 52, 42] as const;
+const WITHIN_BYTES_SIDE_SCALES = [1, 0.85, 0.7, 0.5, 0.35, 0.25] as const;
+
+/**
+ * Re-encodes a still image under `maxBytes`, keeping its dimensions while any quality step fits.
+ * Opaque images become JPEG; transparent images stay PNG and shrink instead of losing alpha.
+ * Returns the smallest candidate with `withinBudget: false` when nothing fits.
+ */
+export async function encodeImageWithinBytes(
+  buffer: Buffer,
+  maxBytes: number,
+): Promise<EncodedImage> {
+  const meta = readImageMetadataFromHeader(buffer);
+  const longSide = meta ? Math.max(meta.width, meta.height) : 0;
+  const sides = [
+    ...new Set(WITHIN_BYTES_SIDE_SCALES.map((scale) => Math.round(longSide * scale))),
+  ].filter((side) => side > 0);
+  return await encodeImage(buffer, {
+    format: "auto",
+    maxBytes,
+    opaque: { format: "jpeg" },
+    transparent: { format: "png" },
+    transparency: "preserve",
+    search: { ...(sides.length ? { maxSide: sides } : {}), quality: WITHIN_BYTES_QUALITY_STEPS },
+  });
+}
+
 export async function convertImageToJpeg(buffer: Buffer): Promise<Buffer> {
-  return (await encodeImage(buffer, { format: "jpeg" }, "convertImageToJpeg")).data;
+  return (await encodeImage(buffer, { format: "jpeg" })).data;
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
-  return (await encodeImage(buffer, { format: "jpeg" }, "convertHeicToJpeg")).data;
+  return (await encodeImage(buffer, { format: "jpeg" })).data;
 }
 
 /** Converts image bytes to PNG, including BMP fallback unsupported by Rastermill's Photon gate. */
@@ -187,15 +202,11 @@ export async function optimizeImageToPng(
   resizeSide: number;
   compressionLevel: number;
 }> {
-  const out = await encodeImage(
-    buffer,
-    {
-      format: "png",
-      maxBytes,
-      search: options?.sides === undefined ? {} : { maxSide: options.sides },
-    },
-    "optimizeImageToPng",
-  );
+  const out = await encodeImage(buffer, {
+    format: "png",
+    maxBytes,
+    search: options?.sides === undefined ? {} : { maxSide: options.sides },
+  });
   return {
     buffer: out.data,
     optimizedSize: out.bytes,

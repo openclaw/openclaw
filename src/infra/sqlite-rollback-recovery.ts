@@ -4,7 +4,9 @@ import { isDeepStrictEqual } from "node:util";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { withExistingSqliteRollbackDatabase } from "./sqlite-existing-database.js";
 import { withSqliteRecoverySnapshot } from "./sqlite-recovery-snapshot.js";
+import { hashPublishedFileSync } from "./sqlite-snapshot-file.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 
 /** Prepare evidence without replaying the source journal; only its live owner may admit rollback. */
 export async function prepareSqliteRollbackRecovery<T>(params: {
@@ -28,7 +30,9 @@ export async function prepareSqliteRollbackRecovery<T>(params: {
       throw new Error("SQLite recovery requires regular unshared database and sidecar files.");
     }
     params.assertFileSafe(file, stat);
-    return `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.mtimeNs}:${stat.size}`;
+    // Recovery is cold: no pager lock is held while these raw descriptors close.
+    const content = hashPublishedFileSync(file, stat);
+    return `${stat.dev}:${stat.ino}:${readDatabaseIdentityBirthtime(stat)}:${stat.size}:${content.sha256}`;
   };
   params.assertIdentity();
   const files = [params.path, `${params.path}-journal`, `${params.path}-wal`, `${params.path}-shm`];

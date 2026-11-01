@@ -4,7 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
@@ -12,7 +12,7 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
+import { selectActiveTranscriptIdentityRows } from "./session-accessor.sqlite-projection-read.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -29,7 +29,7 @@ import {
 } from "./session-transcript-retained-data.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
-/** Loads one raw suffix only after SQL-side row and byte bounds are proven. */
+/** Native adapter for the deprecated synchronous manager and process-held incognito. */
 export function loadTranscriptSuffixEventsBoundedSync(
   scope: SessionTranscriptReadScope,
   startSeq: number,
@@ -55,7 +55,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
   limits: { maxBytes: number; maxEvents: number; retainedCustomDataIds?: readonly string[] },
 ): TranscriptEvent[] {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       assertSessionTranscriptHot(database.db, resolved.sessionId);
@@ -84,7 +84,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           .select([
             "seq",
             /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
-            sql<number>`${transcriptRetainedDataBytesSql(limits.retainedCustomDataIds ?? [])} + 1`.as(
+            sql<number>`${transcriptRetainedDataBytesSql(database.db, limits.retainedCustomDataIds ?? [])} + 1`.as(
               "serialized_bytes",
             ),
           ])
@@ -116,6 +116,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           .selectFrom("transcript_events")
           .select([
             projectTranscriptRetainedDataSql(
+              database.db,
               transcriptEventJsonSql(database.db),
               limits.retainedCustomDataIds ?? [],
             ).as("event_json"),
@@ -129,12 +130,6 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           )
           .orderBy("seq", "asc"),
       ).rows;
-      if (
-        rows.length !== metadata.length ||
-        rows.some((row, index) => row.seq !== metadata[index]?.seq)
-      ) {
-        throw new Error(`SQLite transcript changed while reading suffix for ${resolved.sessionId}`);
-      }
       // SAFETY: Raw transcript rows are parsed through the persisted transcript event union.
       return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
     },
@@ -154,16 +149,9 @@ export function readPreviousIndexedTranscriptEventSync(
   return withCurrentProjectionSnapshot(
     scope,
     (projection) => {
-      const db = getActiveTranscriptKysely(projection.database);
       const row = executeSqliteQueryTakeFirstSync(
         projection.database.db,
-        db
-          .selectFrom("transcript_event_identities as identity")
-          .innerJoin("session_transcript_active_events as active", (join) =>
-            join
-              .onRef("active.session_id", "=", "identity.session_id")
-              .onRef("active.event_seq", "=", "identity.seq"),
-          )
+        selectActiveTranscriptIdentityRows(projection.database)
           .innerJoin("transcript_events as event", (join) =>
             join
               .onRef("event.session_id", "=", "identity.session_id")

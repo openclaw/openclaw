@@ -3,7 +3,6 @@ import { isNewerBuzzRevision } from "./event-order.js";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 import { BUZZ_ROOM_MEMBERSHIP_KIND, parseBuzzRoomMembershipEvent } from "./room-membership.js";
-import { BUZZ_CHANNEL_ID_PATTERN } from "./target.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
 const METADATA_KIND = 39000;
@@ -67,7 +66,7 @@ export async function discoverBuzzRoomsOnRelay(params: {
         .map((event) => parseBuzzRoomMembershipEvent(event, params.relayPublicKey))
         .filter((membership) => membership?.roles.get(params.publicKey) === "bot")
         .map((membership) => membership?.roomId)
-        .filter((roomId): roomId is string => Boolean(roomId?.match(BUZZ_CHANNEL_ID_PATTERN))),
+        .filter((roomId): roomId is string => Boolean(roomId)),
     ),
   ].toSorted();
   if (roomIds.length === 0) {

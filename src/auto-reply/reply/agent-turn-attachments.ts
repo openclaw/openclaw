@@ -18,10 +18,7 @@ const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
 function hasInboundHistoryMedia(ctx: MsgContext): boolean {
-  return (
-    Array.isArray(ctx.InboundHistory) &&
-    ctx.InboundHistory.some((entry) => Array.isArray(entry.media) && entry.media.length > 0)
-  );
+  return ctx.InboundHistory?.some((entry) => (entry.media?.length ?? 0) > 0) ?? false;
 }
 
 /** Current-turn image indexes already represented by media-understanding text. */
@@ -63,21 +60,14 @@ export async function resolveAgentTurnAttachments(params: {
         isImageAttachment: runtime.isImageAttachment,
       })
     : [];
-  const firstHistoryAttachmentIndex =
-    currentAttachments.reduce(
-      (maxIndex, attachment) =>
-        Number.isFinite(attachment.index) ? Math.max(maxIndex, attachment.index) : maxIndex,
-      -1,
-    ) + 1;
+  // Normalization assigns ascending source indexes, preserving gaps from filtered media.
+  const firstHistoryAttachmentIndex = (currentAttachments.at(-1)?.index ?? -1) + 1;
   const historyAttachments: MediaAttachment[] = recentHistoryImages.map((image, index) => ({
     path: image.path,
     mime: image.contentType,
     kind: image.kind,
     index: firstHistoryAttachmentIndex + index,
   }));
-  const historyAttachmentByIndex = new Map(
-    historyAttachments.map((attachment, index) => [attachment.index, recentHistoryImages[index]]),
-  );
   const mediaAttachments = [...currentAttachments, ...historyAttachments];
   const cache = new runtime.MediaAttachmentCache(mediaAttachments, {
     localPathRoots: runtime.resolveMediaAttachmentLocalRoots({
@@ -92,10 +82,7 @@ export async function resolveAgentTurnAttachments(params: {
   const resultIndexes: number[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
-    if (!runtime.isImageAttachment(attachment)) {
-      return false;
-    }
-    if (!normalizeOptionalString(attachment.path)) {
+    if (!runtime.isImageAttachment(attachment) || !normalizeOptionalString(attachment.path)) {
       return false;
     }
     try {
@@ -113,7 +100,7 @@ export async function resolveAgentTurnAttachments(params: {
         data: buffer.toString("base64"),
       });
       resultIndexes.push(attachment.index);
-      const historyImage = historyAttachmentByIndex.get(attachment.index);
+      const historyImage = recentHistoryImages[attachment.index - firstHistoryAttachmentIndex];
       if (historyImage) {
         resolvedHistoryImages.push(historyImage);
       }
@@ -164,10 +151,7 @@ export async function resolveAgentTurnAttachments(params: {
 export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,
 ): AgentTurnAttachment[] {
-  if (!Array.isArray(images)) {
-    return [];
-  }
-  return images
+  return (images ?? [])
     .map((image) => ({
       mediaType: image.mimeType,
       data: image.data,

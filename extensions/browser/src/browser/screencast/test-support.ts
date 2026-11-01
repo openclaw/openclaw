@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 import type { BrowserScreencastTokenParams } from "./tokens.js";
 
+const profileSignal = new AbortController().signal;
+
 export function screencastParams(
   overrides: Partial<BrowserScreencastTokenParams> = {},
 ): BrowserScreencastTokenParams {
@@ -12,7 +14,7 @@ export function screencastParams(
     maxWidth: 1280,
     maxHeight: 1280,
     quality: 70,
-    lifecycleGeneration: 0,
+    profileSignal,
     lifecycleSignal: new AbortController().signal,
     assertCurrent: () => {},
     checkNavigationAllowed: async () => {},

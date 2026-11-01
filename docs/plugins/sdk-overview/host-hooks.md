@@ -8,13 +8,13 @@ read_when:
   - You need trusted tool policy or tool-result middleware
 ---
 
-The SDK seams for plugins that participate in the host lifecycle rather than
+The SDK hooks for plugins that participate in the host lifecycle rather than
 only adding a provider, channel, or tool. Part of the
 [Plugin SDK overview](/plugins/sdk-overview).
 
 ## Host hooks for workflow plugins
 
-Host hooks are the SDK seams for plugins that need to participate in the host
+Host hooks are the SDK interfaces for plugins that need to participate in the host
 lifecycle rather than only adding a provider, channel, or tool. They are
 generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
@@ -35,7 +35,6 @@ plugins.
 | `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
 | `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
 | `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
-| `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
 
 Runtime lifecycle registrations can also supply `dispose()` for resources captured
 by that registration. Explicitly owned, uncached plugin inspections invoke it on
@@ -51,6 +50,16 @@ registrations bypass the global registry cache. Warm callers share their prepare
 generation. Registration resources remain held through admitted work and cleanup;
 `dispose()` runs after the final claim releases, including any bounded idle
 retention between runs.
+
+Use `api.runContext` to share JSON-compatible, per-run data between a plugin's
+admitted agent hooks and its Gateway service registrations. Values are keyed by
+run ID, plugin ID, and namespace, so separate prepared-runtime registrations of
+the same plugin can exchange admission metadata without sharing closure state.
+Scoped hooks can access this data while their invocation is admitted; merely
+loading a plugin for inspection does not grant access, and retired registrations
+cannot read or write it. Terminal agent-event handlers can still read the data;
+the host clears it after those handlers settle. This does not grant scoped hooks
+permission to steer runs, inject prompts, or emit process-global events.
 
 Creating a configured or standalone publication does not enable this ownership.
 Existing root registries and raw SDK host registrations keep their original owner;
@@ -136,30 +145,6 @@ Standalone programmatic CLI calls and caller-owned Commander programs retain
 their existing lifecycle. `cli-metadata` remains inert and accepts CLI descriptors
 only; keep its `machineOutput` resolver pure and synchronous.
 
-`registerBoardWidgetContentKind(...)` is for plugins that own a declarative
-widget source format. The registration supplies a globally unique lowercase
-`kind`, a short label, one capability-scoped plugin surface plus its renderer
-resource paths, a synchronous `validateSource(source)` callback, and a
-synchronous `composeDocument(...)` callback. Core adds the document shell,
-sandbox, theme, and ticket-bound action bridge. Registrations exist only while
-their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
-Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
-not for renderer registration.
-
-For inline rendering, `resources.readPublicResource(path)` can optionally return
-`{ body: Uint8Array, contentType: string }` for the registered resource paths.
-These bytes are public: the isolated sandbox listener serves them with no
-Gateway credentials. Return only static renderer assets, never user data or
-secrets. Unregistered paths and registrations without this callback stay private.
-Opting in reserves every declared path in one global sandbox namespace: no other
-content kind may declare the same path, even without a public reader. Registration
-rejects these collisions regardless of order; only private registrations may
-share paths. Public paths must already be canonical URL pathnames, without dot
-segments, backslashes, query strings, or fragments. The sandbox host endpoint
-`/mcp-app-sandbox` is reserved. These additional path restrictions apply only to
-registrations with `readPublicResource`; private paths retain their capability
-URL encoding.
-
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway
 hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.
@@ -183,7 +168,7 @@ cannot be combined with `placement: "route:<pluginId>"`. Registration rejects
 duplicate slugs from another active plugin (the first registration wins) and
 Gateway-owned names: `api`, `plugins`, `plugin`, `focus`, `approve`, `ask`, `share`,
 `j`, `v1`, `ui`, `mcp-app-sandbox`, `__openclaw__`, `__openclaw`, `sessions`,
-`agent`, `agents`, and probe names `health`, `healthz`, `ready`, `readyz`, `startup`,
+`agent`, `agents`, and check names `health`, `healthz`, `ready`, `readyz`, `startup`,
 and `startupz`.
 
 The Control UI ignores slugs matching the first segment of any native route or
@@ -200,8 +185,8 @@ short-lived, HttpOnly grant scoped to that plugin and route root so the
 sandboxed frame can load without copying the Gateway bearer token into its URL
 or JavaScript. The authenticated parent renews the grant while the external tab
 is active and before mounting it after navigation or browser resume. It also
-probes the grant from the same opaque sandbox before mounting, so browser
-privacy modes that block the cookie fail closed with an unavailable panel.
+checks the grant from the same opaque sandbox before mounting, so browser
+privacy modes that block the cookie leave the panel unavailable.
 The frame grant accepts only `GET` and `HEAD` and always carries
 `operator.read`; `requiredScopes` controls tab visibility but never widens the
 cookie grant. Mutations remain on explicit Gateway-authenticated parent or
@@ -256,6 +241,7 @@ Use the grouped namespaces for new plugin code:
 
 - `api.session.state.registerSessionExtension(...)`
 - `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.steerActiveRun(...)`
 - `api.session.workflow.registerSessionSchedulerJob(...)`
 - `api.session.workflow.sendSessionAttachment(...)`
 - `api.session.workflow.scheduleSessionTurn(...)`
@@ -267,18 +253,45 @@ Use the grouped namespaces for new plugin code:
 - `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
 - `api.lifecycle.registerRuntimeLifecycle(...)`
 
-The equivalent flat methods remain available as deprecated compatibility
-aliases for existing plugins. The compatibility registry deprecated them on
+The flat aliases `api.emitAgentEvent`, `api.setRunContext`, `api.getRunContext`,
+`api.clearRunContext`, `api.registerSessionAction`, `api.sendSessionAttachment`,
+`api.scheduleSessionTurn`, and `api.unscheduleSessionTurnsByTag` have been removed.
+Use their grouped replacements above. These aliases were deprecated on
 2026-07-25 with a `removeAfter` date of 2026-10-01; see the
-[removal timeline](/plugins/sdk-migration/removal-timeline). Do not add new
-plugin code that calls
-`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
-`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
-`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
-`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
-`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
-`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
-`api.unscheduleSessionTurnsByTag` directly.
+[removal timeline](/plugins/sdk-migration/removal-timeline).
+
+The other equivalent flat methods remain deprecated compatibility aliases for
+existing plugins. New plugin code should use the grouped namespaces. Steering
+is exposed only through `api.session.workflow.steerActiveRun(...)`.
+
+`api.agent.events.registerAgentEventSubscription(...)` accepts optional `streams`
+and `phases` filters:
+
+```typescript
+api.agent.events.registerAgentEventSubscription({
+  id: "tool-starts",
+  streams: ["tool"],
+  phases: ["start"],
+  handle(event, ctx) {
+    ctx.setRunContext("lastToolStart", { timestamp: event.ts });
+  },
+});
+```
+
+Both filters must match for delivery. Omit a filter or pass an empty array to
+leave that dimension unrestricted. `phases` must be an array of non-empty
+strings; registration trims each string. A non-empty phase filter matches only
+events whose `data` is an object with a string `phase` in that list. Events with
+no phase or a non-string phase are excluded.
+Set `payload: "metadata"` to retain only own enumerable top-level `data` fields
+containing strings of at most 256 characters, numbers, booleans, or `null`, without
+reading accessors; omitted `payload` or `"full"` preserves the full cloned payload.
+
+Subscribe narrowly: event payloads are cloned per matching subscription. The
+host applies stream and phase filters before cloning payloads or allocating
+handler context. Filtering out terminal lifecycle events does not prevent
+host-owned terminal bookkeeping or run-context cleanup; cleanup still waits
+for pending subscription handlers within the host's bounded grace period.
 
 `scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
 Cron scheduler. Cron owns timing and run history; the Plugin SDK only constrains
@@ -341,7 +354,7 @@ Examples of non-Plan consumers:
   manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
   they need to rewrite a tool result after execution and before the runtime
   feeds that result back into the model. This is the trusted runtime-neutral
-  seam for async output reducers such as tokenjuice.
+  interface for async output reducers such as tokenjuice.
 
 Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
 runtime. Supported ids are `agentsapi`, `codex`, and `openclaw`; for example,
@@ -424,7 +437,7 @@ when it follows a failed or revoked core operation.
 
 The Crabbox adapter uses `crabbox exec --id <lease-id> [--pty] -- /bin/sh -c ...`
 and `stop --current-repo --id <lease-id>` from the original owning workspace. Its
-pre-allocation `exec --check` probe requires `execution` and `currentRepoStop` to
+pre-allocation `exec --check` check requires `execution` and `currentRepoStop` to
 both be true; initial support is for direct Daytona leases. Static SSH continues
 to use its existing settings through an adapter into the same workspace owner.
 
@@ -474,16 +487,45 @@ The UI clears removed contributions and ignores stale request results.
 
 The `linkReader` fields are:
 
-| Field           | Contract                                                                                                                                                                                  |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                               |
-| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.    |
-| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
-| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
-| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
+| Field           | Contract                                                                                                                                                                                            |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                                         |
+| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.              |
+| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh?, section? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
+| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
+| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                            |
 
-Preview and detail requests include the selected `agentId` when available; detail
-requests also accept `refresh: true`. The receiving owner must authorize identity
+A reader may opt into progressive detail loading with `progressive: true`.
+The host requests `section: "overview"` first; that response is a normal document
+with its title and Markdown body, an opaque `revision`, and `deferredSections`
+containing any of `"checks"`, `"files"`, and `"discussion"`. Deferred sections
+are intentional omissions, not partial upstream failures. The host can request
+checks and discussion independently and files on demand, using the same detail
+method and `section` field. Every section response still includes `url`, `title`,
+and `body` plus the selected section's fields and the same source `revision`.
+The host merges only that section's fields and rejects mismatched revisions;
+plugins must not label current mutable content with an older cached revision.
+Checks own `checks`; files own `files` and their total/truncation fields;
+discussion owns `comments` and their total/truncation fields. Each request must
+independently authorize source access and current caller lifetime. Do not retain
+caller-bound authority for another section or start work beyond the request.
+Omitting `section` retains the full-document response, including for older hosts
+and tools. Readers without `progressive: true` receive the existing full-document
+request. The existing `ControlUiLinkReaderDetailParams` and
+`ControlUiLinkReaderDocument` exports describe these fields without extra SDK aliases.
+
+A reader may set `sessionScoped: true` to receive the foreground pane's `sessionKey`
+on preview and detail requests. This is a context hint, never authority: its Gateway
+method must authorize the current operator and exact session before reading private
+data. Hovercard caches and seeds retire when that pane changes sessions. Readers
+without this flag retain the public request shape.
+
+Preview and detail requests include the selected `agentId` when available and
+accept `refresh: true` to wait for fresh metadata. An explicitly `stale` preview
+gets one refresh attempt; a still-stale or failed refresh retains a labeled cached
+preview with short backoff. Fresh reader details update matching hovercards in
+the same connection, agent, and pane session without waiting for their browser cache
+to expire. The receiving owner must authorize identity
 selection rather than treating this hint as access authority.
 
 Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS
@@ -544,8 +586,9 @@ item list is incomplete, including when a source could not be read. Preserve
 the document body if an optional checks request fails, and never report success
 from incomplete data. An empty complete list is `neutral`.
 
-The bundled GitHub reader reads check runs and legacy commit statuses anonymously
-for the pull request's exact head SHA, not its base or test-merge commit. It reads
+The bundled GitHub reader reads check runs and legacy commit statuses with the
+request's admitted read identity (or anonymously) for the pull request's exact
+head SHA, not its base or test-merge commit. It reads
 one page of at most 100 entries from each API and returns at most 100 items; it
 does not follow pagination links. GitHub's `filter=latest` selects check runs;
 the reader retains every distinct run ID rather than inferring workflow identity
@@ -557,16 +600,18 @@ outranks unavailable data; only complete data can produce success or neutral.
 Canceled, timed-out, stale, and action-required runs count as failures; skipped
 and neutral runs remain neutral. Partial results retain known items and an
 explicit incomplete summary. PR snapshots share the existing document cache
-for 30 seconds; an explicit refresh rereads the PR and both CI sources for that
-response's head. This surface neither evaluates required-check rules nor claims
-that a PR can merge.
+for 30 seconds. Refreshing an overview retires its cached sections; a subsequent
+checks request reads both CI sources for that overview's head. A full-document
+refresh rereads the PR and both CI sources. On-demand PR files use a fresh head
+and reject a diff if that head changes during the read. This surface neither
+evaluates required-check rules nor claims that a PR can merge.
 
 Return only bounded data appropriate for the caller. Rendered content cannot
 activate embedded app widgets, script, file actions, or code execution. Inline
 remote images use anonymous CORS and no referrer unless the reader declares
 `imageMethod`. That method resolves images through the plugin when the source
 does not support browser CORS. It must validate the source and every redirect,
-bound response size and time, and return the requested URL with a canonical
+bound response size and time, and return the requested URL with a normalized
 base64 raster image data URL; SVG and HTML are not supported. Do not forward
 browser cookies or service credentials to image hosts. The host displays the
 validated image data without executing remote content. The host accepts PNG, JPEG, GIF, and WebP data up to

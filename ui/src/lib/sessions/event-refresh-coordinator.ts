@@ -18,6 +18,7 @@ export function createSessionEventRefreshCoordinator({
   // Hidden pages and in-flight requests retain one trailing invalidation.
   let queued = false;
   let retryAt: number | null = null;
+  let fallback: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimer = () => {
     clearTimeout(timer);
@@ -32,7 +33,7 @@ export function createSessionEventRefreshCoordinator({
     const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
     timer = setTimeout(
       start,
-      retryAt === null ? Math.max(delay, nextAllowed - now) : Math.max(0, retryAt - now),
+      retryAt !== null ? Math.max(0, retryAt - now) : Math.max(delay, nextAllowed - now),
     );
   };
 
@@ -61,6 +62,8 @@ export function createSessionEventRefreshCoordinator({
   };
 
   const absorb = () => {
+    clearTimeout(fallback);
+    fallback = undefined;
     revision += 1;
     clearTimer();
     queued = false;
@@ -73,6 +76,13 @@ export function createSessionEventRefreshCoordinator({
   };
 
   return {
+    scheduleFallback() {
+      fallback ??= setTimeout(() => {
+        fallback = undefined;
+        queued = true;
+        arm();
+      }, 60_000);
+    },
     scheduleRetry(delayMs: number) {
       retryAt = Date.now() + delayMs;
       queued = true;

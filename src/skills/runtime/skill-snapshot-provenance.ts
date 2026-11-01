@@ -25,16 +25,3 @@ export function resolveSkillSnapshotExecutionFileHost(
   }
   return Reflect.get(roots, EXECUTION_WORKSPACE_FILE_HOST) === "gateway" ? "gateway" : undefined;
 }
-
-export function copySkillSnapshotExecutionFileHost<T extends SkillSnapshot>(
-  source: SkillSnapshot,
-  target: T,
-): T {
-  if (target.skillRoots) {
-    recordSkillRootsExecutionFileHost(
-      target.skillRoots,
-      resolveSkillSnapshotExecutionFileHost(source),
-    );
-  }
-  return target;
-}

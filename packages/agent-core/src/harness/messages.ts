@@ -5,7 +5,7 @@ import {
   type ImageContent,
   type Message,
   type TextContent,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/types";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getOpenClawSystemUpdateKind } from "../operator-messages.js";
@@ -178,6 +178,20 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       default:
         return;
     }
+    const turnScoped = message.role === "custom" && asOptionalRecord(message.details)?.turnScoped;
+    if (
+      message.role === "custom" &&
+      getOpenClawSystemUpdateKind(message) &&
+      typeof turnScoped === "boolean"
+    ) {
+      llmMessages.push({
+        role: "user",
+        content: message.content,
+        timestamp: message.timestamp,
+        operatorMessage: { turnScoped },
+      });
+      return;
+    }
     const timestamp =
       message.role === "compactionSummary"
         ? normalizeCompactionSummaryTimestamp(message.timestamp)
@@ -210,7 +224,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         runtimeContextCarrier: true,
       });
     } else {
-      llmMessages.push({ role: "user", content, timestamp });
+      llmMessages.push({ role: "user", content, timestamp, synthetic: true });
     }
   });
   return llmMessages;

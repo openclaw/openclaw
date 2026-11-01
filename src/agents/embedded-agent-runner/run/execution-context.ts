@@ -11,18 +11,19 @@ import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js
 import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { createEmbeddedRunProgressController } from "./progress-controller.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type PreparedEmbeddedRunInput = {
+  modelCallSequence?: { value: number };
   /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
   onInitialWriterPrepared: (resource: AsyncDisposable) => void;
   preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
   runParams: RunEmbeddedAgentParamsWithSessionFile;
-  sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
+  sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>;
   contextEngineAgentId?: string;
   provider: string;
   modelId: string;
@@ -51,12 +52,10 @@ export type PreparedEmbeddedRunInput = {
 export type PreparedEmbeddedAttemptDispatchInput = {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-  contextEngine: ContextEngine;
+  contextEngine?: ContextEngine;
   sessionPromptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
   terminalRetryState: ReturnType<typeof createEmbeddedRunTerminalRetryState>;
   replayState: EmbeddedRunReplayState;
-  provider: string;
-  modelId: string;
   startupStagesEmitted: boolean;
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;
@@ -64,7 +63,5 @@ export type PreparedEmbeddedAttemptDispatchInput = {
   isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: NonNullable<EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"]>;
   getPostCompactionAbortError: () => Error | undefined;
-  setPostCompactionAbortController: (controller: AbortController | undefined) => void;
-  clearPostCompactionAbortController: (controller: AbortController) => void;
   permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
 };

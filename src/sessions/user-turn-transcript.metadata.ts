@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
@@ -61,7 +62,11 @@ export function buildPersistedUserTurnMetadata(
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
+  const requesterOrigin = input.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: input.requesterOrigin })
+    : undefined;
   return {
+    ...(requesterOrigin ? { requesterOrigin } : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}
@@ -154,6 +159,16 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
     nextMessage.display = false;
   }
   const runtimeMeta = { ...nextMessage["__openclaw"] };
+  delete runtimeMeta.chatRequestIdentity;
+  if (typeof preparedMeta?.chatRequestIdentity === "string") {
+    runtimeMeta.chatRequestIdentity = preparedMeta.chatRequestIdentity;
+  }
+  delete runtimeMeta.requesterOrigin;
+  if (preparedMeta?.requesterOrigin) {
+    runtimeMeta.requesterOrigin = captureRequesterOrigin({
+      requesterOrigin: preparedMeta.requesterOrigin,
+    });
+  }
   delete runtimeMeta.intent;
   if (preparedMeta?.intent) {
     runtimeMeta.intent = preparedMeta.intent;
@@ -225,6 +240,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
+  const chatRequestIdentity = originalMeta?.chatRequestIdentity;
+  const requesterOrigin = originalMeta?.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: originalMeta.requesterOrigin })
+    : undefined;
   const originalContent =
     originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
       ? undefined
@@ -270,6 +289,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   };
   const protectedMeta: Record<string, unknown> = {
     ...nextUserMessage["__openclaw"],
+    ...(typeof chatRequestIdentity === "string" ? { chatRequestIdentity } : {}),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyToPreview ? { replyToPreview } : {}),
@@ -281,6 +301,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   };
   if (intent === undefined) {
     delete protectedMeta.intent;
+  }
+  delete protectedMeta.requesterOrigin;
+  if (requesterOrigin) {
+    protectedMeta.requesterOrigin = requesterOrigin;
   }
   // A redacting hook must not leave an alternate copy of the original text visible.
   const contentUnchanged = isDeepStrictEqual(nextUserMessage.content, originalContent);

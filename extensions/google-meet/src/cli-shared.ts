@@ -107,7 +107,7 @@ type GoogleMeetGatewayMethod =
   | "googlemeet.testListen"
   | "googlemeet.testSpeech";
 
-type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
+type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false };
 
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
@@ -299,7 +299,6 @@ export function parsePositiveIntegerOption(
 }
 
 export async function callGoogleMeetGateway(params: {
-  callGateway: typeof callGatewayFromCli;
   method: GoogleMeetGatewayMethod;
   payload?: Record<string, unknown>;
   timeoutMs?: number;
@@ -308,7 +307,7 @@ export async function callGoogleMeetGateway(params: {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
     return {
       ok: true,
-      payload: await params.callGateway(
+      payload: await callGatewayFromCli(
         params.method,
         { json: true, timeout: String(timeoutMs) },
         params.payload,
@@ -317,7 +316,7 @@ export async function callGoogleMeetGateway(params: {
     };
   } catch (err) {
     if (isGatewayUnavailableForLocalFallback(err, params.method)) {
-      return { ok: false, error: err };
+      return { ok: false };
     }
     throw err;
   }

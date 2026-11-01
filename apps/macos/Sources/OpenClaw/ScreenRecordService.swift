@@ -32,35 +32,22 @@ final class ScreenRecordService {
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?,
-        outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
     {
-        guard AppLaunchRuntimePlan.current.allowsActivation ||
-            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
-        else {
-            throw ScreenRecordError.writeFailed(
-                "Screen Recording permission required; relaunch without --no-activate and retry")
-        }
+        try await ScreenCaptureSupport.requirePermission()
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
         let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
         let includeAudio = includeAudio ?? false
 
-        let outURL: URL = {
-            if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return URL(fileURLWithPath: outPath)
-            }
-            return FileManager().temporaryDirectory
-                .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
-        }()
+        let outURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-screen-record-\(UUID().uuidString).mp4")
         try? FileManager().removeItem(at: outURL)
 
-        let content = try await SCShareableContent.current
-        let displays = content.displays.sorted { $0.displayID < $1.displayID }
-        guard !displays.isEmpty else { throw ScreenRecordError.noDisplays }
-
         let idx = screenIndex ?? 0
-        guard idx >= 0, idx < displays.count else { throw ScreenRecordError.invalidScreenIndex(idx) }
-        let display = displays[idx]
+        let display = try await ScreenCaptureSupport.display(
+            at: idx,
+            noDisplays: ScreenRecordError.noDisplays,
+            invalidIndex: ScreenRecordError.invalidScreenIndex)
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let config = SCStreamConfiguration()
@@ -86,9 +73,6 @@ final class ScreenRecordService {
             try stream.addStreamOutput(recorder, type: .audio, sampleHandlerQueue: recorder.queue)
         }
 
-        self.logger.info(
-            "screen record start idx=\(idx) durationMs=\(durationMs) fps=\(fps) out=\(outURL.path, privacy: .public)")
-
         var started = false
         do {
             try await stream.startCapture()
@@ -97,7 +81,7 @@ final class ScreenRecordService {
             try await stream.stopCapture()
         } catch {
             if started { try? await stream.stopCapture() }
-            throw error
+            throw PermissionManager.screenCaptureFailure(error)
         }
 
         try await recorder.finish()
@@ -186,10 +170,7 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             return
         }
         _ = stream
-        if let msg = self.pendingErrorMessage {
-            let source = type == .audio ? "audio " : ""
-            self.logger
-                .error("screen record \(source, privacy: .public)aborting due to prior error: \(msg, privacy: .public)")
+        if self.pendingErrorMessage != nil {
             return
         }
         if self.didFinish { return }
@@ -230,14 +211,10 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
                 self.input.markAsFinished()
                 self.audioInput?.markAsFinished()
                 self.writer.finishWriting {
-                    if let err = self.writer.error {
-                        cont
-                            .resume(throwing: ScreenRecordService.ScreenRecordError
-                                .writeFailed(err.localizedDescription))
-                    } else if self.writer.status != .completed {
-                        cont
-                            .resume(throwing: ScreenRecordService.ScreenRecordError
-                                .writeFailed("Failed to finalize video"))
+                    let failure = self.writer.error?.localizedDescription ??
+                        (self.writer.status == .completed ? nil : "Failed to finalize video")
+                    if let failure {
+                        cont.resume(throwing: ScreenRecordService.ScreenRecordError.writeFailed(failure))
                     } else {
                         cont.resume()
                     }

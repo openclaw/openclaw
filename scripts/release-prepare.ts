@@ -34,13 +34,7 @@ type ReleasePrepareStepResult = ReleasePrepareStep & {
   status: "failed" | "passed" | "planned" | "skipped";
 };
 
-type WorktreeState = {
-  changedFiles: string[];
-  fingerprint: string;
-  head: string;
-  packageVersion: string;
-  status: string;
-};
+type WorktreeState = Awaited<ReturnType<typeof readWorktreeState>>;
 
 const DEFAULT_JOBS = 4;
 const MAX_JOBS = 16;
@@ -270,7 +264,7 @@ export function runReleasePrepareStep(
   return result.status ?? 1;
 }
 
-export async function readWorktreeState(rootDir: string): Promise<WorktreeState> {
+export async function readWorktreeState(rootDir: string) {
   const head = git(rootDir, ["rev-parse", "HEAD"]);
   const status = git(rootDir, ["status", "--porcelain=v1", "--untracked-files=all"]);
   const fingerprint = crypto.createHash("sha256").update(`${head}\0${status}\0`);

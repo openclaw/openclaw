@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getPublicKey } from "nostr-tools";
+import { getPublicKey, SimplePool } from "nostr-tools";
 import { decrypt } from "nostr-tools/nip04";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -14,10 +14,14 @@ import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { nostrPlugin } from "./channel.js";
 import { getActiveNostrBuses } from "./gateway.js";
+import { registerNostrAdmissionTests } from "./nostr-bus.admission.test-support.js";
 import { startNostrBus } from "./nostr-bus.js";
+import { registerNostrGatewayAdmissionTests } from "./nostr-gateway.admission.test-support.js";
 import { createNostrRelayFixture, PREFIX_ACK_REASON } from "./nostr-relay.test-harness.js";
 import { getNostrRuntime, setNostrRuntime } from "./runtime.js";
 import {
@@ -26,6 +30,18 @@ import {
   buildResolvedNostrAccount,
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
+
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+  };
+});
 
 // Keep existing state persistence isolation; transport, signatures and NIP-04 are real.
 vi.mock("./nostr-state-store.js", () => ({
@@ -38,9 +54,15 @@ vi.mock("./nostr-state-store.js", () => ({
 
 const RECIPIENT_KEY = new Uint8Array(32).fill(2);
 const RECIPIENT_PUBKEY = getPublicKey(RECIPIENT_KEY);
+const SENDER_PUBKEY = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
+type Relay = Awaited<ReturnType<typeof createNostrRelayFixture>>;
 let stateDir = "";
 let stops: Array<() => Promise<void>> = [];
-let relays: Array<Awaited<ReturnType<typeof createNostrRelayFixture>>> = [];
+let relays: Relay[] = [];
+
+function expectPlaintext(entry: Relay, publicKey: string, text: string, index = 0) {
+  expect(decrypt(RECIPIENT_KEY, publicKey, entry.events[index]!.content)).toBe(text);
+}
 
 async function relay(options: Parameters<typeof createNostrRelayFixture>[0] = {}) {
   const result = await createNostrRelayFixture(options);
@@ -65,7 +87,7 @@ async function startRegisteredAccount(urls: string[]) {
     cfg,
     account: buildResolvedNostrAccount({
       relays: urls,
-      publicKey: getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES),
+      publicKey: SENDER_PUBKEY,
     }),
     abortSignal: abort.signal,
   });
@@ -116,6 +138,7 @@ describe("Nostr outbound relay failover", () => {
   });
 
   afterEach(async () => {
+    effectInput.current = undefined;
     for (const entry of relays) {
       entry.releaseUpgrades();
     }
@@ -138,19 +161,85 @@ describe("Nostr outbound relay failover", () => {
     }
   });
 
-  it("accepts a real positive OK even when its reason starts with connection failure", async () => {
-    const first = await relay({ reason: PREFIX_ACK_REASON });
-    const second = await relay();
-    const bus = await startBus([first.url, second.url]);
-
-    const id = await bus.sendDm(RECIPIENT_PUBKEY, "hello");
-
-    expect(first.events).toHaveLength(1);
-    expect(first.acknowledgements).toEqual([["OK", id, true, PREFIX_ACK_REASON]]);
-    expect(second.events).toEqual([]);
-    expect(first.events[0]).toMatchObject({ id, kind: 4, tags: [["p", RECIPIENT_PUBKEY]] });
-    expect(decrypt(RECIPIENT_KEY, bus.publicKey, first.events[0]!.content)).toBe("hello");
-  });
+  it.each([false, true])(
+    "prepares relay publication without retrying refusal (allowed=%s)",
+    async (allowed) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const received = createDeferred<void>();
+      const first = await relay({
+        holdAcknowledgements: true,
+        onEvent: () => received.resolve(),
+      });
+      const second = await relay();
+      const bus = await startBus([first.url, second.url]);
+      const refusal = new Error("message use refused");
+      let handedOff = false;
+      let publicationsAtHandoff = 0;
+      const connections = vi.spyOn(SimplePool.prototype, "ensureRelay");
+      let publish:
+        | MockInstance<Awaited<ReturnType<SimplePool["ensureRelay"]>>["publish"]>
+        | undefined;
+      let initiations = 0;
+      const initiate = async <T>(effect: () => T | Promise<T>): Promise<T> => {
+        initiations++;
+        preparing.resolve();
+        await prepared.promise;
+        if (!allowed) {
+          throw refusal;
+        }
+        try {
+          const result = effect();
+          publicationsAtHandoff = publish?.mock.calls.length ?? 0;
+          return result;
+        } finally {
+          handedOff = true;
+        }
+      };
+      effectInput.current = { active: true, run: (run) => run(), initiate };
+      const completion = bus.sendDm(RECIPIENT_PUBKEY, "prepared relay publish");
+      try {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          Promise.race([completion, received.promise]),
+          "Relay skipped preparation",
+        );
+        const connectionIndex = connections.mock.calls.findLastIndex(
+          ([url]) => new URL(url).href === new URL(first.url).href,
+        );
+        const connection = connections.mock.results[connectionIndex];
+        if (connection?.type !== "return") {
+          throw new Error("No Nostr relay connection was prepared");
+        }
+        publish = vi.spyOn(await connection.value, "publish");
+        expect(first.events).toEqual([]);
+        expect(publish).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!allowed) {
+          await expect(completion).rejects.toBe(refusal);
+          expect(first.events).toEqual([]);
+        } else {
+          await awaitGateBeforeSettlement(received.promise, completion, "Relay did not publish");
+          expect(handedOff).toBe(true);
+          expect(first.acknowledgements).toEqual([]);
+          first.acknowledgeAll();
+          await expect(completion).resolves.toBe(first.events[0]!.id);
+        }
+        expect(initiations).toBe(1);
+        expect(publicationsAtHandoff).toBe(allowed ? 1 : 0);
+        expect(publish).toHaveBeenCalledTimes(allowed ? 1 : 0);
+        expect(first.events).toHaveLength(allowed ? 1 : 0);
+        expect(second.events).toEqual([]);
+      } finally {
+        prepared.resolve();
+        first.acknowledgeAll();
+        await first.close();
+        await completion.catch(() => {});
+        publish?.mockRestore();
+        connections.mockRestore();
+      }
+    },
+  );
 
   it("preserves real failures when every relay rejects", async () => {
     const first = await relay({ rejectUpgrade: true });
@@ -166,6 +255,43 @@ describe("Nostr outbound relay failover", () => {
     expect(second.acknowledgements).toEqual([
       ["OK", second.events[0]!.id, false, PREFIX_ACK_REASON],
     ]);
+  });
+
+  it("accepts a positive OK regardless of reason and prefers that relay on the next send", async () => {
+    const first = await relay({ accepted: false, reason: PREFIX_ACK_REASON });
+    const second = await relay({ reason: PREFIX_ACK_REASON });
+    const bus = await startBus([first.url, second.url]);
+
+    await bus.sendDm(RECIPIENT_PUBKEY, "initial fallback");
+    const nextId = await bus.sendDm(RECIPIENT_PUBKEY, "preferred relay");
+
+    expect(first.events).toHaveLength(1);
+    expect(second.events).toHaveLength(2);
+    expect(second.acknowledgements.at(-1)).toEqual(["OK", nextId, true, PREFIX_ACK_REASON]);
+    expect(second.events[1]).toMatchObject({
+      id: nextId,
+      kind: 4,
+      tags: [["p", RECIPIENT_PUBKEY]],
+    });
+    expectPlaintext(second, bus.publicKey, "preferred relay", 1);
+  });
+
+  it("retries a recovered relay on the next explicit send after repeated rejections", async () => {
+    const options = { accepted: false, reason: "fixture relay unavailable" };
+    const recovering = await relay(options);
+    const bus = await startBus([recovering.url]);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(bus.sendDm(RECIPIENT_PUBKEY, `rejected ${attempt}`)).rejects.toThrow(
+        options.reason,
+      );
+    }
+
+    options.accepted = true;
+    const id = await bus.sendDm(RECIPIENT_PUBKEY, "relay recovered");
+
+    expect(recovering.events).toHaveLength(6);
+    expect(recovering.acknowledgements.at(-1)).toEqual(["OK", id, true, options.reason]);
+    expectPlaintext(recovering, bus.publicKey, "relay recovered", 5);
   });
 
   describe("registered message sender", () => {
@@ -189,9 +315,7 @@ describe("Nostr outbound relay failover", () => {
       expect(result.receipt.parts[0]?.kind).toBe("text");
       expect(first.acknowledgements).toEqual([["OK", result.messageId, false, PREFIX_ACK_REASON]]);
       expect(second.acknowledgements).toEqual([["OK", result.messageId, true, "saved"]]);
-      expect(
-        decrypt(RECIPIENT_KEY, getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES), second.events[0]!.content),
-      ).toBe("ordinary fallback");
+      expectPlaintext(second, SENDER_PUBKEY, "ordinary fallback");
       expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
     });
 
@@ -239,9 +363,7 @@ describe("Nostr outbound relay failover", () => {
       expect(first.events).toHaveLength(1);
       expect(withdrawnResult).toBe(canceled);
       expect(currentResult).toMatchObject({ messageId: first.events[0]!.id });
-      expect(
-        decrypt(RECIPIENT_KEY, getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES), first.events[0]!.content),
-      ).toBe("still current");
+      expectPlaintext(first, SENDER_PUBKEY, "still current");
     });
 
     it.each(["cancellation", "failure"])(
@@ -274,3 +396,7 @@ describe("Nostr outbound relay failover", () => {
     );
   });
 });
+
+describe("Nostr local admission", registerNostrAdmissionTests);
+
+describe("Nostr Gateway admission", registerNostrGatewayAdmissionTests);

@@ -7,55 +7,26 @@ import { redactClaimToken } from "./card-redaction.js";
 import type { WorkboardMutationScope } from "./store-inputs.js";
 import type { WorkboardStore } from "./store.js";
 
-function canMutateCard(card: WorkboardCard, ownerId: string, token?: string): boolean {
-  const claim = card.metadata?.claim;
-  return !claim || claim.ownerId === ownerId || safeEqualSecret(token, claim.token);
-}
-
-export async function requireScopedCard(
-  store: WorkboardStore,
-  cardId: string,
-  ownerId: string,
-  token?: string,
-): Promise<WorkboardCard> {
-  const card = await store.get(cardId);
-  if (!card) {
-    throw new Error(`card not found: ${cardId}`);
-  }
-  if (!canMutateCard(card, ownerId, token)) {
-    throw new Error(`card is claimed by ${card.metadata?.claim?.ownerId ?? "another agent"}.`);
-  }
-  return card;
-}
-
-type WorkboardToolCardParams = {
-  record: Record<string, unknown>;
-  id: string;
-  scope: WorkboardMutationScope;
-};
 type WorkboardCardMutation = (
   id: string,
   record: Record<string, unknown>,
-  scope: WorkboardToolCardParams["scope"],
+  scope: WorkboardMutationScope,
 ) => Promise<WorkboardCard>;
 
-// Card payloads stay nested under `card`: the host grades a tool call from
-// reserved keys on `details` (`status`, `ok`, `error`, ...), so a flat card
-// would report every mutation of a blocked card as a failed tool call.
-function redactedCardResult(card: WorkboardCard) {
-  return jsonResult({ card: redactClaimToken(card) });
-}
-
 export function createWorkboardCardMutations(store: WorkboardStore, ownerId: string) {
-  const readParams = async (
-    rawParams: unknown,
-    requireClaim = false,
-  ): Promise<WorkboardToolCardParams> => {
+  const readParams = async (rawParams: unknown, requireClaim = false) => {
     const record = asRecord(rawParams);
     const id = readStringParam(record, "id", { required: true });
     const token = readStringValue(record.token);
-    const card = await requireScopedCard(store, id, ownerId, token);
-    if (requireClaim && !card.metadata?.claim) {
+    const card = await store.get(id);
+    if (!card) {
+      throw new Error(`card not found: ${id}`);
+    }
+    const claim = card.metadata?.claim;
+    if (claim && claim.ownerId !== ownerId && !safeEqualSecret(token, claim.token)) {
+      throw new Error(`card is claimed by ${claim.ownerId ?? "another agent"}.`);
+    }
+    if (requireClaim && !claim) {
       throw new Error("card must be claimed before lifecycle completion.");
     }
     return { record, id, scope: { ownerId, token } };
@@ -64,11 +35,12 @@ export function createWorkboardCardMutations(store: WorkboardStore, ownerId: str
     (mutate: WorkboardCardMutation, requireClaim = false) =>
     async (_toolCallId: string, rawParams: unknown) => {
       const { record, id, scope } = await readParams(rawParams, requireClaim);
-      return redactedCardResult(await mutate(id, record, scope));
+      // Nest cards so their status cannot be mistaken for the tool result's status.
+      return jsonResult({ card: redactClaimToken(await mutate(id, record, scope)) });
     };
   return {
     readScopedCardToolParams: (rawParams: unknown) => readParams(rawParams),
-    scopedCardMutation: (mutate: WorkboardCardMutation) => cardMutation(mutate),
+    scopedCardMutation: cardMutation,
     claimedCardMutation: (mutate: WorkboardCardMutation) => cardMutation(mutate, true),
   };
 }
@@ -90,7 +62,12 @@ export function workspaceField() {
     strictObject({
       kind: Type.String({ description: "scratch, dir, or worktree." }),
       path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-      branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+      branch: Type.Optional(
+        Type.String({
+          description:
+            "Optional worktree source base ref. Re-dispatch reuses a retained checkout; use a new card for a different base ref.",
+        }),
+      ),
     }),
   );
 }

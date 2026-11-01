@@ -1,4 +1,3 @@
-// Destructive lifecycle tests protect exact terminal ownership at the RPC boundary.
 import { expect, onTestFinished, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -50,20 +49,12 @@ test.each(["archive", "incognito reset"] as const)(
         entries: { [sessionKey]: sessionStoreEntry(oldOwner.agentSessionId) },
       });
     }
+    const open = (owner: typeof oldOwner, pty: typeof oldPty, viewerConnId?: string) =>
+      manager.open(baseOpenRequest({ owner, viewerConnId, createBackend: async () => pty }));
     const [oldSession, replacementSession, unrelatedSession] = await Promise.all([
-      manager.open(
-        baseOpenRequest({
-          owner: oldOwner,
-          viewerConnId: "conn-1",
-          createBackend: async () => oldPty,
-        }),
-      ),
-      manager.open(
-        baseOpenRequest({ owner: replacementOwner, createBackend: async () => replacementPty }),
-      ),
-      manager.open(
-        baseOpenRequest({ owner: unrelatedOwner, createBackend: async () => unrelatedPty }),
-      ),
+      open(oldOwner, oldPty, "conn-1"),
+      open(replacementOwner, replacementPty),
+      open(unrelatedOwner, unrelatedPty),
     ]);
     if (!oldSession.ok || !replacementSession.ok || !unrelatedSession.ok) {
       throw new Error("expected terminal sessions");
@@ -72,18 +63,15 @@ test.each(["archive", "incognito reset"] as const)(
     expect(manager.write("conn-1", oldSession.sessionId, "long-running-command\n")).toBe(true);
     let mutationSettled = false;
     const context = createDirectChatContext({ terminalSessions: manager });
-    const mutationPromise = withPluginRuntimeGatewayRequestScope(
-      { context, isWebchatConnect: () => false },
-      () =>
-        directSessionReq(
-          operation === "archive" ? "sessions.patch" : "sessions.reset",
-          {
-            key: sessionKey,
-            ...(operation === "archive" ? { archived: true } : {}),
-            expectedSessionId: oldOwner.agentSessionId,
-          },
-          { context },
-        ),
+    const scope = { context, isWebchatConnect: () => false };
+    const method = operation === "archive" ? "sessions.patch" : "sessions.reset";
+    const params = {
+      key: sessionKey,
+      ...(operation === "archive" ? { archived: true } : {}),
+      expectedSessionId: oldOwner.agentSessionId,
+    };
+    const mutationPromise = withPluginRuntimeGatewayRequestScope(scope, () =>
+      directSessionReq(method, params, { context }),
     ).finally(() => {
       mutationSettled = true;
     });
@@ -97,10 +85,9 @@ test.each(["archive", "incognito reset"] as const)(
 
     // Synchronize on the PTY action itself; cold RPC loading is not lifecycle timing.
     await Promise.race([drainStarted.promise, mutationPromise]);
-    expect(oldPty.killed).toBe(true);
     expect(mutationSettled).toBe(false);
     expect(manager.write("conn-1", oldSession.sessionId, "after-reset\n")).toBe(false);
-    expect(oldPty.writes).toEqual(["long-running-command\n"]);
+    expect(oldPty).toMatchObject({ killed: true, writes: ["long-running-command\n"] });
     await expect(
       manager.open(baseOpenRequest({ owner: oldOwner, createBackend: async () => makeFakePty() })),
     ).resolves.toMatchObject({ ok: false, code: "closed" });
@@ -112,16 +99,14 @@ test.each(["archive", "incognito reset"] as const)(
     expect(mutated.ok).toBe(true);
     expect(manager.listAgent(oldOwner)).toEqual([]);
     expect(manager.snapshotAgent(oldOwner, oldSession.sessionId)).toBeUndefined();
-    replacementPty.emitData("replacement\n");
-    unrelatedPty.emitData("unrelated\n");
-    expect(manager.snapshotAgent(replacementOwner, replacementSession.sessionId)).toContain(
-      "replacement",
-    );
-    expect(manager.snapshotAgent(unrelatedOwner, unrelatedSession.sessionId)).toContain(
-      "unrelated",
-    );
-    expect(replacementPty.killed).toBe(false);
-    expect(unrelatedPty.killed).toBe(false);
+    for (const [owner, session, pty, text] of [
+      [replacementOwner, replacementSession, replacementPty, "replacement"],
+      [unrelatedOwner, unrelatedSession, unrelatedPty, "unrelated"],
+    ] as const) {
+      pty.emitData(`${text}\n`);
+      expect(manager.snapshotAgent(owner, session.sessionId)).toContain(text);
+      expect(pty.killed).toBe(false);
+    }
     expect(manager.size).toBe(2);
     if (operation === "archive") {
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));

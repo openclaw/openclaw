@@ -1,4 +1,3 @@
-// Parses report CLI output arguments and writes optional artifacts.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -84,9 +83,6 @@ export function parseInventoryReportCliArgs(
   });
 }
 
-/**
- * Writes an optional report artifact, creating its parent directory first.
- */
 export async function writeReportArtifact(filePath: string | null, content: string) {
   if (!filePath) {
     return;

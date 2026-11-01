@@ -1,35 +1,46 @@
+import { serialize } from "node:v8";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   preparePluginStateNativeBindingCodec,
   readPreparedPluginStateNativeBinding,
 } from "../../plugin-state/plugin-state-native-binding-codec.js";
+import {
+  capturePluginStateReceipt,
+  type PluginStateCommitReceipt,
+} from "../../plugin-state/plugin-state-publication.js";
 import { wrapPluginStateError } from "../../plugin-state/plugin-state-store.database.js";
 import {
   deletePluginStateNativeBinding,
   restorePluginStateNativeBinding,
 } from "../../plugin-state/plugin-state-store.mutations.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
-import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-descendant-basis.js";
-import { collectReclamationChangedSessionKeys } from "./session-accessor.sqlite-reclamation-publication.js";
+import { collectReclamationEntryReplacement } from "./session-accessor.sqlite-reclamation-publication.js";
 import { reclaimSqliteSessionInTransaction } from "./session-accessor.sqlite-reclamation.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type {
   SessionNativeBindingCandidate,
   SessionNativeBindingDeletion,
+  SessionNativeBindingParticipants,
   SessionNativeBindingReceipt,
 } from "./session-native-binding.types.js";
 import type { SessionEntry } from "./types.js";
 
 export async function prepareSessionNativeBindingDeletion(
-  input: SessionNativeBindingDeletion,
+  input: SessionNativeBindingParticipants,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   for (const { binding } of input.participants) {
@@ -39,10 +50,62 @@ export async function prepareSessionNativeBindingDeletion(
   }
 }
 
-/** A owns the transaction; its native participants commit and compensate through the captured S. */
 export function deleteSessionWithNativeBindings(
   input: SessionNativeBindingDeletion,
   context: AgentWorkerOperationContext,
+): SessionNativeBindingReceipt {
+  return runSessionNativeBindingTransaction(
+    input,
+    context,
+    `session.reclaim.${input.plan.kind}`,
+    "Native binding deletion",
+    (current, wrapReceipt) => {
+      const result = reclaimSqliteSessionInTransaction({
+        ...input.plan,
+        databaseOptions: { ...input.plan.databaseOptions, ...context.options },
+      });
+      if (
+        result.kind !== "entry" &&
+        result.kind !== "lifecycle-artifacts" &&
+        result.kind !== "maintenance-finalize" &&
+        result.kind !== "lifecycle-projection-commit"
+      ) {
+        throw new Error("Native binding deletion returned another reclamation operation");
+      }
+      const replacement = collectReclamationEntryReplacement(input.plan, result);
+      const publication = replacement
+        ? prepareSessionEntryReplacementPublication(replacement, current)
+        : undefined;
+      if (publication) {
+        publication.changedKeys = publication.membershipInvalidatedKeys;
+      }
+      const candidate: SessionNativeBindingCandidate = {
+        kind: "session-native-binding-deletion",
+        result,
+        publication,
+      };
+      return transferSessionEntryWorkerCandidate(
+        current,
+        (stage, facts) => {
+          context.admit(stage, facts);
+        },
+        candidate,
+        wrapReceipt,
+      );
+    },
+  );
+}
+
+/** The caller's whole A transaction retains the same reversible S veto and settlement owner. */
+export function runSessionNativeBindingTransaction(
+  input: SessionNativeBindingParticipants,
+  context: AgentWorkerOperationContext,
+  operationLabel: string,
+  owner: string,
+  mutate: (
+    database: OpenClawAgentDatabase,
+    wrapReceipt: (receipt: SessionEntryPatchReceipt) => SessionNativeBindingReceipt,
+  ) => SessionNativeBindingReceipt,
 ): SessionNativeBindingReceipt {
   const database = context.open();
   const writeSharedTransaction = context.writeSharedTransaction;
@@ -51,11 +114,18 @@ export function deleteSessionWithNativeBindings(
   }
   const writeShared = <T>(
     operation: "delete" | "register",
-    write: (shared: OpenClawStateDatabase) => T,
+    write: (shared: OpenClawStateDatabase) => {
+      value: T;
+      bindings: SessionNativeBindingReceipt["bindings"];
+    },
     refusal?: Error,
   ): T => {
     try {
-      return writeSharedTransaction(input.sharedSource, write);
+      return writeSharedTransaction(input.sharedSource, (shared) => {
+        const captured = capturePluginStateReceipt(shared.db, () => write(shared));
+        recordSharedCommit(shared, captured.result.bindings, captured.receipt);
+        return captured.result.value;
+      });
     } catch (error) {
       if (error === refusal) {
         throw error;
@@ -75,27 +145,44 @@ export function deleteSessionWithNativeBindings(
   let agent: SessionNativeBindingReceipt["agent"] = "pending";
   let agentCommitted = false;
   let bindings: SessionNativeBindingReceipt["bindings"] = input.participants.map(() => "pending");
+  let pluginState: PluginStateCommitReceipt | undefined;
   let compensationFailure: SessionNativeBindingReceipt["compensationFailure"];
   const removed = new Map<number, Record<string, unknown>>();
-  const receipt = (nextAgent = agent, nextBindings = bindings): SessionNativeBindingReceipt => ({
-    kind: "session-native-binding",
-    operationId: input.operationId,
-    agent: nextAgent,
-    bindings: [...nextBindings],
-    ...(compensationFailure ? { compensationFailure } : {}),
-  });
+  const receipt = (
+    nextAgent = agent,
+    nextBindings = bindings,
+    nextPluginState = pluginState,
+  ): SessionNativeBindingReceipt => {
+    const value: SessionNativeBindingReceipt = {
+      kind: "session-native-binding",
+      operationId: input.operationId,
+      agent: nextAgent,
+      bindings: [...nextBindings],
+      ...(nextPluginState ? { pluginState: nextPluginState } : {}),
+      ...(compensationFailure ? { compensationFailure } : {}),
+    };
+    if (nextPluginState && serialize(value).byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+      value.pluginState = { kind: "unknown", identity: nextPluginState.source.identity };
+    }
+    return value;
+  };
   const recordSharedCommit = (
     shared: OpenClawStateDatabase,
     nextBindings: SessionNativeBindingReceipt["bindings"],
+    captured: PluginStateCommitReceipt,
   ) => {
-    stageSqliteTransactionState(shared.db, {
-      stage() {},
+    const nextPluginState: PluginStateCommitReceipt = {
+      ...captured,
+      facts: new Map([...(pluginState?.facts ?? []), ...captured.facts]),
+    };
+    const anchor = sqlPublicationAnchor(shared.db);
+    stageSqliteTransactionState(anchor, {
       commit: () => {
         bindings = nextBindings;
+        pluginState = nextPluginState;
       },
-      rollback() {},
     });
-    deferSqliteWorkerCommitReceipt(shared.db, receipt(agent, nextBindings));
+    deferSqliteWorkerCommitReceipt(anchor, receipt(agent, nextBindings, nextPluginState));
   };
   const admitShared = (
     index: number,
@@ -140,7 +227,6 @@ export function deleteSessionWithNativeBindings(
           }
           const next = [...bindings];
           next[index] = result.status === "conflict" ? "pending" : result.status;
-          recordSharedCommit(shared, next);
           admitShared(index, "delete", "commit");
           if (result.status === "deleted") {
             const lease = readPreparedPluginStateNativeBinding(plan, result.value)?.lease;
@@ -148,7 +234,7 @@ export function deleteSessionWithNativeBindings(
               throw expired;
             }
           }
-          return result.status;
+          return { value: result.status, bindings: next };
         },
         expired,
       );
@@ -159,62 +245,17 @@ export function deleteSessionWithNativeBindings(
   };
   try {
     return withSqliteSessionDeletionWorkerParticipant(commitParticipant, () =>
-      context.writeTransaction("session.reclaim.entry", "Native binding deletion", (current) => {
-        stageSqliteTransactionState(current.db, {
-          stage() {},
+      context.writeTransaction(operationLabel, owner, (current) => {
+        stageSqliteTransactionState(sqlPublicationAnchor(current.db), {
           commit: () => {
             agent = "committed";
             agentCommitted = true;
           },
-          rollback() {},
         });
-        const result = reclaimSqliteSessionInTransaction({
-          ...input.plan,
-          databaseOptions: { ...input.plan.databaseOptions, ...context.options },
-        });
-        if (result.kind !== "entry") {
-          throw new Error("Native binding deletion returned another reclamation operation");
-        }
-        const changedKeys = collectReclamationChangedSessionKeys(input.plan, result);
-        const publication = result.value.deleted
-          ? prepareSessionEntryReplacementPublication(
-              {
-                previous: new Map(
-                  input.plan.preparedTargetSnapshot.map(({ sessionKey, entry }) => [
-                    sessionKey,
-                    entry,
-                  ]),
-                ),
-                current: new Map(),
-                pendingArchiveRecovery: false,
-                membershipInvalidatedKeys: changedKeys,
-                maintenancePlans: [],
-              },
-              current,
-            )
-          : undefined;
-        if (publication) {
-          publication.changedKeys = changedKeys;
-        }
-        const candidate: SessionNativeBindingCandidate = {
-          kind: "session-native-binding-deletion",
-          result,
-          publication,
-        };
-        return transferSessionEntryWorkerCandidate(
-          current,
-          (stage, facts) => {
-            context.admit(stage, facts);
-            if (stage === "commit") {
-              assertSessionSubagentRunsCurrent(input.plan, input.plan.databaseOptions.env);
-            }
-          },
-          candidate,
-          (transferred) => ({
-            ...receipt("committed"),
-            receipt: transferred,
-          }),
-        );
+        return mutate(current, (transferred) => ({
+          ...receipt("committed"),
+          receipt: transferred,
+        }));
       }),
     );
   } catch (error) {
@@ -246,16 +287,15 @@ export function deleteSessionWithNativeBindings(
       }
       const plan = input.participants[index]!.binding!;
       try {
+        admitShared(index, "restore", "transaction");
         const restored = writeShared("register", (shared) => {
-          admitShared(index, "restore", "transaction");
           const applied = restorePluginStateNativeBinding(shared, plan, value);
           const next = [...bindings];
           if (applied) {
             next[index] = "restored";
           }
-          recordSharedCommit(shared, next);
           admitShared(index, "restore", "commit");
-          return applied;
+          return { value: applied, bindings: next };
         });
         if (!restored) {
           throw new Error(plan.rollbackChanged, { cause: error });
@@ -273,7 +313,8 @@ export function deleteSessionWithNativeBindings(
       );
     }
     try {
-      writeShared("register", (shared) => recordSharedCommit(shared, bindings));
+      context.admit("transaction");
+      writeShared("register", () => ({ value: undefined, bindings }));
     } catch (failure) {
       failures.push(failure);
     }

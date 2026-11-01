@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
 import type { ExtractedArchiveVerification } from "../infra/install-flow.js";
-import { resolveUserPath } from "../utils.js";
 import {
   inspectBundlePluginArtifact,
   inspectNativePluginArtifact,
@@ -173,6 +171,7 @@ async function installBundleFromSourceDir(
       copyErrorPrefix: "failed to copy plugin bundle",
       hasDeps: false,
       depsLogMessage: "",
+      onPluginArtifactInspect: params.onPluginArtifactInspect,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
     }),
@@ -293,6 +292,7 @@ async function installPluginFromPackageDir(
       sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
       depsLogMessage: "Installing plugin dependencies…",
       nameEncoder: encodePluginInstallDirName,
+      onPluginArtifactInspect: params.onPluginArtifactInspect,
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       afterInstall: async (installedDir) => {
@@ -366,6 +366,7 @@ export async function installPluginFromArchive<
           trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           requirePluginManifest: true,
           installPolicyRequest,
+          onPluginArtifactInspect: params.onPluginArtifactInspect,
           onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
           beforePersistentApply: params.beforePersistentApply,
           onEffectiveMode: (resolvedMode) => {
@@ -385,44 +386,6 @@ export async function installPluginFromArchive<
   return result;
 }
 
-async function installPluginFromDir(
-  params: {
-    dirPath: string;
-  } & PackageInstallCommonParams,
-): Promise<InstallPluginResult> {
-  const runtime = await loadPluginInstallRuntime();
-  const dirPath = resolveUserPath(params.dirPath);
-  const installPolicyRequest = params.installPolicyRequest ?? {
-    kind: "plugin-dir",
-    requestedSpecifier: params.dirPath,
-    source: localPluginInstallPolicySource("plugin-dir"),
-  };
-  if (!(await runtime.fileExists(dirPath))) {
-    return { ok: false, error: `directory not found: ${dirPath}` };
-  }
-  const stat = await fs.stat(dirPath);
-  if (!stat.isDirectory()) {
-    return { ok: false, error: `not a directory: ${dirPath}` };
-  }
-
-  let effectiveMode = params.mode ?? "install";
-  const result = await installPluginFromSourceDir({
-    ...params,
-    sourceDir: dirPath,
-    installPolicyRequest,
-    onEffectiveMode: (resolvedMode) => {
-      effectiveMode = resolvedMode;
-    },
-  });
-  emitSuccessfulPluginInstallSecurityEvent(result, {
-    dryRun: params.dryRun,
-    mode: effectiveMode,
-    sourceFamily: sourceFamilyForInstallPolicyKind(installPolicyRequest.kind, "directory"),
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-  });
-  return result;
-}
-
 export async function installPluginFromPath(
   params: {
     path: string;
@@ -434,13 +397,24 @@ export async function installPluginFromPath(
     return pathResult;
   }
   const { resolvedPath: resolved, stat } = pathResult;
-
   if (stat.isDirectory()) {
-    return await installPluginFromDir({
+    const installPolicyRequest = installPolicyRequestForPath(params, "plugin-dir");
+    let effectiveMode = params.mode ?? "install";
+    const result = await installPluginFromSourceDir({
       ...params,
-      dirPath: resolved,
-      installPolicyRequest: installPolicyRequestForPath(params, "plugin-dir"),
+      sourceDir: resolved,
+      installPolicyRequest,
+      onEffectiveMode: (resolvedMode) => {
+        effectiveMode = resolvedMode;
+      },
     });
+    emitSuccessfulPluginInstallSecurityEvent(result, {
+      dryRun: params.dryRun,
+      mode: effectiveMode,
+      sourceFamily: sourceFamilyForInstallPolicyKind(installPolicyRequest.kind, "directory"),
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    });
+    return result;
   }
 
   const archiveKind = runtime.resolveArchiveKind(resolved);

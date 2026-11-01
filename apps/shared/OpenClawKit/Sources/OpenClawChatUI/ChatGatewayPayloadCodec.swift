@@ -14,7 +14,7 @@ public enum OpenClawChatSessionKey {
     }
 
     /// Match the Control UI's session-key comparison without folding opaque channel identifiers.
-    static func comparisonKey(_ key: String) -> String {
+    public static func comparisonKey(_ key: String) -> String {
         let raw = key.trimmingCharacters(in: .whitespacesAndNewlines)
         var parts = raw.components(separatedBy: ":")
         var start = 0
@@ -55,6 +55,19 @@ public enum OpenClawChatSessionKey {
         guard parts.count >= 3, parts[0].lowercased() == "agent" else { return nil }
         let agentID = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
         return agentID.isEmpty ? nil : agentID
+    }
+
+    static func catalogSource(_ key: String) -> [Data]? {
+        let parts = key.components(separatedBy: ":")
+        if parts.first == "agent", parts.count < 2 || parts[1].isEmpty { return nil }
+        let source = parts.first == "agent" ? Array(parts.dropFirst(2)) : parts
+        guard source.count == 4, source[0] == "catalog" else { return nil }
+        let decoded = source.dropFirst().compactMap { part -> Data? in
+            guard let value = part.removingPercentEncoding, !value.isEmpty else { return nil }
+            // Opaque IDs use exact bytes, without Swift String's canonical Unicode equivalence.
+            return Data(value.utf8)
+        }
+        return decoded.count == 3 ? decoded : nil
     }
 }
 
@@ -158,6 +171,15 @@ public enum OpenClawChatGatewayPayloadCodec {
             ])
         }
         return card
+    }
+
+    public static func decodeProgressCardRefresh(_ data: Data) throws -> OpenClawChatProgressCardRefreshResult {
+        let result = try JSONDecoder().decode(OpenClawChatProgressCardRefreshResult.self, from: data)
+        guard !result.runId.isEmpty, result.revision >= 1 else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [], debugDescription: "Progress refresh receipt was invalid"))
+        }
+        return result
     }
 
     public static func decodeQuestionAnswer(_ data: Data) throws -> QuestionAnswers {
@@ -276,6 +298,9 @@ public enum OpenClawChatGatewayPayloadCodec {
 
     private struct MetadataChangedPayload: Decodable {
         let modelSelectionChanged: Bool?
+        let modelCatalogChanged: Bool?
+        let authChanged: Bool?
+        let agentId: String?
     }
 
     public static func event(from frame: EventFrame) -> OpenClawChatTransportEvent? {
@@ -288,7 +313,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             return .tick
         case "chat.metadata.changed":
             let payload = decode(MetadataChangedPayload.self)
-            return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged
+            return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged(
+                modelCatalogChanged: payload?.modelCatalogChanged != false || payload?.authChanged == true,
+                agentID: payload?.agentId)
         case "config.changed":
             return .modelSelectionChanged
         case "sessions.changed":

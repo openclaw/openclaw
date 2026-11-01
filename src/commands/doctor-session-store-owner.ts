@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
@@ -9,10 +7,12 @@ import { CONFIG_BACKUP_COUNT } from "../config/backup-rotation.js";
 import { getRecord } from "../config/legacy.shared.js";
 import { isSameAuthoredSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
-import { containsAuthoredInclude } from "./doctor/shared/include-migration-ownership.js";
+import {
+  containsAuthoredInclude,
+  readDoctorConfigBackup,
+} from "./doctor/shared/include-migration-ownership.js";
 
 const OWNER_KEY = "agents.defaults.sessionStore.agentId";
 
@@ -21,25 +21,6 @@ type SessionStoreOwnerRecovery = {
   changes: string[];
   warnings: string[];
 };
-
-function readBackup(backupPath: string): string | undefined {
-  const opened = openRootFileSync({
-    absolutePath: backupPath,
-    rootPath: path.dirname(backupPath),
-    boundaryLabel: "config backup directory",
-  });
-  if (!opened.ok) {
-    if (isRootFileMissingFailure(opened)) {
-      return undefined;
-    }
-    throw new Error("Config backup could not be read safely");
-  }
-  try {
-    return fs.readFileSync(opened.fd, "utf8");
-  } finally {
-    fs.closeSync(opened.fd);
-  }
-}
 
 /** Offers historical ownership without guessing whether its removal was intentional. */
 export async function prepareSessionStoreOwnerRecovery(params: {
@@ -65,7 +46,7 @@ export async function prepareSessionStoreOwnerRecovery(params: {
     let raw: string | undefined;
     let backup: unknown;
     try {
-      raw = readBackup(backupPath);
+      raw = readDoctorConfigBackup(backupPath);
       backup = raw === undefined ? undefined : JSON5.parse(raw);
     } catch {
       unchanged.warnings.push(
@@ -121,7 +102,7 @@ export async function prepareSessionStoreOwnerRecovery(params: {
     }
     let currentBackup: string | undefined;
     try {
-      currentBackup = readBackup(backupPath);
+      currentBackup = readDoctorConfigBackup(backupPath);
     } catch {
       // Loss of readable evidence after confirmation must leave the candidate untouched.
     }

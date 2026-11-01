@@ -97,8 +97,8 @@ internal class GatewayLiveTextProjection {
     val textIndex = blocks.indexOfLast { (it as? JsonObject)?.get("type").asJsonStringOrNull() == "text" }
     if (replace) {
       blocks.removeAll { (it as? JsonObject)?.get("type").asJsonStringOrNull() == "text" }
-      blocks.add(0, textBlock(delta))
-    } else if (textIndex < 0) {
+    }
+    if (replace || textIndex < 0) {
       blocks.add(0, textBlock(delta))
     } else {
       val block = blocks[textIndex] as JsonObject

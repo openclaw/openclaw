@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   formatDiagnosticTraceparent,
   type DiagnosticTraceContext,
@@ -20,68 +21,51 @@ type RegisteredDiagnosticTracePropagationBridge = DiagnosticTracePropagationBrid
 type DiagnosticTracePropagationState = {
   marker: symbol;
   bridges: Set<RegisteredDiagnosticTracePropagationBridge>;
+  activeBridge: RegisteredDiagnosticTracePropagationBridge | undefined;
 };
 
 const DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY = Symbol.for(
   "openclaw.diagnosticTracePropagation.state.v1",
 );
 
-function isDiagnosticTracePropagationState(
-  value: unknown,
-): value is DiagnosticTracePropagationState {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as Partial<DiagnosticTracePropagationState>;
-  return (
-    candidate.marker === DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY && candidate.bridges instanceof Set
-  );
-}
-
-function getDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY];
-  if (isDiagnosticTracePropagationState(existing)) {
-    return existing;
-  }
-  const state: DiagnosticTracePropagationState = {
+const tracePropagationState = resolveGlobalSingleton<DiagnosticTracePropagationState>(
+  DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
+  () => ({
     marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
-    bridges: new Set(),
-  };
-  Object.defineProperty(globalThis, DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY, {
-    configurable: true,
-    enumerable: false,
-    value: state,
-    writable: false,
-  });
-  return state;
-}
+    bridges: new Set<RegisteredDiagnosticTracePropagationBridge>(),
+    activeBridge: undefined,
+  }),
+);
 
-function activeDiagnosticTracePropagationBridge():
-  | RegisteredDiagnosticTracePropagationBridge
-  | undefined {
-  let active: RegisteredDiagnosticTracePropagationBridge | undefined;
-  for (const bridge of getDiagnosticTracePropagationState().bridges) {
-    active = bridge;
-  }
-  return active;
+/** Whether an exporter needs events prepared before their queued delivery. */
+export function hasDiagnosticTracePropagationConsumer(): boolean {
+  return tracePropagationState.activeBridge?.prepareEvent !== undefined;
 }
 
 export function registerDiagnosticTracePropagationBridge(
   bridge: DiagnosticTracePropagationBridge<never, never>,
 ): () => void {
-  const state = getDiagnosticTracePropagationState();
+  const state = tracePropagationState;
   // The global registry crosses preloaded and plugin-owned SDK copies. Erase
   // event types only inside that registry; callers keep the exact typed seam.
   const registered = bridge as unknown as RegisteredDiagnosticTracePropagationBridge;
-  state.bridges.add(registered);
+  if (!state.bridges.has(registered)) {
+    state.bridges.add(registered);
+    state.activeBridge = registered;
+  }
   return () => {
-    state.bridges.delete(registered);
+    if (!state.bridges.delete(registered) || state.activeBridge !== registered) {
+      return;
+    }
+    state.activeBridge = undefined;
+    for (const remaining of state.bridges) {
+      state.activeBridge = remaining;
+    }
   };
 }
 
 export function shouldPrepareDiagnosticTracePropagation(event: unknown): boolean {
-  const bridge = activeDiagnosticTracePropagationBridge();
+  const bridge = tracePropagationState.activeBridge;
   if (!bridge?.prepareEvent) {
     return false;
   }
@@ -100,7 +84,7 @@ export function prepareDiagnosticTracePropagation(
   event: { type: string; seq: number },
   metadata: unknown,
 ): void {
-  const bridge = activeDiagnosticTracePropagationBridge();
+  const bridge = tracePropagationState.activeBridge;
   if (!bridge?.prepareEvent) {
     return;
   }
@@ -120,7 +104,7 @@ export function formatPropagatedDiagnosticTraceparent(
   if (!traceContext) {
     return undefined;
   }
-  const bridge = activeDiagnosticTracePropagationBridge();
+  const bridge = tracePropagationState.activeBridge;
   if (!bridge) {
     return formatDiagnosticTraceparent(traceContext);
   }
@@ -137,5 +121,6 @@ export function formatPropagatedDiagnosticTraceparent(
 }
 
 export function resetDiagnosticTracePropagationForTest(): void {
-  getDiagnosticTracePropagationState().bridges.clear();
+  tracePropagationState.bridges.clear();
+  tracePropagationState.activeBridge = undefined;
 }

@@ -60,7 +60,7 @@ impl Fixture {
         assert!(!client.0.is_null());
         let peer = Rtc::builder()
             .clear_codecs()
-            .enable_opus(true)
+            .enable_opus(true, false)
             .set_ice_lite(true)
             .build(Instant::now());
         let mut fixture = Self {

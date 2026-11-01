@@ -247,25 +247,23 @@ public enum ChatSessionSidebarModel {
                 row.childSessions = nil // Group projected roots without rebuilding their child links.
                 return row
             }
-            return self.groupedSections(
+            #else
+            let groupRows = visible
+            #endif
+            let sections = self.groupedSections(
                 groupRows,
                 groups: groups,
                 options: viewOptions,
                 peopleAvailable: owners.map { $0.count >= 2 } ?? true,
                 selfOwnerID: selfOwnerID,
                 sectionOrder: sectionOrder,
-                identity: identity).map {
+                identity: identity)
+            #if os(macOS)
+            return sections.map {
                 Section(id: $0.id, title: $0.title, nodes: $0.nodes.compactMap { byKey[identity($0.session)] })
             }
             #else
-            return self.groupedSections(
-                visible,
-                groups: groups,
-                options: viewOptions,
-                peopleAvailable: owners.map { $0.count >= 2 } ?? true,
-                selfOwnerID: selfOwnerID,
-                sectionOrder: sectionOrder,
-                identity: identity)
+            return sections
             #endif
         }
         // Pin state owns first placement. Group sections then preserve the
@@ -545,12 +543,12 @@ public enum ChatSessionSidebarModel {
         to sessions: [OpenClawChatSessionEntry],
         activeAgentId: String? = nil) -> [OpenClawChatSessionEntry]?
     {
-        guard let key = change.sessionKey else { return sessions }
+        guard let key = change.sessionKey ?? change.session?.key else { return sessions }
         guard let index = sessions.firstIndex(where: { $0.key == key }) else { return nil }
         guard let projection = self.observerProjection(for: change, activeAgentId: activeAgentId)
         else { return sessions }
 
-        var session = sessions[index]
+        guard var session = self.sessionSnapshot(for: change, previous: sessions[index]) else { return nil }
         if let updatedAt = change.updatedAt {
             session.updatedAt = updatedAt
         }
@@ -574,6 +572,9 @@ public enum ChatSessionSidebarModel {
         }
         if change.activeRunIdsPresent {
             session.activeRunIds = change.activeRunIds
+        }
+        if let reasoningLevel = change.session?.reasoningLevel {
+            session.reasoningLevel = reasoningLevel
         }
         if let startedAt = change.startedAt {
             session.startedAt = startedAt
@@ -605,7 +606,36 @@ public enum ChatSessionSidebarModel {
 
         var updated = sessions
         updated[index] = session
-        return updated
+        return self.clearingForeignGlobalObserverDigest(in: updated, activeAgentId: activeAgentId)
+    }
+
+    private static func sessionSnapshot(
+        for change: OpenClawChatSessionsChangedEvent,
+        previous: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry?
+    {
+        guard let row = change.session else { return previous }
+        guard row.key == previous.key else { return nil }
+        guard row.sessionId != nil, row.kind != nil else { return previous }
+        if row.sessionId == previous.sessionId, let offeredDate = row.updatedAt,
+           let heldDate = previous.updatedAt, offeredDate < heldDate { return nil }
+        let sessionFields = change.sessionFields
+        var session = if row.sessionId == previous.sessionId, let sessionFields {
+            self.mergingSessionFields(row, fields: sessionFields, into: previous)
+        } else {
+            row
+        }
+        if session.sessionId == previous.sessionId, self.isRunning(session),
+           let digest = previous.observerDigest,
+           self.sessionMatchesActiveAgent(
+               sessionKey: row.key,
+               agentId: digest.agentId ?? previous.agentId,
+               activeAgentId: change.agentId ?? row.agentId),
+           digest.runId.map(self.normalizedActiveRunIds(session.activeRunIds).contains) == true,
+           session.observerDigest.map({ self.isNewer(digest, than: $0) }) ?? true
+        {
+            session.observerDigest = digest
+        }
+        return session
     }
 
     private static func visibleObserverDigest(

@@ -1,4 +1,5 @@
-.device-domains {
+.device-domains,
+.device-extension-setup {
   display: grid;
   gap: var(--space-2);
   width: 100%;
@@ -10,12 +11,6 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-2);
-}
-
-.device-extension-setup {
-  display: grid;
-  gap: var(--space-2);
-  width: 100%;
 }
 
 .device-extension-setup__actions {

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
+  wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import {
   readDatabasePathIdentitySync,
@@ -10,45 +10,110 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { beginPluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
 import type { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
+import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
+import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import {
+  collectReclamationDeletionEntries,
+  prepareReclamationPublication,
+} from "./session-accessor.sqlite-reclamation-publication.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
+import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import type {
   SessionNativeBindingCandidate,
   SessionNativeBindingDeletion,
+  SessionNativeBindingParticipants,
   SessionNativeBindingReceipt,
 } from "./session-native-binding.types.js";
+import type { SessionEntry } from "./types.js";
 
 type NativeDeletionCapture = NonNullable<ReturnType<typeof captureNativeSessionWorkerDeletion>>;
-// A may be unknown even without an S binding (ACP or initialization-only deletion).
+// A may be unknown even without an S binding (ACP's commit-only finalizer).
 // Keep the exact generation and its cleanup custody until the process owner closes.
 const unresolved = resolveGlobalSingleton(
   Symbol.for("openclaw.nativeSessionDeletionOutcomes"),
   () =>
     new Set<{
       source: DatabasePathIdentity;
-      plan: SessionNativeBindingDeletion["plan"];
+      entries: readonly { sessionKey: string; entry: SessionEntry }[];
       custody: NativeDeletionCapture;
       error: Error;
     }>(),
 );
 
-/** Retains host native custody while A and its reversible S participant settle independently. */
-export async function deleteSessionWithNativeBindingsInWorker(
+export function deleteSessionWithNativeBindingsInWorker(
   plan: SessionNativeBindingDeletion["plan"],
   captured: NativeDeletionCapture,
-  assertCurrent: () => void,
+  assertCurrent: (operation?: RetainedWorkerTransactionAdmission) => void,
   onResult?: (result: SessionNativeBindingCandidate["result"], identity: string) => void,
 ) {
-  const agentSource = readDatabasePathIdentitySync(plan.databaseOptions.path);
+  return runSessionNativeBindingWorkerOperation<
+    SessionNativeBindingCandidate,
+    SessionNativeBindingCandidate["result"]
+  >({
+    database: plan.databaseOptions,
+    agentId: plan.databaseOptions.agentId,
+    entries: collectReclamationDeletionEntries(plan),
+    captured,
+    assertCurrent,
+    assertCandidate: (_candidate, operation) => assertCurrent(operation),
+    candidateKind: "session-native-binding-deletion",
+    execute: (worker, participants) =>
+      worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
+    onCommitted(candidate, published, identity) {
+      try {
+        onResult?.(candidate.result, identity);
+        publishSessionLifecycleWorkerEffects(plan, candidate.result);
+      } finally {
+        if (plan.kind === "lifecycle-projection-commit") {
+          if (published) {
+            publishCommittedSessionIdentity(
+              plan.agentId,
+              identity,
+              published.previous,
+              published.current,
+              published.prepared,
+            );
+          }
+        } else {
+          prepareReclamationPublication(plan, identity, candidate.result)?.();
+        }
+      }
+      return candidate.result;
+    },
+  });
+}
+
+/** Retain the same native generation across a caller's typed compound A operation. */
+export function runSessionNativeBindingWorkerOperation<
+  Candidate extends { kind: string; publication?: SessionEntryReplacementPublication },
+  Result,
+>(
+  params: Omit<
+    Parameters<typeof runSessionEntryWorkerOperation<Candidate, Result>>[0],
+    "run" | "nativeSettlement"
+  > & {
+    entries: readonly { sessionKey: string; entry: SessionEntry }[];
+    captured: NativeDeletionCapture;
+    execute: (
+      worker: AgentDatabaseExecutionScope,
+      participants: SessionNativeBindingParticipants,
+    ) => Promise<unknown>;
+  },
+): Promise<Result> {
+  const { captured } = params;
+  const agentSource = readDatabasePathIdentitySync(params.database.path);
   const operationId = randomUUID();
   const members = captured.participants;
-  const state = captureOpenClawStateWorkerContext({ env: plan.databaseOptions.env });
+  const state = captureOpenClawStateWorkerContext({ env: params.database.env });
   const source = members.find(({ participant }) => participant.source)?.participant.source;
   const sharedSource = source ?? state.admission.identity;
   for (const { participant } of members) {
@@ -61,10 +126,9 @@ export async function deleteSessionWithNativeBindingsInWorker(
       throw new Error("Native binding participants belong to different physical stores");
     }
   }
-  const input: SessionNativeBindingDeletion = {
+  const input: SessionNativeBindingParticipants = {
     operationId,
     sharedSource,
-    plan,
     participants: members.map(({ sessionKey, entry, participant }) => ({
       sessionKey,
       entry,
@@ -84,8 +148,8 @@ export async function deleteSessionWithNativeBindingsInWorker(
         blocked.source.key === agentSource.key &&
         blocked.source.birthtime === agentSource.birthtime &&
         blocked.source.canonicalPath === agentSource.canonicalPath &&
-        blocked.plan.preparedTargetSnapshot.some((old) =>
-          plan.preparedTargetSnapshot.some(
+        blocked.entries.some((old) =>
+          params.entries.some(
             (current) =>
               current.sessionKey === old.sessionKey &&
               current.entry.sessionId === old.entry.sessionId &&
@@ -96,7 +160,7 @@ export async function deleteSessionWithNativeBindingsInWorker(
         throw blocked.error;
       }
     }
-    assertCurrent();
+    params.assertCurrent();
     captured.assertCurrent();
     state.admission.assertCurrent();
     for (const { participant } of members) {
@@ -118,14 +182,13 @@ export async function deleteSessionWithNativeBindingsInWorker(
     // SAFETY: The exact executing command owns this closed receipt shape; identity and phases were checked above.
     return value as SessionNativeBindingReceipt;
   };
-  return runSessionEntryWorkerOperation<
-    SessionNativeBindingCandidate,
-    SessionNativeBindingCandidate["result"]
-  >({
-    database: plan.databaseOptions,
-    agentId: plan.databaseOptions.agentId,
+  const publication = beginPluginStatePublication(
+    () => sharedSource.key,
+    state.assertPublicationCurrent ?? state.admission.assertCurrent,
+  );
+  return runSessionEntryWorkerOperation<Candidate, Result>({
+    ...params,
     assertCurrent: assertHeld,
-    candidateKind: "session-native-binding-deletion",
     nativeSettlement: {
       get failure() {
         return failure;
@@ -143,6 +206,9 @@ export async function deleteSessionWithNativeBindingsInWorker(
         }
         admitted = { admission, retained };
         assertHeld();
+        if (facts.kind === "native-binding-ready" || facts.phase === "delete") {
+          params.onTransactionFacts?.(facts);
+        }
         if (facts.kind === "native-binding-ready") {
           if (members.some(({ participant }) => participant.renewalPending())) {
             readinessRefused = true;
@@ -193,12 +259,24 @@ export async function deleteSessionWithNativeBindingsInWorker(
         const committed = completed && acknowledged && receipt?.agent === "committed";
         const rolledBack =
           completed && receipt?.agent === "rolled-back" && !receipt.bindings.includes("deleted");
-        if (!committed && !rolledBack) {
-          const error = new SqliteWorkerError(
-            "Native binding settlement is unknown; this generation cannot be reused",
+        let publicationFailure: { cause: unknown } | undefined;
+        if ((committed || rolledBack) && receipt.pluginState) {
+          try {
+            publication.install(receipt.pluginState);
+          } catch (cause) {
+            publicationFailure = { cause };
+          }
+        }
+        if ((!committed && !rolledBack) || publicationFailure) {
+          const error = wrapSqliteWorkerError(
+            publicationFailure
+              ? "Native binding settlement could not publish current lease facts; this generation cannot be reused"
+              : "Native binding settlement is unknown; this generation cannot be reused",
             "outcome-unknown",
+            publicationFailure?.cause,
+            outcome.ok ? undefined : outcome.error,
+            settlement && settlement.kind !== "completed" ? settlement.error : undefined,
           );
-          error.cause = outcome.ok ? undefined : outcome.error;
           if (receipt?.compensationFailure) {
             const compensation = new Error("Native binding compensation failed");
             retainOpenClawStateWorkerErrorPayload(compensation, receipt.compensationFailure);
@@ -212,7 +290,13 @@ export async function deleteSessionWithNativeBindingsInWorker(
             );
           }
           failure = error;
-          unresolved.add({ source: agentSource, plan, custody: captured, error });
+          publication.finish("unknown");
+          unresolved.add({
+            source: agentSource,
+            entries: params.entries,
+            custody: captured,
+            error,
+          });
           for (const { participant } of members) {
             participant.settle("unknown", error);
           }
@@ -232,9 +316,7 @@ export async function deleteSessionWithNativeBindingsInWorker(
         readinessAuthorized = false;
         admitted = undefined;
         try {
-          return await commit(() =>
-            worker.execute({ type: "session.nativeBindings.delete", input }),
-          );
+          return await commit(() => params.execute(worker, input));
         } catch (error) {
           if (error !== renewalPending || !readinessRefused) {
             throw error;
@@ -244,14 +326,12 @@ export async function deleteSessionWithNativeBindingsInWorker(
         }
       }
     },
-    onAcknowledged(candidate) {
-      if (candidate.result.value.deleted) {
-        captured.committed();
+  })
+    .catch((error: unknown) => {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        publication.finish("unknown");
       }
-    },
-    onCommitted(candidate, _published, identity) {
-      onResult?.(candidate.result, identity);
-      return candidate.result;
-    },
-  });
+      throw error;
+    })
+    .finally(() => publication.finish("completed"));
 }

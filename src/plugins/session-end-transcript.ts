@@ -36,12 +36,7 @@ export type PluginHookSessionContext = {
   endedTranscript?: PluginHookEndedTranscript;
 };
 
-type SessionEndTranscriptAvailableSource = {
-  available: true;
-  readTail(
-    options: PluginHookEndedTranscriptReadOptions,
-  ): Promise<PluginHookEndedTranscriptReadResult>;
-};
+type SessionEndTranscriptAvailableSource = Extract<PluginHookEndedTranscript, { available: true }>;
 
 export type SessionEndTranscriptSource =
   | SessionEndTranscriptAvailableSource
@@ -66,18 +61,6 @@ export function attachSessionEndTranscriptSource(
     value: source,
     writable: false,
   });
-}
-
-function readSessionEndTranscriptSource(
-  context: PluginHookSessionContext,
-): SessionEndTranscriptSource {
-  return (
-    // SAFETY: attachSessionEndTranscriptSource is the sole writer for this private symbol.
-    (context as SessionEndContextWithSource)[sessionEndTranscriptSource] ?? {
-      available: false,
-      reason: "unsupported-source",
-    }
-  );
 }
 
 function createScopedAvailableEndedTranscript(
@@ -138,7 +121,12 @@ export function projectSessionEndTranscriptContext(
       dispose() {},
     };
   }
-  const source = readSessionEndTranscriptSource(context);
+  const source: SessionEndTranscriptSource =
+    // SAFETY: attachSessionEndTranscriptSource is the sole writer for this private symbol.
+    (context as SessionEndContextWithSource)[sessionEndTranscriptSource] ?? {
+      available: false,
+      reason: "unsupported-source",
+    };
   if (!source.available) {
     return { context: { ...context, endedTranscript: Object.freeze({ ...source }) }, dispose() {} };
   }

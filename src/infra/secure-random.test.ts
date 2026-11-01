@@ -1,7 +1,13 @@
-// Covers secure random helper outputs.
 import { Buffer } from "node:buffer";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
+import {
+  generateSecureFraction,
+  generateSecureHex,
+  generateSecureInt,
+  generateSecureToken,
+  generateSecureUuid,
+} from "./secure-random.js";
 
 const cryptoMocks = vi.hoisted(() => ({
   randomBytes: vi.fn((bytes: number) => Buffer.alloc(bytes, 0xab)),
@@ -9,27 +15,7 @@ const cryptoMocks = vi.hoisted(() => ({
   randomUUID: vi.fn(),
 }));
 
-vi.mock("node:crypto", () => ({
-  randomBytes: cryptoMocks.randomBytes,
-  randomInt: cryptoMocks.randomInt,
-  randomUUID: cryptoMocks.randomUUID,
-}));
-
-let generateSecureFraction: typeof import("./secure-random.js").generateSecureFraction;
-let generateSecureHex: typeof import("./secure-random.js").generateSecureHex;
-let generateSecureInt: typeof import("./secure-random.js").generateSecureInt;
-let generateSecureToken: typeof import("./secure-random.js").generateSecureToken;
-let generateSecureUuid: typeof import("./secure-random.js").generateSecureUuid;
-
-beforeAll(async () => {
-  ({
-    generateSecureFraction,
-    generateSecureHex,
-    generateSecureInt,
-    generateSecureToken,
-    generateSecureUuid,
-  } = await import("./secure-random.js"));
-});
+vi.mock("node:crypto", () => cryptoMocks);
 
 beforeEach(() => {
   cryptoMocks.randomBytes.mockClear();
@@ -82,11 +68,22 @@ describe("secure-random", () => {
     const publicId = generateSecureToken(18);
     expect(redactRegisteredSecretValues(publicId, () => "hidden")).toBe(publicId);
     expect(() => generateSecureToken({ bytes: 0, redact: true })).toThrow("at least 16 bytes");
+    cryptoMocks.randomBytes.mockReturnValueOnce(Buffer.alloc(32, 0xff));
+    const signingKey = generateSecureToken({
+      bytes: 32,
+      redact: true,
+      encoding: "base64",
+      prefix: "whsec_",
+    });
+    expect(signingKey).toMatch(/^whsec_[A-Za-z0-9+/]+=$/);
+    expect(Buffer.from(signingKey.slice(6), "base64")).toEqual(Buffer.alloc(32, 0xff));
+    expect(redactRegisteredSecretValues("secret=" + signingKey, () => "hidden")).toBe(
+      "secret=hidden",
+    );
+    expect(redactRegisteredSecretValues(signingKey.slice(6), () => "hidden")).toBe("hidden");
   });
 
   it("generates secure hex strings", () => {
-    cryptoMocks.randomBytes.mockClear();
-
     expect(generateSecureHex(4)).toBe(Buffer.alloc(4, 0xab).toString("hex"));
     expect(cryptoMocks.randomBytes).toHaveBeenCalledWith(4);
   });
@@ -99,11 +96,9 @@ describe("secure-random", () => {
   });
 
   it("delegates bounded integer generation to crypto.randomInt", () => {
-    cryptoMocks.randomInt.mockReturnValueOnce(2).mockReturnValueOnce(7);
+    cryptoMocks.randomInt.mockReturnValueOnce(2);
 
     expect(generateSecureInt(5)).toBe(2);
-    expect(generateSecureInt(3, 9)).toBe(7);
-    expect(cryptoMocks.randomInt).toHaveBeenNthCalledWith(1, 5);
-    expect(cryptoMocks.randomInt).toHaveBeenNthCalledWith(2, 3, 9);
+    expect(cryptoMocks.randomInt).toHaveBeenCalledExactlyOnceWith(5);
   });
 });

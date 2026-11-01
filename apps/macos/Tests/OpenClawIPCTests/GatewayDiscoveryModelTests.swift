@@ -3,6 +3,14 @@ import Testing
 
 @MainActor
 struct GatewayDiscoveryModelTests {
+    @Test func `starts and stops discovery in the live test runner`() {
+        let model = GatewayDiscoveryModel(localDisplayName: "Test Mac")
+        model.start()
+        model.stop()
+        #expect(model.gateways.isEmpty)
+        #expect(model.statusText == "Stopped")
+    }
+
     @Test func `inactive discovery does not retain its model for host resolution`() {
         weak var released: GatewayDiscoveryModel?
         do {

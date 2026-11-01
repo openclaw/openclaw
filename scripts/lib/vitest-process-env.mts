@@ -14,31 +14,30 @@ function parsePositiveInt(value: string | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function resolveExplicitVitestWorkerBudget(env: NodeJS.ProcessEnv): number | null {
-  return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
-}
-
-function shouldApplyNativeWorkerBudget(env: NodeJS.ProcessEnv): boolean {
+function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): string | null {
   if (env.RAYON_NUM_THREADS?.trim() && env.TOKIO_WORKER_THREADS?.trim()) {
-    return false;
+    return null;
   }
-  return (
-    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || resolveExplicitVitestWorkerBudget(env) !== null
-  );
-}
-
-function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): number {
-  return Math.min(resolveExplicitVitestWorkerBudget(env) ?? 1, 4);
+  const budget = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+  return env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || budget !== null
+    ? String(Math.min(budget ?? 1, 4))
+    : null;
 }
 
 /** Applies local Vitest scheduling and native worker budget env. */
 export function resolveVitestProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const baseEnv = resolveLocalVitestEnv(env);
-  if (!shouldApplyNativeWorkerBudget(baseEnv)) {
+  // Node and Chromium fix their default Intl locale at startup, so pin the
+  // locale CI uses; otherwise host locales change formatted test output.
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...resolveLocalVitestEnv(env),
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
+  const nativeWorkerCount = resolveNativeWorkerCount(baseEnv);
+  if (nativeWorkerCount === null) {
     return baseEnv;
   }
 
-  const nativeWorkerCount = String(resolveNativeWorkerCount(baseEnv));
   return {
     ...baseEnv,
     RAYON_NUM_THREADS: baseEnv.RAYON_NUM_THREADS?.trim() || nativeWorkerCount,

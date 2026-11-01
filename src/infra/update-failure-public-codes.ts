@@ -4,10 +4,9 @@ import { isServiceInspectionReason } from "../daemon/service-inspection-error.js
 import { normalizeSupportDiagnosticErrorCode } from "../logging/diagnostic-support-redaction.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
-import {
-  SKIPPED_UPDATE_OUTCOMES,
-  UPDATE_ENVIRONMENT_FAILURE_REASONS,
-} from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
+import { UPDATE_ENVIRONMENT_FAILURE_REASONS } from "../shared/update-outcome.js";
+import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
 import { UPDATE_PREFLIGHT_DETAILS } from "./update-preflight-details.js";
 import { updateRecoverySchema } from "./update-recovery.js";
 
@@ -21,6 +20,7 @@ export const CANARY_CHECKS = [
 ] as const;
 
 const PUBLIC_CODES = new Set<string>([
+  ...PACKAGE_REFUSAL_CODES,
   ...Object.keys(UPDATE_PREFLIGHT_DETAILS),
   ...Object.keys(SKIPPED_UPDATE_OUTCOMES),
   ...Object.values(PLUGIN_INSTALL_ERROR_CODE),
@@ -38,13 +38,19 @@ const PUBLIC_CODES = new Set<string>([
   "URIError",
   "EvalError",
   "AggregateError",
+  "OpenClawStateLeaseError",
+  "OPENCLAW_STATE_LEASE_LOST",
   "command-failed",
   "doctor-failed",
   "doctor-processes-unsettled",
   "agent-database-lease-active",
   "global-install-failed",
   "unexpected-error",
+  "host-owned-plugin-link",
   "update-failed",
+  "file_lock_timeout",
+  "file_lock_stale",
+  "repair-failed",
   "update-recovery-pending",
   "update-executor-settlement-failed",
   "unsupported_git_channel",
@@ -93,7 +99,9 @@ const PUBLIC_CODES = new Set<string>([
   "verification-result-missing",
   "finalization-timeout",
   "finalization-failed",
+  "ancestry-unverified",
   "no-output-timeout",
+  "output-limit",
   "signal",
   "readyz-unhealthy",
   "service-not-running",

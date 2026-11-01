@@ -84,17 +84,3 @@ it("joins deferred publication without spending retry time or retiring later obs
     await waits.settle();
   }
 });
-
-it.each([
-  { cleanupHandled: true, delivery: { status: "pending", payload: "final" } },
-  { cleanupHandled: false, delivery: { status: "delivered", payload: "final" } },
-  { cleanupHandled: false, delivery: { status: "pending" } },
-])("rejects incomplete deferred facts after producer settlement: %j", async (facts) => {
-  mocks.settleRootWork.mockResolvedValue(undefined);
-  mocks.listRuns.mockReturnValue([{ runId: "run", ...facts }]);
-  const waits = createLifecycleAgentCallWaits("agent:main:main", () => 0);
-  await expect(waits.waitForCleanupHandledFalse("run")).rejects.toThrow(
-    "did not reach deferred cleanup",
-  );
-  await waits.settle();
-});

@@ -12,8 +12,9 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
 }));
 
+// mock-isolation: Collector-scope fixtures supply channel owners without persisted plugin discovery.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (...args: unknown[]) =>
+  resolveConfiguredChannelPluginIdsAsync: async (...args: unknown[]) =>
     resolveConfiguredChannelPluginIdsMock(...args),
 }));
 
@@ -42,7 +43,6 @@ function createAuditOptions(params: {
     env: {},
     platform: process.platform,
     includeFilesystem: false,
-    includeChannelSecurity: true,
     deep: false,
     deepTimeoutMs: 5000,
     stateDir: "/tmp/openclaw-test-state",
@@ -196,7 +196,7 @@ describe("security audit read-only plugin scope", () => {
       sourceConfig,
       env: {},
       includeFilesystem: false,
-      includeChannelSecurity: false,
+      plugins: [],
       stateDir: "/tmp/openclaw-test-state",
       configPath: "/tmp/openclaw-test-config.json",
     });

@@ -1,5 +1,6 @@
 import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   validatePluginUiCapabilities,
   type PluginUiCapability,
@@ -10,6 +11,7 @@ import {
   readClawHubNonEmptyStringFields,
   readClawHubStringArrayField,
   readClawHubStringField,
+  readRequiredClawHubStringArrayField,
   readRequiredClawHubStringField,
 } from "./clawhub-client.js";
 
@@ -45,15 +47,10 @@ export function parseClawHubPluginCapabilities(
     result.contracts = Object.fromEntries(
       Object.keys(contracts)
         .toSorted()
-        .map((family) => {
-          const names = readClawHubStringArrayField(contracts, family, "plugin contracts");
-          if (!names) {
-            throw new Error(
-              `Malformed ClawHub plugin contracts: expected ${family} to be a string array.`,
-            );
-          }
-          return [family, names];
-        }),
+        .map((family) => [
+          family,
+          readRequiredClawHubStringArrayField(contracts, family, "plugin contracts"),
+        ]),
     );
   }
   return result;
@@ -86,8 +83,8 @@ export function parseClawHubPluginMcpServer(
   }
   const name = readRequiredClawHubStringField(entry, "name", context);
   const rawUrl = readClawHubStringField(entry, "url", context);
-  const scope = readClawHubStringField(entry, "scope", context)?.slice(0, 1000);
-  const setup = readClawHubStringField(entry, "setup", context)?.slice(0, 2000);
+  const scope = readClawHubStringField(entry, "scope", context);
+  const setup = readClawHubStringField(entry, "setup", context);
   let url: string | undefined;
   let endpointRedacted = entry.endpointRedacted === true;
   if (rawUrl && !endpointRedacted) {
@@ -127,8 +124,8 @@ export function parseClawHubPluginMcpServer(
     ...(entry.auth === "oauth" || entry.auth === "api-key" || entry.auth === "none"
       ? { auth: entry.auth }
       : {}),
-    ...(scope ? { scope } : {}),
-    ...(setup ? { setup } : {}),
+    ...(scope ? { scope: truncateUtf16Safe(scope, 1000) } : {}),
+    ...(setup ? { setup: truncateUtf16Safe(setup, 2000) } : {}),
     ...(endpointRedacted ? { endpointRedacted } : {}),
   };
 }

@@ -10,7 +10,7 @@ it("round-trips opaque list cursors through the installed AppBridge transport", 
   const bridge = new OpenClawAppBridge(
     null,
     { name: "OpenClaw", version: "test" },
-    buildMcpAppHostCapabilities(undefined, true, false, true),
+    buildMcpAppHostCapabilities(undefined, true, false),
   );
   const app = new App({ name: "cursor-proof", version: "1" }, {}, { autoResize: false });
   let cursor = "";
@@ -27,6 +27,7 @@ it("round-trips opaque list cursors through the installed AppBridge transport", 
   bindMcpAppResourceHandlers({
     bridge,
     request,
+    releaseResourceSubscription: vi.fn(() => Promise.resolve({})),
     sessionKey: "one",
     viewId: "app",
     iframe: document.createElement("iframe"),

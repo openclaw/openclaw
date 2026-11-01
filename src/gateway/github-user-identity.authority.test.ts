@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeWsControlUiGatewayConnect, resolveGatewayAuth } from "./auth.js";
@@ -23,12 +24,13 @@ afterEach(() => {
 });
 
 it("keeps public sign-in, durable roles and privileged dispatch independent of colliding Enterprise IDs", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = syncGitHubIdentity({
       identity: { accountId: 9001, login: "bob" },
       authenticationAlias: { kind: "github-login", login: "bob" },
     });
     setUserProfileRole(owner.id, "maintainer");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const cfg: OpenClawConfig = {
       gateway: {
         github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },

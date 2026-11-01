@@ -1,8 +1,5 @@
-import { html, nothing } from "lit";
-import type { SessionsCatalogStartTerminalResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForTerminalSession } from "../../app-route-paths.ts";
-import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import {
   readSessionMethodAccess,
@@ -31,45 +28,6 @@ export function readNewSessionTerminalStartAccess(
         method: "worktrees.create",
         requiredScope: "operator.admin",
       });
-}
-
-async function startNewSessionInTerminal(
-  client: GatewayBrowserClient,
-  params: {
-    catalogId: string;
-    agentId: string;
-    hostId: string;
-    cwd: string;
-    initialMessage: string;
-    worktree: boolean;
-    worktreeName: string;
-    baseRef: string;
-  },
-  isCurrent: () => boolean,
-): Promise<SessionsCatalogStartTerminalResult | null> {
-  let cwd = params.cwd;
-  if (params.worktree) {
-    const created = await createManagedWorktree(client, {
-      repoRoot: cwd,
-      name: params.worktreeName,
-      baseRef: params.baseRef,
-    });
-    if (!isCurrent()) {
-      return null;
-    }
-    cwd = created.path;
-  }
-  return startCatalogSessionInTerminal(
-    client,
-    {
-      catalogId: params.catalogId,
-      agentId: params.agentId,
-      hostId: params.hostId,
-      cwd,
-      ...(params.initialMessage ? { initialMessage: params.initialMessage } : {}),
-    },
-    isCurrent,
-  );
 }
 
 /** Native startup shares draft custody, but never falls through to chat creation. */
@@ -102,11 +60,8 @@ export async function submitDraftInTerminal(options: {
   const submission = options.capture(client);
   const initialMessage = flow.message.trim();
   const terminalInput = {
-    catalogId,
-    agentId,
     hostId: place.terminalHostId,
     cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
-    initialMessage,
     worktree: place.worktree,
     worktreeName: place.worktreeName,
     baseRef: place.baseRef,
@@ -119,7 +74,29 @@ export async function submitDraftInTerminal(options: {
   place.browser.close();
   options.closeTransientUi();
   try {
-    const result = await startNewSessionInTerminal(client, terminalInput, submission.isCurrent);
+    let cwd = terminalInput.cwd;
+    if (terminalInput.worktree) {
+      const created = await createManagedWorktree(client, {
+        repoRoot: cwd,
+        name: terminalInput.worktreeName,
+        baseRef: terminalInput.baseRef,
+      });
+      if (!submission.isCurrent()) {
+        return;
+      }
+      cwd = created.path;
+    }
+    const result = await startCatalogSessionInTerminal(
+      client,
+      {
+        catalogId,
+        agentId,
+        hostId: terminalInput.hostId,
+        cwd,
+        ...(initialMessage ? { initialMessage } : {}),
+      },
+      submission.isCurrent,
+    );
     if (!result || !submission.isCurrent()) {
       return;
     }
@@ -146,48 +123,9 @@ export async function submitDraftInTerminal(options: {
   }
 }
 
-export function renderNewSessionTerminalHost(params: {
+export type NewSessionTerminalHostOptions = {
   hosts: Array<{ hostId: string; label: string }> | undefined;
   hostId: string;
   submitting: boolean;
   onSelect: (hostId: string) => void;
-}) {
-  if (!params.hosts) {
-    return nothing;
-  }
-  if (params.hosts.length === 0) {
-    return html`<span class="new-session-page__catalog-unavailable" role="status">
-      ${t("newSession.nativeHostsUnavailable")}
-    </span>`;
-  }
-  if (params.hosts.length === 1 && params.hosts[0]?.hostId === params.hostId) {
-    return nothing;
-  }
-  return html`<div class="new-session-page__select new-session-page__menu-field">
-    <span>${t("newSession.where")}</span>
-    <select
-      class="new-session-page__trigger"
-      aria-label=${t("newSession.where")}
-      .value=${params.hostId}
-      ?disabled=${params.submitting}
-      @change=${(event: Event) => {
-        if (event.currentTarget instanceof HTMLSelectElement) {
-          params.onSelect(event.currentTarget.value);
-        }
-      }}
-    >
-      ${
-        !params.hosts.some((host) => host.hostId === params.hostId)
-          ? html`<option value=${params.hostId} selected disabled>
-              ${t("newSession.chooseNativeHost")}
-            </option>`
-          : nothing
-      }
-      ${params.hosts.map(
-        (host) => html`<option value=${host.hostId} ?selected=${host.hostId === params.hostId}>
-          ${host.label}
-        </option>`,
-      )}
-    </select>
-  </div>`;
-}
+};

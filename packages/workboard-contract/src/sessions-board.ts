@@ -1,7 +1,7 @@
 import type { SchemaContract } from "../../gateway-protocol/src/schema-contract.js";
 import type { SessionPerson } from "../../gateway-protocol/src/schema/session-participant.js";
 import type { SessionsListParams } from "../../gateway-protocol/src/schema/sessions-list.js";
-import type { WorkboardBoardMetadata } from "./index.js";
+import type { WorkboardBoardMetadata, WorkboardChange } from "./index.js";
 
 const OBSERVER_HEALTH = [
   "on-track",
@@ -52,8 +52,14 @@ export type WorkboardSessionFacts = {
     assessment?: string;
     revision: number;
   };
-  pullRequests: Array<{ number: number; state: "open" | "draft" | "merged" | "closed" }>;
+  pullRequests: Array<{
+    number: number;
+    state: "open" | "draft" | "merged" | "closed";
+    url?: string;
+    title?: string;
+  }>;
   pullRequestsUnavailable?: boolean;
+  pullRequestsRateLimited?: true;
   archived: boolean;
   lastActivityAt: number;
 };
@@ -69,12 +75,16 @@ export type WorkboardSessionsBoardView = Pick<
   SessionsListParams,
   "involvingMe" | "involvingProfileId" | "includePeople"
 >;
+export type WorkboardSessionsBoardRevision = WorkboardChange & { boardId: string; scope: string };
 export type WorkboardSessionsBoardRead = {
+  revision?: WorkboardSessionsBoardRevision;
   board: WorkboardSessionsBoard;
   columns: WorkboardSessionsColumn[];
   sessions: Array<
     WorkboardSessionFacts & Pick<WorkboardSessionPlacement, "columnId" | "source" | "reason">
   >;
+  nextCursor?: string;
+  total?: number;
   people?: SessionPerson[];
   warning?: string;
 };
@@ -142,10 +152,11 @@ function record(value: unknown, name: string, keys: readonly string[]): Record<s
 }
 
 function text(value: unknown, name: string, min: number, max = Number.MAX_SAFE_INTEGER): string {
-  if (typeof value !== "string" || value.trim().length < min || value.trim().length > max) {
+  const trimmed = typeof value === "string" ? value.trim() : undefined;
+  if (trimmed === undefined || trimmed.length < min || trimmed.length > max) {
     throw new Error(`${name} must be a string with ${min}..${max} characters.`);
   }
-  return value.trim();
+  return trimmed;
 }
 
 function boolean(value: unknown, name: string): boolean {
@@ -225,7 +236,13 @@ function normalizeColumn(value: unknown) {
 }
 
 function normalizeScope(value: unknown) {
-  const input = record(value, "scope", ["agentIds", "includeArchived", "maxAgeHours"]);
+  const input = record(value, "scope", [
+    "agentIds",
+    "includeArchived",
+    "includeAutomation",
+    "includeHome",
+    "maxAgeHours",
+  ]);
   let agentIds: string[] | undefined;
   if (input.agentIds !== undefined) {
     if (!Array.isArray(input.agentIds)) {
@@ -244,6 +261,12 @@ function normalizeScope(value: unknown) {
     ...(agentIds !== undefined ? { agentIds } : {}),
     ...(input.includeArchived !== undefined
       ? { includeArchived: boolean(input.includeArchived, "scope.includeArchived") }
+      : {}),
+    ...(input.includeAutomation !== undefined
+      ? { includeAutomation: boolean(input.includeAutomation, "scope.includeAutomation") }
+      : {}),
+    ...(input.includeHome !== undefined
+      ? { includeHome: boolean(input.includeHome, "scope.includeHome") }
       : {}),
     ...(maxAgeHours !== undefined ? { maxAgeHours } : {}),
   };

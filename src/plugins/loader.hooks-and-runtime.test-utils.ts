@@ -345,7 +345,6 @@ ${channelPluginSource({
     );
     const plugin = writePlugin({
       id: "auto-enabled-load-path-channel",
-      filename: "auto-enabled-load-path-channel.cjs",
       body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded", "utf-8");
 ${channelPluginSource({
   pluginId: "auto-enabled-load-path-channel",
@@ -354,19 +353,11 @@ ${channelPluginSource({
   blurb: "auto-enabled load-path setup gate",
 })}`,
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "auto-enabled-load-path-channel",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-          channels: ["auto-enabled-load-path-channel"],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: "auto-enabled-load-path-channel",
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      channels: ["auto-enabled-load-path-channel"],
+    });
 
     const scopedSetupRegistry = loadOpenClawPlugins({
       cache: false,
@@ -1327,25 +1318,19 @@ ${channelPluginSource({
   });
 
   it.each([
-    { successor: "removed", preserved: true },
-    { successor: "replaced", replaced: true, preserved: false },
-    { successor: "removed while Gateway B is live and active", gatewayB: true, preserved: true },
+    { successor: "replaced", replaced: true },
     {
-      successor: "removed and Gateway A is closing while Gateway B is live and active",
-      gatewayB: true,
+      successor: "removed and its Gateway is closing",
       closeGatewayA: true,
-      preserved: false,
     },
     {
       // A published build shares this process state but never links its registries.
       successor: "removed from a registry a published build left unlinked",
       unlinked: true,
-      gatewayB: true,
-      preserved: false,
     },
   ])(
-    "keeps a run's tool result only when its middleware plugin was $successor",
-    async ({ successor, replaced, gatewayB, closeGatewayA, unlinked, preserved }) => {
+    "rejects retired middleware when its plugin was $successor",
+    async ({ successor, replaced, closeGatewayA, unlinked }) => {
       useNoBundledPlugins();
       const pluginId = `tool-result-middleware-${successor}`;
       const plugin = writePlugin({
@@ -1388,34 +1373,16 @@ ${channelPluginSource({
       }
       setActivePluginRegistry(next);
       gatewayA?.publish(next);
-      if (gatewayB) {
-        // Gateway B becomes the process-active projection without this plugin.
-        const other = createEmptyPluginRegistry();
-        setActivePluginRegistry(other);
-        createPluginRegistryOwner(other);
-      }
       if (closeGatewayA) {
         await gatewayA?.close();
       }
       await instance.dispose();
-      // Callable and cyclic details survive only on the untouched no-middleware path.
+      // A retired callback cannot run against the later result.
       const details: Record<string, unknown> = { format: () => "exit 0" };
       details.self = details;
       const raw = { content: [{ type: "text" as const, text: "exit 0" }], details };
       const result = await runner.applyToolResultMiddleware({ ...event, result: raw });
-      if (preserved) {
-        // The removed plugin no longer post-processes: same result as no middleware.
-        expect(result).toBe(raw);
-        expect(
-          await createAgentToolResultMiddlewareRunner(
-            { runtime: "openclaw" },
-            [],
-          ).applyToolResultMiddleware({ ...event, result: raw }),
-        ).toBe(raw);
-      } else {
-        // A replacement, a closing owner or no owner link: the stale handler fails closed.
-        expect(result.details).toEqual({ status: "error", middlewareError: true });
-      }
+      expect(result.details).toEqual({ status: "error", middlewareError: true });
     },
   );
 

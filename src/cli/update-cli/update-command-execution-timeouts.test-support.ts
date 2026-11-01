@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import {
   bindExecutionGuards,
@@ -23,10 +23,6 @@ export function registerExecutionTimeoutTests() {
         runtimeInspected: true,
         running: false,
       });
-      const budgets = await import("../../infra/update-finalization-budget.js");
-      const budget = vi
-        .spyOn(budgets, "resolveUpdateFinalizationTimeoutMs")
-        .mockResolvedValue(180_000);
       mocks.runPackageUpdate.mockImplementation(async ({ beforeActivate }) => {
         await beforeActivate();
         return successfulUpdate;
@@ -64,10 +60,7 @@ export function registerExecutionTimeoutTests() {
       }
       expect(execution?.mutationStarted).toBe(true);
       expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(2);
-      expect(mocks.prepareMutableUpdate.mock.calls.at(-1)?.[1]).toBe(
-        timeoutMs === undefined ? undefined : 180_000,
-      );
-      expect(budget).toHaveBeenCalledTimes(timeoutMs === undefined ? 0 : 1);
+      expect(mocks.prepareMutableUpdate.mock.calls.at(-1)?.[1]).toBe(timeoutMs);
     },
   );
 }

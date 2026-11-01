@@ -1,22 +1,28 @@
-import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 // Claude's native transcript augments display history, never canonical model context.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { withTranscriptRedactionSnapshot } from "../agents/transcript-redact-text.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
+  ChatHistoryMessageParams,
 } from "../config/sessions/session-history-types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
 } from "../sessions/transcript-anchor-page.js";
+import { createTranscriptDisplaySource } from "../sessions/transcript-display-position.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
-import { dropPreSessionStartAnnouncePairs } from "./chat-display-projection.history.js";
+import {
+  dropPreSessionStartAnnouncePairs,
+  isPreSessionStartAssistantMessage,
+} from "./chat-display-projection.history.js";
+import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -28,11 +34,15 @@ import {
   readChatHistoryPaginationKey,
   readIncrementalChatHistoryTail,
 } from "./session-history-tail.js";
-import type { SessionTranscriptPageReader } from "./session-transcript-read-kernel.js";
-import type { SessionTranscriptPageOptions } from "./session-transcript-read.types.js";
+import { filterSessionMessageHistoryVisibility } from "./session-transcript-read-kernel.js";
+import type {
+  ReadSessionMessageByIdResult,
+  SessionTranscriptPageOptions,
+  SessionTranscriptPageReader,
+} from "./session-transcript-read.types.js";
 
 export type CliHistoryRevision = {
-  database: DatabaseSync;
+  database: EngineConnection;
   generation?: string;
   indexedSeq: number;
   leafEventId: string | null;
@@ -43,9 +53,9 @@ export type CliHistoryReaders = SessionTranscriptPageReader & {
 };
 type Readers = CliHistoryReaders;
 type CachedIndex = {
-  database?: DatabaseSync;
+  database?: EngineConnection;
   key: string;
-  index: CliSessionHistoryIndex;
+  index: CliHistoryIndex;
   release: () => void;
   readWindow?: TranscriptReadWindow;
   displaySource?: string;
@@ -97,14 +107,12 @@ export async function prepareCliSessionHistoryReader(
       offset: params.offset,
       readOnly: true,
       deferProfileDisplay: true,
+      // The history worker prepares current cron labels after selecting the page.
+      resolveCronJobName: () => undefined,
     });
     if (tail.rawMessages.length) {
       return undefined;
     }
-  }
-  const redaction = params.cliHistoryRedaction;
-  if (!redaction) {
-    throw new Error("CLI history requires prepared transcript redaction");
   }
   const native = {
     cliSessionId: binding.sessionId,
@@ -121,12 +129,7 @@ export async function prepareCliSessionHistoryReader(
   const revisionKey = (value: CliHistoryRevision) =>
     JSON.stringify([value.generation, value.indexedSeq, value.leafEventId]);
   const localRevision = revision ? revisionKey(revision) : undefined;
-  const key = JSON.stringify([
-    localRevision,
-    source[1],
-    params.entry?.sessionStartedAt,
-    redaction.policyToken,
-  ]);
+  const key = JSON.stringify([localRevision, source[1], params.entry?.sessionStartedAt]);
   let cached = revision?.database ? indexes.get(identity) : undefined;
   if (cached && (cached.database !== revision?.database || cached.key !== key)) {
     retire(identity);
@@ -145,15 +148,16 @@ export async function prepareCliSessionHistoryReader(
     }
   };
   if (!cached) {
-    const index = new CliSessionHistoryIndex(!revision?.database);
+    const index =
+      params.entry?.incognito === true
+        ? new MemoryCliSessionHistoryIndex()
+        : new CliSessionHistoryIndex();
     try {
-      await withTranscriptRedactionSnapshot(redaction, () =>
-        visitClaudeCliSessionMessages(
-          source[0],
-          native,
-          (message) => index.appendImported(message),
-          source[2],
-        ),
+      await visitClaudeCliSessionMessages(
+        source[0],
+        native,
+        (message) => index.appendImported(message),
+        source[2],
       );
       if (!index.importedCount) {
         index.close();
@@ -231,7 +235,9 @@ export async function prepareCliSessionHistoryReader(
           readWindow,
           displaySource,
           leafEventId,
-          release: registerNodeSqliteDisposeCallback(revision?.database, () => retire(identity)),
+          release: registerNodeSqliteDisposeCallback(sqlPublicationAnchor(revision.database), () =>
+            retire(identity),
+          ),
         };
         indexes.set(identity, cached);
         while (indexes.size > MAX_INDEXES) {
@@ -251,9 +257,17 @@ export async function prepareCliSessionHistoryReader(
     indexes.set(identity, cached);
   }
   const index = cached.index;
+  const indexCursorSource = createTranscriptDisplaySource([key]);
+  // Set once this request reads a closed reset interval or archive through the
+  // canonical anchor reader. Every row on that page, including rows retained into
+  // the current window, then keeps its canonical sequence.
+  let canonicalAnchorPage = false;
   const sequence = (message: unknown) => {
     const id = readChatHistoryMessageId(message);
     const seq = readChatHistoryMessageSeq(message);
+    if (canonicalAnchorPage) {
+      return seq;
+    }
     const ordinal = id
       ? index.ordinal(id)
       : seq === undefined
@@ -336,7 +350,38 @@ export async function prepareCliSessionHistoryReader(
       readWindow: { source: key, latestResetRawSeq: null },
     };
   };
-  return {
+  const readIndexedMessage: Readers["readSessionMessageByIdAsync"] = async (
+    readScope,
+    messageId,
+    options,
+  ) => {
+    const ordinal = index.ordinal(messageId);
+    if (ordinal === undefined) {
+      return { found: false, oversized: false };
+    }
+    const [message] = await readRange(ordinal, ordinal + 1, options?.maxBytes);
+    const precedingMessage =
+      options?.historyVisibility &&
+      ordinal > 0 &&
+      isPreSessionStartAssistantMessage(message, options.historyVisibility.sessionStartedAt)
+        ? (await readRange(ordinal - 1, ordinal))[0]
+        : undefined;
+    return filterSessionMessageHistoryVisibility(
+      {
+        found: message !== undefined,
+        oversized: false,
+        message,
+        seq: ordinal + 1,
+        historyContext: { displaySource: key, precedingMessage },
+      },
+      readScope,
+      messageId,
+      options?.historyVisibility,
+      prepared.readers,
+    );
+  };
+  const prepared = {
+    readIndexedMessage,
     dispose: () => {
       if (!cached.database) {
         index.close();
@@ -344,8 +389,9 @@ export async function prepareCliSessionHistoryReader(
     },
     sequence,
     applyPagination(historyPage: ChatHistoryPage) {
-      if (historyPage.pagination) {
-        historyPage.pagination.messageSequences = Object.fromEntries(
+      const pagination = historyPage.pagination ?? historyPage.anchor;
+      if (pagination) {
+        pagination.messageSequences = Object.fromEntries(
           historyPage.messages.flatMap((message) => {
             const id = readChatHistoryPaginationKey(message);
             const seq = sequence(message);
@@ -365,25 +411,75 @@ export async function prepareCliSessionHistoryReader(
         options: SessionTranscriptPageOptions,
       ) => page(options),
       readSessionMessagesAroundIdWithStatsAsync: async (
-        _scope: Parameters<Readers["readSessionMessagesPageWithStatsAsync"]>[0],
+        anchorScope: Parameters<Readers["readSessionMessagesAroundIdWithStatsAsync"]>[0],
         options: Parameters<Readers["readSessionMessagesAroundIdWithStatsAsync"]>[1],
       ) => {
         const ordinal = index.ordinal(options.messageId);
-        const range =
-          ordinal === undefined
-            ? undefined
-            : resolveHistoryAnchorPageRange(index.count, ordinal, options);
+        // The index covers only the latest reset window, and reset clears CLI bindings.
+        // Closed reset intervals and archives keep the canonical anchor contract; rows
+        // indexed here stay subject to merge and display filtering. Cursors stay on the
+        // source that issued them, because a closed interval shares its retained rows
+        // and closing reset marker with the index.
+        if (
+          ordinal === undefined ||
+          canonicalAnchorPage ||
+          (params.pageCursor !== undefined && params.pageCursor.source !== indexCursorSource)
+        ) {
+          canonicalAnchorPage = true;
+          return await readers.readSessionMessagesAroundIdWithStatsAsync(anchorScope, options);
+        }
+        const range = resolveHistoryAnchorPageRange(index.count, ordinal, options);
         return {
-          messages: range
-            ? await readRange(range.readStart, range.endExclusive, options.maxBytes)
-            : [],
+          messages: await readRange(range.readStart, range.endExclusive, options.maxBytes),
           totalMessages: index.count,
-          found: Boolean(range),
-          offset: range?.offset ?? 0,
-          hasOverreadContext: range?.hasOverreadContext ?? false,
+          found: true,
+          offset: range.offset,
+          hasOverreadContext: range.hasOverreadContext,
           displaySource: key,
         };
       },
     },
   };
+  prepared.readers.readSessionMessageByIdAsync = (...args) =>
+    readCanonicalOrImportedMessage(readers, args, () => readIndexedMessage(...args));
+  return prepared;
+}
+
+async function readCanonicalOrImportedMessage(
+  readers: Readers,
+  args: Parameters<Readers["readSessionMessageByIdAsync"]>,
+  readImported: (missing: ReadSessionMessageByIdResult) => Promise<ReadSessionMessageByIdResult>,
+): Promise<ReadSessionMessageByIdResult> {
+  const local = await readers.readSessionMessageByIdAsync(...args);
+  return local.found || local.historyHidden ? local : readImported(local);
+}
+
+/** Canonical IDs retain archive access; imported-only IDs use the page owner's admitted index. */
+export async function readChatHistoryMessageFromReaders(
+  params: ChatHistoryMessageParams,
+  readers: CliHistoryReaders,
+): Promise<ReadSessionMessageByIdResult> {
+  const scope = {
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: params.canonicalKey,
+    storePath: params.storePath,
+    sessionEntry: params.entry,
+  };
+  const options = {
+    allowResetArchiveFallback: true,
+    historyVisibility: { sessionStartedAt: params.entry?.sessionStartedAt },
+  };
+  return readCanonicalOrImportedMessage(
+    readers,
+    [scope, params.messageId, options],
+    async (missing) => {
+      const cli = await prepareCliSessionHistoryReader(params, readers);
+      try {
+        return cli ? await cli.readIndexedMessage(scope, params.messageId, options) : missing;
+      } finally {
+        cli?.dispose();
+      }
+    },
+  );
 }

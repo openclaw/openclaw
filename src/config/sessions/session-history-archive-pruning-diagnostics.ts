@@ -7,6 +7,7 @@ function archivePruningLogFields(diagnostics: SqliteSessionArchivePruningDiagnos
     value === undefined ? undefined : Math.round(value);
   return {
     trigger: diagnostics.trigger,
+    highWaterBytes: diagnostics.highWaterBytes,
     checkpointCalls: diagnostics.checkpointCalls,
     checkpointIncomplete: diagnostics.checkpointIncomplete,
     checkpoint: diagnostics.checkpoint,

@@ -18,9 +18,7 @@ export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
 };
 
 export type GatewayPluginOptions = {
-  reconnect?: { maxAttempts?: number };
   intents?: number;
-  shard?: [number, number];
   url?: string;
 };
 

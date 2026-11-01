@@ -1,3 +1,4 @@
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
   ChannelPreviewStreamingConfig,
   DmPolicy,
@@ -9,6 +10,7 @@ import type {
   ChannelReactionConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -22,7 +24,6 @@ export type TelegramActionConfig = {
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
-  /** Enable forum topic creation. */
   createForumTopic?: boolean;
   /** Enable forum topic editing (rename / change icon). */
   editForumTopic?: boolean;
@@ -73,7 +74,7 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
   string | number,
   TelegramPreviewStreamingConfig
 > &
-  ChannelReactionConfig<"off" | "own" | "all", "off" | "ack" | "minimal" | "extensive", string> & {
+  ChannelReactionConfig<"off" | "own" | "all", ReactionLevel, string> & {
     /** Post a room-specific introduction when joining a group. Default: true. */
     joinIntro?: boolean;
     /** Telegram-native exec approval delivery + approver authorization. */
@@ -97,7 +98,6 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
      * Default: false.
      */
     richMessages?: boolean;
-    /** Network transport overrides for Telegram. */
     network?: TelegramNetworkConfig;
     proxy?: string;
     webhookUrl?: string;
@@ -113,7 +113,6 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     webhookCertPath?: string;
     /** Per-action tool gating (default: true for all). */
     actions?: TelegramActionConfig;
-    /** Telegram thread/conversation binding overrides. */
     threadBindings?: TelegramThreadBindingsConfig;
     /** Controls whether link previews are shown in outbound messages. Default: true. */
     linkPreview?: boolean;
@@ -172,9 +171,4 @@ export type TelegramDirectConfig = Omit<CommonChannelGroupConfig, "requireMentio
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
-export type TelegramConfig = {
-  /** Optional per-account Telegram configuration (multi-account). */
-  accounts?: Record<string, TelegramAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & TelegramAccountConfig;
+export type TelegramConfig = MultiAccountChannelConfig<TelegramAccountConfig>;

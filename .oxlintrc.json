@@ -1,12 +1,15 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["unicorn", "typescript", "oxc", "import"],
+  "jsPlugins": ["./scripts/oxlint-boundary-guards.mjs"],
+  "settings": { "solid": { "version": 2 } },
   "categories": {
     "correctness": "error",
     "perf": "error",
     "suspicious": "error"
   },
   "rules": {
+    "openclaw-boundaries/no-recursive-readdir": "error",
     "curly": "error",
     "eslint/array-callback-return": "error",
     "eslint/no-underscore-dangle": ["error", { "allow": ["__typename", "_meta"] }],
@@ -227,9 +230,7 @@
     "dist/",
     "dist-runtime/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
-    ".agents/skills/autoreview/tests/fixtures/**",
     "test/fixtures/oxlint-boundary-guards/**",
-    "**/a2ui.bundle.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
@@ -247,6 +248,63 @@
     "**/node_modules/**"
   ],
   "overrides": [
+    {
+      "files": [
+        "ui/**/*.tsx",
+        "ui/src/lib/reactive/**/*.ts",
+        "ui/src/components/solid/**/*.ts",
+        "ui/src/test-helpers/**/*.ts",
+        "extensions/*/browser/**/*.tsx",
+        "extensions/*/src/**/*.tsx"
+      ],
+      "jsPlugins": ["./tools/solid-lint/index.mjs"],
+      // Component analysis stays scoped to renderers and explicitly reactive helpers.
+      "rules": {
+        "solid/jsx-no-duplicate-props": "error",
+        "solid/jsx-no-undef": "error",
+        "solid/jsx-uses-vars": "error",
+        "solid/no-unknown-namespaces": "error",
+        "solid/no-innerhtml": "error",
+        "solid/jsx-no-script-url": "error",
+        "solid/components-return-once": "warn",
+        "solid/no-destructure": "error",
+        "solid/prefer-for": "error",
+        "solid/reactivity": "warn",
+        "solid/event-handlers": "error",
+        "solid/imports": "warn",
+        "solid/style-prop": "warn",
+        "solid/no-react-deps": "off",
+        "solid/no-react-specific-props": "error",
+        "solid/self-closing-comp": "warn",
+        "solid/no-array-handlers": "off",
+        "solid/prefer-show": "off",
+        "solid/no-proxy-apis": "off",
+        "solid/prefer-classlist": "off",
+        "solid/no-accessor-as-prop": "error",
+        "solid/no-boolean-enumerated-attribute": "error",
+        "solid/prefer-structured-class": "warn",
+        "solid/valid-use-server": "error",
+        "solid/require-async-server-function": "error",
+        "solid/no-invalid-server-capture": "error",
+        "solid/no-browser-globals-in-server-function": "error"
+      }
+    },
+    {
+      "files": [
+        "ui/**/*.{ts,tsx}",
+        "extensions/*/browser/**/*.{ts,tsx}",
+        "extensions/*/src/**/*.tsx"
+      ],
+      "jsPlugins": ["./tools/solid-lint/index.mjs"],
+      // Primitive contracts apply to domain helpers too, without treating props-named data as components.
+      "rules": {
+        "solid/removed-api": "error",
+        "solid/no-single-arg-create-effect": "error",
+        "solid/no-store-mutation-outside-setter": "error",
+        "solid/no-write-in-pure-computation": "error",
+        "solid/no-unused-signal": "warn"
+      }
+    },
     {
       "files": ["packages/worker-runtime/**/*.{js,ts,mts,cts}"],
       "rules": {
@@ -309,10 +367,16 @@
       }
     },
     {
-      "files": ["src/cli/cli-process-diagnostics.test-support.cjs"],
+      "files": [
+        "src/cli/cli-process-diagnostics.test-support.cjs",
+        "scripts/perf/async-context-probe.cjs",
+        "scripts/perf/gateway-ui-rpc-preload.mjs",
+        "scripts/perf/session-delete-phases-loader.mjs",
+        "scripts/perf/sqlite-reply-census-preload.mjs"
+      ],
       "rules": {
-        // The saved emitter is always invoked with the caller's receiver via Reflect.apply.
-        // CJS semantic discovery varies by lint target set; an inline disable can appear unused.
+        // Saved native methods always receive the original caller's receiver.
+        // JS semantic discovery varies by lint target set; an inline disable can appear unused.
         "typescript/unbound-method": "off"
       }
     },
@@ -334,6 +398,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -355,6 +420,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -376,6 +442,7 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -396,6 +463,7 @@
       "excludeFiles": [
         "**/__generated__/**",
         "**/generated/**",
+        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -404,6 +472,13 @@
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["src/agents/agent-command.live-model-switch.test.ts"],
+      "rules": {
+        // expectations updated for equal-primary saved selections keeping configured fallbacks; #185496
+        "max-lines": ["error", { "max": 3736, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {

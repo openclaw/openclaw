@@ -17,7 +17,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_requiresLocationPermissionWhenNeitherFineNorCoarse() =
     runTest {
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -36,7 +36,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_requiresForegroundBeforeLocationPermission() =
     runTest {
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -62,7 +62,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
           backgroundGranted = true,
         )
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource = source,
           isForeground = { false },
@@ -79,7 +79,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_deniesBackgroundWhenFlavorDisablesAlwaysMode() =
     runTest {
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -107,7 +107,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
           coarseGranted = true,
         )
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource = source,
           locationPreciseEnabled = { true },
@@ -130,7 +130,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
           coarseGranted = true,
         )
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource = source,
           locationPreciseEnabled = { true },
@@ -146,7 +146,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_mapsTimeoutToLocationTimeout() =
     runTest {
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -167,7 +167,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_mapsOtherFailuresToLocationUnavailable() =
     runTest {
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -188,7 +188,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_propagatesParentCancellation() =
     runTest {
       val handler =
-        LocationHandler(
+        createLocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -207,24 +207,38 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
     }
 }
 
+private fun createLocationHandler(
+  appContext: Context,
+  dataSource: FakeLocationDataSource,
+  isForeground: () -> Boolean = { true },
+  locationMode: () -> LocationMode = { LocationMode.WhileUsing },
+  backgroundLocationEnabled: () -> Boolean = { false },
+  locationPreciseEnabled: () -> Boolean = { true },
+): LocationHandler =
+  LocationHandler(
+    appContext = appContext,
+    capture = dataSource::fetchLocation,
+    hasFinePermission = { dataSource.fineGranted },
+    hasCoarsePermission = { dataSource.coarseGranted },
+    hasBackgroundPermission = { dataSource.backgroundGranted },
+    isForeground = isForeground,
+    locationMode = locationMode,
+    backgroundLocationEnabled = backgroundLocationEnabled,
+    locationPreciseEnabled = locationPreciseEnabled,
+  )
+
 private class FakeLocationDataSource(
-  private val fineGranted: Boolean,
-  private val coarseGranted: Boolean,
-  private val backgroundGranted: Boolean = false,
+  val fineGranted: Boolean,
+  val coarseGranted: Boolean,
+  val backgroundGranted: Boolean = false,
   private val failure: Throwable? = null,
   private val timeout: Boolean = false,
-) : LocationDataSource {
+) {
   var lastDesiredProviders: List<String> = emptyList()
   var lastMaxAgeMs: Long? = null
   var lastTimeoutMs: Long? = null
 
-  override fun hasFinePermission(context: Context): Boolean = fineGranted
-
-  override fun hasCoarsePermission(context: Context): Boolean = coarseGranted
-
-  override fun hasBackgroundPermission(context: Context): Boolean = backgroundGranted
-
-  override suspend fun fetchLocation(
+  suspend fun fetchLocation(
     desiredProviders: List<String>,
     maxAgeMs: Long?,
     timeoutMs: Long,

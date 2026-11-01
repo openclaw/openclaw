@@ -1,37 +1,172 @@
-import { describe, expect, it, vi } from "vitest";
-import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
+import "./service-http-mock.test-support.js";
+import "./session-authority.test-support.js";
+import type {
+  OpenClawPluginGatewayEvents,
+  OpenClawPluginSessionsChangedEvent,
+} from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ClickClackHttpError } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
+import { getClickClackDiscussionBindingStore } from "./binding-store.js";
 import { fallbackDiscussionLabel } from "./naming.js";
+import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
+import { resolveClickClackDiscussionRoute } from "./routing.js";
+import {
+  bindingEntriesGate,
+  expectCreated,
+  expectLastPatch,
+  expectPatched,
+} from "./service-case.test-support.js";
 import {
   discussionChannel,
   MANAGED_CONTRACT_FIELDS,
   createHarness,
+  reserveTestExternalRef,
   testExternalRef,
 } from "./service-test-support.js";
+import { ClickClackDiscussionService } from "./service.js";
 
-function legacyCreateResponse(
-  input: Parameters<ClickClackClient["createChannel"]>[1],
-): ClickClackChannel {
-  const response: ClickClackChannel = discussionChannel({
-    ...input,
-    kind: "public",
-  });
-  Reflect.deleteProperty(response, "display_title");
-  return response;
+type Harness = ReturnType<typeof createHarness>;
+const nameConflict =
+  'duplicate key value violates unique constraint "channels_workspace_id_name_key"';
+const httpError = (status: number, message: string) =>
+  new ClickClackHttpError(status, message, new Headers());
+async function interruptCreate(h: Harness) {
+  const general = (await h.channels())[0]!;
+  h.channels
+    .mockResolvedValueOnce([general])
+    .mockRejectedValueOnce(new Error("relist unavailable"));
+  h.createChannel.mockRejectedValueOnce(new Error("connection lost"));
 }
-
-describe("ClickClack discussion service", () => {
-  it("opens a managed channel once and returns stable info URLs", async () => {
-    const harness = createHarness({ label: "Release Planning", category: "Projects" });
-    harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
-    const sessionKey = "agent:main:main";
-
-    expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
-    const [opened, reopened] = await Promise.all([
-      harness.service.open(sessionKey),
-      harness.service.open(sessionKey),
+function managedRoom(fields: Partial<ClickClackChannel>) {
+  return discussionChannel({
+    external_managed: true,
+    external_url: "",
+    sidebar_section: "Sessions",
+    archived: false,
+    ...fields,
+  });
+}
+function legacyPatchResponse(h: Harness, fields: Partial<ClickClackChannel>, patchArchive = false) {
+  h.updateChannel.mockImplementationOnce(async (channelId, patch) => {
+    const response = discussionChannel({ ...fields, ...patch, id: fields.id ?? channelId });
+    Reflect.deleteProperty(response, "display_title");
+    if (!patchArchive) {
+      response.archived = fields.archived;
+    }
+    return response;
+  });
+}
+async function recoverLostResponse(
+  h: Harness,
+  fields: Partial<ClickClackChannel>,
+  error = "connection lost",
+) {
+  const general = (await h.channels())[0]!;
+  h.channels
+    .mockResolvedValueOnce([general])
+    .mockImplementationOnce(async () => [
+      general,
+      managedRoom({ ...fields, external_ref: h.createChannel.mock.calls[0]?.[1].external_ref }),
     ]);
+  h.createChannel.mockRejectedValueOnce(new Error(error));
+}
+describe("ClickClack discussion service", () => {
+  const sessionKey = "agent:main:main";
+  let h: Harness;
+  beforeEach(() => {
+    h = createHarness({ label: "Title" });
+  });
+  it("keeps accepted same-session operations in order while initial hydration settles", async () => {
+    const { entered, release, arm } = bindingEntriesGate(h.runtime);
+    arm();
+    const opening = h.service.open(sessionKey);
+    await entered.promise;
+    // Another callback submits work as the worker reply passes through promise continuations.
+    const info = release.promise.then(() =>
+      Promise.resolve().then(() => h.service.info(sessionKey)),
+    );
+    try {
+      release.resolve();
+      await expect(opening).resolves.toMatchObject({ state: "open" });
+      await expect(info).resolves.toMatchObject({ state: "open" });
+      expect(h.createChannel).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([opening, info]);
+      await h.service.cleanup();
+    }
+  });
 
+  it.each(["disabled", "retargeted", "revoked", "replaced"] as const)(
+    "does not update or resurrect a discussion after %s during binding preparation",
+    async (change) => {
+      h.setSessionEntry({ label: "Title", category: "Projects" });
+      const { entered, release, arm } = bindingEntriesGate(h.runtime);
+      await h.service.open(sessionKey);
+      const originalBinding = getClickClackDiscussionBindingStore(h.runtime).get(sessionKey);
+      if (!originalBinding) {
+        throw new Error("Expected the opened discussion binding fixture");
+      }
+      const { displayTitle: _displayTitle, ...legacyBinding } = originalBinding;
+      h.store.register(sessionKey, legacyBinding);
+      // This unchanged legacy title needs the sibling-support scan even if ordinary scans are removed.
+      h.store.register("agent:main:prepared-metadata-sibling", {
+        ...originalBinding,
+        channelId: "chn_sibling",
+        externalRef: "supporting-sibling-room",
+        displayTitle: "Supported",
+      });
+      const replacement = {
+        ...originalBinding,
+        sessionId: "new",
+        channelId: "chn_new",
+        channelRouteId: "new-route",
+        externalRef: "new-room",
+        section: "Next",
+      };
+      h.updateChannel.mockClear();
+      h.setSessionEntry({ label: "Title", category: "Next" });
+      arm();
+      // info passes resolved.account: there is no older network await between these guards and the scan.
+      const operation = h.service.info(sessionKey);
+      try {
+        await entered.promise;
+        if (change === "disabled") {
+          h.config.channels!.clickclack!.enabled = false;
+        } else if (change === "retargeted") {
+          h.config.channels!.clickclack!.discussions!.workspace = "other-team";
+        } else if (change === "revoked") {
+          await markClickClackDiscussionChannelRevoked(h.runtime, sessionKey, legacyBinding);
+        } else {
+          // Bypass local routing indexes, as another native writer can, then reset the session.
+          h.store.register(sessionKey, replacement);
+          h.setSessionEntry({ sessionId: replacement.sessionId, label: "Title", category: "Next" });
+        }
+        release.resolve();
+        await operation;
+        if (change === "replaced") {
+          expect(h.store.lookup(sessionKey)).toEqual(replacement);
+        }
+        expect(h.updateChannel).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await operation.catch(() => undefined);
+        await h.service.cleanup();
+      }
+    },
+  );
+
+  it("opens one channel with stable URLs", async () => {
+    h.setSessionEntry({ label: "Release Planning", category: "Projects" });
+    expect(await h.service.info(sessionKey)).toEqual({ state: "available" });
+    const [opened, reopened] = await Promise.all([
+      h.service.open(sessionKey),
+      h.service.open(sessionKey),
+    ]);
     expect(opened).toEqual({
       state: "open",
       embedUrl:
@@ -39,860 +174,559 @@ describe("ClickClack discussion service", () => {
       openUrl: "https://clickclack.example/app/team-route/discussion-route",
     });
     expect(reopened).toEqual(opened);
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        namespace: "discussion-binding-generations",
-        overflowPolicy: "reject-new",
-      }),
-    );
-    expect(harness.runtime.state.openSyncKeyedStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        namespace: "discussion-revoked-channels",
-        overflowPolicy: "reject-new",
-      }),
-    );
-    expect(harness.createChannel).toHaveBeenCalledWith("wsp_team", {
-      name: "release-planning",
+    expect(h.createChannel).toHaveBeenCalledTimes(1);
+    expectCreated(h, {
       kind: "public",
       external_managed: true,
-      external_ref: testExternalRef(sessionKey),
-      external_url: "https://control.example/control/chat/main",
-      sidebar_section: "Projects",
-      display_title: "Release Planning",
+      external_ref: testExternalRef(sessionKey, h.runtime),
     });
   });
 
-  it("clears display_title for fallback labels", async () => {
-    const harness = createHarness({});
-    const sessionKey = "agent:main:untitled";
-
-    await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        name: fallbackDiscussionLabel(sessionKey, "main"),
-        display_title: "",
-      }),
-    );
+  it("propagates worker session read failures before creating a discussion", async () => {
+    const failure = new Error("Session worker unavailable");
+    vi.mocked(h.runtime.agent.session.getSessionEntryAsync).mockRejectedValue(failure);
+    await expect(h.service.open("agent:main:worker-unavailable")).rejects.toBe(failure);
+    expect(h.runtime.agent.session.getSessionEntry).not.toHaveBeenCalled();
+    expect(h.createChannel).not.toHaveBeenCalled();
   });
 
-  it("truncates display_title by Unicode code point", async () => {
-    const harness = createHarness({ label: "😀".repeat(201) });
-
-    await harness.service.open("agent:main:long-title");
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({ display_title: "😀".repeat(200) }),
-    );
+  it.each([
+    ["global", "ops", "ops", "ops"],
+    ["agent:worker:qualified", "worker", "worker", "worker/qualified"],
+    ["telegram:12345", "research", "ops", "research/telegram/12345"],
+    [
+      "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      "main",
+      "main",
+      "main/control-link-12345678?tenant=alpha",
+    ],
+  ])("keeps the owner and control link for %s", async (key, linkAgent, owner, url) => {
+    h.setSessionEntry({ label: "Control link" });
+    h.config.agents = { entries: owner === "worker" ? { ops: {}, worker: {} } : { [owner]: {} } };
+    h.config.channels!.clickclack!.agentId = linkAgent;
+    if (key.includes("dashboard:")) {
+      h.config.channels!.clickclack!.discussions!.controlUrlBase =
+        "https://control.example/control///?tenant=alpha#old";
+    }
+    await h.service.open(key);
+    expect(h.store.lookup(key)).toMatchObject({ agentId: owner });
+    expectCreated(h, { external_url: `https://control.example/control/chat/${url}` });
+    if (linkAgent === "research") {
+      await h.service.reconcile(key);
+      expect(h.updateChannel).not.toHaveBeenCalled();
+      h.config.channels!.clickclack!.agentId = "writer";
+      await h.service.reconcile(key);
+      expectLastPatch(h, {
+        external_url: "https://control.example/control/chat/writer/telegram/12345",
+      });
+    }
   });
 
-  it("backfills an unchanged title after a sibling confirms server support", async () => {
-    const harness = createHarness({ label: "Needs Backfill" });
-    const sessionKey = "agent:main:needs-backfill";
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
-      legacyCreateResponse(input),
-    );
-    await harness.service.open(sessionKey);
-
-    harness.setSessionEntry({ label: "Confirmed Sibling" });
-    await harness.service.open("agent:main:confirmed-sibling");
-    expect(harness.store.lookup("agent:main:confirmed-sibling")).toMatchObject({
-      displayTitle: "Confirmed Sibling",
-    });
-
-    harness.updateChannel.mockClear();
-    harness.setSessionEntry({ label: "Needs Backfill" });
-    await harness.service.reconcile(sessionKey);
-
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
-      display_title: "Needs Backfill",
-    });
-    expect(harness.store.lookup(sessionKey)).toMatchObject({ displayTitle: "Needs Backfill" });
-  });
-
-  it("does not retry an unchanged title without server capability confirmation", async () => {
-    const harness = createHarness({ label: "Legacy title" });
-    const sessionKey = "agent:main:legacy-title-no-retry";
-    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
-      legacyCreateResponse(input),
-    );
-    await harness.service.open(sessionKey);
-
-    harness.updateChannel.mockClear();
-    await harness.service.reconcile(sessionKey);
-
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-  });
-
-  it("pins the configured default for global keys and preserves qualified owners", async () => {
-    const globalHarness = createHarness({ label: "Global session" });
-    globalHarness.config.agents = { entries: { ops: {} } };
-
-    expect(await globalHarness.service.open("global")).toMatchObject({ state: "open" });
-    expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
-
-    const qualifiedHarness = createHarness({ label: "Qualified session" });
-    qualifiedHarness.config.agents = { entries: { ops: {}, worker: {} } };
-    const qualifiedKey = "agent:worker:qualified";
-
-    expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
-    expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
-    expect(qualifiedHarness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({ external_url: expect.stringContaining("/chat/worker/") }),
-    );
-  });
-
-  it("uses the account agent for unscoped links without changing the configured owner", async () => {
-    const harness = createHarness({ label: "Telegram peer" });
-    harness.config.agents = { entries: { ops: {} } };
-    harness.config.channels!.clickclack!.agentId = "research";
-
-    await harness.service.open("telegram:12345");
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        external_url: "https://control.example/control/chat/research/telegram/12345",
-      }),
-    );
-    expect(harness.store.lookup("telegram:12345")).toMatchObject({ agentId: "ops" });
-
-    await harness.service.reconcile("telegram:12345");
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-
-    harness.config.channels!.clickclack!.agentId = "writer";
-    await harness.service.reconcile("telegram:12345");
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
-      external_url: "https://control.example/control/chat/writer/telegram/12345",
-    });
-  });
-
-  it("uses the configured main key when building control links", async () => {
-    const harness = createHarness({ label: "Workspace main" });
-    harness.config.session = { mainKey: "workspace" };
-
-    await harness.service.open("agent:research:workspace");
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        external_url: "https://control.example/control/chat/research",
-      }),
-    );
-  });
-
-  it("builds control links from URL path and query components", async () => {
-    const harness = createHarness({ label: "Control link" });
-    harness.config.channels!.clickclack!.discussions!.controlUrlBase =
-      "https://control.example/control///?tenant=alpha#old";
-    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
-
-    await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({
-        external_url:
-          "https://control.example/control/chat/main/control-link-12345678?tenant=alpha",
-      }),
-    );
-  });
-
-  it("does not create a channel for a missing session", async () => {
-    const harness = createHarness(undefined);
-
-    expect(await harness.service.open("agent:main:missing")).toEqual({ state: "available" });
-    expect(harness.createChannel).not.toHaveBeenCalled();
-  });
-
+  it.each([undefined, { label: "Recovered Name", archivedAt: 123 }])(
+    "does not create or adopt a room for an unavailable session: %j",
+    async (entry) => {
+      h.setSessionEntry(entry);
+      expect(await h.service.open("agent:main:unavailable")).toEqual({ state: "available" });
+      expect(h.workspaces).not.toHaveBeenCalled();
+      expect(h.channels).not.toHaveBeenCalled();
+      expect(h.updateChannel).not.toHaveBeenCalled();
+      expect(h.createChannel).not.toHaveBeenCalled();
+    },
+  );
   it("does not create a channel without a concrete session incarnation", async () => {
-    const harness = createHarness({ sessionId: "", label: "Unmaterialized session" });
-
-    await expect(harness.service.open("agent:main:unmaterialized")).rejects.toThrow(
+    h.setSessionEntry({ sessionId: "", label: "Unmaterialized session" });
+    await expect(h.service.open("agent:main:unmaterialized")).rejects.toThrow(
       "does not yet have a concrete session id",
     );
-
-    expect(harness.client.workspaces).not.toHaveBeenCalled();
-    expect(harness.channels).not.toHaveBeenCalled();
-    expect(harness.createChannel).not.toHaveBeenCalled();
-  });
-
-  it("keeps the room durable across session archive, restore, and deletion", async () => {
-    const harness = createHarness({ label: "Original", category: "Projects" });
-    const sessionKey = "agent:main:work";
-    await harness.service.open(sessionKey);
-
-    harness.setSessionEntry({
-      label: "Renamed Session",
-      category: "Incidents",
-      archivedAt: 123,
-    });
-    await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.store.lookup(sessionKey)).toMatchObject({ channelId: "chn_discussion" });
-
-    harness.setSessionEntry({ label: "Renamed Session" });
-    await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      display_title: "Renamed Session",
-      name: "renamed-session",
-      sidebar_section: "Sessions",
-    });
-
-    harness.updateChannel.mockClear();
-    harness.setSessionEntry(undefined);
-    await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(await harness.service.info(sessionKey)).toMatchObject({ state: "open" });
+    expect(h.workspaces).not.toHaveBeenCalled();
+    expect(h.channels).not.toHaveBeenCalled();
+    expect(h.createChannel).not.toHaveBeenCalled();
   });
 
   it("renames a fallback discussion when displayName arrives", async () => {
-    const harness = createHarness({});
-    const sessionKey = "agent:main:generated-title";
-    await harness.service.open(sessionKey);
-
-    harness.setSessionEntry({ displayName: "Generated Session Title" });
-    await harness.service.reconcile(sessionKey);
-
-    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
+    h.setSessionEntry({ category: "Projects" });
+    await h.service.open(sessionKey);
+    const other = createHarness({ label: "Independent" });
+    await other.service.open(sessionKey);
+    expectCreated(h, { name: fallbackDiscussionLabel(sessionKey, "main"), display_title: "" });
+    h.setSessionEntry({ displayName: "Generated Session Title" });
+    await h.service.reconcile(sessionKey);
+    expectLastPatch(h, {
       display_title: "Generated Session Title",
       name: "generated-session-title",
+      sidebar_section: "Sessions",
     });
-    expect(harness.store.lookup(sessionKey)).toMatchObject({ label: "Generated Session Title" });
+    expect(h.store.lookup(sessionKey)).toMatchObject({ label: "Generated Session Title" });
+    expect(other.updateChannel).not.toHaveBeenCalled();
   });
 
-  it("rotates the session attachment without replacing the durable room", async () => {
-    const harness = createHarness({ sessionId: "session-old", label: "Resettable" });
-    const sessionKey = "agent:main:resettable";
-    await harness.service.open(sessionKey);
-    const externalRef = testExternalRef(sessionKey);
-
-    harness.setSessionEntry({ sessionId: "session-new", label: "Resettable" });
-    expect((await harness.service.readLatestMessages(sessionKey, 30)).text).toBe(
-      "The bound discussion has no messages yet.",
-    );
-
-    expect(await harness.service.open(sessionKey)).toMatchObject({ state: "open" });
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.store.lookup(sessionKey)).toMatchObject({
-      sessionId: "session-new",
-      externalRef,
+  it.each([1, 2])("rechecks a reset during session read %s", async (changedRead) => {
+    h.setSessionEntry({ sessionId: "old", label: "Old" });
+    const key = "agent:main:reset";
+    let reads = 0;
+    h.runtime.agent.session.getSessionEntryAsync = async (params) => {
+      const prepared = h.runtime.agent.session.getSessionEntry(params);
+      if (++reads === changedRead) {
+        h.setSessionEntry({ sessionId: "new", label: "Next", category: "Next" });
+      }
+      return prepared;
+    };
+    await expect(h.service.open(key)).resolves.toMatchObject({ state: "open" });
+    expect(h.updateChannel).not.toHaveBeenCalled();
+    expect(h.store.lookup(key)).toMatchObject({
+      sessionId: "new",
       channelId: "chn_discussion",
+      label: "Old",
+      section: "Sessions",
     });
-  });
-
-  it("attaches a channel to the current incarnation when the session resets during open", async () => {
-    const harness = createHarness({ sessionId: "session-old", label: "Reset race" });
-    const sessionKey = "agent:main:reset-race";
-    vi.mocked(harness.runtime.agent.session.getSessionEntry)
-      .mockReturnValueOnce({ sessionId: "session-old", label: "Reset race", updatedAt: 1 })
-      .mockReturnValue({
-        sessionId: "session-new",
-        label: "Current reset race",
-        category: "Current sessions",
-        updatedAt: 2,
-      });
-
-    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-    expect(harness.updateChannel).toHaveBeenCalledWith(
-      "chn_discussion",
-      expect.objectContaining({
-        name: "current-reset-race",
-        display_title: "Current reset race",
-        sidebar_section: "Current sessions",
-      }),
-    );
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.store.lookup(sessionKey)).toMatchObject({
-      sessionId: "session-new",
-      label: "Current reset race",
-      section: "Current sessions",
-    });
+    await h.service.reconcile(key);
+    expectPatched(h, { name: "next", display_title: "Next", sidebar_section: "Next" });
+    expect(h.createChannel).toHaveBeenCalledOnce();
+    expect(h.store.lookup(key)).toMatchObject({ sessionId: "new" });
   });
 
   it("falls back after exhausting desired-name suffixes through 20", async () => {
-    const harness = createHarness({ label: "Release Planning" });
-    const sessionKey = "agent:main:duplicate-label";
-    vi.mocked(harness.channels).mockResolvedValue(
+    h.setSessionEntry({ label: "Release Planning" });
+    h.channels.mockResolvedValue(
       Array.from({ length: 20 }, (_, index) =>
         discussionChannel({
-          id: `chn_existing_${index}`,
-          route_id: `existing-route-${index}`,
           name: index === 0 ? "release-planning" : `release-planning-${index + 1}`,
-          kind: "public",
           ...MANAGED_CONTRACT_FIELDS,
         }),
       ),
     );
-
-    await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).toHaveBeenCalledWith(
-      "wsp_team",
-      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey, "main") }),
-    );
+    await h.service.open(sessionKey);
+    expectCreated(h, { name: fallbackDiscussionLabel(sessionKey, "main") });
   });
 
-  it("relists and retries when another process claims the selected create name", async () => {
-    const harness = createHarness({ label: "Release Planning" });
-    const sessionKey = "agent:main:create-race";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
+  it.each([
+    ["create", 400, "UNIQUE constraint failed: channels.workspace_id, channels.name"],
+    ["rename", 409, nameConflict],
+  ] as const)("retries a name claimed concurrently during %s", async (operation, code, message) => {
+    h.setSessionEntry({ label: "Original" });
+    if (operation === "rename") {
+      await h.service.open(sessionKey);
+    }
+    h.setSessionEntry({ label: "Renamed" });
+    const general = (await h.channels())[0]!;
+    h.channels
       .mockResolvedValueOnce([general])
       .mockResolvedValueOnce([
         general,
-        {
-          ...general,
-          id: "chn_human",
-          route_id: "human-route",
-          name: "release-planning",
-        },
+        { ...general, id: "chn_human", route_id: "human-route", name: "renamed" },
       ]);
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(
-      new ClickClackHttpError(
-        400,
-        "UNIQUE constraint failed: channels.workspace_id, channels.name",
-        new Headers(),
-      ),
-    );
-
-    await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).toHaveBeenCalledTimes(2);
-    expect(harness.createChannel).toHaveBeenLastCalledWith(
-      "wsp_team",
-      expect.objectContaining({ name: "release-planning-2" }),
-    );
-  });
-
-  it("relists and retries when another process claims the selected rename", async () => {
-    const harness = createHarness({ label: "Original" });
-    const sessionKey = "agent:main:rename-race";
-    await harness.service.open(sessionKey);
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockResolvedValueOnce([
-        general,
-        {
-          ...general,
-          id: "chn_human",
-          route_id: "human-route",
-          name: "renamed",
-        },
-      ]);
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(
-      new ClickClackHttpError(
-        409,
-        'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
-        new Headers(),
-      ),
-    );
-    harness.setSessionEntry({ label: "Renamed" });
-
-    await harness.service.reconcile(sessionKey);
-
-    expect(harness.updateChannel).toHaveBeenCalledTimes(2);
-    expect(harness.updateChannel).toHaveBeenLastCalledWith(
-      "chn_discussion",
+    const mutation = operation === "create" ? h.createChannel : h.updateChannel;
+    mutation.mockRejectedValueOnce(httpError(code, message));
+    if (operation === "create") {
+      await h.service.open(sessionKey);
+    } else {
+      await h.service.reconcile(sessionKey);
+    }
+    expect(mutation).toHaveBeenCalledTimes(2);
+    expect(mutation).toHaveBeenLastCalledWith(
+      operation === "create" ? "wsp_team" : "chn_discussion",
       expect.objectContaining({ name: "renamed-2" }),
     );
   });
 
-  it("adopts a remotely created channel by external reference after an interrupted open", async () => {
-    const harness = createHarness({ label: "Release Planning", category: "Projects" });
-    const sessionKey = "agent:main:recover";
-    const externalRef = testExternalRef(sessionKey);
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_recovered",
-        route_id: "recovered-route",
-        name: "release-planning",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "https://control.example/control/chat/main/release-planning-12345678",
-        sidebar_section: "Projects",
-      }),
-    ]);
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) =>
-      discussionChannel({
-        id: "chn_recovered",
-        route_id: "recovered-route",
-        name: patch.name ?? "release-planning",
-        external_managed: patch.external_managed,
-        external_ref: patch.external_ref,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-      }),
-    );
-
-    const opened = await harness.service.open(sessionKey);
-
-    expect(harness.createChannel).not.toHaveBeenCalled();
-    expect(harness.updateChannel).toHaveBeenCalledWith(
-      "chn_recovered",
-      expect.objectContaining({ external_ref: externalRef, external_managed: true }),
-    );
-    expect(harness.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
-    expect(opened).toEqual({
-      state: "open",
-      embedUrl:
-        "https://clickclack.example/embed/channel/team-route/recovered-route?openclawHostTheme=1",
-      openUrl: "https://clickclack.example/app/team-route/recovered-route",
-    });
-  });
-
-  it("reuses a pending generation after an interrupted create", async () => {
-    const generationFactory = vi.fn(() => "pending-generation");
-    const harness = createHarness(
-      { label: "Interrupted create" },
-      { bindingGenerationFactory: generationFactory },
-    );
-    const sessionKey = "agent:main:interrupted-create";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const firstRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      generation: "pending-generation",
-    });
-
-    await harness.service.reconcileAll();
-
-    expect(harness.createChannel.mock.calls[1]?.[1].external_ref).toBe(firstRef);
-    expect(generationFactory).toHaveBeenCalledTimes(1);
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-  });
-
   it("does not transfer a pending open across credential rotation", async () => {
-    const harness = createHarness({ label: "Credential rotation" });
-    const sessionKey = "agent:main:credential-rotation";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const pendingBeforeRotation = harness.generationStore.lookup(sessionKey);
-    harness.config.channels!.clickclack!.token = "test-token-placeholder";
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow(
-      "restore its credential and retry",
-    );
-
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.generationStore.lookup(sessionKey)).toEqual(pendingBeforeRotation);
+    await interruptCreate(h);
+    await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
+    const pendingBeforeRotation = h.generationStore.lookup(sessionKey);
+    h.config.channels!.clickclack!.token = "test-token-placeholder";
+    await expect(h.service.open(sessionKey)).rejects.toThrow("restore its credential and retry");
+    expect(h.createChannel).toHaveBeenCalledTimes(1);
+    expect(h.generationStore.lookup(sessionKey)).toEqual(pendingBeforeRotation);
   });
 
   it("adopts a created channel when the create response is lost", async () => {
-    const harness = createHarness({ label: "Lost response" });
-    const sessionKey = "agent:main:lost-response";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockImplementationOnce(async () => {
-        const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-        return [
-          general,
-          discussionChannel({
-            id: "chn_lost_response",
-            route_id: "lost-response-route",
-            name: "lost-response",
-            external_managed: true,
-            external_ref: externalRef,
-            external_url: "",
-            sidebar_section: "Sessions",
-            archived: false,
-          }),
-        ];
+    h.setSessionEntry({ label: "Lost response" });
+    const room = managedRoom({
+      id: "chn_lost_response",
+      route_id: "lost-response-route",
+      name: "lost-response",
+      external_ref: "",
+    });
+    await recoverLostResponse(h, room);
+    legacyPatchResponse(h, room, true);
+    await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+    expectPatched(h, { external_managed: true }, "chn_lost_response");
+    expect(h.store.lookup(sessionKey)).toMatchObject({ channelId: "chn_lost_response" });
+    expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
+  });
+
+  it.each([403, 500, "transport"] as const)(
+    "settles pending creation after %s failure",
+    async (failure) => {
+      const error =
+        failure === "transport"
+          ? new Error("connection reset")
+          : httpError(failure, "create failed");
+      h.createChannel.mockRejectedValueOnce(error);
+      await expect(h.service.open(sessionKey)).rejects.toThrow(error.message);
+      if (failure === 403) {
+        expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
+      } else {
+        expect(h.generationStore.lookup(sessionKey)).toMatchObject({
+          pending: { sessionId: "session-id" },
+        });
+      }
+    },
+  );
+
+  it.each([
+    ["recovered", new Error("patch unavailable"), "connection reset"],
+    ["forbidden", httpError(403, "forbidden"), "ClickClack 403: forbidden"],
+    ["conflict", httpError(409, nameConflict), "relist unavailable"],
+  ] as const)(
+    "retains an adoption reservation after $0 failure",
+    async (failure, error, expectedError) => {
+      let externalRef: string | undefined;
+      if (failure === "recovered") {
+        await recoverLostResponse(h, { name: "title" }, "connection reset");
+      } else {
+        externalRef = await reserveTestExternalRef(h.runtime, sessionKey);
+        const room = managedRoom({ external_ref: externalRef, name: "title" });
+        if (failure === "conflict") {
+          h.channels
+            .mockResolvedValueOnce([room])
+            .mockRejectedValueOnce(new Error("relist unavailable"));
+        } else {
+          h.channels.mockResolvedValue([room]);
+        }
+      }
+      if (failure === "forbidden") {
+        h.updateChannel.mockRejectedValue(error);
+      } else {
+        h.updateChannel.mockRejectedValueOnce(error);
+      }
+      await expect(h.service.open(sessionKey)).rejects.toThrow(expectedError);
+      expect(h.generationStore.lookup(sessionKey)).toMatchObject({
+        pending: externalRef ? { externalRef } : { sessionId: "session-id" },
       });
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (_channelId, patch) =>
-      discussionChannel({
-        id: "chn_lost_response",
-        route_id: "lost-response-route",
-        name: patch.name ?? "lost-response",
-        external_managed: patch.external_managed ?? true,
-        external_ref: patch.external_ref ?? "",
-        external_url: patch.external_url ?? "",
-        sidebar_section: patch.sidebar_section ?? "Sessions",
-        archived: patch.archived ?? false,
-      }),
-    );
+      expect(h.revokedStore.entries()).toHaveLength(1);
+    },
+  );
 
-    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-
-    expect(harness.updateChannel).toHaveBeenCalledWith(
-      "chn_lost_response",
-      expect.objectContaining({ external_managed: true }),
-    );
-    expect(harness.store.lookup(sessionKey)).toMatchObject({ channelId: "chn_lost_response" });
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-  });
-
-  it("releases a pending destination after a definitive create rejection", async () => {
-    const harness = createHarness({ label: "Forbidden create" });
-    const sessionKey = "agent:main:forbidden-create";
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(
-      new ClickClackHttpError(403, "forbidden", new Headers()),
-    );
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("ClickClack 403: forbidden");
-
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-  });
-
-  it("retains a pending destination after an ambiguous HTTP create failure", async () => {
-    const harness = createHarness({ label: "Server failure" });
-    const sessionKey = "agent:main:server-failure";
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(
-      new ClickClackHttpError(500, "internal error", new Headers()),
-    );
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow(
-      "ClickClack 500: internal error",
-    );
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
-    });
-  });
-
-  it("retains a pending destination when a transport failure relists empty", async () => {
-    const harness = createHarness({ label: "Delayed commit" });
-    const sessionKey = "agent:main:delayed-commit";
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection reset"));
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection reset");
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
-    });
-  });
-
-  it("retains a recovered channel reservation when its adoption patch fails", async () => {
-    const harness = createHarness({ label: "Adoption failure" });
-    const sessionKey = "agent:main:adoption-failure";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockImplementationOnce(async () => {
-        const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-        return [
-          general,
-          discussionChannel({
-            id: "chn_adoption_failure",
-            route_id: "adoption-failure-route",
-            name: "adoption-failure",
-            external_managed: true,
-            external_ref: externalRef,
-            external_url: "",
-            sidebar_section: "Sessions",
-            archived: false,
-          }),
-        ];
+  it.each(["reset", "archived", "disabled", "account replacement"] as const)(
+    "recovers an ambiguous open after %s",
+    async (change) => {
+      h.setSessionEntry({ sessionId: "old-session", label: "Ambiguous" });
+      await interruptCreate(h);
+      await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
+      const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
+      const room = managedRoom({
+        id: "chn_recovered",
+        route_id: "recovered-route",
+        name: "ambiguous",
+        external_ref: externalRef,
       });
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection reset"));
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(new Error("patch unavailable"));
+      h.channels.mockResolvedValue([room]);
+      h.setSessionEntry({
+        sessionId: "new-session",
+        label: "Ambiguous",
+        ...(change === "archived" ? { archivedAt: 1 } : {}),
+      });
+      const account = h.config.channels!.clickclack!;
+      if (change === "disabled" || change === "account replacement") {
+        account.discussions!.enabled = false;
+      }
+      if (change === "archived" || change === "disabled") {
+        await h.service.reconcileAll();
+        expect(h.createChannel).toHaveBeenCalledTimes(1);
+        expect(h.updateChannel).not.toHaveBeenCalled();
+        expect(h.generationStore.lookup(sessionKey)).toMatchObject({
+          generation: expect.any(String),
+        });
+        expect(h.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
+        expect(h.revokedStore.entries()).toHaveLength(1);
+        h.setSessionEntry({ sessionId: "new-session", label: "Ambiguous" });
+        if (change === "disabled") {
+          account.token = "replacement-token";
+          account.discussions!.enabled = true;
+        }
+      }
+      if (change === "account replacement") {
+        account.accounts = {
+          replacement: {
+            baseUrl: "https://replacement-clickclack.example",
+            apiBaseUrl: h.transportBaseUrl,
+            token: "test-token-placeholder",
+            workspace: "team",
+            discussions: { enabled: true, workspace: "team" },
+          },
+        };
+      }
+      const adopts = change === "reset" || change === "archived";
+      if (adopts) {
+        legacyPatchResponse(h, room);
+        expect(await h.service.open(sessionKey)).toMatchObject({ state: "open" });
+        expectPatched(h, { external_ref: externalRef, external_managed: true }, "chn_recovered");
+        expect(h.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
+        expect(h.store.lookup(sessionKey)).toMatchObject({
+          sessionId: "new-session",
+          externalRef,
+          channelId: "chn_recovered",
+        });
+        expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
+        expect(h.revokedStore.entries()).toHaveLength(0);
+      } else {
+        await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+        expect(h.updateChannel).not.toHaveBeenCalled();
+        if (change === "disabled") {
+          expect(h.createChannel.mock.calls[1]?.[1].external_ref).not.toBe(externalRef);
+        } else {
+          expect(h.store.lookup(sessionKey)).toMatchObject({
+            accountId: "replacement",
+            serverBaseUrl: "https://replacement-clickclack.example",
+          });
+        }
+      }
+      expect(h.createChannel).toHaveBeenCalledTimes(adopts ? 1 : 2);
+    },
+  );
+});
 
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection reset");
+function createGatewayEventsHarness() {
+  const handlers = new Set<(event: OpenClawPluginSessionsChangedEvent) => void>();
+  const unsubscribe = vi.fn();
+  const gatewayEvents = {
+    onSessionsChanged(handler) {
+      handlers.add(handler);
+      return () => {
+        if (handlers.delete(handler)) {
+          unsubscribe();
+        }
+      };
+    },
+  } satisfies Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
+  return {
+    gatewayEvents,
+    unsubscribe,
+    emit(event: OpenClawPluginSessionsChangedEvent) {
+      for (const handler of handlers) {
+        handler(event);
+      }
+    },
+  };
+}
 
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ sessionId: "session-id" }),
-    });
-    expect(harness.revokedStore.entries()).toHaveLength(1);
+describe("ClickClack discussion session events", () => {
+  it("coalesces event bursts at the earliest deadline and reconciles the renamed session", async () => {
+    const h = await eventFixture("Old", "Projects");
+    const { gateway, sessionKey } = h;
+    const reconcile = vi.spyOn(h.service, "reconcile");
+    const reconcileAll = vi.spyOn(h.service, "reconcileAll");
+    h.updateChannel.mockClear();
+    gateway.emit({ sessionKey, phase: "message" });
+    await vi.advanceTimersByTimeAsync(100);
+    gateway.emit({ sessionKey, phase: "message" });
+    await vi.advanceTimersByTimeAsync(100);
+    h.setSessionEntry({ label: "New", category: "Projects" });
+    gateway.emit({ sessionKey, label: "New", reason: "rename" });
+    await vi.advanceTimersByTimeAsync(49);
+    expect(h.updateChannel).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reconcile.mock.calls).toEqual([[sessionKey]]);
+    expectPatched(h, { display_title: "New", name: "new" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcile.mock.calls).toEqual([[sessionKey]]);
+    expect(reconcileAll).not.toHaveBeenCalled();
   });
 
-  it("retains a pre-existing channel reservation after definitive adoption failures", async () => {
-    const harness = createHarness({ label: "Existing adoption failure" });
-    const sessionKey = "agent:main:existing-adoption-failure";
-    const externalRef = testExternalRef(sessionKey);
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_existing_adoption_failure",
-        route_id: "existing-adoption-failure-route",
-        name: "existing-adoption-failure",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "",
-        sidebar_section: "Sessions",
-        archived: false,
-      }),
-    ]);
-    vi.mocked(harness.updateChannel).mockRejectedValue(
-      new ClickClackHttpError(403, "forbidden", new Headers()),
-    );
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("ClickClack 403: forbidden");
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ externalRef }),
-    });
-    expect(harness.revokedStore.entries()).toHaveLength(1);
+  const services: ClickClackDiscussionService[] = [];
+  let finishScenario: (() => Promise<void>) | undefined;
+  beforeEach(() => {
+    finishScenario = undefined;
+    vi.useFakeTimers();
+  });
+  afterEach(async () => {
+    try {
+      // Vitest can time out before the test body unwinds; release and join its work first.
+      await finishScenario?.();
+      await Promise.all(services.splice(0).map((service) => service.cleanup()));
+    } finally {
+      finishScenario = undefined;
+      vi.useRealTimers();
+    }
+  });
+  function fixture(...args: Parameters<typeof createHarness>) {
+    const h = createHarness(...args);
+    services.push(h.service);
+    return h;
+  }
+  async function eventFixture(label: string, category?: string) {
+    const gateway = createGatewayEventsHarness();
+    const h = fixture({ label, category }, { gatewayEvents: gateway.gatewayEvents });
+    const sessionKey = `agent:main:event-${label.toLowerCase()}`;
+    await h.service.open(sessionKey);
+    return { ...h, gateway, sessionKey };
+  }
+  it("does not overwrite a replacement attachment when metadata reconciliation settles late", async (context) => {
+    const h = fixture({ sessionId: "old", label: "Old", category: "Projects" });
+    const sessionKey = "agent:main:event-concurrent-reset";
+    const updateEntered = createDeferred<void>();
+    const releaseUpdate = createDeferred<void>();
+    let reconcile: Promise<void> | undefined;
+    let finishing: Promise<void> | undefined;
+    const finish = () =>
+      (finishing ??= (async () => {
+        releaseUpdate.resolve();
+        await Promise.allSettled([scenario, reconcile]);
+      })());
+    finishScenario = finish;
+    const scenario = (async () => {
+      try {
+        await h.service.open(sessionKey);
+        h.updateChannel.mockClear();
+        const updateChannel = h.updateChannel.getMockImplementation()!;
+        h.updateChannel.mockImplementationOnce(async (...args) => {
+          updateEntered.resolve();
+          await releaseUpdate.promise;
+          return updateChannel(...args);
+        });
+        h.setSessionEntry({ sessionId: "old", label: "New", category: "Projects" });
+        reconcile = h.service.reconcile(sessionKey);
+        void reconcile.catch(() => undefined);
+        await withinTest(updateEntered.promise, context.signal);
+        h.setSessionEntry({ sessionId: "new", label: "Next", category: "Next" });
+        expect(
+          await resolveClickClackDiscussionRoute({
+            runtime: h.runtime,
+            accountId: "default",
+            serverBaseUrl: "https://clickclack.example",
+            workspaceId: "wsp_team",
+            channelId: "chn_discussion",
+          }),
+        ).toMatchObject({ state: "active" });
+        const replacementBinding = h.store.lookup(sessionKey);
+        expect(replacementBinding).toMatchObject({
+          sessionId: "new",
+          label: "Old",
+          displayTitle: "Old",
+          section: "Projects",
+        });
+        releaseUpdate.resolve();
+        await reconcile;
+        expect(h.store.lookup(sessionKey)).toEqual(replacementBinding);
+        await h.service.reconcile(sessionKey);
+        expect(h.store.lookup(sessionKey)).toMatchObject({
+          sessionId: "new",
+          label: "Next",
+          displayTitle: "Next",
+          section: "Next",
+        });
+        expect(h.updateChannel).toHaveBeenLastCalledWith(
+          "chn_discussion",
+          expect.objectContaining({ display_title: "Next", sidebar_section: "Next" }),
+        );
+      } finally {
+        releaseUpdate.resolve();
+        await Promise.allSettled(reconcile ? [reconcile] : []);
+      }
+    })();
+    void scenario.catch(() => undefined);
+    try {
+      await withinTest(scenario, context.signal);
+    } finally {
+      await finish();
+    }
   });
 
-  it("retains an adopted channel reservation when conflict relisting fails", async () => {
-    const harness = createHarness({ label: "Adopted conflict" });
-    const sessionKey = "agent:main:adopted-conflict";
-    const externalRef = testExternalRef(sessionKey);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([
-        discussionChannel({
-          id: "chn_adopted_conflict",
-          route_id: "adopted-conflict-route",
-          name: "adopted-conflict",
-          external_managed: true,
-          external_ref: externalRef,
-          external_url: "",
-          sidebar_section: "Sessions",
-          archived: false,
-        }),
-      ])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.updateChannel).mockRejectedValueOnce(
-      new ClickClackHttpError(
-        409,
-        'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
-        new Headers(),
-      ),
-    );
-
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("relist unavailable");
-
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      pending: expect.objectContaining({ externalRef }),
-    });
-    expect(harness.revokedStore.entries()).toHaveLength(1);
+  it("unsubscribes and cancels event reconciliation during cleanup", async () => {
+    const h = await eventFixture("Cleanup");
+    const { gateway, sessionKey } = h;
+    const reconcile = vi.spyOn(h.service, "reconcile").mockResolvedValue(undefined);
+    gateway.emit({ sessionKey, phase: "message" });
+    await h.service.cleanup();
+    await vi.advanceTimersByTimeAsync(250);
+    gateway.emit({ sessionKey, reason: "rename" });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(gateway.unsubscribe).toHaveBeenCalledOnce();
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it("adopts an ambiguous create after the session incarnation changes", async () => {
-    const harness = createHarness({ sessionId: "old-session", label: "Ambiguous reset" });
-    const sessionKey = "agent:main:ambiguous-reset";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-    harness.setSessionEntry({ sessionId: "new-session", label: "Ambiguous reset" });
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_ambiguous_old",
-        route_id: "ambiguous-old-route",
-        name: "ambiguous-reset",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "",
-        sidebar_section: "Sessions",
-        archived: false,
-      }),
-    ]);
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (channelId, patch) =>
-      discussionChannel({
-        id: channelId,
-        route_id: "ambiguous-old-route",
-        name: patch.name ?? "ambiguous-reset",
-        external_managed: patch.external_managed ?? true,
-        external_ref: patch.external_ref ?? externalRef,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-        archived: false,
-      }),
-    );
+  it("defers events arriving during a failing reconcile to the backoff floor", async () => {
+    const h = await eventFixture("Slow");
+    const { gateway, sessionKey } = h;
+    const pending = createDeferred<void>();
+    const reconcile = vi.spyOn(h.service, "reconcile").mockReturnValueOnce(pending.promise);
+    gateway.emit({ sessionKey, label: "Slow renamed", reason: "rename" });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(reconcile).toHaveBeenCalledOnce();
 
-    await harness.service.open(sessionKey);
-
-    expect(harness.updateChannel).toHaveBeenCalledWith(
-      "chn_ambiguous_old",
-      expect.objectContaining({ external_ref: externalRef }),
-    );
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.store.lookup(sessionKey)).toMatchObject({
-      sessionId: "new-session",
-      externalRef,
-      channelId: "chn_ambiguous_old",
-    });
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(harness.revokedStore.entries()).toHaveLength(0);
+    // Event during the in-flight run: must not arm a fresh 250ms timer that
+    // would outlive (and undercut) the failure's backoff floor.
+    gateway.emit({ sessionKey, label: "Slow renamed again", reason: "rename" });
+    reconcile.mockResolvedValue(undefined);
+    pending.reject(new Error("outage"));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(reconcile).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reconcile).toHaveBeenCalledTimes(2);
   });
 
-  it("reattaches an ambiguous room after the session is archived and restored", async () => {
-    const harness = createHarness({ sessionId: "old-session", label: "Archived during create" });
-    const sessionKey = "agent:main:archived-ambiguous-open";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-    harness.setSessionEntry({
-      sessionId: "new-session",
-      label: "Archived during create",
-      archivedAt: 1,
-    });
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_archived_ambiguous",
-        route_id: "archived-ambiguous-route",
-        name: "archived-during-create",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "",
-        sidebar_section: "Sessions",
-        archived: false,
-      }),
-    ]);
-
-    await harness.service.reconcileAll();
-
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      generation: expect.any(String),
-    });
-    expect(harness.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
-    expect(harness.revokedStore.entries()).toHaveLength(1);
-
-    harness.setSessionEntry({
-      sessionId: "new-session",
-      label: "Archived during create",
-    });
-    vi.mocked(harness.updateChannel).mockImplementationOnce(async (channelId, patch) =>
-      discussionChannel({
-        id: channelId,
-        route_id: "archived-ambiguous-route",
-        name: patch.name ?? "archived-during-create",
-        external_managed: patch.external_managed ?? true,
-        external_ref: patch.external_ref ?? externalRef,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-        archived: false,
-      }),
-    );
-
-    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-
-    expect(harness.createChannel).toHaveBeenCalledTimes(1);
-    expect(harness.updateChannel).toHaveBeenCalledWith(
-      "chn_archived_ambiguous",
-      expect.objectContaining({ external_ref: externalRef }),
-    );
-    expect(harness.store.lookup(sessionKey)).toMatchObject({
-      sessionId: "new-session",
-      externalRef,
-      channelId: "chn_archived_ambiguous",
-    });
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
-    expect(harness.revokedStore.entries()).toHaveLength(0);
+  it("polls persisted bindings only while started, including after a restart", async () => {
+    const h = fixture({ label: "Pre-start" });
+    const service = h.service;
+    await service.open("agent:main:pre-start");
+    const reconcileAll = vi.spyOn(service, "reconcileAll").mockResolvedValue(undefined);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileAll).not.toHaveBeenCalled();
+    await service.bindGatewayEvents(undefined, createTestPluginServiceScheduler());
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileAll).toHaveBeenCalled();
+    await service.cleanup();
+    await service.bindGatewayEvents(undefined, createTestPluginServiceScheduler());
+    reconcileAll.mockClear();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileAll).toHaveBeenCalled();
   });
 
-  it("reconciles an ambiguous create after discussions are disabled", async () => {
-    const generations = ["disabled-generation", "replacement-generation"];
-    const harness = createHarness(
-      { label: "Disable during create" },
-      { bindingGenerationFactory: () => generations.shift() ?? "unexpected-generation" },
+  it("joins an admitted reconcile before retiring and restarting its activation", async () => {
+    const h = await eventFixture("Stale");
+    const { gateway, sessionKey } = h;
+    const pending = Promise.withResolvers<void>();
+    try {
+      const reconcile = vi
+        .spyOn(h.service, "reconcile")
+        .mockImplementationOnce(() => pending.promise)
+        .mockResolvedValue(undefined);
+      gateway.emit({ sessionKey, label: "Stale renamed", reason: "rename" });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(reconcile).toHaveBeenCalledOnce();
+      let retired = false;
+      const closing = h.service.cleanup().then(() => {
+        retired = true;
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(retired).toBe(false);
+      expect(reconcile).toHaveBeenCalledOnce();
+      pending.resolve();
+      await closing;
+      await h.service.bindGatewayEvents(gateway.gatewayEvents, createTestPluginServiceScheduler());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reconcile).toHaveBeenCalledTimes(2);
+      expect(reconcile).toHaveBeenLastCalledWith(sessionKey);
+    } finally {
+      pending.resolve();
+    }
+  });
+
+  it("polls pending opens until another runtime clears the last one", async () => {
+    const h = fixture({ label: "Externally cleared" }, { startTimer: true });
+    h.createChannel.mockRejectedValueOnce(new Error("ambiguous create"));
+    await expect(h.service.open("agent:main:externally-cleared")).rejects.toThrow(
+      "ambiguous create",
     );
-    const sessionKey = "agent:main:disable-during-create";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-    harness.config.channels!.clickclack!.discussions!.enabled = false;
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_disabled_pending",
-        route_id: "disabled-pending-route",
-        name: "disable-during-create",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "",
-        sidebar_section: "Sessions",
-        archived: false,
-      }),
-    ]);
-
-    await harness.service.reconcileAll();
-
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
-      generation: expect.any(String),
-    });
-    expect(harness.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
-    expect(harness.revokedStore.entries()).toHaveLength(1);
-
-    harness.config.channels!.clickclack!.token = "replacement-token";
-    harness.config.channels!.clickclack!.discussions!.enabled = true;
-
-    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.createChannel).toHaveBeenCalledTimes(2);
-    expect(harness.createChannel.mock.calls[1]?.[1].external_ref).not.toBe(externalRef);
-  });
-
-  it("does not recurse while replacing the account for an ambiguous open", async () => {
-    const harness = createHarness({ label: "Account replacement" });
-    const sessionKey = "agent:main:account-replacement";
-    const general = await harness.channels().then((channels) => channels[0]!);
-    vi.mocked(harness.channels)
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
-    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
-    const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
-    harness.config.channels!.clickclack!.discussions!.enabled = false;
-    harness.config.channels!.clickclack!.accounts = {
-      replacement: {
-        baseUrl: "https://replacement-clickclack.example",
-        token: "test-token-placeholder",
-        workspace: "team",
-        discussions: { enabled: true, workspace: "team" },
-      },
-    };
-    vi.mocked(harness.channels).mockResolvedValue([
-      discussionChannel({
-        id: "chn_old_account",
-        route_id: "old-account-route",
-        name: "account-replacement",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "",
-        sidebar_section: "Sessions",
-        archived: false,
-      }),
-    ]);
-
-    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
-
-    expect(harness.updateChannel).not.toHaveBeenCalled();
-    expect(harness.createChannel).toHaveBeenCalledTimes(2);
-    expect(harness.store.lookup(sessionKey)).toMatchObject({
-      accountId: "replacement",
-      serverBaseUrl: "https://replacement-clickclack.example",
-    });
-  });
-
-  it("does not create or adopt a room for an archived main session", async () => {
-    const harness = createHarness({ label: "Recovered Name", archivedAt: 123 });
-    const sessionKey = "agent:main:recover-stale";
-    await expect(harness.service.open(sessionKey)).resolves.toEqual({ state: "available" });
-    expect(harness.channels).not.toHaveBeenCalled();
-    expect(harness.updateChannel).not.toHaveBeenCalled();
+    const reconcileAll = vi.spyOn(h.service, "reconcileAll");
+    reconcileAll.mockResolvedValueOnce(undefined);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileAll).toHaveBeenCalledOnce();
+    h.generationStore.clear();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileAll).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(reconcileAll).toHaveBeenCalledTimes(2);
   });
 });

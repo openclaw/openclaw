@@ -20,10 +20,8 @@ export type UserProfileAvatarInspection = {
   emails: string[];
 };
 
-export type UserProfileAvatarRepresentation = {
+export type UserProfileAvatarRepresentation = Pick<UserProfileAvatar, "sha256" | "mime"> & {
   canonicalProfileId: string;
-  sha256: string;
-  mime: UserProfileAvatarMime;
 };
 
 export type UserProfileAvatarReadCommand =
@@ -33,10 +31,6 @@ export type UserProfileAvatarReadCommand =
       profileId: string;
       expected: UserProfileAvatarRepresentation;
     };
-
-export type UserProfileAvatarReadReply =
-  | { type: "userProfiles.avatar.inspect"; inspection: UserProfileAvatarInspection }
-  | { type: "userProfiles.avatar.read"; avatar: UserProfileAvatar | undefined };
 
 export type UserProfileAvatarAdmission = { kind: "profile-avatar"; before: ProfileDisplayRow };
 

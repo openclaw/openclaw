@@ -15,13 +15,9 @@ export type InstallSecurityScanResult = {
   };
 };
 
-/** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
-async function loadInstallSecurityScanRuntime() {
-  return await import("./install-security-scan.runtime.js");
-}
-
+// Normal plugin startup must not import the install policy runtime.
 const bindInstallSecurityScanRuntime = createLazyRuntimeMethodBinder(
-  loadInstallSecurityScanRuntime,
+  () => import("./install-security-scan.runtime.js"),
 );
 
 /** Scans an unpacked bundle source before plugin install/update. */

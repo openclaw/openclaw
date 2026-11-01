@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +23,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["source:@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["source:@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
   ["setup:@openclaw/codex:dangerous-exec:dist/.setup/dynamic-tools-<hash>.mjs", 2],
+  ["setup:@openclaw/codex:dangerous-exec:dist/.setup/installed-probe-<hash>.mjs", 1],
   ["setup:@openclaw/codex:dangerous-exec:dist/.setup/transport-stdio-<hash>.mjs", 3],
   ["dist:@openclaw/codex:dangerous-exec:dist/api.js", 1],
   ["dist:@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
@@ -38,28 +40,31 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["source:@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
   ["setup:@openclaw/discord:dangerous-exec:dist/.setup/receive-recovery-<hash>.mjs", 1],
   ["source:@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
-  ["setup:@openclaw/diffs:env-harvesting:dist/assets/viewer-runtime.js", 1],
+  ["dist:@openclaw/diffs:env-harvesting:dist/assets/viewer-runtime.js", 1],
   ["dist:@openclaw/diffs-language-pack:env-harvesting:dist/assets/viewer-runtime.js", 1],
-  ["setup:@openclaw/facetime:dangerous-exec:dist/runtime-api.js", 1],
-  ["setup:@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
+  ["dist:@openclaw/facetime:dangerous-exec:dist/runtime-api.js", 1],
   ["source:@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
-  ["setup:@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
+  ["dist:@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
   ["source:@openclaw/google-meet:dangerous-exec:src/node-host.ts", 3],
   ["source:@openclaw/google-meet:dangerous-exec:src/realtime.ts", 2],
   ["setup:@openclaw/imessage:dangerous-exec:dist/.setup/client-<hash>.mjs", 1],
+  ["setup:@openclaw/imessage:dangerous-exec:dist/.setup/sanitize-outbound-<hash>.mjs", 1],
   ["source:@openclaw/imessage:dangerous-exec:src/client.ts", 1],
-  ["setup:@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 3],
+  ["setup:@openclaw/llama-cpp-provider:dangerous-exec:dist/.setup/managed-server-<hash>.mjs", 2],
+  ["setup:@openclaw/llama-cpp-provider:dangerous-exec:dist/.setup/media-catalog-<hash>.mjs", 1],
+  ["dist:@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 3],
   ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/hardware.ts", 1],
   ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts", 1],
-  ["source:@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
   ["source:@openclaw/matrix:dangerous-exec:src/matrix/deps.ts", 1],
   ["setup:@openclaw/memory-lancedb:dangerous-exec:dist/.setup/dist-<hash>.mjs", 1],
   ["setup:@openclaw/memory-lancedb:dynamic-code-execution:dist/.setup/dist-<hash>.mjs", 1],
+  ["dist:@openclaw/meta-provider:dangerous-exec:dist/muse-login.js", 1],
   ["dist:@openclaw/mxc-sandbox:dangerous-exec:dist/index.js", 2],
   ["source:@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
   ["setup:@openclaw/onnx:dangerous-exec:dist/.setup/worker-client-<hash>.mjs", 1],
+  ["setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs", 1],
   ["source:@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
-  ["setup:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
+  ["dist:@openclaw/raft:dangerous-exec:dist/channel-plugin-api.js", 1],
   ["source:@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
   ["setup:@openclaw/signal:dangerous-exec:dist/.setup/monitor-<hash>.mjs", 1],
   ["source:@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
@@ -67,6 +72,17 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
   ["source:@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 4],
   ["source:@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts", 1],
+]);
+
+const REVIEWED_CRITICAL_FINDING_CONTENT_SHA256 = new Map<string, string>([
+  [
+    "setup:@openclaw/imessage:dangerous-exec:dist/.setup/sanitize-outbound-<hash>.mjs",
+    "34833261f1e012015e6e28f35903d78f77efcfdac68f924310b8a3761264878b",
+  ],
+  [
+    "setup:@openclaw/openshell-sandbox:dangerous-exec:dist/.setup/worker-cli-<hash>.mjs",
+    "799a34cf8a82fed6725a5ac5322242becb394804b1ba6ea62d189aa8a1fa5f02",
+  ],
 ]);
 
 // Vendored runtime findings are owned by dependency path instead of every plugin
@@ -81,7 +97,11 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/@clawdbot/lobster/bin/invoke.js", 1],
   ["dangerous-exec:node_modules/@clawdbot/lobster/dist/src/abortable_process.js", 3],
   ["dangerous-exec:node_modules/@matrix-org/matrix-sdk-crypto-nodejs/index.js", 1],
+  ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/bwrap-probe-anchor.js", 1],
+  ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/bwrap-probe-helper.js", 1],
+  ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/bwrap-probe-worker.js", 1],
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/diagnostic.js", 1],
+  // 4 covers mxc-sdk 0.8.0 on the supported stable line; 0.9.0 has 3.
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/platform.js", 4],
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/policy.js", 1],
   ["dangerous-exec:node_modules/@microsoft/mxc-sdk/dist/sandbox.js", 2],
@@ -92,7 +112,8 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/node-addon-api/tools/check-napi.js", 1],
   ["dangerous-exec:node_modules/node-addon-api/tools/clang-format.js", 1],
   ["dangerous-exec:node_modules/node-addon-api/tools/eslint-format.js", 3],
-  ["dangerous-exec:node_modules/playwright-core/lib/coreBundle.js", 3],
+  ["dangerous-exec:node_modules/openai/helpers/audio.mjs", 2],
+  ["dangerous-exec:node_modules/playwright-core/lib/coreBundle.js", 4],
   ["dangerous-exec:node_modules/playwright-core/lib/utilsBundle.js", 10],
   ["dangerous-exec:node_modules/prism-media/src/core/FFmpeg.js", 2],
   ["dangerous-exec:node_modules/tokenjuice/dist/core/cli-client.js", 1],
@@ -101,6 +122,8 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dangerous-exec:node_modules/tokenjuice/dist/hosts/localcode/index.js", 2],
   ["dynamic-code-execution:node_modules/@napi-rs/wasm-runtime/dist/fs.js", 1],
   ["dynamic-code-execution:node_modules/@noble/curves/abstract/fft.js", 2],
+  ["dynamic-code-execution:node_modules/apache-arrow/Arrow.es2015.min.js", 1],
+  ["dynamic-code-execution:node_modules/apache-arrow/Arrow.esnext.min.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/index.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/jtd/parse.js", 1],
   ["dynamic-code-execution:node_modules/ajv/dist/compile/jtd/serialize.js", 1],
@@ -117,9 +140,13 @@ const REVIEWED_DEPENDENCY_FINDING_LIMITS = new Map<string, number>([
   ["dynamic-code-execution:node_modules/setimmediate/setImmediate.js", 1],
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.esm.min.js", 1],
   ["env-harvesting:node_modules/@tybys/wasm-util/dist/wasm-util.min.js", 1],
+  ["env-harvesting:node_modules/playwright-core/lib/bootstrap.js", 1],
 ]);
 
-type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & { path: string };
+type CriticalFinding = Pick<SkillScanFinding, "line" | "ruleId"> & {
+  contentSha256: string;
+  path: string;
+};
 
 function normalizeFindingPath(file: string): string {
   const name = path.posix.basename(file);
@@ -128,13 +155,18 @@ function normalizeFindingPath(file: string): string {
     "defaultSettingsView",
     "dist",
     "dynamic-tools",
+    "installed-probe",
+    "managed-server",
+    "media-catalog",
     "monitor",
     "receive-recovery",
     "runtime-entry",
+    "sanitize-outbound",
     "service",
     "session-catalog",
     "transport-stdio",
     "worker-client",
+    "worker-cli",
   ]) {
     const match = new RegExp(`^${prefix}-[A-Za-z0-9_-]{8}\\.(m?js)$`, "u").exec(name);
     if (match?.[1]) {
@@ -250,11 +282,6 @@ export function scanPluginNpmArtifactSecurity(params: {
     );
   }
   const executables = declaredExecutablePaths(initial.packageManifest, packedFiles);
-  const layout = packedFiles.some((file) => file.startsWith("dist/.setup/"))
-    ? "setup"
-    : packedFiles.some((file) => file.startsWith("dist/"))
-      ? "dist"
-      : "source";
   const critical: CriticalFinding[] = [];
   let scannedFiles = 0;
   let scannedBytes = 0;
@@ -283,6 +310,7 @@ export function scanPluginNpmArtifactSecurity(params: {
       for (const finding of scanSource(Buffer.from(content).toString("utf8"), packedPath)) {
         if (finding.severity === "critical") {
           critical.push({
+            contentSha256: createHash("sha256").update(content).digest("hex"),
             line: finding.line,
             path: normalizeFindingPath(packedPath),
             ruleId: finding.ruleId,
@@ -295,6 +323,11 @@ export function scanPluginNpmArtifactSecurity(params: {
   const unexpected: CriticalFinding[] = [];
   for (const finding of critical) {
     const dependencyPath = dependencyFindingPath(finding.path);
+    const layout = finding.path.startsWith("dist/.setup/")
+      ? "setup"
+      : finding.path.startsWith("dist/")
+        ? "dist"
+        : "source";
     const key = dependencyPath
       ? `${finding.ruleId}:${dependencyPath}`
       : `${layout}:${params.packageName}:${finding.ruleId}:${finding.path}`;
@@ -303,7 +336,13 @@ export function scanPluginNpmArtifactSecurity(params: {
     const reviewedLimit = dependencyPath
       ? REVIEWED_DEPENDENCY_FINDING_LIMITS.get(key)
       : REVIEWED_CRITICAL_FINDING_LIMITS.get(key);
-    if (count > (reviewedLimit ?? 0)) {
+    const reviewedContentSha256 = dependencyPath
+      ? undefined
+      : REVIEWED_CRITICAL_FINDING_CONTENT_SHA256.get(key);
+    if (
+      count > (reviewedLimit ?? 0) ||
+      (reviewedContentSha256 !== undefined && finding.contentSha256 !== reviewedContentSha256)
+    ) {
       unexpected.push(finding);
     }
   }

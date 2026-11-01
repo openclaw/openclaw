@@ -6,7 +6,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
 import {
   catalogCost,
@@ -15,6 +14,7 @@ import {
   staleCost,
 } from "./model.configured-pricing.test-support.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+import { normalizeConfiguredProviderModel } from "./model.registry-resolution.js";
 import { makeModel } from "./model.test-harness.js";
 
 afterEach(clearRuntimeConfigSnapshot);
@@ -73,7 +73,7 @@ describe("captured configured pricing policies", () => {
         discoveredModel,
         providerConfig,
       });
-      const fallback = buildConfiguredFallbackModel({
+      const fallback = normalizeConfiguredProviderModel({
         ...options,
         getStaticCatalogModel: () => discoveredModel,
       });

@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
+  resolveNextcloudTalkAllowlistMatch,
   resolveNextcloudTalkGroupRequireMention,
   resolveNextcloudTalkGroupToolPolicy,
 } from "./policy.js";
@@ -44,5 +45,25 @@ describe("nextcloud-talk group policy", () => {
 
     expect(resolveNextcloudTalkGroupRequireMention(params)).toBe(false);
     expect(resolveNextcloudTalkGroupToolPolicy(params)).toEqual({ deny: ["exec"] });
+  });
+});
+
+describe("nextcloud-talk user allowlist comparison", () => {
+  it.each([
+    ["alice", "users/alice", true],
+    ["users/alice", "alice", true],
+    ["  nc-talk:Users/Alice  ", "nextcloud-talk:users/ALICE", true],
+    ["alice", "guests/alice", false],
+    ["alice", "emails/alice", false],
+    ["alice", "federated_users/alice", false],
+    ["alice", "bots/alice", false],
+    ["alice", "users/alice2", false],
+    ["alice", "users/malice", false],
+    ["users/*", "users/bob", false],
+    ["*", "users/bob", true],
+  ])("matches %s against %s: %s", (entry, senderId, allowed) => {
+    expect(resolveNextcloudTalkAllowlistMatch({ allowFrom: [entry], senderId }).allowed).toBe(
+      allowed,
+    );
   });
 });

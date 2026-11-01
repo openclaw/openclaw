@@ -9,6 +9,7 @@ import {
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -44,23 +45,9 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
   nodeSession: NodeSession;
   risk: OpenClawPluginNodeInvokePolicyContext["risk"];
   standingGrantAuthorization: NodeInvokePlacementGrantAuthorization;
-  placementGrantAuthority?: {
-    agentId: string;
-    sessionKey: string;
-    runId: string;
-    assertCurrent: (request: {
-      pluginId: string;
-      command: string;
-      nodeId: string;
-      workspace: {
-        workspaceDir: string;
-        environmentId: string;
-        sessionId: string;
-        ownerEpoch: number;
-        sessionKey: string;
-      };
-    }) => void;
-  };
+  placementGrantAuthority?: NonNullable<
+    PluginRuntimeGatewayRequestScope["nodePlacementGrantAuthority"]
+  >;
   turnSource?: {
     channel?: unknown;
     to?: unknown;
@@ -116,7 +103,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
               }),
           }
         : undefined;
-      const placementGrantResolution = resolveNodeInvokePlacementGrant({
+      const placementGrantResolution = await resolveNodeInvokePlacementGrant({
         runtime: params.context.placementStandingGrants,
         requestedDecisions,
         owner: placementGrantOwner,
@@ -126,6 +113,9 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
         risk: params.risk,
         nodeSession: params.nodeSession,
       });
+      if (!params.isCurrent()) {
+        throw new Error("agent runtime approval authority is no longer active");
+      }
       if (placementGrantResolution.kind === "granted") {
         params.standingGrantAuthorization.binding = placementGrantResolution.binding;
         return { id: placementGrantResolution.approvalId, decision: "allow-always" };
@@ -203,17 +193,17 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       }
       decision = manager.projectDecisionIfActive(record.id, decision);
       if (
-        !retainResolvedNodeInvokePlacementGrant({
+        !(await retainResolvedNodeInvokePlacementGrant({
           runtime: params.context.placementStandingGrants,
           decision,
           binding: placementGrant,
           owner: placementGrantOwner,
           authorization: params.standingGrantAuthorization,
-        })
+        }))
       ) {
         return { id: record.id, decision: null };
       }
-      return { id: record.id, decision };
+      return { id: record.id, decision: params.isCurrent() ? decision : null };
     },
   };
 }

@@ -1,8 +1,8 @@
-import type { AsyncLocalStorage } from "node:async_hooks";
 import type { Transferable, WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation, RetainedOutcome } from "./retained-operation.js";
 import type { RetainedNativeWorker, WorkerLifecycle } from "./worker-lifecycle.js";
 import type { WorkerComputePermit } from "./worker-task-capacity.js";
+import type { WorkerTaskObservation } from "./worker-task-host.js";
 import type { WorkerNativeSectionState } from "./worker-task-native-sections.js";
 
 export type WorkerTaskPoolOptions<Output> = {
@@ -22,14 +22,20 @@ export type WorkerTaskPoolOptions<Output> = {
   maxPendingTasks?: number;
   maxPendingBytes?: number;
   idleTimeoutMs?: number;
+  /** Surplus idle timeout; one recently recreated burst can stay warm for three times this value. */
+  burstIdleTimeoutMs?: number;
   restartOnError?: boolean;
   validateResult?: (value: Output) => void;
   /** Reports failed stops synchronously; returned rejections never delay retirement. */
   onRetirementFailure?: (error: unknown) => void | Promise<void>;
+  /** Publish released native resources synchronously before rotation resumes queued inputs. */
+  onRotationComplete?: () => void;
 };
 
 export type WorkerTaskPoolOwnerOptions = {
   retainedTransport?: true;
+  /** Internal interactive owners retain their newest idle worker until explicit retirement. */
+  retainOneIdleWorker?: true;
   decodeResourceError?: (error: unknown) => Error;
 };
 
@@ -52,27 +58,35 @@ type WorkerTaskRequestContext = {
 
 export type WorkerTaskInput<Input> = Input | (() => Input | Promise<Input>);
 
-type WorkerTaskExecutionSettlement = {
-  /** True only after this task's worker termination has been joined. */
-  retired: boolean;
-};
-
 export type WorkerTaskOptions<Input> = {
   /** Known retained input bytes, including inputs captured by a factory. No serialization pass. */
   inputBytes?: number;
-  /** When supplied, queueing and asynchronous preparation consume the execution deadline. */
+  /** Queueing, preparation, execution, and host callbacks consume this deadline. */
   timeoutMs?: number;
+  /** Only callbacks with their own deadline may replace the pool clock during host waits. */
+  hostTimeout?: "owner";
   signal?: AbortSignal;
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;
+  /** Task-scoped observations; these do not settle work or renew its deadline. */
+  onNotification?: (value: unknown) => void;
   onInputConsumed?: () => void;
   /** Native task receipt before its result; async input preparation and host effects are not joined. */
-  onExecutionSettled?: (settlement: WorkerTaskExecutionSettlement) => void;
+  onExecutionSettled?: (settlement: {
+    /** True only after this task's worker termination has been joined. */
+    retired: boolean;
+  }) => void;
 };
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
-export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> &
-  (
+export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Retained owners may exclude queueing behind owner-controlled work from their budget. */
+  timeoutFrom?: "dispatch";
+  /** Host diagnostics classify this operation before publishing bounded labels. */
+  diagnosticOperation?: string;
+  /** Optional shared sequence word; wakeups are hints, never task receipts. */
+  progressSignal?: Int32Array<SharedArrayBuffer>;
+} & (
     | { onRequest?: WorkerTaskOptions<Input>["onRequest"]; onRequestSync?: never }
     | {
         onRequest?: never;
@@ -91,27 +105,20 @@ export type RetainedWorkerTask<Output> = RetainedOperation<Output> & {
   release(options?: { retire?: true }): RetainedOperation<void>;
 };
 
-type TaskOwner = {
-  closed: boolean;
-  retire: boolean;
-  closing?: RetainedOperation<void>;
-  complete?: () => void;
-};
-
-type WorkerHostExchange = {
-  id: number;
-  pressure: AbortController;
-  onConsumed?: () => void;
-  sent: boolean;
-};
-
 export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> & {
   resolve(value: Output): void;
   read(): RetainedOutcome<Output>;
   id: number;
-  runInContext: ReturnType<typeof AsyncLocalStorage.snapshot>;
-  controller: AbortController;
-  exchange?: WorkerHostExchange;
+  runInContext: <T>(operation: () => T) => T;
+  /** Allocated when a host request exposes the task's lifetime signal. */
+  controller?: AbortController;
+  exchange?: {
+    id: number;
+    name: string;
+    pressure: AbortController;
+    onConsumed?: () => void;
+    sent: boolean;
+  };
   inputConsumed: boolean;
   executionNotified: boolean;
   exchangeSequence: number;
@@ -125,10 +132,17 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   admitted: boolean;
   /** Present only while the input factory is pending. */
   preparation?: PromiseWithResolvers<void>;
-  owner?: TaskOwner;
+  owner?: {
+    closed: boolean;
+    retire: boolean;
+    closing?: RetainedOperation<void>;
+    complete?: () => void;
+  };
   inputBytes: number;
   computePermit?: WorkerComputePermit;
   enqueuedAt: number;
+  observation?: WorkerTaskObservation;
+  diagnosticLabel?: string;
   startedAt?: number;
   preparedAt?: number;
   transferMs: number;
@@ -139,6 +153,8 @@ export type Slot<Input, Output> = {
   nativeSections: WorkerNativeSectionState;
   worker?: WorkerLifecycle;
   native?: RetainedNativeWorker;
+  /** Undefined until a host-declared task-protocol Worker begins construction. */
+  ready?: boolean;
   creating?: boolean;
   releaseResources?: () => Promise<void>;
   task?: Task<Input, Output>;

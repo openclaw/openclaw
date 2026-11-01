@@ -91,13 +91,10 @@ function blobFromDataUrl(dataUrl: string): Blob | null {
   const metadata = match[1] ?? "";
   const payload = match[2] ?? "";
   try {
-    if (metadata.toLowerCase().includes(";base64")) {
-      const bytes = base64ToBytes(payload.replace(/\s+/gu, ""));
-      return new Blob([bytes], { type: metadata.split(";", 1)[0] });
-    }
-    return new Blob([decodeURIComponent(payload.replace(/\+/gu, "%20"))], {
-      type: metadata.split(";", 1)[0],
-    });
+    const content = metadata.toLowerCase().includes(";base64")
+      ? base64ToBytes(payload.replace(/\s+/gu, ""))
+      : decodeURIComponent(payload.replace(/\+/gu, "%20"));
+    return new Blob([content], { type: metadata.split(";", 1)[0] });
   } catch {
     return null;
   }

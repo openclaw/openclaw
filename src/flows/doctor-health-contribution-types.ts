@@ -2,6 +2,7 @@ import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-lega
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
+import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
 import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -15,10 +16,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { AgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import type { DoctorUpdateBudget, DoctorUpdateWork } from "./doctor-update-budget.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-import type { HealthCheckContext } from "./health-checks.js";
+import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
+  /** Captured before config retirement; shared by every heartbeat migration step. */
+  heartbeatMigrationSource?: OpenClawConfig;
   warnings?: string[];
   /** Original authored/resolved pair; retained across every committed Doctor write. */
   referenceSource?: DoctorConfigReferenceSource;
@@ -32,6 +35,7 @@ type DoctorConfigResult = {
   modelBillingRouteWarnings?: readonly string[];
   /** Successful retirement pass awaiting the config-write/no-change boundary. */
   modelRetirementRepairRan?: boolean;
+  retirementOnly?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -48,14 +52,19 @@ type DoctorConfigResult = {
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   /** Transient pre-retirement alias/default interpretation; current config owns auth and routes. */
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  /** Matched source providers whose references must move before config publication. */
+  providerRenames?: readonly ProviderRename[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
+  preflightLegacyStateConfig?: OpenClawConfig;
 };
 
 export type DoctorHealthFlowContext = {
+  /** Cleared when a retained owner discovers work requiring the full pass. */
+  retirementOnly?: boolean;
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -85,12 +94,13 @@ export type DoctorHealthFlowContext = {
   authProfileHealthReady?: boolean;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
-  gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../status/summary.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
   updateWarnings?: string[];
+  /** Findings awaiting the final current-state summary; effects and prompts remain streamed. */
+  healthFindings?: HealthFinding[];
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
 };

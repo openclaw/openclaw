@@ -9,6 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   SkillResourceDeliverySchema,
+  SKILL_RESOURCE_MAX_SKILLS,
   type SkillResourceDelivery,
 } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import {
@@ -21,7 +22,6 @@ import { acquireFileLock } from "../../infra/file-lock.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   copyExplicitSkillSelectionFileHost,
   resolveExplicitSkillSelectionFileHost,
@@ -36,24 +36,24 @@ import {
 } from "../library/bundle.js";
 import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
 import {
-  captureSkillLibrarySelection,
+  captureSkillLibraryPreparation,
   prepareSkillLibrarySelection,
 } from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
-import { createSyntheticSourceInfo, type Skill } from "../loading/skill-contract.js";
-import { shouldSyncSkillPath } from "../loading/skill-paths.js";
-import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
 import {
-  copySkillFileHost,
-  recordSkillFileHost,
-  resolveSkillFileHost,
-} from "../skill-file-host.js";
+  createSyntheticSourceInfo,
+  escapeSkillXml,
+  type Skill,
+} from "../loading/skill-contract.js";
+import { shouldSyncSkillPath } from "../loading/skill-paths.js";
+import { parseSkillsPromptCatalog } from "../loading/skill-prompt-catalog.js";
+import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
+import { recordSkillFileHost, resolveSkillFileHost } from "../skill-file-host.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
 import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
-import { copySkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 const log = createSubsystemLogger("skills/resources");
 
@@ -145,20 +145,23 @@ export async function prepareSkillResourceDelivery(
   assertCurrent();
   if (
     !inputSnapshot.resolvedSkills?.length &&
+    !inputSnapshot.discoverySkills?.length &&
     !inputSnapshot.librarySelections?.length &&
     !inputExplicitSelections.length
   ) {
     return undefined;
   }
-  const snapshot = copySkillSnapshotExecutionFileHost(inputSnapshot, {
+  const library = captureSkillLibraryPreparation(
+    inputSnapshot.librarySelections ?? [],
+    assertCurrent,
+  );
+  const snapshot = {
     ...inputSnapshot,
-    librarySelections: captureSkillLibrarySelection(inputSnapshot.librarySelections ?? []),
+    librarySelections: library.librarySelections,
     skills: inputSnapshot.skills.map((skill) => ({ ...skill })),
-    resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) =>
-      copySkillFileHost(skill, { ...skill }),
-    ),
+    resolvedSkills: inputSnapshot.resolvedSkills?.map((skill) => ({ ...skill })),
     skillRoots: inputSnapshot.skillRoots && { ...inputSnapshot.skillRoots },
-  });
+  };
   const explicitSelections = inputExplicitSelections.map((selection) =>
     copyExplicitSkillSelectionFileHost(selection, { ...selection }),
   );
@@ -185,23 +188,15 @@ export async function prepareSkillResourceDelivery(
   };
   const skills: SkillResourceDelivery["skills"] = [];
   let total = 0;
-  const libraryContext = snapshot.librarySelections?.length
-    ? captureOpenClawStateWorkerContext()
-    : undefined;
-  const assertLibraryCurrent = () => {
-    assertCurrent();
-    libraryContext?.maintenanceScope?.assertAdmission();
-    libraryContext?.admission.assertCurrent();
-  };
-  const libraryOptions = { env: libraryContext?.environment };
-  const libraryEntries = libraryContext
+  const libraryOptions = { env: library.libraryContext?.environment };
+  const libraryEntries = library.libraryContext
     ? await prepareSkillLibrarySelection(
         snapshot.librarySelections ?? [],
         libraryOptions,
-        assertLibraryCurrent,
+        library.assertCurrent,
       )
     : [];
-  assertLibraryCurrent();
+  library.assertCurrent();
   const candidates = resolveSkillResourceCandidates(snapshot, libraryEntries)!;
   for (const selected of explicitSelections) {
     if (
@@ -234,7 +229,7 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError({ name: selected.name, baseDir: skillDir }, error);
     }
-    assertLibraryCurrent();
+    library.assertCurrent();
     if (
       !loaded ||
       loaded.filePath !== selected.path ||
@@ -278,17 +273,17 @@ export async function prepareSkillResourceDelivery(
     let files: SkillLibraryFile[] | null;
     try {
       if (pin) {
-        assertLibraryCurrent();
+        library.assertCurrent();
         if (!manifests) {
           manifests = await readSkillLibrarySelectionManifests(pins, libraryOptions);
-          assertLibraryCurrent();
+          library.assertCurrent();
         }
         const manifest = manifests?.[pins.indexOf(pin)];
         if (!manifest) {
           throw new SkillLibraryError("NOT_FOUND", "Selected skill revision is unavailable.");
         }
         files = await readSkillLibraryManifestTree(
-          skillLibraryRevisionDir(pin.skillId, pin.revision, libraryContext?.environment),
+          skillLibraryRevisionDir(pin.skillId, pin.revision, library.libraryContext?.environment),
           manifest.files_json,
           pin.revision,
         );
@@ -300,7 +295,7 @@ export async function prepareSkillResourceDelivery(
     } catch (error) {
       throw contextualizeSkillResourceError(skill, error);
     }
-    assertLibraryCurrent();
+    library.assertCurrent();
     if (files === null) {
       if (explicitlySelected) {
         throw contextualizeSkillResourceError(
@@ -343,7 +338,17 @@ export async function prepareSkillResourceDelivery(
       files,
     });
   }
-  const delivery = { version: 1 as const, skills };
+  // Discovery is optional; prompted, explicit, and pinned resources keep their slots.
+  const required = new Set(
+    skills.filter(
+      (skill) => skill.modelVisible || pins.some((selection) => selection.name === skill.name),
+    ),
+  );
+  let discoverySlots = Math.max(0, SKILL_RESOURCE_MAX_SKILLS - required.size);
+  const delivery = {
+    version: 1 as const,
+    skills: skills.filter((skill) => required.has(skill) || discoverySlots-- > 0),
+  };
   if (!Value.Check(SkillResourceDeliverySchema, delivery)) {
     throw new Error("Selected skill catalog exceeds the worker resource contract.");
   }
@@ -407,7 +412,7 @@ export async function materializeSkillResources(
       assertCurrent();
       await fs.mkdir(directory, { mode: 0o700 });
     }
-    const pathMappings: Array<[string, string]> = [];
+    const pathMappings: [source: string, target: string, name?: string][] = [];
     const resolvedSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
     for (const { skill, bundle } of bundles) {
       const name = normalizeSkillIndexName(skill.name).slice(0, 40) || "skill";
@@ -430,12 +435,11 @@ export async function materializeSkillResources(
         { name: skill.name, filePath: skill.sourcePath ?? filePath },
         "workspace",
       );
-      pathMappings.push([virtualPath, filePath]);
-      pathMappings.push([virtualPath.slice(0, -"SKILL.md".length), `${baseDir}${path.sep}`]);
-      if (skill.sourcePath) {
-        pathMappings.push([skill.sourcePath, filePath]);
-        // Explicit supporting-file references share the same verified bundle root.
-        pathMappings.push([skill.sourcePath.slice(0, -"SKILL.md".length), `${baseDir}${path.sep}`]);
+      for (const source of skill.sourcePath ? [virtualPath, skill.sourcePath] : [virtualPath]) {
+        pathMappings.push(
+          [source, filePath, skill.name],
+          [source.slice(0, -"SKILL.md".length), `${baseDir}${path.sep}`],
+        );
       }
       resolvedSkills.push({
         name: skill.name,
@@ -450,6 +454,11 @@ export async function materializeSkillResources(
       });
     }
     assertCurrent();
+    const rewritePaths = (text: string) =>
+      pathMappings.reduce(
+        (rewritten, [source, target]) => rewritten.replaceAll(source, target),
+        text,
+      );
     return {
       directory,
       snapshot: {
@@ -461,11 +470,31 @@ export async function materializeSkillResources(
           preserveOrder: true,
         }),
       },
-      rewriteReferences: (text: string) =>
-        pathMappings.reduce(
-          (rewritten, [source, target]) => rewritten.replaceAll(source, target),
-          text,
-        ),
+      rewriteReferences: (text: string) => {
+        let cursor = Math.max(0, text.indexOf("<available_skills>\n"));
+        const parts = [rewritePaths(text.slice(0, cursor))];
+        for (const { name, location } of parseSkillsPromptCatalog(text)) {
+          const nameStart = text.indexOf(`<name>${escapeSkillXml(name)}</name>`, cursor);
+          const tag = `<location>${escapeSkillXml(location)}</location>`;
+          const start = nameStart < 0 ? -1 : text.indexOf(tag, nameStart);
+          if (start < 0) {
+            continue;
+          }
+          const named = pathMappings.filter((mapping) => mapping[2] === name);
+          const exact = named.filter(([source]) => source === location);
+          const candidates = exact.length ? exact : location.startsWith("~/") ? named : [];
+          const targets = [...new Set(candidates.map(([, target]) => target))];
+          const target = targets.length === 1 ? targets[0]! : location;
+          // Catalog locations are XML and may be compact; other references retain raw path syntax.
+          parts.push(
+            rewritePaths(text.slice(cursor, start)),
+            `<location>${escapeSkillXml(target)}</location>`,
+          );
+          cursor = start + tag.length;
+        }
+        parts.push(rewritePaths(text.slice(cursor)));
+        return parts.join("");
+      },
       cleanup,
     };
   } catch (error) {

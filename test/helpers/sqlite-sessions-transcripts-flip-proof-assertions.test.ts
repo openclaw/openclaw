@@ -16,40 +16,32 @@ Legacy session store requires migration: /qa/state/agents/main/sessions/sessions
 
 describe("SQLite flip proof startup refusal assertions", () => {
   it.each([
-    { label: "unprofiled", profile: undefined, command: "openclaw doctor --fix" },
-    {
-      label: "profile-qualified",
-      profile: "qa-sqlite-proof",
-      command: "openclaw --profile qa-sqlite-proof doctor --fix",
-    },
-  ])("accepts $label guidance with preserved legacy sources", ({ profile, command }) => {
+    [undefined, "openclaw doctor --fix", undefined],
+    ["qa-sqlite-proof", "openclaw --profile qa-sqlite-proof doctor --fix", undefined],
+    ["qa-sqlite-proof", "openclaw doctor --fix", "guidance"],
+    ["qa-sqlite-proof", "openclaw --profile unrelated doctor --fix", "guidance"],
+    [undefined, "openclaw doctor --fix", "source"],
+  ] as const)("validates profile %s guidance %s with failure %s", (profile, command, failure) => {
     withEnv({ OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: undefined }, () => {
-      expect(() => assertSqliteFlipStartupRefusal(startupRefusal(command))).not.toThrow();
-    });
-  });
-
-  it.each(["openclaw doctor --fix", "openclaw --profile unrelated doctor --fix"])(
-    "rejects guidance outside the active profile: %s",
-    (command) => {
-      withEnv({ OPENCLAW_PROFILE: "qa-sqlite-proof", OPENCLAW_CONTAINER_HINT: undefined }, () => {
-        const refusal = startupRefusal(command);
-        expect(() => assertSqliteFlipStartupRefusal(refusal)).toThrow(
-          expect.objectContaining({
-            actual: refusal.message,
-            expected: 'Run "openclaw --profile qa-sqlite-proof doctor --fix"',
-          }),
+      const refusal = startupRefusal(command);
+      if (failure === "source") {
+        refusal.preservedSourceFiles.pop();
+      }
+      const assertion = expect(() => assertSqliteFlipStartupRefusal(refusal));
+      if (failure) {
+        assertion.toThrow(
+          expect.objectContaining(
+            failure === "guidance"
+              ? {
+                  actual: refusal.message,
+                  expected: 'Run "openclaw --profile qa-sqlite-proof doctor --fix"',
+                }
+              : { actual: refusal.preservedSourceFiles },
+          ),
         );
-      });
-    },
-  );
-
-  it("rejects valid guidance when a legacy source was not preserved", () => {
-    withEnv({ OPENCLAW_PROFILE: undefined, OPENCLAW_CONTAINER_HINT: undefined }, () => {
-      const refusal = startupRefusal("openclaw doctor --fix");
-      refusal.preservedSourceFiles.pop();
-      expect(() => assertSqliteFlipStartupRefusal(refusal)).toThrow(
-        expect.objectContaining({ actual: refusal.preservedSourceFiles }),
-      );
+      } else {
+        assertion.not.toThrow();
+      }
     });
   });
 });

@@ -8,47 +8,19 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/**
- * Injectable notification listener facade so command parsing can be tested without Android service state.
- */
-internal interface NotificationsStateProvider {
-  fun readSnapshot(context: Context): DeviceNotificationSnapshot
-
-  fun requestServiceRebind(context: Context)
-
-  fun executeAction(
-    context: Context,
-    request: NotificationActionRequest,
-  ): NotificationActionResult
-}
-
-private object SystemNotificationsStateProvider : NotificationsStateProvider {
-  /** Reads listener state through Android APIs and returns a disabled snapshot when access is missing. */
-  override fun readSnapshot(context: Context): DeviceNotificationSnapshot {
-    val enabled = DeviceNotificationListenerService.isAccessEnabled(context)
-    if (!enabled) {
-      return DeviceNotificationSnapshot(
-        enabled = false,
-        connected = false,
-        notifications = emptyList(),
-      )
-    }
-    return DeviceNotificationListenerService.snapshot(context, enabled = true)
-  }
-
-  override fun requestServiceRebind(context: Context) {
-    DeviceNotificationListenerService.requestServiceRebind(context)
-  }
-
-  override fun executeAction(
-    context: Context,
-    request: NotificationActionRequest,
-  ): NotificationActionResult = DeviceNotificationListenerService.executeAction(context, request)
-}
-
 class NotificationsHandler internal constructor(
-  private val appContext: Context,
-  private val stateProvider: NotificationsStateProvider = SystemNotificationsStateProvider,
+  appContext: Context,
+  private val readSnapshot: () -> DeviceNotificationSnapshot = {
+    if (DeviceNotificationListenerService.isAccessEnabled(appContext)) {
+      DeviceNotificationListenerService.snapshot(appContext, enabled = true)
+    } else {
+      DeviceNotificationSnapshot(enabled = false, connected = false, notifications = emptyList())
+    }
+  },
+  private val requestServiceRebind: () -> Unit = { DeviceNotificationListenerService.requestServiceRebind(appContext) },
+  private val executeAction: (NotificationActionRequest) -> NotificationActionResult = {
+    DeviceNotificationListenerService.executeAction(appContext, it)
+  },
 ) {
   /** Lists the current listener snapshot after nudging Android to reconnect if needed. */
   suspend fun handleNotificationsList(_paramsJson: String?): GatewaySession.InvokeResult {
@@ -72,21 +44,10 @@ class NotificationsHandler internal constructor(
     // command contract rather than Android-specific PendingIntent labels.
     val action =
       when (actionRaw) {
-        "open" -> {
-          NotificationActionKind.Open
-        }
-
-        "dismiss" -> {
-          NotificationActionKind.Dismiss
-        }
-
-        "reply" -> {
-          NotificationActionKind.Reply
-        }
-
-        else -> {
-          return nodeInvokeError("INVALID_REQUEST", "action must be open|dismiss|reply")
-        }
+        "open" -> NotificationActionKind.Open
+        "dismiss" -> NotificationActionKind.Dismiss
+        "reply" -> NotificationActionKind.Reply
+        else -> return nodeInvokeError("INVALID_REQUEST", "action must be open|dismiss|reply")
       }
     val replyText = params.nonBlankString("replyText")
     if (action == NotificationActionKind.Reply && replyText.isNullOrBlank()) {
@@ -94,8 +55,7 @@ class NotificationsHandler internal constructor(
     }
 
     val result =
-      stateProvider.executeAction(
-        appContext,
+      executeAction(
         NotificationActionRequest(
           key = key,
           kind = action,
@@ -119,10 +79,10 @@ class NotificationsHandler internal constructor(
   }
 
   private fun readSnapshotWithRebind(): DeviceNotificationSnapshot {
-    val snapshot = stateProvider.readSnapshot(appContext)
+    val snapshot = readSnapshot()
     if (snapshot.enabled && !snapshot.connected) {
       // Access can be granted while Android has not rebound the listener yet.
-      stateProvider.requestServiceRebind(appContext)
+      requestServiceRebind()
     }
     return snapshot
   }
@@ -132,11 +92,6 @@ class NotificationsHandler internal constructor(
       put("enabled", JsonPrimitive(snapshot.enabled))
       put("connected", JsonPrimitive(snapshot.connected))
       put("count", JsonPrimitive(snapshot.notifications.size))
-      put(
-        "notifications",
-        JsonArray(
-          snapshot.notifications.map { entry -> entry.toJsonObject() },
-        ),
-      )
+      put("notifications", JsonArray(snapshot.notifications.map { it.toJsonObject() }))
     }.toString()
 }

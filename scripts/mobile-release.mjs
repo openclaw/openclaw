@@ -116,6 +116,11 @@ function collectArtifacts(source, recovery, platform) {
             destination: "screenshot-diagnostics",
             filename: /^capture-attempts\.json$/,
           },
+          {
+            source: "apps/ios/build",
+            destination: "screenshot-diagnostics",
+            filename: /^screenshot-diagnostics\.json$/,
+          },
         ]
       : []),
   ];
@@ -262,9 +267,7 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
   if (isGithubActions) {
     const eventAllowed =
       process.env.GITHUB_EVENT_NAME === "workflow_dispatch" ||
-      (((platform === "ios" && destination === "testflight") ||
-        (platform === "android" && destination === "internal")) &&
-        process.env.GITHUB_EVENT_NAME === "schedule");
+      process.env.GITHUB_EVENT_NAME === "schedule";
     if (
       !eventAllowed ||
       process.env.GITHUB_REPOSITORY !== "openclaw/openclaw" ||
@@ -272,7 +275,7 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
       sourceSha !== process.env.GITHUB_SHA
     ) {
       throw new Error(
-        "CI releases require the exact workflow_dispatch commit on openclaw/openclaw main; scheduled events are accepted only for iOS TestFlight or Android internal testing.",
+        "CI releases require the exact workflow_dispatch or schedule commit on openclaw/openclaw main.",
       );
     }
   } else if (git(root, "branch", "--show-current") !== "main") {
@@ -303,93 +306,96 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
   const source = path.join(recovery, "source");
   const planPath = path.join(recovery, `${platform}-plan.json`);
   const notesPath = path.join(recovery, "release-notes.json");
+  let plan;
+  if (platform === "ios") {
+    plan = JSON.parse(
+      run(
+        "/bin/bash",
+        [
+          "scripts/ios-release-plan.sh",
+          "--json",
+          ...(destination === "testflight" ? ["--destination", destination] : []),
+          ...releaseArgs,
+        ],
+        root,
+      ),
+    );
+    if ((plan.destination ?? "app-store") !== destination) {
+      throw new Error("The planned iOS destination does not match the requested destination.");
+    }
+  } else {
+    run(
+      "/bin/bash",
+      [
+        "-c",
+        'source scripts/lib/android-fastlane.sh; cd apps/android; run_android_fastlane android release_plan "output_path:$1"',
+        "release-plan",
+        planPath,
+      ],
+      root,
+      { stdio: "inherit" },
+    );
+    plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+    plan.destination = destination;
+  }
+  plan.sourceSha = sourceSha;
+  if (firebase) {
+    plan.firebase = firebase.configuration;
+  }
+  fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+  let stageExisting = false;
+  if (destination === "testflight") {
+    const outcome = testflightNonUploadOutcome(root, plan, sourceSha);
+    if (outcome?.outcome === "stage-existing") {
+      const build = outcome.build;
+      const buildNumber = Number(build.buildNumber);
+      if (
+        build.shortVersion !== plan.appStoreVersion ||
+        !/^[1-9]\d*$/.test(build.buildNumber) ||
+        !Number.isSafeInteger(buildNumber) ||
+        !build.id
+      ) {
+        throw new Error(
+          "The existing App Store build does not match the planned TestFlight train.",
+        );
+      }
+      if (releaseArgs.includes("--build-number")) {
+        throw new Error(
+          "This source already has an App Store build. Omit --build-number to distribute that build through TestFlight without another upload.",
+        );
+      }
+      plan = {
+        ...plan,
+        buildNumber,
+        decision: "stage-existing",
+        testflight: { ...plan.testflight, existingBuildId: build.id },
+      };
+      fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+      stageExisting = true;
+    } else if (outcome) {
+      fs.writeFileSync(
+        path.join(recovery, "testflight-result.json"),
+        `${JSON.stringify(outcome, null, 2)}\n`,
+        { mode: 0o600 },
+      );
+      const summary = `TestFlight: ${outcome.outcome}. No new build uploaded.\n`;
+      console.log(summary.trim());
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+      }
+      return;
+    }
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      throw new Error("OPENAI_API_KEY is required to prepare TestFlight notes.");
+    }
+  }
   git(root, "worktree", "add", "--detach", source, sourceSha);
   let completed = false;
   try {
     bridgeLocalTools(root, source, platform);
-    let plan;
-    if (platform === "ios") {
-      plan = JSON.parse(
-        run(
-          "/bin/bash",
-          [
-            "scripts/ios-release-plan.sh",
-            "--json",
-            ...(destination === "testflight" ? ["--destination", destination] : []),
-            ...releaseArgs,
-          ],
-          source,
-        ),
-      );
-      if ((plan.destination ?? "app-store") !== destination) {
-        throw new Error("The planned iOS destination does not match the requested destination.");
-      }
-    } else {
-      run(
-        "/bin/bash",
-        [
-          "-c",
-          'source scripts/lib/android-fastlane.sh; cd apps/android; run_android_fastlane android release_plan "output_path:$1"',
-          "release-plan",
-          planPath,
-        ],
-        source,
-        { stdio: "inherit" },
-      );
-      plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
-      plan.destination = destination;
-    }
-    plan.sourceSha = sourceSha;
-    if (firebase) {
-      plan.firebase = firebase.configuration;
-    }
-    fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
-    let stageExisting = false;
-    if (destination === "testflight") {
-      const outcome = testflightNonUploadOutcome(root, plan, sourceSha);
-      if (outcome?.outcome === "stage-existing") {
-        const build = outcome.build;
-        const buildNumber = Number(build.buildNumber);
-        if (
-          build.shortVersion !== plan.appStoreVersion ||
-          !/^[1-9]\d*$/.test(build.buildNumber) ||
-          !Number.isSafeInteger(buildNumber) ||
-          !build.id
-        ) {
-          throw new Error(
-            "The existing App Store build does not match the planned TestFlight train.",
-          );
-        }
-        if (releaseArgs.includes("--build-number")) {
-          throw new Error(
-            "This source already has an App Store build. Omit --build-number to distribute that build through TestFlight without another upload.",
-          );
-        }
-        plan = {
-          ...plan,
-          buildNumber,
-          decision: "stage-existing",
-          testflight: { ...plan.testflight, existingBuildId: build.id },
-        };
-        fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
-        stageExisting = true;
-      } else if (outcome) {
-        fs.writeFileSync(
-          path.join(recovery, "testflight-result.json"),
-          `${JSON.stringify(outcome, null, 2)}\n`,
-          { mode: 0o600 },
-        );
-        const summary = `TestFlight: ${outcome.outcome}. No new build uploaded.\n`;
-        console.log(summary.trim());
-        if (process.env.GITHUB_STEP_SUMMARY) {
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-        }
-        completed = true;
-        return;
-      }
-      if (!process.env.OPENAI_API_KEY?.trim()) {
-        throw new Error("OPENAI_API_KEY is required to prepare TestFlight notes.");
-      }
+    // Deferred TestFlight attempts need no history; notes require complete source ancestry.
+    if (git(root, "rev-parse", "--is-shallow-repository") === "true") {
+      git(root, "fetch", "--no-tags", "--filter=blob:none", "--unshallow", "origin", sourceSha);
     }
     run(
       process.execPath,

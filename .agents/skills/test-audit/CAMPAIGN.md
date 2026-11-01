@@ -101,8 +101,9 @@ on the same harness.
 Campaigns outlive many `main` commits. Merge `main` rather than rebasing a
 long, many-commit campaign. When `main` modified a file the campaign
 deleted, keep the deletion. Port the new contract into the keeper instead, and
-confirm every new regression `main` added still has a home. Rerun the whole
-subsystem suite and repeat live proof on the merged head.
+confirm every new regression `main` added still has a home. PR CI reruns broad
+subsystem suite on merged head. Locally rerun only tests touched by merge or
+failed in CI; repeat live proof when merged inputs affect live contract.
 
 Expect review tooling to see a truncated file list on a diff this large.
 Record maintainer decisions for generic compatibility flags in the PR evidence

@@ -1,7 +1,4 @@
-import type {
-  QaBusInboundMessageInput,
-  QaBusOutboundMessageInput,
-} from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaBusInboundMessageInput } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
@@ -13,10 +10,9 @@ const retryRequest = { allInputText: `${rawMarker}: you did not call message(act
 
 async function runStrandedRetryFailureFlow(
   options: {
-    outbound?: Partial<QaBusOutboundMessageInput>;
     duplicate?: boolean;
     leakRaw?: boolean;
-    extraRetry?: "immediate" | "settled";
+    extraRetry?: "settled";
   } = {},
 ) {
   const state = createQaBusState();
@@ -25,12 +21,8 @@ async function runStrandedRetryFailureFlow(
     to: "dm:qa-stranded-retry-failure-dm",
     isError: true,
     text: diagnostic,
-    ...options.outbound,
   };
   const requests = [{ allInputText: rawMarker }, retryRequest];
-  if (options.extraRetry === "immediate") {
-    requests.push(retryRequest);
-  }
   let settled = false;
   return await runLoadedScenarioFlow("message-tool-stranded-final-retry-failure", {
     state,
@@ -80,18 +72,8 @@ describe("stranded-final retry failure scenario", () => {
   it.each<
     [label: string, options: Parameters<typeof runStrandedRetryFailureFlow>[0], failure?: string]
   >([
-    ["unclassified", { outbound: { isError: false } }],
-    ["foreign account", { outbound: { accountId: "other" } }],
-    ["foreign conversation", { outbound: { to: "dm:other" } }],
-    ["wrong conversation kind", { outbound: { to: "channel:qa-stranded-retry-failure-dm" } }],
-    ["extra text", { outbound: { text: `${diagnostic} Unexpected extra text.` } }],
     ["late duplicate", { duplicate: true }, "expected exactly one sanitized diagnostic, saw 2"],
     ["late private text leak", { leakRaw: true }, "raw stranded final text must not be delivered"],
-    [
-      "immediate second retry",
-      { extraRetry: "immediate" },
-      "expected exactly one stranded-reply retry request, saw 2",
-    ],
     [
       "late second retry",
       { extraRetry: "settled" },

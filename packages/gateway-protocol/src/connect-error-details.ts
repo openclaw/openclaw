@@ -4,6 +4,7 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   isProtocolRecord,
@@ -45,6 +46,8 @@ export const ConnectErrorDetailCodes = {
   DEVICE_AUTH_SIGNATURE_INVALID: "DEVICE_AUTH_SIGNATURE_INVALID",
   DEVICE_AUTH_PUBLIC_KEY_INVALID: "DEVICE_AUTH_PUBLIC_KEY_INVALID",
   PAIRING_REQUIRED: "PAIRING_REQUIRED",
+  PAIRING_REJECTED: "PAIRING_REJECTED",
+  PAIRING_EXPIRED: "PAIRING_EXPIRED",
   CLIENT_VERSION_MISMATCH: "CLIENT_VERSION_MISMATCH",
 } as const;
 
@@ -79,6 +82,7 @@ type PairingConnectErrorDetails = {
   recommendedNextStep?: ConnectRecoveryNextStep;
   retryable?: boolean;
   pauseReconnect?: boolean;
+  waitForResolution?: boolean;
   deviceId?: string;
   requestedRole?: string;
   requestedScopes?: string[];
@@ -234,6 +238,9 @@ function createPairingConnectErrorDetails(
     ...(params.recommendedNextStep ? { recommendedNextStep: params.recommendedNextStep } : {}),
     ...(params.retryable !== undefined ? { retryable: params.retryable } : {}),
     ...(params.pauseReconnect !== undefined ? { pauseReconnect: params.pauseReconnect } : {}),
+    ...(params.waitForResolution !== undefined
+      ? { waitForResolution: params.waitForResolution }
+      : {}),
     ...(params.deviceId ? { deviceId: params.deviceId } : {}),
     ...(params.requestedRole ? { requestedRole: params.requestedRole } : {}),
     ...(params.requestedScopes ? { requestedScopes: params.requestedScopes } : {}),
@@ -281,6 +288,7 @@ export function buildPairingConnectErrorDetails(
     recommendedNextStep: params.recommendedNextStep,
     retryable: params.retryable,
     pauseReconnect: params.pauseReconnect,
+    waitForResolution: params.waitForResolution,
   });
 }
 
@@ -331,6 +339,8 @@ export function readPairingConnectErrorDetails(
     retryable: typeof details.retryable === "boolean" ? details.retryable : undefined,
     pauseReconnect:
       typeof details.pauseReconnect === "boolean" ? details.pauseReconnect : undefined,
+    waitForResolution:
+      typeof details.waitForResolution === "boolean" ? details.waitForResolution : undefined,
   });
 }
 
@@ -342,7 +352,7 @@ export function readConnectPairingRequiredMessage(
   if (!normalizedMessage) {
     return null;
   }
-  const normalized = normalizedMessage.trim().toLowerCase();
+  const normalized = normalizedMessage.toLowerCase();
   let reason: ConnectPairingRequiredReason | undefined;
   for (const [candidate, metadata] of Object.entries(PAIRING_CONNECT_REASON_METADATA) as Array<
     [ConnectPairingRequiredReason, { message: string }]
@@ -400,15 +410,10 @@ function readIdentityProxyRejection(details: unknown): { cloudflareAccess: boole
     return null;
   }
   const location = normalizeOptionalProtocolString(details.location);
-  if (!location) {
-    return { cloudflareAccess: false };
-  }
-  try {
-    const hostname = new URL(location).hostname.toLowerCase().replace(/\.+$/u, "");
-    return { cloudflareAccess: hostname.endsWith(".cloudflareaccess.com") };
-  } catch {
-    return { cloudflareAccess: false };
-  }
+  const hostname = URL.parse(location ?? "")
+    ?.hostname.toLowerCase()
+    .replace(/\.+$/u, "");
+  return { cloudflareAccess: hostname?.endsWith(".cloudflareaccess.com") ?? false };
 }
 
 /** Classifies Gateway connect failures from structured details, with one legacy text fallback. */
@@ -506,10 +511,11 @@ export function formatConnectPairingRequiredMessage(details: unknown): string {
 
 /** Formats connect errors using structured details before falling back to raw messages. */
 export function formatConnectErrorMessage(params: { message?: string; details?: unknown }): string {
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
+  const code = readConnectErrorDetailCode(params.details);
+  if (code === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
     return formatConnectPairingRequiredMessage(params.details);
   }
-  if (readConnectErrorDetailCode(params.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+  if (code === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
     return formatProtocolMismatchMessage(params.message, params.details);
   }
   return normalizeOptionalProtocolString(params.message) ?? "gateway request failed";
@@ -522,10 +528,10 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
     expectedProtocol?: unknown;
     minimumProbeProtocol?: unknown;
   };
-  const clientMin = normalizeProtocolNumber(raw.clientMinProtocol);
-  const clientMax = normalizeProtocolNumber(raw.clientMaxProtocol);
-  const expected = normalizeProtocolNumber(raw.expectedProtocol);
-  const probeMin = normalizeProtocolNumber(raw.minimumProbeProtocol);
+  const clientMin = asPositiveInteger(raw.clientMinProtocol);
+  const clientMax = asPositiveInteger(raw.clientMaxProtocol);
+  const expected = asPositiveInteger(raw.expectedProtocol);
+  const probeMin = asPositiveInteger(raw.minimumProbeProtocol);
   const parts: string[] = [];
   if (clientMin !== undefined && clientMax !== undefined) {
     parts.push(
@@ -538,12 +544,8 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
     parts.push(`Gateway v${expected}`);
   }
   if (probeMin !== undefined) {
-    parts.push(`probe min v${probeMin}`);
+    parts.push(`connection check min v${probeMin}`);
   }
   const normalized = normalizeOptionalProtocolString(message) ?? "protocol mismatch";
   return parts.length > 0 ? `${normalized}: ${parts.join(", ")}` : normalized;
-}
-
-function normalizeProtocolNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }

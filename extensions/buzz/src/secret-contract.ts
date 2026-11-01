@@ -7,7 +7,7 @@ import {
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveBuzzAccountConfig } from "./types.js";
+import { resolveBuzzAccountConfig } from "./account-config.js";
 
 const fields = ["privateKey", "authTag"] as const;
 

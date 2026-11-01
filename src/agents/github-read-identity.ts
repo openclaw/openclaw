@@ -1,30 +1,41 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../process/exec.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
+import type { GitHubCredentialReader } from "./github-credential-reader.js";
 import { resolveGitHubHost } from "./github-host-runtime.js";
 
 const GITHUB_IDENTITY_COMMAND_TIMEOUT_MS = 15_000;
 export const GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES = 32 * 1024;
 
-// Read/options only: host gh login/logout/switch detection can lag by 60 seconds,
-// matching credential verification. Publication and environment tokens stay live.
+// API reads wait after 60 seconds; options may display stale facts during refresh.
+// Publication and environment tokens stay live.
 const NATIVE_GITHUB_TOKEN_TTL_MS = 60_000;
-let nativeTokens = new Map<string, { token: string; expiresAt: number }>();
-const pendingNativeTokens = new Map<string, Promise<string | undefined>>();
+const nativeTokens = createStaleWhileRevalidateCache<string | undefined>({
+  maxEntries: 32,
+  ttlMs: NATIVE_GITHUB_TOKEN_TTL_MS,
+  // Failed reads and anonymous absence proofs must not hide later sign-in.
+  cacheable: (token) => token !== undefined,
+});
+
+export const githubIdentityChanges: { onChange?: () => void } = {};
 
 export function clearNativeGitHubTokenCache(): void {
-  // In-flight reads keep their old map and cannot repopulate the cleared cache.
-  nativeTokens = new Map();
-  pendingNativeTokens.clear();
+  nativeTokens.clear();
+  try {
+    githubIdentityChanges.onChange?.();
+  } catch {
+    // Discovery is best effort; cache retirement must still succeed.
+  }
 }
 
 function ambientGitHubCredential(env: NodeJS.ProcessEnv, host = resolveGitHubHost()) {
@@ -47,6 +58,7 @@ export async function readCachedNativeGitHubToken(
   env: NodeJS.ProcessEnv,
   requireAbsentProof = false,
   githubHost = resolveGitHubHost(),
+  display?: { onStale: () => void },
 ): Promise<string | undefined> {
   const effectiveEnv = mergeProcessEnv([process.env, env]);
   const { host, token } = ambientGitHubCredential(effectiveEnv, githubHost);
@@ -55,51 +67,42 @@ export async function readCachedNativeGitHubToken(
   }
   // Include the complete command context: operators can provide gh wrappers,
   // and relative config/executable paths depend on the current directory.
-  const key = createHash("sha256")
-    .update(
-      JSON.stringify([
-        host,
-        process.cwd(),
-        Object.entries(effectiveEnv).toSorted(([left], [right]) => left.localeCompare(right)),
-        requireAbsentProof,
-      ]),
-    )
-    .digest("hex");
-  const cache = nativeTokens;
-  const cached = cache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.token;
-  }
-  cache.delete(key);
-  return getOrCreatePromise(
-    pendingNativeTokens,
-    key,
-    async () => {
-      const current = await readNativeGitHubToken(env, requireAbsentProof, host);
-      // Failures and anonymous absence proofs remain live, so unreadable native
-      // configuration cannot be hidden by a previously absent account.
-      if (current !== undefined) {
-        cache.set(key, { token: current, expiresAt: Date.now() + NATIVE_GITHUB_TOKEN_TTL_MS });
-        pruneMapToMaxSize(cache, 32);
-      }
-      return current;
-    },
-    { evictOnSettled: true },
+  const key = sha256Hex(
+    JSON.stringify([
+      host,
+      process.cwd(),
+      Object.entries(effectiveEnv).toSorted(([left], [right]) => left.localeCompare(right)),
+      requireAbsentProof,
+    ]),
   );
+  const { value, stale } = await nativeTokens.read(
+    key,
+    () => readNativeGitHubToken(env, requireAbsentProof, host),
+    { allowStale: display !== undefined },
+  );
+  if (stale) {
+    display?.onStale();
+  }
+  return value;
 }
 
-export async function runGitHubIdentityCommand(
+async function runGitHubIdentityCommand(
   argv: string[],
   env?: NodeJS.ProcessEnv,
   cwd?: string,
   timeoutMs = GITHUB_IDENTITY_COMMAND_TIMEOUT_MS,
 ) {
-  return await runCommandBuffered(argv, {
-    env: env ? { ...env } : {},
-    cwd,
-    timeoutMs,
-    maxOutputBytes: GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
-  });
+  return await withGitProcessOperation(
+    "github.identity",
+    () =>
+      runCommandBuffered(argv, {
+        env: env ? { ...env } : {},
+        cwd,
+        timeoutMs,
+        maxOutputBytes: GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
+      }),
+    "default",
+  );
 }
 
 export function normalizeGitHubToken(token: string): string {
@@ -247,6 +250,7 @@ export async function readNativeGitHubToken(
 export type GitHubIdentityPreparation = {
   config: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
+  readNativeCredential?: GitHubCredentialReader;
   agentId: string;
   env?: NodeJS.ProcessEnv;
 };
@@ -256,6 +260,12 @@ export type GitHubReadIdentityStarter = <T>(start: () => T) => Promise<Awaited<T
 export type GitHubReadIdentityPreparation = GitHubIdentityPreparation & {
   /** Fixed public capabilities ignore the repository host; other reads use its configured issuer. */
   issuer?: "github.com";
+  /** Only request owners that await revoke before returning may mint App credentials. */
+  allowAppInstallation?: boolean;
+  /** Restrict App admission and issuance to this configured owner/repository. */
+  requestedRepository?: string;
+  /** Account display facts may refresh in the background; never grants write authority. */
+  allowStale?: boolean;
   getCurrentConfig: () => OpenClawConfig;
   assertActive: () => void;
   startActive?: GitHubReadIdentityStarter;
@@ -296,6 +306,8 @@ export type GitHubReadIdentitySelection = Readonly<{
   accountId: number;
 }>;
 type GitHubReadAuthority = {
+  revoke?: () => Promise<void>;
+  stale?: true;
   cacheScope: string;
   assertSelected: () => void;
   revalidate: () => Promise<void>;
@@ -314,6 +326,7 @@ export function createGitHubReadIdentity(
     assertSelected: () => void;
     startActive?: GitHubReadIdentityStarter;
     readToken: () => Promise<string | undefined>;
+    stale?: true;
   } & (
     | { token: string; selection: GitHubReadIdentitySelection }
     | { token: undefined; selection: Readonly<{ source: "anonymous" }> }
@@ -331,14 +344,13 @@ export function createGitHubReadIdentity(
     }, caller);
   };
   const authority: GitHubReadAuthority = {
+    ...(params.stale ? { stale: true } : {}),
     cacheScope:
       selection.source === "anonymous"
         ? "anonymous"
-        : createHash("sha256")
-            .update(
-              JSON.stringify([selection.source, selection.profileId, selection.accountId, token]),
-            )
-            .digest("hex"),
+        : sha256Hex(
+            JSON.stringify([selection.source, selection.profileId, selection.accountId, token]),
+          ),
     assertSelected,
     revalidate: () => start(() => undefined),
     start,
@@ -348,4 +360,30 @@ export function createGitHubReadIdentity(
   return params.token === undefined
     ? { ...authority, token: undefined, selection: Object.freeze(params.selection) }
     : { ...authority, token: params.token, selection: Object.freeze(params.selection) };
+}
+
+export async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
+  const result = await runGitHubIdentityCommand(
+    ["git", "config", "--null", "--get-regexp", "^user\\.(name|email)$"],
+    { ...env, GIT_NO_LAZY_FETCH: "1" },
+    cwd,
+  );
+  const author: { name: string | null; email: string | null } = { name: null, email: null };
+  if (result.code !== 0) {
+    return author;
+  }
+  for (const entry of result.stdout.toString("utf8").split("\0")) {
+    const separator = entry.indexOf("\n");
+    if (separator < 0) {
+      continue;
+    }
+    const key = entry.slice(0, separator);
+    const value = readNonBlankString(entry.slice(separator + 1))?.trim() ?? null;
+    if (key === "user.name") {
+      author.name = value;
+    } else if (key === "user.email") {
+      author.email = value;
+    }
+  }
+  return author;
 }

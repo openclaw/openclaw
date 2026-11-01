@@ -1,6 +1,12 @@
+import os from "node:os";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core";
+import {
+  normalizeHomeDirValue,
+  resolveEffectiveHomeDir,
+} from "@openclaw/normalization-core/home-dir";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { iterateAnsiSegments } from "./ansi-sequences.js";
 import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
-import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
 
 type Align = "left" | "right" | "center";
@@ -10,7 +16,6 @@ export type TableColumn = {
   header: string;
   align?: Align;
   minWidth?: number;
-  maxWidth?: number;
   flex?: boolean;
 };
 
@@ -18,22 +23,17 @@ export type RenderTableOptions = {
   columns: TableColumn[];
   rows: Array<Record<string, string>>;
   width?: number;
-  padding?: number;
-  border?: "unicode" | "ascii" | "none";
 };
 
-function resolveDefaultBorder(
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): "unicode" | "ascii" {
-  if (platform !== "win32") {
+function resolveDefaultBorder(): "unicode" | "ascii" {
+  if (process.platform !== "win32") {
     return "unicode";
   }
 
-  const term = env.TERM ?? "";
-  const termProgram = env.TERM_PROGRAM ?? "";
+  const term = process.env.TERM ?? "";
+  const termProgram = process.env.TERM_PROGRAM ?? "";
   const isModernTerminal =
-    Boolean(env.WT_SESSION) ||
+    Boolean(process.env.WT_SESSION) ||
     term.includes("xterm") ||
     term.includes("cygwin") ||
     term.includes("msys") ||
@@ -43,10 +43,7 @@ function resolveDefaultBorder(
 }
 
 function repeat(ch: string, n: number): string {
-  if (n <= 0) {
-    return "";
-  }
-  return ch.repeat(n);
+  return ch.repeat(Math.max(0, n));
 }
 
 function padCell(text: string, width: number, align: Align): string {
@@ -60,23 +57,16 @@ function padCell(text: string, width: number, align: Align): string {
     return content;
   }
   const pad = width - w;
-  if (align === "right") {
-    return `${repeat(" ", pad)}${content}`;
-  }
-  if (align === "center") {
-    const left = Math.floor(pad / 2);
-    const right = pad - left;
-    return `${repeat(" ", left)}${content}${repeat(" ", right)}`;
-  }
-  return `${content}${repeat(" ", pad)}`;
+  const left = align === "right" ? pad : align === "center" ? Math.floor(pad / 2) : 0;
+  return `${repeat(" ", left)}${content}${repeat(" ", pad - left)}`;
 }
 
 const ESC = "\u001b";
 const C1_CSI = "\u009b";
-const C1_OSC = "\u009d";
-const C1_ST = "\u009c";
 const BEL = "\u0007";
 const SGR_CONTROL_CHARS_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
+// oxlint-disable-next-line eslint/no-control-regex -- OSC 8 delimiters are terminal control characters.
+const OSC8_SEQUENCE_RE = /^(?:\u001b\]|\u009d)8;([^;]*);([\s\S]*)(?:\u001b\\|\u0007|\u009c)$/u;
 
 type AnsiToken = { kind: "ansi" | "char"; value: string; width: number };
 
@@ -203,39 +193,6 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
 
 type Osc8Link = { params: string; uri: string };
 
-function parseOsc8Sequence(value: string): Osc8Link | undefined {
-  let payloadStart: number;
-  if (value.startsWith(`${ESC}]`)) {
-    payloadStart = 2;
-  } else if (value.startsWith(C1_OSC)) {
-    payloadStart = 1;
-  } else {
-    return undefined;
-  }
-
-  let terminatorLength: number;
-  if (value.endsWith(`${ESC}\\`)) {
-    terminatorLength = 2;
-  } else if (value.endsWith(BEL) || value.endsWith(C1_ST)) {
-    terminatorLength = 1;
-  } else {
-    return undefined;
-  }
-
-  const payload = value.slice(payloadStart, -terminatorLength);
-  if (!payload.startsWith("8;")) {
-    return undefined;
-  }
-  const uriSeparator = payload.indexOf(";", 2);
-  if (uriSeparator < 0) {
-    return undefined;
-  }
-  return {
-    params: payload.slice(2, uriSeparator),
-    uri: payload.slice(uriSeparator + 1),
-  };
-}
-
 function wrapLine(text: string, width: number): string[] {
   // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
   // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
@@ -258,7 +215,8 @@ function wrapLine(text: string, width: number): string[] {
   const flushAt = (breakAt: number | null) => {
     // Keep the suffix in its buffer: long zero-width runs can exceed the argument
     // limit of a spread-based copy even when their visible width is small.
-    const left = breakAt == null || breakAt <= 0 ? buf : buf.splice(0, breakAt);
+    const keepsSuffix = breakAt != null && breakAt > 0;
+    const left = keepsSuffix ? buf.splice(0, breakAt) : buf;
     // Only the emitted prefix determines continuation state; the buffered suffix
     // belongs to the next line.
     const content: string[] = [];
@@ -270,7 +228,8 @@ function wrapLine(text: string, width: number): string[] {
         continue;
       }
       applySgrSequence(sgr, token.value);
-      const link = parseOsc8Sequence(token.value);
+      const match = OSC8_SEQUENCE_RE.exec(token.value);
+      const link = match ? { params: match[1] ?? "", uri: match[2] ?? "" } : undefined;
       if (link) {
         activeOsc8 = link.uri === "" ? undefined : link;
       }
@@ -288,31 +247,23 @@ function wrapLine(text: string, width: number): string[] {
       lines.push(`${content.join("")}${closeOsc8}${closeSgr}`.trimEnd());
       logicalLineHasOutput = true;
     }
-    if (breakAt == null || breakAt <= 0) {
-      buf.length = 0;
-      if (openOsc8) {
-        buf.push({ kind: "ansi", value: openOsc8, width: 0 });
-      }
-      for (const state of activeSgr) {
-        buf.push({ kind: "ansi", value: state.open, width: 0 });
-      }
-      bufVisible = 0;
-      lastBreakIndex = null;
-      return;
-    }
-
+    const continuation: AnsiToken[] = activeSgr.map((state) => ({
+      kind: "ansi",
+      value: state.open,
+      width: 0,
+    }));
     if (openOsc8) {
-      buf.unshift({ kind: "ansi", value: openOsc8, width: 0 });
+      const link: AnsiToken = { kind: "ansi", value: openOsc8, width: 0 };
+      if (keepsSuffix) {
+        continuation.push(link);
+      } else {
+        continuation.unshift(link);
+      }
     }
-    if (activeSgr.length > 0) {
-      buf.unshift(
-        ...activeSgr.map((state) => ({
-          kind: "ansi" as const,
-          value: state.open,
-          width: 0,
-        })),
-      );
+    if (!keepsSuffix) {
+      buf.length = 0;
     }
+    buf.unshift(...continuation);
 
     bufVisible = buf.reduce((acc, token) => acc + token.width, 0);
     lastBreakIndex = null;
@@ -398,18 +349,19 @@ function wrapLine(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [""];
 }
 
-function normalizeWidth(n: number | undefined): number | undefined {
-  if (n == null) {
-    return undefined;
+function naturalCellWidth(text: string): number {
+  if (!text.includes("\n") && !text.includes("\r")) {
+    return visibleWidth(text);
   }
-  if (!Number.isFinite(n) || n <= 0) {
-    return undefined;
-  }
-  return Math.floor(n);
+  // Use the renderer's logical lines so newlines inside ANSI payloads stay atomic.
+  return wrapLine(text, Number.POSITIVE_INFINITY).reduce(
+    (max, line) => Math.max(max, visibleWidth(line)),
+    0,
+  );
 }
 
-export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): number {
-  return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
+export function getTerminalTableWidth(): number {
+  return Math.max(60, process.stdout.columns ?? 120);
 }
 
 /** Render untrusted single-line values without changing renderTable's trusted ANSI contract. */
@@ -428,8 +380,73 @@ export function renderTerminalSafeTable(opts: RenderTableOptions): string {
   });
 }
 
+/** Find a case-insensitive Windows path without changing offsets in the original string. */
+function indexOfWindowsPath(input: string, home: string, cursor: number): number {
+  const foldedHome = lowercasePreservingWhitespace(home);
+  // Resolved Windows homes begin with a drive or UNC prefix. Their first backslash
+  // anchors candidates without folding the input and shifting Unicode offsets.
+  const separatorOffset = home.indexOf("\\");
+  for (
+    let separator = input.indexOf("\\", cursor + separatorOffset);
+    separator !== -1;
+    separator = input.indexOf("\\", separator + 1)
+  ) {
+    const index = separator - separatorOffset;
+    if (index > input.length - home.length) {
+      break;
+    }
+    if (lowercasePreservingWhitespace(input.slice(index, index + home.length)) === foldedHome) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 export function renderTable(opts: RenderTableOptions): string {
-  const displayString = createDisplayStringFormatter();
+  // One home snapshot per synchronous render; the next render observes environment changes.
+  const home = resolveEffectiveHomeDir(process.env, os.homedir, {
+    preserveUnresolvedTilde: true,
+  });
+  const prefix = home && normalizeHomeDirValue(process.env.OPENCLAW_HOME) ? "$OPENCLAW_HOME" : "~";
+  const displayString = (input: string): string => {
+    if (!home) {
+      return input;
+    }
+    let output = "";
+    let cursor = 0;
+    // Keep the token-aware table scan local; core owns application path rendering.
+    while (cursor < input.length) {
+      const index =
+        process.platform === "win32"
+          ? indexOfWindowsPath(input, home, cursor)
+          : input.indexOf(home, cursor);
+      if (index < 0) {
+        return `${output}${input.slice(cursor)}`;
+      }
+
+      const before = input[index - 1];
+      const homeEnd = index + home.length;
+      const after = input[homeEnd];
+      const startsToken = before === undefined || /[\s("'`:=[{,]/u.test(before);
+      let punctuationEnd = homeEnd;
+      while (punctuationEnd < input.length && /[)"'`:,;.\]}]/u.test(input.charAt(punctuationEnd))) {
+        punctuationEnd += 1;
+      }
+      const punctuationEndsToken =
+        punctuationEnd > homeEnd &&
+        (punctuationEnd === input.length || /\s/u.test(input.charAt(punctuationEnd)));
+      const endsTokenOrContinuesPath =
+        after === undefined || after === "/" || after === "\\" || punctuationEndsToken;
+      if (startsToken && endsTokenOrContinuesPath) {
+        output += `${input.slice(cursor, index)}${prefix}`;
+      } else {
+        output += input.slice(cursor, index + home.length);
+      }
+      cursor = index + home.length;
+    }
+
+    return output;
+  };
   const rows = opts.rows.map((row) => {
     const next: Record<string, string> = {};
     for (const [key, value] of Object.entries(row)) {
@@ -437,31 +454,23 @@ export function renderTable(opts: RenderTableOptions): string {
     }
     return next;
   });
-  const border = opts.border ?? resolveDefaultBorder(process.platform, process.env);
-  if (border === "none") {
-    const columns = opts.columns;
-    const header = columns.map((c) => c.header).join(" | ");
-    const lines = [header, ...rows.map((r) => columns.map((c) => r[c.key] ?? "").join(" | "))];
-    return `${lines.join("\n")}\n`;
-  }
-
-  const padding = Math.max(0, opts.padding ?? 1);
+  const border = resolveDefaultBorder();
+  const padding = 1;
   const columns = opts.columns;
 
   const metrics = columns.map((c) => {
-    const headerW = visibleWidth(c.header);
-    const cellW = rows.reduce((max, row) => Math.max(max, visibleWidth(row[c.key] ?? "")), 0);
+    const headerW = naturalCellWidth(c.header);
+    const cellW = rows.reduce((max, row) => Math.max(max, naturalCellWidth(row[c.key] ?? "")), 0);
     return { headerW, cellW };
   });
 
   const widths = columns.map((c, i) => {
     const m = metrics[i];
     const base = Math.max(m?.headerW ?? 0, m?.cellW ?? 0) + padding * 2;
-    const capped = c.maxWidth ? Math.min(base, c.maxWidth) : base;
-    return Math.max(c.minWidth ?? 3, capped);
+    return Math.max(c.minWidth ?? 3, base);
   });
 
-  const maxWidth = normalizeWidth(opts.width);
+  const maxWidth = Math.floor(asPositiveFiniteNumber(opts.width) ?? 0);
   const sepCount = columns.length + 1;
   const total = widths.reduce((a, b) => a + b, 0) + sepCount;
 
@@ -511,43 +520,15 @@ export function renderTable(opts: RenderTableOptions): string {
   // If we have room and any flex columns, expand them to fill the available width.
   // This keeps tables from looking "clipped" and reduces wrapping in wide terminals.
   if (maxWidth) {
-    const sepCountLocal = columns.length + 1;
-    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCountLocal;
-    let extra = maxWidth - currentTotal;
+    const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCount;
+    const extra = maxWidth - currentTotal;
     if (extra > 0) {
-      let flexCols = columns.flatMap((column, i) => (column.flex ? [i] : []));
+      const flexCols = columns.flatMap((column, i) => (column.flex ? [i] : []));
       if (flexCols.length > 0) {
-        const caps = columns.map((c) =>
-          typeof c.maxWidth === "number" && c.maxWidth > 0
-            ? Math.floor(c.maxWidth)
-            : Number.POSITIVE_INFINITY,
-        );
-        while (extra > 0) {
-          flexCols = flexCols.filter(
-            (i) => (widths[i] ?? 0) < (caps[i] ?? Number.POSITIVE_INFINITY),
-          );
-          if (flexCols.length === 0) {
-            break;
-          }
-          // Fractional additions can round at a cap, so retain their one-cell steps.
-          // Complete integer rounds stop at the first cap; partial rounds keep column order.
-          const rounds = flexCols.reduce(
-            (amount, i) =>
-              Number.isSafeInteger(widths[i])
-                ? Math.min(amount, (caps[i] ?? Number.POSITIVE_INFINITY) - (widths[i] ?? 0))
-                : 1,
-            Number.isSafeInteger(maxWidth) && Number.isSafeInteger(extra)
-              ? Math.max(1, Math.floor(extra / flexCols.length))
-              : 1,
-          );
-          for (const i of flexCols) {
-            const amount = Math.min(rounds, Math.ceil(extra));
-            widths[i] = (widths[i] ?? 0) + amount;
-            extra -= amount;
-            if (extra <= 0) {
-              break;
-            }
-          }
+        const rounds = Math.floor(extra / flexCols.length);
+        const remainder = extra % flexCols.length;
+        for (const [position, i] of flexCols.entries()) {
+          widths[i] = (widths[i] ?? 0) + rounds + (position < remainder ? 1 : 0);
         }
       }
     }
@@ -561,24 +542,21 @@ export function renderTable(opts: RenderTableOptions): string {
   const hLine = ([left, mid, right]: string) =>
     `${left}${widths.map((w) => repeat(box.h, w)).join(mid)}${right}`;
 
-  const contentWidthFor = (i: number) => {
-    const width = widths.at(i);
-    if (width === undefined) {
-      throw new Error(`expected table column width ${i} to be defined`);
-    }
-    return Math.max(1, width - padding * 2);
-  };
+  const contentWidths = widths.map((width) => Math.max(1, width - padding * 2));
   const padStr = repeat(" ", padding);
 
   const lines: string[] = [];
-  const renderRow = (record: Record<string, string>, isHeader = false) => {
+  const renderRow = (record: Record<string, string>, isHeader: boolean) => {
     const cells = columns.map((c) => (isHeader ? c.header : (record[c.key] ?? "")));
-    const wrapped = cells.map((cell, i) => wrapLine(cell, contentWidthFor(i)));
-    const height = Math.max(...wrapped.map((w) => w.length));
+    const wrapped = contentWidths.map((width, i) => ({
+      width,
+      lines: wrapLine(cells[i] ?? "", width),
+    }));
+    const height = Math.max(...wrapped.map((cell) => cell.lines.length));
     for (let li = 0; li < height; li += 1) {
-      const parts = wrapped.map((cellLines, i) => {
+      const parts = wrapped.map(({ lines: cellLines, width }, i) => {
         const raw = cellLines[li] ?? "";
-        const aligned = padCell(raw, contentWidthFor(i), columns[i]?.align ?? "left");
+        const aligned = padCell(raw, width, columns[i]?.align ?? "left");
         return `${padStr}${aligned}${padStr}`;
       });
       lines.push(`${box.v}${parts.join(box.v)}${box.v}`);

@@ -201,51 +201,44 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       signal,
       assertDirectAdapterHandoff,
       onPlatformSendDispatch,
+      audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+      onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     };
+    const sendPart = (text: string, index: number, mediaUrl?: string) =>
+      send(to, text, {
+        ...sendOptions,
+        mediaUrl,
+        replyToId: resolveReplyToId(),
+        deliveryPartIndex: index,
+        deliveryPartCount: urls.length || 1,
+        extraContent: index === 0 ? resolveMatrixExtraContent(payload) : undefined,
+      });
     if (urls.length > 0) {
       const sentResults: Awaited<ReturnType<typeof sendMessageMatrix>>[] = [];
-      const lastResult = await sendPayloadMediaSequence({
+      await sendPayloadMediaSequence({
         text: payloadText,
         mediaUrls: urls,
-        send: async ({ text, mediaUrl, index, isFirst }) =>
-          await send(to, text, {
-            ...sendOptions,
-            mediaUrl,
-            replyToId: resolveReplyToId(),
-            audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
-            deliveryPartIndex: index,
-            deliveryPartCount: urls.length,
-            extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
-            onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
-          }),
+        send: ({ text, mediaUrl, index }) => sendPart(text, index, mediaUrl),
         onResult: (result) => {
           sentResults.push(result);
         },
       });
-      if (lastResult !== undefined) {
-        // One payload owns one receipt; keep every attachment and its original reply metadata.
-        const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
-        receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-        return attachChannelToResult(
-          "matrix",
-          toMatrixOutboundResult({
-            ...lastResult,
-            primaryMessageId: receipt.primaryPlatformMessageId,
-            receipt,
-            content: sentResults.map((result) => result.content).join("\n"),
-          }),
-        );
-      }
+      // URLs are already normalized; a successful sequence always has a last result.
+      const lastResult = sentResults.at(-1)!;
+      // One payload owns one receipt; keep every attachment and its original reply metadata.
+      const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
+      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      return attachChannelToResult(
+        "matrix",
+        toMatrixOutboundResult({
+          ...lastResult,
+          primaryMessageId: receipt.primaryPlatformMessageId,
+          receipt,
+          content: sentResults.map((result) => result.content).join("\n"),
+        }),
+      );
     }
-    const result = await send(to, payloadText, {
-      ...sendOptions,
-      replyToId: resolveReplyToId(),
-      audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
-      deliveryPartIndex: 0,
-      deliveryPartCount: 1,
-      extraContent: resolveMatrixExtraContent(payload),
-      onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
-    });
+    const result = await sendPart(payloadText, 0);
     return attachChannelToResult("matrix", toMatrixOutboundResult(result));
   },
   sendText: (ctx) => sendMatrixOutbound(ctx),

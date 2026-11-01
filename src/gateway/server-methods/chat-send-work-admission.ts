@@ -1,36 +1,82 @@
-import { isDeepStrictEqual } from "node:util";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
-import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
+import {
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
+import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
+import {
+  withOwnedSessionTranscriptWrites,
+  withSessionTranscriptSourcePublication,
+} from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { retireProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import {
-  isCompetingSessionWorkAdmissionActive,
-  type SessionWorkAdmissionLease,
-} from "../../sessions/session-lifecycle-admission.js";
+  isCompetingSessionControllerWorkActive,
+  captureSessionTarget,
+  type SessionEffectRef,
+} from "../../sessions/session-controller.lifecycle.js";
+import { bindSessionEffectTransition } from "../../sessions/session-controller.owner-context.js";
+import {
+  getRpcSourceIdentity,
+  isRpcSourceRegistered,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
-import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
-import { readPreRegisteredRun } from "./chat-abort-authorization.js";
+import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
+import { broadcastChatError } from "./chat-broadcast.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import {
   prepareChatSendRetryComparison,
-  readChatSendDedupeResponse,
   resolveChatSendRequestConflict,
-  respondChatSendAdmissionError,
   respondChatSendRetry,
-  type ChatSendPreAdmissionParams,
 } from "./chat-send-pre-admission.js";
+import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { ChatSendRetryComparison } from "./chat-send-retry-comparison.js";
-import { loadCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import { withCurrentChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
+import { respondError } from "./response.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  SessionMutationAuthorization,
+} from "./types.js";
+
+export function assertChatSendWorkAdmissionCurrent(params: {
+  retainedWork: Pick<ReturnType<typeof createChatSendWorkAdmission>, "isActive">;
+  admission: Pick<SessionEffectRef, "isActive">;
+  lifecycleGeneration: string;
+  controller: AbortController;
+  sourceRef: RpcSourceRef;
+}) {
+  // Collect retains admission after retiring source cancellation until aggregate settlement.
+  if (
+    !params.retainedWork.isActive() ||
+    !params.admission.isActive() ||
+    params.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
+    (params.controller.signal.aborted &&
+      !(
+        isRpcSourceRegistered(params.sourceRef) &&
+        params.sourceRef.input.custody.cancellationRetired
+      ))
+  ) {
+    throw new Error("Chat admission ended or was cancelled; submit a new turn.");
+  }
+}
 
 /** Preparation returns facts; the caller consumes current retry ownership before reserving. */
 export function prepareChatSendAdmissionRetry(params: ChatSendPreAdmissionParams) {
@@ -52,16 +98,12 @@ export function consumeChatSendAdmissionRetry(
     const pending = readPreRegisteredRun({
       key: params.session.pendingChatSendKey,
       entry: params.context.dedupe.get(params.session.pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
     if (pending?.payload.goalFingerprint) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Run ID is reserved by a Goal request; use a new ID.",
-        ),
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Run ID is reserved by a Goal request; use a new ID.",
       );
       return false;
     }
@@ -77,25 +119,72 @@ export function consumeChatSendAdmissionRetry(
   }
 }
 
-/** Reload after an actual worker wait in the consuming admission frame. */
-export function prepareCurrentChatSendRetry(
-  params: ChatSendPreAdmissionParams & { session: PreparedChatSendSession },
+/** An awaited retry comparison must return to current rows before admission can consume it. */
+export async function withCurrentChatSendRetry(
+  params: ChatSendPreAdmissionParams & {
+    session: PreparedChatSendSession;
+    withPreparedCurrent?: SessionMutationAuthorization["withPreparedCurrent"];
+  },
   ownPendingAttemptId: string,
+  consume: (
+    session: Parameters<Parameters<typeof withCurrentChatSendSession>[0]["consume"]>[0],
+    comparison: ChatSendRetryComparison | undefined,
+  ) => void,
 ) {
-  const session = loadCurrentChatSendSession(params.session);
-  const comparison = prepareChatSendRetryComparison(
-    { ...params, session: { ...params.session, entry: session.entry } },
-    ownPendingAttemptId,
-  );
-  return {
-    comparison,
-    readSession: () => (comparison ? loadCurrentChatSendSession(params.session) : session),
-  };
+  const withCurrent = <T>(read: (session: Parameters<typeof consume>[0]) => T) =>
+    withCurrentChatSendSession({
+      session: params.session,
+      getRuntimeConfig: params.context.getRuntimeConfig,
+      includeMembership: Boolean(params.withPreparedCurrent),
+      includeActivePath: params.request.p.queueMode !== "steer",
+      consume: (latest, membership, assertSourceCurrent) => {
+        const consumeCurrent = () => read(latest);
+        if (params.withPreparedCurrent) {
+          return params.withPreparedCurrent(
+            {
+              agentId: latest.agentId,
+              storePath: latest.storePath,
+              sessionKey: latest.canonicalKey,
+              entry: latest.entry,
+              readSource: latest.capturedReadSource,
+              members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
+            },
+            consumeCurrent,
+            assertSourceCurrent,
+          );
+        }
+        assertSourceCurrent();
+        return consumeCurrent();
+      },
+    });
+  const pending = await withCurrent((session) => {
+    const comparison = prepareChatSendRetryComparison(
+      { ...params, session: { ...params.session, entry: session.entry } },
+      ownPendingAttemptId,
+    );
+    if (comparison) {
+      return observeChatSendWork(comparison);
+    }
+    consume(session, undefined);
+    return undefined;
+  });
+  if (pending) {
+    const comparison = await pending();
+    await withCurrent((session) => consume(session, comparison));
+  }
 }
 
+/** Settle an invalid exact attempt before selecting its admission failure response. */
 export function respondChatSendWorkAdmissionFailure(
   params: ChatSendPreAdmissionParams,
   error: unknown,
+  admission: {
+    attemptId: string;
+    lifecycleGeneration: string;
+    pendingReservation: ReturnType<typeof readPreRegisteredRun>;
+    requestIdentity?: string;
+    runAbort: ReturnType<typeof registerChatAbortController>;
+  },
   comparison?: ChatSendRetryComparison,
 ) {
   if (error instanceof ExpectedProfileMismatchError) {
@@ -103,6 +192,31 @@ export function respondChatSendWorkAdmissionFailure(
   }
   const { context, respond, session } = params;
   const { clientRunId } = session;
+  const pending = admission.pendingReservation;
+  const pendingAttempt = normalizeOptionalString(pending?.payload.attemptId);
+  if (
+    !readChatSendDedupeResponse(context.dedupe, clientRunId) &&
+    (!pendingAttempt || pendingAttempt === admission.attemptId)
+  ) {
+    // The controller source exists before worker reads, so cancellation can win that read.
+    const stopReason = admission.runAbort.controller.signal.aborted
+      ? (admission.runAbort.entry?.adapter.abortStopReason ?? "rpc")
+      : admission.lifecycleGeneration !== getAgentEventLifecycleGeneration()
+        ? "restart"
+        : !pending || !isFutureDateTimestampMs(pending.payload.expiresAtMs, { nowMs: Date.now() })
+          ? "timeout"
+          : undefined;
+    // A pre-ACK restart leaves unstarted input with the client for retry.
+    if (stopReason && stopReason !== "restart") {
+      writePreRegisteredChatAbort({
+        context,
+        runId: clientRunId,
+        stopReason,
+        attemptId: admission.attemptId,
+        requestIdentity: admission.requestIdentity,
+      });
+    }
+  }
   try {
     const conflict = resolveChatSendRequestConflict(params, comparison);
     if (conflict) {
@@ -119,7 +233,20 @@ export function respondChatSendWorkAdmissionFailure(
     respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
     return;
   }
-  respondChatSendAdmissionError(error, respond);
+  respondChatSendAdmissionError(error, respond, (errorMessage) => {
+    if (isProgressCardRefreshInputProvenance(params.request.systemInputProvenance)) {
+      return;
+    }
+    // Admission can fail before the transcript/setup error owner exists.
+    broadcastChatError({
+      context,
+      terminalEntry: admission.runAbort.entry,
+      runId: clientRunId,
+      sessionKey: session.sessionKey,
+      agentId: session.agentId,
+      errorMessage,
+    });
+  });
 }
 
 /** New input is checked only after the chat owner has reconciled prior receipts. */
@@ -129,14 +256,15 @@ export function admitChatSendUploads({
   context,
   respond,
 }: Pick<GatewayRequestHandlerOptions, "params" | "client" | "context" | "respond">) {
-  const assertClientUploadAllowed = captureGatewayClientUploadCommitGuard({
-    method: "chat.send",
-    requestParams: params,
-    client,
-    context,
-  });
   try {
+    const assertClientUploadAllowed = captureGatewayClientUploadCommitGuard({
+      method: "chat.send",
+      requestParams: params,
+      client,
+      context,
+    });
     assertClientUploadAllowed?.();
+    return { ok: true as const, assertClientUploadAllowed };
   } catch (error) {
     if (!(error instanceof SessionMutationAuthorizationChangedError)) {
       throw error;
@@ -144,38 +272,57 @@ export function admitChatSendUploads({
     respond(false, undefined, error.error);
     return { ok: false as const };
   }
-  return { ok: true as const, assertClientUploadAllowed };
 }
 
-/** Caller and physical target custody end together when admitted work settles. */
-export function releaseChatSendCallerAuthority(params: {
-  operator: { release?: () => void };
-  request: Pick<NormalizedChatSendRequest, "providerReviewAcknowledgment">;
-  session: Pick<PreparedChatSendSession, "releaseSessionTarget">;
-}): void {
-  try {
-    params.operator.release?.();
-  } finally {
-    try {
-      if (params.request.providerReviewAcknowledgment) {
-        retireProviderReviewAcknowledgment(params.request.providerReviewAcknowledgment);
-      }
-    } finally {
-      params.session.releaseSessionTarget();
-    }
-  }
+/** Observe started work before the retained read releases; consuming still rethrows its error. */
+export function observeChatSendWork<T>(work: Promise<T>): () => Promise<T> {
+  void work.catch(() => {});
+  return () => work;
 }
 
 /** Queued and collected turns share the original session and caller admission until settlement. */
 export function createChatSendWorkAdmission(params: {
-  admission: Pick<SessionWorkAdmissionLease, "release">;
+  admission: Pick<SessionEffectRef, "release">;
+  followRegistration?: SessionMutationAuthorization["followRegistration"];
   releaseCallerAuthority?: () => void;
   releaseGatewayRootContinuation?: () => void;
   logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+  terminal?: {
+    target: QualifiedSessionEntryAccessTarget;
+    storePath: string;
+    sourceRef: RpcSourceRef;
+    lifecycleRevision?: string;
+    isActive: () => boolean;
+  };
 }) {
+  const terminal = params.terminal;
+  const storage =
+    terminal &&
+    getSessionActorStorageBinding({
+      agentId: terminal.target.agentId,
+      sessionKey: terminal.target.canonicalKey,
+      storePath: terminal.storePath,
+    });
+  const inStorage = <T>(run: () => T): T =>
+    storage ? runWithSessionActorStorage(storage, run) : run();
   let references = 1;
+  const cleanup: Array<() => void> = [];
+  let admittedSource = terminal?.target.readSource;
+  let lifecycleRevision = terminal?.lifecycleRevision;
+  let isCommittedDestinationCurrent: (() => boolean) | undefined;
+  let committedDestination: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
+  let releaseCommittedDestination: (() => void) | undefined;
   let finishPendingInput: (() => void | Promise<void>) | undefined;
+  let inputActor: ReturnType<typeof acquireSessionInputActor> | undefined;
+  let actorLifetimeActive = true;
   const releaseAdmission = () => {
+    for (const dispose of cleanup.splice(0)) {
+      try {
+        dispose();
+      } catch (error) {
+        warnCleanupFailure(error);
+      }
+    }
     try {
       params.admission.release();
     } finally {
@@ -189,6 +336,22 @@ export function createChatSendWorkAdmission(params: {
   const warnCleanupFailure = (error: unknown) => {
     params.logGateway.warn(`Failed to finish pending chat input: ${formatForLog(error)}`);
   };
+  const finishRelease = () => {
+    if (!inputActor) {
+      actorLifetimeActive = false;
+      releaseAdmission();
+      return;
+    }
+    const close = async () => {
+      try {
+        await (await inputActor)?.actor.release();
+      } finally {
+        actorLifetimeActive = false;
+        releaseAdmission();
+      }
+    };
+    void close().catch(warnCleanupFailure);
+  };
   const release = () => {
     if (references === 0) {
       return;
@@ -199,21 +362,21 @@ export function createChatSendWorkAdmission(params: {
     }
     let pending: void | Promise<void> = undefined;
     try {
-      pending = finishPendingInput?.();
+      pending = inStorage(() => finishPendingInput?.());
     } catch (error) {
-      // The durable row remains recoverable; a failed disposition write must
+      // A failed disposition write must
       // not strand session/root drain ownership during shutdown.
       warnCleanupFailure(error);
     }
     if (pending) {
       // The existing admission's drain joins this write before releasing the
       // session/root fence; prompt custody has already been revoked.
-      void pending.then(releaseAdmission, (error: unknown) => {
+      void pending.then(finishRelease, (error: unknown) => {
         warnCleanupFailure(error);
-        releaseAdmission();
+        finishRelease();
       });
     } else {
-      releaseAdmission();
+      finishRelease();
     }
   };
   const hold = () => {
@@ -226,15 +389,197 @@ export function createChatSendWorkAdmission(params: {
       release();
     };
   };
+  const retain = () => {
+    if (references === 0) {
+      throw new Error("cannot retain a released chat work admission");
+    }
+    references += 1;
+    return hold();
+  };
   return {
-    isActive: () => references > 0,
-    release: hold(),
-    retain: () => {
-      if (references === 0) {
-        throw new Error("cannot retain a released chat work admission");
+    acquireInputActor() {
+      if (!inputActor) {
+        if (!terminal || references === 0) {
+          throw new Error("Chat input actor has no live admission");
+        }
+        const assertCurrent = () => {
+          if (!actorLifetimeActive || !terminal.isActive()) {
+            throw new Error("Chat input actor admission ended");
+          }
+        };
+        const followRegistration = params.followRegistration;
+        inputActor = inStorage(() =>
+          acquireSessionInputActor(
+            {
+              agentId: terminal.target.agentId,
+              storePath: terminal.storePath,
+              readSource: terminal.target.readSource,
+              target: {
+                canonicalKey: terminal.target.canonicalKey,
+                storeKeys: [...terminal.target.storeKeys],
+              },
+            },
+            { assertCurrent, assertReadable: assertCurrent },
+            followRegistration &&
+              ((change) =>
+                followRegistration(
+                  { sessionKey: terminal.target.canonicalKey, agentId: terminal.target.agentId },
+                  change,
+                )),
+          ),
+        );
       }
-      references += 1;
-      return hold();
+      return inputActor;
+    },
+    addCleanup: (dispose: () => void) => cleanup.push(dispose),
+    isActive: () => references > 0,
+    assertCommittedDestinationCurrent(this: void) {
+      if (
+        isCommittedDestinationCurrent &&
+        (references === 0 || !terminal?.isActive() || !isCommittedDestinationCurrent())
+      ) {
+        throw new Error("Committed chat input session changed");
+      }
+    },
+    recordFailureNotice(
+      this: void,
+      failure: Pick<
+        Parameters<typeof recordGatewaySessionRunFailure>[0],
+        "runId" | "error" | "errorKind" | "notice"
+      >,
+    ) {
+      if (!terminal) {
+        throw new Error("Failed input notice requires its original admission target");
+      }
+      const expectedLifecycleRevision = lifecycleRevision;
+      const target = {
+        agentId: terminal.target.agentId,
+        storePath: terminal.target.storePath,
+        sessionKey: terminal.target.storeKey,
+        sessionId: getRpcSourceIdentity(terminal.sourceRef).sessionId,
+        expectedOwner: { lifecycleRevision: expectedLifecycleRevision },
+      };
+      const assertCommitAllowed = () => {
+        if (references === 0 || !terminal.isActive()) {
+          throw new Error("Failed input notice admission ended");
+        }
+      };
+      // Failure bookkeeping keeps accepted source custody after sender revocation,
+      // without claiming or terminating the session's running writer.
+      return inStorage(() =>
+        withOwnedSessionTranscriptWrites(
+          { sessionTarget: target, assertCommitAllowed, withTranscriptWrite: trackAsyncWork },
+          () =>
+            recordGatewaySessionRunFailure({
+              ...failure,
+              target,
+              assertCommitAllowed,
+              sessionEntryCurrent: admittedSource
+                ? {
+                    source: { ...admittedSource, sessionKey: target.sessionKey },
+                    assertCurrent(facts) {
+                      assertCommitAllowed();
+                      if (
+                        facts?.sessionId !== target.sessionId ||
+                        facts.lifecycleRevision !== expectedLifecycleRevision
+                      ) {
+                        throw new Error("Failed input notice session changed");
+                      }
+                    },
+                  }
+                : undefined,
+            }),
+        ),
+      );
+    },
+    release: hold(),
+    retain,
+    withInputCommitPublication<T>(
+      this: void,
+      run: () => Promise<T>,
+      onCommitted?: Parameters<typeof withSessionTranscriptSourcePublication>[1],
+    ): Promise<T> {
+      if (!terminal) {
+        throw new Error("Chat input publication requires its original admission target");
+      }
+      return inStorage(() =>
+        withSessionTranscriptSourcePublication(
+          {
+            agentId: terminal.target.agentId,
+            sessionId: getRpcSourceIdentity(terminal.sourceRef).sessionId,
+            sessionKey: terminal.target.storeKey,
+            storePath: terminal.target.storePath,
+          },
+          (source, committedEntry) => {
+            if (
+              admittedSource &&
+              (admittedSource.agentId !== source.agentId ||
+                admittedSource.path !== source.path ||
+                admittedSource.databaseIdentity !== source.databaseIdentity ||
+                admittedSource.databaseBirthtime !== source.databaseBirthtime)
+            ) {
+              throw new Error("Committed chat input changed its admitted physical source");
+            }
+            admittedSource ??= source;
+            if (!isCommittedDestinationCurrent) {
+              const bindDestination = (entry: SessionEntry) => {
+                releaseCommittedDestination?.();
+                committedDestination = entry;
+                const { sessionId, lifecycleRevision: committedRevision } = entry;
+                const matches = (current: SessionEntry | undefined) =>
+                  current !== undefined &&
+                  current.archivedAt === undefined &&
+                  current.lifecycleRevision === committedRevision &&
+                  (committedRevision !== undefined || current.sessionId === sessionId);
+                // Compaction can rotate a revision-bound transcript; legacy rows still bind its id.
+                if (storage) {
+                  isCommittedDestinationCurrent = () =>
+                    matches(
+                      storage.actor.storage.readCurrent(
+                        {
+                          type: "session.entry.read",
+                          input: { sessionKey: terminal.target.storeKey },
+                        },
+                        storage.authority,
+                      ),
+                    );
+                } else {
+                  const retained = retainPreparedSessionEntryPredicate({
+                    databaseIdentity: `file:${source.databaseIdentity}`,
+                    sessionKey: terminal.target.storeKey,
+                    entry,
+                    matches: (_before, current) => matches(current),
+                  });
+                  releaseCommittedDestination = retained.release;
+                  isCommittedDestinationCurrent = retained.isCurrent;
+                }
+              };
+              bindDestination(committedEntry);
+              cleanup.push(() => releaseCommittedDestination?.());
+              bindSessionEffectTransition(
+                captureSessionTarget({
+                  storeScope: terminal.storePath,
+                  sessionKey: terminal.target.canonicalKey,
+                  agentId: terminal.target.agentId,
+                }),
+                terminal,
+                ({ previous, current }) => {
+                  if (
+                    previous?.sessionId === committedDestination?.sessionId &&
+                    previous?.lifecycleRevision === committedDestination?.lifecycleRevision
+                  ) {
+                    bindDestination({ ...committedEntry, ...current });
+                    lifecycleRevision = current.lifecycleRevision;
+                  }
+                },
+              );
+            }
+            lifecycleRevision = committedEntry.lifecycleRevision;
+            onCommitted?.(source, committedEntry);
+          },
+          run,
+        ),
+      );
     },
     setPendingInputCleanup: (finish: () => void | Promise<void>) => {
       finishPendingInput = finish;
@@ -252,9 +597,15 @@ export function assertChatSendExclusiveAdmission(
   }
   const { storePath, sessionKey, backingSessionId, activeRunScopeKey } = session;
   if (
-    isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, backingSessionId]) ||
-    hasPendingFollowupQueueWork([sessionKey, backingSessionId, activeRunScopeKey]) ||
-    replyRunRegistry.isActive(activeRunScopeKey)
+    isCompetingSessionControllerWorkActive(
+      storePath,
+      [sessionKey, backingSessionId],
+      session.agentId,
+    ) ||
+    hasPendingFollowupQueueWork([sessionKey, backingSessionId, activeRunScopeKey], {
+      storeScope: storePath,
+      agentId: session.agentId,
+    })
   ) {
     throw new Error(
       request.providerReviewAcknowledgment
@@ -264,82 +615,62 @@ export function assertChatSendExclusiveAdmission(
   }
 }
 
-/** Goal and initial-session policy are revalidated in the same input writer barrier. */
-export function createChatSendGoalCommitGuard(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "sessionMutationAuthorization" | "sessionMutationCommitGuard"
-  > & {
-    admission: {
-      initialSessionEntry?: SessionEntry;
-      assertInitialSkillSelection?: () => void;
-      activeRunAbort: Pick<ReturnType<typeof registerChatAbortController>, "controller">;
-      lifecycleGeneration: ReturnType<typeof getAgentEventLifecycleGeneration>;
-    };
-    session: Pick<
-      PreparedChatSendSession,
-      | "agentId"
-      | "sessionLoadKey"
-      | "sessionLoadOptions"
-      | "sessionKey"
-      | "storePath"
-      | "sessionRoutingChanged"
-    >;
-  },
-): Pick<SessionTranscriptTurnMutation, "assertCurrent" | "routingPredicate"> & {
-  assertCurrent: () => void;
-} {
-  const {
-    admission,
-    session,
-    client,
-    context,
-    sessionMutationAuthorization,
-    sessionMutationCommitGuard,
-  } = params;
-  const routingPredicate = admission.initialSessionEntry
-    ? {
-        config: structuredClone(context.getRuntimeConfig()),
-        key: session.sessionLoadKey,
-        agentId: session.sessionLoadOptions.agentId,
-        storePath: session.storePath,
-        canonicalKey: session.sessionKey,
-      }
-    : undefined;
-  const assertCurrent = () => {
-    sessionMutationCommitGuard?.();
-    sessionMutationAuthorization?.assertCurrent();
-    const currentConfig = context.getRuntimeConfig();
-    const initialEntry = admission.initialSessionEntry;
-    if (initialEntry) {
-      admission.assertInitialSkillSelection?.();
-      // The executor checks rows; live configuration and creator authority remain host-owned.
-      if (!isDeepStrictEqual(currentConfig, routingPredicate?.config)) {
-        throw new Error("Session routing changed before Goal admission; refresh and retry.");
-      }
-      const creationError = authorizeGatewaySessionCreation({
-        cfg: currentConfig,
-        client,
-        agentId: session.agentId,
-      });
-      if (creationError) {
-        throw new SessionMutationAuthorizationChangedError(creationError);
-      }
-      const creation = resolveOperatorSessionCreation(client);
-      if (
-        creation.actor?.id !== initialEntry.createdActor?.id ||
-        resolveCreatorSandbox(currentConfig, creation) !== initialEntry.sandbox
-      ) {
-        throw new Error("Session creation policy changed before Goal admission; retry.");
-      }
-    }
-    if (
-      admission.activeRunAbort.controller.signal.aborted ||
-      admission.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
-      session.sessionRoutingChanged(currentConfig)
-    ) {
-      throw new Error("Goal admission changed before commit; refresh and retry.");
+export function createChatSendPendingInputAdmission({
+  runId,
+  expectedProfileId,
+  sessionMutationAuthorization,
+  sessionMutationCommitGuard,
+  assertCustodyLifetimeCurrent,
+  assertClientUploadAllowed,
+}: Pick<
+  GatewayRequestHandlerOptions,
+  "sessionMutationAuthorization" | "sessionMutationCommitGuard"
+> & {
+  runId: string;
+  expectedProfileId?: string;
+  assertCustodyLifetimeCurrent: () => void;
+  assertClientUploadAllowed?: () => void;
+}) {
+  const assertCustodyCurrent = () => {
+    assertCustodyLifetimeCurrent();
+    if (sessionMutationAuthorization?.assertAdmittedInputCurrent) {
+      sessionMutationAuthorization.assertAdmittedInputCurrent();
+    } else {
+      sessionMutationCommitGuard?.();
+      sessionMutationAuthorization?.assertCurrent();
     }
   };
-  return { assertCurrent, routingPredicate };
+  let preparationFailure: { cause: unknown } | undefined;
+  const assertAdmittedCurrent =
+    expectedProfileId === undefined
+      ? assertCustodyCurrent
+      : createMessageInjectionAuthority(() => {
+          if (preparationFailure) {
+            throw preparationFailure.cause;
+          }
+          assertCustodyCurrent();
+          return true;
+        });
+  return {
+    runId,
+    authority: sessionMutationAuthorization?.admittedInputAuthority
+      ? withSessionPendingInputAuthorityGuard(
+          sessionMutationAuthorization.admittedInputAuthority,
+          assertCustodyLifetimeCurrent,
+          expectedProfileId === undefined
+            ? undefined
+            : (cause) => {
+                preparationFailure ??= { cause };
+                assertAdmittedCurrent();
+                throw cause;
+              },
+        )
+      : undefined,
+    assertCurrent: () => {
+      assertClientUploadAllowed?.();
+      sessionMutationCommitGuard?.();
+      assertCustodyCurrent();
+    },
+    assertAdmittedCurrent,
+  };
 }

@@ -1,4 +1,8 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import {
+  asFiniteNumber,
+  floorPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,12 +21,11 @@ import {
   inferUniqueProviderFromConfiguredModels,
   listModelAliasCandidates,
 } from "../model-selection-shared.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
+import { readModelServingContextWindow } from "../model-serving-context.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { normalizeContextTokenBudget } from "./utils.js";
 
 type NullableCompactionContextKey =
   | "sessionKey"
@@ -40,7 +43,13 @@ type NullableCompactionContextKey =
 
 type EmbeddedCompactionRuntimeContextParams = Omit<
   Partial<CompactEmbeddedAgentSessionParams>,
-  NullableCompactionContextKey | "workspaceDir" | "model"
+  | NullableCompactionContextKey
+  | "workspaceDir"
+  | "model"
+  | "senderName"
+  | "senderUsername"
+  | "senderE164"
+  | "trigger"
 > & {
   [Key in NullableCompactionContextKey]?: CompactEmbeddedAgentSessionParams[Key] | null;
 } & {
@@ -74,16 +83,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   // Revalidate the immutable request for every concrete candidate instead of
   // carrying a level clamped for an earlier model into a later attempt.
   return (
-    resolveCandidateThinkingLevel({
-      cfg: params.config,
-      provider: params.provider,
-      modelId: params.modelId,
-      level: requestedLevel,
-      catalog: params.catalog,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      agentRuntime: params.agentRuntime,
-    }) ?? "off"
+    resolveCandidateThinkingLevel({ ...params, cfg: params.config, level: requestedLevel }) ?? "off"
   );
 }
 
@@ -104,8 +104,6 @@ export function resolveEmbeddedCompactionTarget(params: {
   manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 }): {
   provider: string | undefined;
-  runtimeProvider?: string;
-  contextProvider?: string;
   nativeHarnessCompaction?: boolean;
   model: string | undefined;
   authProfileId: string | undefined;
@@ -171,10 +169,7 @@ export function resolveEmbeddedCompactionTarget(params: {
         manifestPlugins: params.manifestPlugins,
       }).byAlias.get(aliasKey)
     : undefined;
-  if (alias) {
-    return assembleTarget(alias.ref.provider, alias.ref.model);
-  }
-  return assembleTarget(provider, override);
+  return assembleTarget(alias?.ref.provider ?? provider, alias?.ref.model ?? override);
 }
 
 /** Binds harness ownership without repeating model or alias selection. */
@@ -188,16 +183,8 @@ export function resolveCompactionTargetRuntime(
   const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(harnessRuntime);
   // Provider defaults choose new runs; they cannot move an existing transcript.
   const useNativeHarnessRuntime =
-    selectedHarnessRuntime !== undefined &&
-    selectedHarnessRuntime !== "openclaw" &&
-    !isDefaultAgentRuntimeId(selectedHarnessRuntime);
-  const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({ provider });
-  const routedRuntimeProvider = runtimeProvider === provider ? undefined : runtimeProvider;
-  return {
-    runtimeProvider: routedRuntimeProvider,
-    contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
-    ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
-  };
+    selectedHarnessRuntime !== "openclaw" && !isDefaultAgentRuntimeId(selectedHarnessRuntime);
+  return useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {};
 }
 
 function hasBareConfiguredModelForProvider(params: {
@@ -215,18 +202,14 @@ function hasBareConfiguredModelForProvider(params: {
     if (slashIdx <= 0 || rawRef.endsWith("/*")) {
       continue;
     }
-    const rawProvider = rawRef.slice(0, slashIdx);
-    const rawModel = rawRef.slice(slashIdx + 1);
     if (
-      normalizeLowercaseStringOrEmpty(rawProvider) === providerKey &&
-      normalizeLowercaseStringOrEmpty(rawModel) === modelKey
+      normalizeLowercaseStringOrEmpty(rawRef.slice(0, slashIdx)) === providerKey &&
+      normalizeLowercaseStringOrEmpty(rawRef.slice(slashIdx + 1)) === modelKey
     ) {
       return true;
     }
   }
-  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(
-    ([key]) => normalizeLowercaseStringOrEmpty(key) === providerKey,
-  )?.[1];
+  const configuredProvider = findNormalizedProviderValue(params.cfg.models?.providers, providerKey);
   return (configuredProvider?.models ?? []).some(
     (entry) => normalizeLowercaseStringOrEmpty(entry?.id ?? "") === modelKey,
   );
@@ -272,19 +255,22 @@ export function resolveCompactionContextTokenBudget(params: {
 }) {
   // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
-    normalizeContextTokenBudget(
+    floorPositiveFiniteNumber(
       resolveContextWindowInfo({
         cfg: params.config,
         provider: params.provider,
         modelId: params.modelId,
         modelContextTokens: asFiniteNumber(params.model?.contextTokens),
+        modelServingContextWindow: params.model
+          ? readModelServingContextWindow(params.model)
+          : undefined,
         modelContextWindow: params.model?.contextWindow,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
   return Math.min(
-    normalizeContextTokenBudget(params.requestedTokenBudget) ??
-      normalizeContextTokenBudget(params.fallbackTokenBudget) ??
+    floorPositiveFiniteNumber(params.requestedTokenBudget) ??
+      floorPositiveFiniteNumber(params.fallbackTokenBudget) ??
       resolvedBudget,
     resolvedBudget,
   );
@@ -292,15 +278,11 @@ export function resolveCompactionContextTokenBudget(params: {
 
 export function buildEmbeddedCompactionRuntimeContext(
   params: EmbeddedCompactionRuntimeContextParams,
+  profile: "full" | "after-turn" | "recovery" = "full",
 ) {
-  const resolved = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.modelId,
-    authProfileId: params.authProfileId,
-    harnessRuntime: params.harnessRuntime,
-    modelSelectionLocked: params.modelSelectionLocked,
-  });
+  // After-turn maintenance and overflow recovery forward narrower run context.
+  const afterTurn = profile === "after-turn";
+  const resolved = resolveEmbeddedCompactionTarget(params);
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const runtimeAuthPlan =
     params.runtimeAuthPlan &&
@@ -324,11 +306,11 @@ export function buildEmbeddedCompactionRuntimeContext(
     sandboxAgentId: params.sandboxAgentId,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
-    clientCaps: params.clientCaps,
-    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
-    chatType: params.chatType ?? undefined,
+    clientCaps: afterTurn ? undefined : params.clientCaps,
+    pinnedWidgetAuthoring: afterTurn ? undefined : params.pinnedWidgetAuthoring,
+    chatType: afterTurn ? undefined : (params.chatType ?? undefined),
     agentAccountId: params.agentAccountId ?? undefined,
-    conversationRoutePeerId: params.conversationRoutePeerId,
+    conversationRoutePeerId: afterTurn ? undefined : params.conversationRoutePeerId,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
@@ -338,29 +320,28 @@ export function buildEmbeddedCompactionRuntimeContext(
     agentHarnessId,
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
-    bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
-    cwd: params.cwd ?? undefined,
-    permissionMode: params.permissionMode,
-    sessionRoot: params.sessionRoot,
-    requireWorkspaceOnly: params.requireWorkspaceOnly,
-    requireWritableSandbox: params.requireWritableSandbox,
+    bootstrapWorkspaceDir: afterTurn ? undefined : params.bootstrapWorkspaceDir,
+    cwd: profile === "recovery" ? undefined : (params.cwd ?? undefined),
+    permissionMode: afterTurn ? undefined : params.permissionMode,
+    sessionRoot: afterTurn ? undefined : params.sessionRoot,
+    requireWorkspaceOnly: afterTurn ? undefined : params.requireWorkspaceOnly,
     agentDir: params.agentDir,
     config: params.config,
-    toolOverrides: params.toolOverrides,
+    toolOverrides: afterTurn ? undefined : params.toolOverrides,
     toolsAllow: params.toolsAllow,
     skillsSnapshot: params.skillsSnapshot,
-    senderIsOwner: params.senderIsOwner,
+    senderIsOwner: profile === "full" ? params.senderIsOwner : undefined,
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
-    runtimeProvider: resolved.runtimeProvider,
     model: resolved.model,
-    modelFallbacksOverride: params.modelFallbacksOverride,
+    modelCallUrgency: params.modelCallUrgency,
+    modelFallbacksOverride: afterTurn ? undefined : params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
-    execOverrides: params.execOverrides,
+    execOverrides: afterTurn ? undefined : params.execOverrides,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode: afterTurn ? undefined : params.sourceReplyDeliveryMode,
     ownerNumbers: params.ownerNumbers,
     ...(activeProcessSessions.length > 0 ? { activeProcessSessions } : {}),
   };

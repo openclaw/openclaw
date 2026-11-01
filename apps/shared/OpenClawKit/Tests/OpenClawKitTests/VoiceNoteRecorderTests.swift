@@ -141,9 +141,7 @@ final class VoiceNoteRecorderTests: XCTestCase {
 
         let started = await recorder.start()
         XCTAssertTrue(started)
-        try await waitUntil("voice note auto-finished") {
-            await MainActor.run { recorder.completedRecording != nil }
-        }
+        await waitForObservedState { !recorder.isRecording }
 
         let result = try XCTUnwrap(recorder.completedRecording)
         XCTAssertEqual(result.durationSeconds, 0.25)

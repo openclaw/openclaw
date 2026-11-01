@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import type { SessionEntry } from "./types.js";
 
@@ -8,7 +8,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 function createMaintenanceArtifacts() {
   return {
     archiveRemovedSessionTranscripts: async () => new Set<string>(),
-    removeRemovedSessionTrajectoryArtifacts: async () => {},
     cleanupArchivedSessionTranscripts: async () => {},
   };
 }
@@ -34,7 +33,7 @@ it("leaves warn-mode rows unchanged and protects admitted work during enforcemen
     log: { warn: () => {}, info: () => {} },
     artifacts: createMaintenanceArtifacts(),
   };
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: shared.storePath,
     identities: ["active"],
     assertAllowed: () => {},

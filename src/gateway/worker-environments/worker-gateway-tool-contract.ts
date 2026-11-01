@@ -11,10 +11,13 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 export type WorkerGatewayToolSink = { send(frame: WorkerGatewayToolUpdateFrame): void };
 
 export type WorkerGatewayToolRuntime = {
+  applyPromptToolsAllow(toolsAllow?: string[]): string[];
+  getAdditionalInheritedToolNames(): readonly string[];
   getSurface(identity: WorkerConnectionIdentity): Promise<WorkerToolSurface>;
-  getModelTools(
-    identity: WorkerConnectionIdentity,
-  ): Promise<NonNullable<WorkerInferenceContext["tools"]>>;
+  getPromptProjection(identity: WorkerConnectionIdentity): Promise<{
+    tools: NonNullable<WorkerInferenceContext["tools"]>;
+    toolSchemaDirectoryPrompt?: string;
+  }>;
   invoke(
     identity: WorkerConnectionIdentity,
     request: WorkerGatewayToolInvokeParams,

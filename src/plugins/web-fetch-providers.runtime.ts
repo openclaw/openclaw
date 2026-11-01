@@ -28,7 +28,7 @@ const providerResolution = {
     mapRegistryProviders({ registry, entries: registry.webFetchProviders, onlyPluginIds }),
 } satisfies WebProviderRuntimeResolution<PluginWebFetchProviderEntry>;
 
-/** Resolves web fetch providers, activating plugin runtimes when requested. */
+/** Resolves web fetch providers from bundled artifacts or scoped plugin loads. */
 export function resolvePluginWebFetchProviders(
   params: ResolvePluginWebProvidersParams,
 ): PluginWebFetchProviderEntry[] {

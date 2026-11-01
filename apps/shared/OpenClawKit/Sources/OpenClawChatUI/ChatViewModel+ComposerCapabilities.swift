@@ -220,7 +220,7 @@ extension OpenClawChatViewModel {
 
     var composerWebSearchEnabled: Bool {
         self.composerCapabilityCatalog.webSearchAvailable &&
-            (self.composerToolOverrides.webSearch ?? self.composerCapabilityCatalog.webSearchBaseEnabled)
+            self.composerCapabilityCatalog.webSearchBaseEnabled && self.composerToolOverrides.webSearch != false
     }
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {
@@ -446,9 +446,9 @@ extension OpenClawChatViewModel {
                     }
                 }
                 let result = try await routeLease.patchSessionSettings(
-                    sessionKey: target.canonicalSessionKey,
-                    agentID: target.agentID,
-                    patch: scopedPatch)
+                    target.canonicalSessionKey,
+                    target.agentID,
+                    scopedPatch)
                 guard isCurrentMutation() else { return }
                 guard let index = self.sessionIndexForModelState(sessionKey: originalSessionKey) else { return }
                 if let permissionMode = patch.permissionMode {

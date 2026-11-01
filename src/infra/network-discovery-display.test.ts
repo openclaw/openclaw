@@ -3,9 +3,8 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
-  inspectBestEffortPrimaryTailnetIPv4,
   pickBestEffortPrimaryLanIPv4,
-  resolveBestEffortGatewayBindHostForDisplay,
+  pickBestEffortPrimaryTailnetIPv4,
 } from "./network-discovery-display.js";
 
 const discoveryErrorMessage = "uv_interface_addresses failed";
@@ -27,32 +26,10 @@ describe("network display discovery", () => {
     expect(pickBestEffortPrimaryLanIPv4()).toBeUndefined();
   });
 
-  it("reports a warning when tailnet inspection throws", () => {
+  it("returns no tailnet address when interface discovery throws", () => {
     mockInterfaceDiscoveryFailure();
 
-    expect(
-      inspectBestEffortPrimaryTailnetIPv4({
-        warningPrefix: "Status could not inspect tailnet addresses",
-      }),
-    ).toEqual({
-      tailnetIPv4: undefined,
-      warning: `Status could not inspect tailnet addresses: ${discoveryErrorMessage}.`,
-    });
-  });
-
-  it("falls back to loopback when bind host resolution throws", async () => {
-    mockInterfaceDiscoveryFailure();
-
-    await expect(
-      resolveBestEffortGatewayBindHostForDisplay({
-        bindMode: "tailnet",
-        warningPrefix:
-          "Status is using fallback network details because interface discovery failed",
-      }),
-    ).resolves.toEqual({
-      bindHost: "127.0.0.1",
-      warning: `Status is using fallback network details because interface discovery failed: ${discoveryErrorMessage}.`,
-    });
+    expect(pickBestEffortPrimaryTailnetIPv4()).toBeUndefined();
   });
 
   it("still returns discovered tailnet values when interfaces are available", () => {
@@ -62,8 +39,6 @@ describe("network display discovery", () => {
       }),
     );
 
-    expect(inspectBestEffortPrimaryTailnetIPv4()).toEqual({
-      tailnetIPv4: "100.88.1.5",
-    });
+    expect(pickBestEffortPrimaryTailnetIPv4()).toBe("100.88.1.5");
   });
 });

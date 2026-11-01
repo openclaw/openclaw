@@ -12,7 +12,7 @@ import {
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import {
@@ -32,7 +32,15 @@ import { getHeader, type AuthorizedGatewayHttpRequest } from "./http-auth-utils.
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { authorizeResolvedSessionMutation, isResolvedIncognitoSession } from "./session-sharing.js";
+import {
+  authorizePreparedSessionMutation,
+  withSessionSharingTarget,
+} from "./session-sharing-policy.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "./session-sharing-read.js";
+import { isResolvedIncognitoSession } from "./session-sharing.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
@@ -102,22 +110,7 @@ function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
   }
 }
 
-function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
-  const raw =
-    normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
-    normalizeOptionalString(getHeader(req, "x-openclaw-agent")) ||
-    "";
-  if (!raw) {
-    return undefined;
-  }
-  if (!isValidAgentId(raw)) {
-    throw new UnknownGatewayAgentError(raw);
-  }
-  return normalizeAgentId(raw);
-}
-
-/** Resolves the target agent encoded by an OpenAI-compatible model id. */
-export function resolveAgentIdFromModel(
+function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
 ): string | undefined {
@@ -137,17 +130,23 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
-/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
-export function isOpenClawAgentModelId(model: string | undefined): boolean {
+/** Maps accepted OpenClaw routing-model spellings to the canonical id listed by `/v1/models`. */
+export function canonicalizeOpenClawAgentModelId(model: string | undefined): string | undefined {
   const raw = model?.trim();
   if (!raw) {
-    return false;
+    return undefined;
   }
   const lowered = normalizeLowercaseStringOrEmpty(raw);
   if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
-    return true;
+    return lowered;
   }
-  return AGENT_MODEL_PATTERN.test(raw);
+  const agentId = raw.match(AGENT_MODEL_PATTERN)?.groups?.agentId;
+  return agentId ? `openclaw/${normalizeAgentId(agentId)}` : undefined;
+}
+
+/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
+export function isOpenClawAgentModelId(model: string | undefined): boolean {
+  return canonicalizeOpenClawAgentModelId(model) !== undefined;
 }
 
 /** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
@@ -221,10 +220,16 @@ export function resolveAgentIdForRequest(params: {
     throw new InvalidGatewayModelError();
   }
 
-  const fromHeader = resolveAgentIdFromHeader(params.req);
-  if (fromHeader) {
-    assertKnownAgentId(fromHeader, cfg);
-    return fromHeader;
+  const headerAgent =
+    normalizeOptionalString(getHeader(params.req, "x-openclaw-agent-id")) ||
+    normalizeOptionalString(getHeader(params.req, "x-openclaw-agent"));
+  if (headerAgent) {
+    if (!isValidAgentId(headerAgent)) {
+      throw new UnknownGatewayAgentError(headerAgent);
+    }
+    const agentId = normalizeAgentId(headerAgent);
+    assertKnownAgentId(agentId, cfg);
+    return agentId;
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
@@ -236,35 +241,16 @@ export function resolveAgentIdForRequest(params: {
   return resolveDefaultAgentId(cfg);
 }
 
-function resolveSessionKey(params: {
-  req: IncomingMessage;
-  agentId: string;
-  user?: string | undefined;
-  prefix: string;
-}): string {
-  const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
-  if (explicit) {
-    if (isReservedSessionKeyOverride(explicit, params.agentId)) {
-      throw new GatewaySessionKeyOverrideError();
-    }
-    return explicit;
-  }
-
-  const user = params.user?.trim();
-  const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
-  return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
-}
-
-function isReservedSessionKeyOverride(sessionKey: string, agentId: string): boolean {
+async function isReservedSessionKeyOverride(sessionKey: string, agentId: string): Promise<boolean> {
   const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
   const harnessLookupKey = sessionKey.startsWith("agent:")
     ? sessionKey
     : canonicalizeSessionKeyForAgent(agentId, sessionKey);
   const harnessEntry = isAgentHarnessSessionKey(sessionKey)
-    ? resolveSessionEntryAccessTarget({
+    ? await readResolvedSessionEntryInWorker({
         cfg: getRuntimeConfig(),
         sessionKey: harnessLookupKey,
-      }).entry
+      })
     : undefined;
   const harnessKeyReserved =
     isAgentHarnessSessionKey(sessionKey) &&
@@ -280,59 +266,88 @@ function isReservedSessionKeyOverride(sessionKey: string, agentId: string): bool
   );
 }
 
-/** Resolves gateway agent/session/channel context for OpenAI-compatible handlers. */
-export function resolveGatewayRequestContext(params: {
+export async function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
   model: string | undefined;
   user?: string | undefined;
   sessionPrefix: string;
-  defaultMessageChannel: string;
-  useMessageChannelHeader?: boolean;
-}): { agentId: string; sessionKey: string; messageChannel: string } {
+}): Promise<{ agentId: string; sessionKey: string; messageChannel: string }> {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
-  const sessionKey = resolveSessionKey({
-    req: params.req,
-    agentId,
-    user: params.user,
-    prefix: params.sessionPrefix,
-  });
+  const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
+  let sessionKey: string;
+  if (explicit) {
+    if (await isReservedSessionKeyOverride(explicit, agentId)) {
+      throw new GatewaySessionKeyOverrideError();
+    }
+    sessionKey = explicit;
+  } else {
+    const user = params.user?.trim();
+    const mainKey = user
+      ? `${params.sessionPrefix}-user:${user}`
+      : `${params.sessionPrefix}:${randomUUID()}`;
+    sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+  }
 
-  const messageChannel = params.useMessageChannelHeader
-    ? (normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ??
-      params.defaultMessageChannel)
-    : params.defaultMessageChannel;
+  const messageChannel =
+    normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ?? "webchat";
 
   return { agentId, sessionKey, messageChannel };
 }
 
-export function authorizeOpenAiCompatibleHttpSession(params: {
+export async function authorizeOpenAiCompatibleHttpSession(params: {
   agentId: string;
   sessionKey: string;
   requestAuth: AuthorizedGatewayHttpRequest;
   senderIsOwner: boolean;
-}): { allowed: true } | { allowed: false; message: string } {
-  const cfg = getRuntimeConfig();
+}): Promise<{ allowed: true } | { allowed: false; message: string }> {
   const authenticatedUserProfile = params.requestAuth.authenticatedUserProfile;
-  const authorizationError = authorizeResolvedSessionMutation({
-    cfg,
-    client: createSyntheticPluginRuntimeClient({
-      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-      operatorRoleActor: params.requestAuth.operatorRoleActor,
-      operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
-      scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
-    }),
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+  const client = createSyntheticPluginRuntimeClient({
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    operatorRoleActor: params.requestAuth.operatorRoleActor,
+    operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
+    scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
   });
-  if (authorizationError) {
-    return { allowed: false, message: authorizationError.message };
-  }
-  if (
-    !params.senderIsOwner &&
-    !authenticatedUserProfile &&
-    isResolvedIncognitoSession({ cfg, sessionKey: params.sessionKey, agentId: params.agentId })
-  ) {
-    return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
-  }
-  return { allowed: true };
+  const profiles = await prepareSessionSharingProfiles(client);
+  return withSessionSharingTarget<{ allowed: true } | { allowed: false; message: string }>(
+    {
+      cfg: getRuntimeConfig(),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    },
+    (read) => {
+      read.assertCurrent();
+      const cfg = getRuntimeConfig();
+      const membership = new Set(read.members.map((member) => member.identityId));
+      const sharing = prepareProjectedSessionSharing({
+        cfg,
+        client,
+        profiles,
+        isMember: (_target, id) => membership.has(id),
+      });
+      const authorizationError = authorizePreparedSessionMutation(
+        {
+          cfg,
+          client,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+        },
+        { target: read.target, membership },
+        { policy: sharing.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
+      );
+      if (authorizationError) {
+        return { allowed: false, message: authorizationError.message };
+      }
+      if (
+        !params.senderIsOwner &&
+        !authenticatedUserProfile &&
+        isResolvedIncognitoSession(
+          { cfg, sessionKey: params.sessionKey, agentId: params.agentId },
+          read.target,
+        )
+      ) {
+        return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
+      }
+      return { allowed: true };
+    },
+  );
 }

@@ -6,8 +6,6 @@ import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-r
 export type CompactionSafeguardCancellation = { reason: string; error?: unknown };
 
 type CompactionSafeguardRuntimeValue = {
-  maxHistoryShare?: number;
-  contextWindowTokens?: number;
   identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
   identifierInstructions?: string;
   customInstructions?: string;
@@ -25,7 +23,7 @@ type CompactionSafeguardRuntimeValue = {
   /**
    * Id of a registered compaction provider plugin.
    * When set and found in the compaction provider registry, the provider's
-   * `summarize()` is called instead of the built-in `summarizeInStages()`.
+   * `summarize()` is called instead of the built-in summary request.
    */
   provider?: string;
   /** Hook cancellation hides provider errors behind AgentSession's generic error. */

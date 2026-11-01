@@ -95,7 +95,7 @@ Add `match.peer` when only one direct message, group, or channel should reach th
 }
 ```
 
-`peer.kind` accepts `direct`, `group`, or `channel`. Use the channel's canonical peer ID, not a display name.
+`peer.kind` accepts `direct`, `group`, or `channel`. Use the channel's stable peer ID, not a display name.
 
 ## Match fields and precedence
 

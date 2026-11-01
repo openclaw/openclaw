@@ -22,31 +22,6 @@ import {
   listRuntimeVisibleChannelPlugins,
 } from "./runtime-visible-channels.js";
 
-/** Source that explains how message channel selection chose its result. */
-type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
-
-function resolveAvailableChannel(params: {
-  cfg: OpenClawConfig;
-  value?: string | null;
-  agentId?: string;
-}): { channel: string; plugin: ChannelPlugin } | undefined {
-  // Availability belongs to the scoped resolver, not the process-root channel list.
-  const normalized = normalizeMessageChannel(params.value);
-  if (!normalized) {
-    return undefined;
-  }
-  // Local agent processes may have only setup metadata for external channels;
-  // explicit activation lets their message tools use the same send path as the CLI.
-  const plugin = resolveOutboundChannelPlugin({
-    channel: normalized,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
-  });
-  return plugin ? { channel: plugin.id, plugin } : undefined;
-}
-
-/** Checks whether a channel has a non-disabled config entry. */
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
   return entry !== undefined && entry.enabled !== false;
@@ -83,19 +58,19 @@ const loggedChannelSelectionErrors = createDedupeCache({
   maxSize: 1024,
 });
 
-function logChannelSelectionError(params: {
-  pluginId: string;
-  accountId: string;
-  operation: "inspectAccount" | "resolveAccount" | "isConfigured";
-  error: unknown;
-}) {
-  const message = formatErrorMessage(params.error);
-  const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
+function logChannelSelectionError(
+  pluginId: string,
+  accountId: string,
+  operation: "inspectAccount" | "resolveAccount" | "isConfigured",
+  error: unknown,
+) {
+  const message = formatErrorMessage(error);
+  const key = `${pluginId}:${accountId}:${operation}:${message}`;
   if (loggedChannelSelectionErrors.check(key)) {
     return;
   }
   defaultRuntime.error?.(
-    `[channel-selection] ${params.pluginId}(${params.accountId}) ${params.operation} failed: ${message}`,
+    `[channel-selection] ${pluginId}(${accountId}) ${operation} failed: ${message}`,
   );
 }
 
@@ -124,12 +99,7 @@ async function isPluginConfigured(
       operation = "resolveAccount";
       account = await resolveChannelAccount({ plugin, cfg, accountId });
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation,
-        error,
-      });
+      logChannelSelectionError(plugin.id, accountId, operation, error);
       continue;
     }
     const enabled = plugin.config.isEnabled
@@ -139,17 +109,11 @@ async function isPluginConfigured(
       continue;
     }
     try {
-      const configured = (await plugin.config.isConfigured?.(account, cfg)) ?? true;
-      if (configured) {
+      if ((await plugin.config.isConfigured?.(account, cfg)) ?? true) {
         return true;
       }
     } catch (error) {
-      logChannelSelectionError({
-        pluginId: plugin.id,
-        accountId,
-        operation: "isConfigured",
-        error,
-      });
+      logChannelSelectionError(plugin.id, accountId, "isConfigured", error);
     }
   }
 
@@ -162,22 +126,20 @@ async function listConfiguredMessageChannelPlugins(
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    if (!resolveOutboundChannelPlugin({ channel: plugin.id, cfg })) {
-      continue;
-    }
-    if (await isPluginConfigured(plugin, cfg, accountResolution)) {
+    if (
+      resolveOutboundChannelPlugin({ channel: plugin.id, cfg }) &&
+      (await isPluginConfigured(plugin, cfg, accountResolution))
+    ) {
       plugins.push(plugin);
     }
   }
   return plugins;
 }
 
-/** Lists deliverable channels with at least one enabled, configured account. */
 export async function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<string[]> {
   return (await listConfiguredMessageChannelPlugins(cfg)).map((plugin) => plugin.id);
 }
 
-/** Resolves the message action channel from explicit input, context fallback, or config. */
 export async function resolveMessageChannelSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
@@ -189,32 +151,25 @@ export async function resolveMessageChannelSelection(params: {
 }): Promise<{
   channel: string;
   plugin: ChannelPlugin;
-  configured: string[];
-  source: MessageChannelSelectionSource;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  const explicit = normalized
-    ? resolveAvailableChannel({
-        cfg: params.cfg,
-        value: params.channel,
-        agentId: params.agentId,
-      })
-    : undefined;
-  if (explicit) {
-    return { ...explicit, configured: [], source: "explicit" };
-  }
-
-  const fallback = resolveAvailableChannel({
-    cfg: params.cfg,
-    value: params.fallbackChannel,
-    agentId: params.agentId,
-  });
-  if (fallback) {
-    return {
-      ...fallback,
-      configured: [],
-      source: "tool-context-fallback",
-    };
+  for (const field of ["channel", "fallbackChannel"] as const) {
+    const cfg = params.cfg;
+    const channel = field === "channel" ? normalized : normalizeMessageChannel(params[field]);
+    const agentId = params.agentId;
+    if (!channel) {
+      continue;
+    }
+    // Explicit activation uses the scoped resolver, including external setup shells.
+    const selectedPlugin = resolveOutboundChannelPlugin({
+      channel,
+      cfg,
+      agentId,
+      allowBootstrap: true,
+    });
+    if (selectedPlugin) {
+      return { channel: selectedPlugin.id, plugin: selectedPlugin };
+    }
   }
 
   if (normalized) {
@@ -243,8 +198,6 @@ export async function resolveMessageChannelSelection(params: {
     return {
       channel: plugin.id,
       plugin,
-      configured,
-      source: "single-configured",
     };
   }
   if (configured.length === 0) {

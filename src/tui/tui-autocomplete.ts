@@ -8,11 +8,21 @@ import { isTerminalSafeAutocompleteValue, sanitizeRenderableLine } from "./tui-f
 
 const originalSafeItem = Symbol("originalSafeItem");
 /** Sanitize autocomplete presentation and omit values unsafe for editor rendering. */
-function sanitizeAutocompleteProvider(inner: AutocompleteProvider): AutocompleteProvider {
+export function createTuiAutocompleteProvider(
+  commands: SlashCommand[],
+  basePath: string,
+  fdPath?: string,
+): AutocompleteProvider {
+  const inner = new CombinedAutocompleteProvider(commands, basePath, fdPath);
   return {
-    triggerCharacters: inner.triggerCharacters,
-    async getSuggestions(...args) {
-      const suggestions = await inner.getSuggestions(...args);
+    async getSuggestions(lines, cursorLine, cursorCol, options) {
+      const textBeforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+      const isAttachment = /(?:^|[\s='"])@(?:"[^"]*|[^\s='"]*)$/u.test(textBeforeCursor);
+      const isNaturalCompletion = isAttachment || textBeforeCursor.startsWith("/");
+      if (!options.force && !isNaturalCompletion) {
+        return null;
+      }
+      const suggestions = await inner.getSuggestions(lines, cursorLine, cursorCol, options);
       if (!suggestions) {
         return null;
       }
@@ -48,29 +58,6 @@ function sanitizeAutocompleteProvider(inner: AutocompleteProvider): Autocomplete
         prefix,
       );
     },
-    shouldTriggerFileCompletion: inner.shouldTriggerFileCompletion
-      ? (...args) => inner.shouldTriggerFileCompletion!(...args)
-      : undefined,
-  };
-}
-
-export function createTuiAutocompleteProvider(
-  commands: SlashCommand[],
-  basePath: string,
-  fdPath?: string,
-): AutocompleteProvider {
-  const inner = new CombinedAutocompleteProvider(commands, basePath, fdPath);
-  return sanitizeAutocompleteProvider({
-    getSuggestions(lines, cursorLine, cursorCol, options) {
-      const textBeforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
-      const isAttachment = /(?:^|[\s='"])@(?:"[^"]*|[^\s='"]*)$/u.test(textBeforeCursor);
-      const isNaturalCompletion = isAttachment || textBeforeCursor.startsWith("/");
-      if (!options.force && !isNaturalCompletion) {
-        return Promise.resolve(null);
-      }
-      return inner.getSuggestions(lines, cursorLine, cursorCol, options);
-    },
-    applyCompletion: (...args) => inner.applyCompletion(...args),
     shouldTriggerFileCompletion: (...args) => inner.shouldTriggerFileCompletion(...args),
-  });
+  };
 }

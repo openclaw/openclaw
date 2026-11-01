@@ -8,6 +8,7 @@ private final class DeleteSessionTestTransport: @unchecked Sendable, OpenClawCha
     private let lock = NSLock()
     private var deletedKeysStorage: [String] = []
     private var historyRequestsStorage: [String] = []
+    private let deletionRefresh = AsyncStream<Void>.makeStream()
 
     var deletedKeys: [String] {
         self.lock.withLock { self.deletedKeysStorage }
@@ -51,6 +52,21 @@ private final class DeleteSessionTestTransport: @unchecked Sendable, OpenClawCha
     func deleteSession(key: String) async throws {
         self.lock.withLock { self.deletedKeysStorage.append(key) }
     }
+
+    func listSessions(
+        limit _: Int?, search _: String?, archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        if !self.deletedKeys.isEmpty { self.deletionRefresh.continuation.yield(()) }
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.list not supported by this transport"])
+    }
+
+    func waitForDeletionRefresh() async {
+        var iterator = self.deletionRefresh.stream.makeAsyncIterator()
+        _ = await iterator.next()
+    }
 }
 
 @MainActor
@@ -59,21 +75,18 @@ struct ChatViewModelSessionDeletionTests {
         let transport = DeleteSessionTestTransport()
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         vm.load()
-        try await waitUntil("initial bootstrap history") {
-            await MainActor.run { transport.historyRequests.contains("main") }
-        }
+        await vm.bootstrapTask?.value
+        #expect(transport.historyRequests.contains("main"))
 
         let historyCountBeforeDelete = transport.historyRequests.count
         vm.deleteSession("main")
 
-        try await waitUntil("delete reaches transport") {
-            await MainActor.run { transport.deletedKeys == ["main"] }
-        }
+        await transport.waitForDeletionRefresh()
+        #expect(transport.deletedKeys == ["main"])
         // The main key stays the address after deletion, so the view model
         // must re-bootstrap it rather than silently keeping dead state.
-        try await waitUntil("post-delete re-bootstrap") {
-            await MainActor.run { transport.historyRequests.count > historyCountBeforeDelete }
-        }
+        await vm.bootstrapTask?.value
+        #expect(transport.historyRequests.count > historyCountBeforeDelete)
         #expect(vm.sessionKey == "main")
     }
 
@@ -81,18 +94,15 @@ struct ChatViewModelSessionDeletionTests {
         let transport = DeleteSessionTestTransport()
         let vm = OpenClawChatViewModel(sessionKey: "scratch", transport: transport)
         vm.load()
-        try await waitUntil("initial bootstrap history") {
-            await MainActor.run { transport.historyRequests.contains("scratch") }
-        }
+        await vm.bootstrapTask?.value
+        #expect(transport.historyRequests.contains("scratch"))
 
         vm.deleteSession("scratch")
 
-        try await waitUntil("delete reaches transport") {
-            await MainActor.run { transport.deletedKeys == ["scratch"] }
-        }
-        try await waitUntil("fallback switch to main") {
-            await MainActor.run { vm.sessionKey == "main" }
-        }
+        await transport.waitForDeletionRefresh()
+        #expect(transport.deletedKeys == ["scratch"])
+        await vm.bootstrapTask?.value
+        #expect(vm.sessionKey == "main")
     }
 
     @Test func `deleting an ordinary qualified global row preserves the bare global conversation`() async throws {
@@ -102,15 +112,13 @@ struct ChatViewModelSessionDeletionTests {
             transport: transport,
             activeAgentId: "ops")
         vm.load()
-        try await waitUntil("initial bootstrap history") {
-            await MainActor.run { transport.historyRequests.contains("global") }
-        }
+        await vm.bootstrapTask?.value
+        #expect(transport.historyRequests.contains("global"))
 
         vm.deleteSession("agent:ops:global")
 
-        try await waitUntil("delete reaches transport") {
-            await MainActor.run { transport.deletedKeys == ["agent:ops:global"] }
-        }
+        await transport.waitForDeletionRefresh()
+        #expect(transport.deletedKeys == ["agent:ops:global"])
         #expect(await MainActor.run { vm.sessionKey == "global" })
     }
 
@@ -118,15 +126,13 @@ struct ChatViewModelSessionDeletionTests {
         let transport = DeleteSessionTestTransport()
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         vm.load()
-        try await waitUntil("initial bootstrap history") {
-            await MainActor.run { transport.historyRequests.contains("main") }
-        }
+        await vm.bootstrapTask?.value
+        #expect(transport.historyRequests.contains("main"))
 
         vm.deleteSession("scratch")
 
-        try await waitUntil("delete reaches transport") {
-            await MainActor.run { transport.deletedKeys == ["scratch"] }
-        }
+        await transport.waitForDeletionRefresh()
+        #expect(transport.deletedKeys == ["scratch"])
         #expect(vm.sessionKey == "main")
     }
 }

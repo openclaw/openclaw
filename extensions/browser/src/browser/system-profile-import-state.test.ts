@@ -1,4 +1,3 @@
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it } from "vitest";
 import {
   configureSystemProfileImportStateStore,
@@ -9,28 +8,13 @@ import {
   type SystemProfileImportState,
 } from "./system-profile-import-state.js";
 
-function createMemoryStore(): PluginStateKeyedStore<SystemProfileImportState> {
+function createMemoryStore(): Parameters<typeof configureSystemProfileImportStateStore>[0] {
   const values = new Map<string, SystemProfileImportState>();
   return {
     register: async (key, value) => {
       values.set(key, value);
     },
-    registerIfAbsent: async (key, value) => {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
     lookup: async (key) => values.get(key),
-    consume: async (key) => {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: async (key) => values.delete(key),
-    entries: async () => [],
-    clear: async () => values.clear(),
   };
 }
 

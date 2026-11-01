@@ -7,25 +7,17 @@ import path from "node:path";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
-
-export const SESSION_ARCHIVE_ZSTD_SUFFIX = ".zst";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
+export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
 const zstdCodec = resolveZstdCodec();
 
-/** Strips the optional zstd suffix so archive name parsers see one shape. */
-export function stripSessionArchiveCompressionSuffix(fileName: string): string {
-  return fileName.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
-    ? fileName.slice(0, -SESSION_ARCHIVE_ZSTD_SUFFIX.length)
-    : fileName;
-}
-
-/** Compresses archive content when the runtime supports zstd. */
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;
   suffix: "" | typeof SESSION_ARCHIVE_ZSTD_SUFFIX;
 } {
   const plain = Buffer.from(content, "utf8");
-  if (!zstdCodec || plain.length === 0) {
+  if (plain.length === 0) {
     return { bytes: plain, suffix: "" };
   }
   // Default zstd level (3) matches the ratio/speed point Codex uses for cold
@@ -33,28 +25,11 @@ export function encodeSessionArchiveContent(content: string): {
   return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
-/** Reads an archived transcript, transparently decompressing zstd artifacts. */
 export function readSessionArchiveContentSync(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
   }
-  if (!zstdCodec) {
-    throw new Error(
-      `Cannot read compressed transcript archive ${filePath}: this runtime lacks node:zlib zstd support`,
-    );
-  }
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
-}
-
-/** Decodes staged archive bytes using the source archive's codec. */
-export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
-  if (!compressed) {
-    return Buffer.from(bytes).toString("utf8");
-  }
-  if (!zstdCodec) {
-    throw new Error("Cannot decode compressed transcript archive: this runtime lacks zstd support");
-  }
-  return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
 }
 
 /**

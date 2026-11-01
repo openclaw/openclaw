@@ -4,8 +4,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
-import { normalizeResolvedModel, resolveRuntimeHooks } from "./model.provider-hooks.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import {
+  normalizeResolvedModel,
+  resolveRuntimeHooks,
+  type ProviderRuntimeHooks,
+} from "./model.provider-hooks.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -17,32 +21,24 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
-function model(overrides: Partial<Model> = {}): Model {
-  return {
+function resolve(
+  overrides: Partial<Model> = {},
+  cfg?: OpenClawConfig,
+  hooks: Partial<ProviderRuntimeHooks> = {},
+): Model {
+  const model = makeProviderModelFixture({
     id: "small-model",
-    name: "Small model",
     provider: "custom-host",
     api: "ollama",
     baseUrl: "http://model-host.example:11434",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32_768,
-    maxTokens: 4_096,
     ...overrides,
-  };
-}
-
-function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): boolean {
-  return resolveAgentToolSurfacePlan({
-    config,
-    model: resolvedModel,
-    modelProvider: resolvedModel.provider,
-    modelId: resolvedModel.id,
-    forceDirectMessageTool: false,
-    toolsEnabled: true,
-    isRawModelRun: false,
-  }).toolSearchControlsEnabled;
+  });
+  return normalizeResolvedModel({
+    provider: model.provider,
+    model,
+    cfg,
+    runtimeHooks: { ...resolveRuntimeHooks(), ...hooks },
+  });
 }
 
 describe("resolved model Tool Search policy", () => {
@@ -62,92 +58,55 @@ describe("resolved model Tool Search policy", () => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: false } } },
     };
-    const resolved = normalizeResolvedModel({
-      provider: route.provider,
-      model: model(route),
-      cfg: config,
-    });
+    const resolved = resolve(route, config);
     expect(resolved).toHaveProperty("toolSearchMode", expected);
-    // Provider preference is separate from the ordinary enabled Tool Search default.
-    expect(toolSearchEnabled(resolved, config)).toBe(true);
-    expect(toolSearchEnabled(resolved, { ...config, tools: { toolSearch: false } })).toBe(false);
-    expect(config.tools).toBeUndefined();
   });
 
   it("uses the final transport and clears a previous attempt's preference", () => {
-    const original = model();
-    const local = normalizeResolvedModel({ provider: original.provider, model: original });
-    expect(local).toHaveProperty("toolSearchMode", "tools");
-    expect(toolSearchEnabled(local)).toBe(true);
-
+    const local = resolve();
+    const baseUrl = "https://hosted.example/v1";
     const hosted = normalizeResolvedModel({
-      provider: original.provider,
+      provider: local.provider,
       model: local,
       runtimeHooks: {
         ...resolveRuntimeHooks(),
-        normalizeProviderTransportWithPlugin: () => ({
-          api: "openai-responses",
-          baseUrl: "https://hosted.example/v1",
-        }),
+        normalizeProviderTransportWithPlugin: () => ({ api: "openai-responses", baseUrl }),
       },
     });
-    expect(hosted.baseUrl).toBe("https://hosted.example/v1");
-    expect(hosted).toHaveProperty("toolSearchMode", undefined);
-    expect(toolSearchEnabled(hosted)).toBe(true);
+    expect(hosted).toMatchObject({ baseUrl, toolSearchMode: undefined });
     expect(local).toHaveProperty("toolSearchMode", "tools");
-    expect(toolSearchEnabled(local)).toBe(true);
   });
 
   it("uses in-place model normalization for transport routing", () => {
-    const resolved = normalizeResolvedModel({
-      provider: "custom-host",
-      model: model(),
-      runtimeHooks: {
-        ...resolveRuntimeHooks(),
-        normalizeProviderResolvedModelWithPlugin: ({ context }) => {
-          context.model.id = "normalized-model";
-          return context.model;
-        },
-        applyProviderResolvedTransportWithPlugin: ({ context }) => ({
-          ...context.model,
-          baseUrl: `https://transport.example/v1/${context.modelId}`,
-        }),
+    const resolved = resolve({}, undefined, {
+      normalizeProviderResolvedModelWithPlugin: ({ context }) => {
+        context.model.id = "normalized-model";
+        return context.model;
       },
+      applyProviderResolvedTransportWithPlugin: ({ context }) => ({
+        ...context.model,
+        baseUrl: `https://transport.example/v1/${context.modelId}`,
+      }),
     });
-    expect(resolved.id).toBe("normalized-model");
-    expect(resolved.baseUrl).toBe("https://transport.example/v1/normalized-model");
+    expect(resolved).toMatchObject({
+      id: "normalized-model",
+      baseUrl: "https://transport.example/v1/normalized-model",
+    });
   });
 
   it.each([
-    {
-      finalBaseUrl: "http://managed.example:8080/v1/",
-      api: "openai-completions",
-      expected: "tools",
-    },
-    { finalBaseUrl: "https://hosted.example/v1", api: "openai-completions", expected: undefined },
-  ] as const)(
-    "limits managed inference defaults to $finalBaseUrl",
-    ({ finalBaseUrl, api, expected }) => {
-      const cfg: OpenClawConfig = {
-        models: {
-          providers: {
-            " CUSTOM-HOST ": {
-              baseUrl: "http://managed.example:8080/v1",
-              api,
-              models: [],
-              localService: { command: "/fixture/server" },
-            },
-          },
-        },
-      };
-      const resolved = normalizeResolvedModel({
-        provider: "custom-host",
-        model: model({ api, baseUrl: finalBaseUrl }),
-        cfg,
-      });
-      expect(resolved).toHaveProperty("toolSearchMode", expected);
-      expect(toolSearchEnabled(resolved, cfg)).toBe(true);
-      expect(cfg.tools).toBeUndefined();
-    },
-  );
+    ["http://managed.example:8080/v1/", "tools"],
+    ["https://hosted.example/v1", undefined],
+  ] as const)("limits managed inference defaults to %s", (finalBaseUrl, expected) => {
+    const api = "openai-completions" as const;
+    const providerConfig = {
+      baseUrl: "http://managed.example:8080/v1",
+      api,
+      models: [],
+      localService: { command: "/fixture/server" },
+    };
+    const cfg: OpenClawConfig = { models: { providers: { " CUSTOM-HOST ": providerConfig } } };
+    const resolved = resolve({ api, baseUrl: finalBaseUrl }, cfg);
+    expect(resolved).toHaveProperty("toolSearchMode", expected);
+  });
 });

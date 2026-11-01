@@ -1,4 +1,3 @@
-#[cfg(any(target_os = "macos", test))]
 use std::path::Path;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_notifications::{NotificationsExt, PermissionState};
@@ -21,17 +20,15 @@ pub fn notify(app: &AppHandle, title: &str, body: &str) {
     let body = body.to_string();
     tauri::async_runtime::spawn(async move {
         let notification = app.notifications();
-        let permission = match notification.permission_state().await {
-            Ok(PermissionState::Granted) => PermissionState::Granted,
-            Ok(_) => match notification.request_permission().await {
-                Ok(permission) => permission,
-                Err(error) => {
-                    eprintln!("Could not request notification permission: {error}");
-                    return;
-                }
-            },
+        let (permission, operation) = match notification.permission_state().await {
+            Ok(PermissionState::Granted) => (Ok(PermissionState::Granted), "check"),
+            Ok(_) => (notification.request_permission().await, "request"),
+            Err(error) => (Err(error), "check"),
+        };
+        let permission = match permission {
+            Ok(permission) => permission,
             Err(error) => {
-                eprintln!("Could not check notification permission: {error}");
+                eprintln!("Could not {operation} notification permission: {error}");
                 return;
             }
         };
@@ -45,34 +42,22 @@ pub fn notify(app: &AppHandle, title: &str, body: &str) {
 }
 
 fn notifications_supported() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        std::env::current_exe()
+    !cfg!(target_os = "macos")
+        || std::env::current_exe()
             .ok()
             .as_deref()
             .is_some_and(is_macos_app_bundle_executable)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        true
-    }
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn is_macos_app_bundle_executable(executable: &Path) -> bool {
     let Some(macos) = executable.parent() else {
         return false;
     };
-    let Some(contents) = macos.parent() else {
-        return false;
-    };
-    let Some(bundle) = contents.parent() else {
-        return false;
-    };
-    macos.file_name().is_some_and(|name| name == "MacOS")
-        && contents.file_name().is_some_and(|name| name == "Contents")
-        && bundle
-            .extension()
+    macos.ends_with("Contents/MacOS")
+        && macos
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::extension)
             .is_some_and(|extension| extension == "app")
 }
 

@@ -4,16 +4,18 @@ import { runPluginHostCleanup } from "./host-hook-cleanup.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 const mocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(),
+  readRuntimeConfig: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
+vi.mock("../config/io.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
+  captureRuntimeConfigAsyncReader: () =>
+    Object.assign(mocks.readRuntimeConfig, { assertCurrent() {} }),
 }));
 
 describe("plugin host cleanup config fallback", () => {
   afterEach(() => {
-    mocks.getRuntimeConfig.mockReset();
+    mocks.readRuntimeConfig.mockReset();
   });
 
   it("records session store config failures while continuing runtime cleanup", async () => {
@@ -29,9 +31,7 @@ describe("plugin host cleanup config fallback", () => {
       },
     });
     const configError = new Error("invalid config");
-    mocks.getRuntimeConfig.mockImplementation(() => {
-      throw configError;
-    });
+    mocks.readRuntimeConfig.mockRejectedValue(configError);
 
     const result = await runPluginHostCleanup({
       registry,

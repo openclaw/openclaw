@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
@@ -21,12 +22,13 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
-import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
+import { prepareUserModelAccountAuthority } from "../state/user-model-account-operations.js";
 import type { ModelAccountConnectAction } from "./model-account-authority.js";
-import { ModelAccountConnectAuthorityError } from "./model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
+  prepareSessionPatchRuntimeSelection,
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
@@ -34,10 +36,100 @@ import type {
   CreateGatewaySessionParams,
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
+import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
-const loadSessionAuthRuntime = createLazyRuntimeModule(
-  () => import("../agents/auth-profiles/session-override.js"),
-);
+/** Creation and adoption retain the settings mutation owner's native permission guard. */
+export async function prepareSessionCreateRuntimeSelection(params: {
+  request: Pick<
+    CreateGatewaySessionParams,
+    "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes" | "waitForModelCatalog"
+  >;
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  entry: SessionEntry;
+  existingEntry: SessionEntry | undefined;
+  catalog: ModelCatalogSnapshot | undefined;
+  validateModelSelection: (() => ErrorShape | undefined) | undefined;
+}): Promise<
+  | { ok: true; validate?: () => ErrorShape | undefined; release?: () => void }
+  | { ok: false; error: ErrorShape }
+> {
+  const { request, entry, existingEntry, sessionKey } = params;
+  const context =
+    request.agentRuntime !== undefined || request.model !== undefined
+      ? resolveSessionWorkerPlacementContext()
+      : undefined;
+  const selection = await prepareSessionPatchRuntimeSelection({
+    cfg: request.cfg,
+    agentId: params.agentId,
+    callerCanConsent: request.requestingOperatorScopes?.includes(ADMIN_SCOPE) === true,
+    patch: { key: sessionKey, agentRuntime: request.agentRuntime, model: request.model },
+    entry,
+    catalog: params.catalog?.entries,
+    // Thinking policy was already validated by the patch owner; create discards hydration.
+    hydrateThinkingCatalog: false,
+    prepareNativeCatalog: request.waitForModelCatalog ?? ((operation) => operation()),
+    validateModelSelection: params.validateModelSelection,
+    ...(context ? { placement: { context, sessionKey } } : {}),
+  });
+  if (
+    !selection.ok ||
+    (entry.permissionMode === existingEntry?.permissionMode &&
+      entry.sandboxMode === existingEntry?.sandboxMode)
+  ) {
+    return selection;
+  }
+  try {
+    // Keep execution runtime imports lazy for creation without permission changes.
+    const { prepareSessionPatchSandboxChange } =
+      await import("./server-methods/sessions-patch-sandbox.runtime.js");
+    const validatePermissions = await prepareSessionPatchSandboxChange({
+      client: null,
+      context: context ?? resolveSessionWorkerPlacementContext(),
+      patch: { key: sessionKey },
+      existingEntry,
+      entry,
+      sessionKey,
+      agentId: params.agentId,
+      storePath: params.storePath,
+      lifecycleIdentities: [sessionKey, existingEntry?.sessionId],
+    });
+    const validate = () => validatePermissions() || selection.validate?.();
+    const error = validate();
+    if (error) {
+      selection.release?.();
+      return { ok: false, error };
+    }
+    return { ...selection, validate };
+  } catch (error) {
+    selection.release?.();
+    throw error;
+  }
+}
+
+/** Keep automatic selection provenance distinct from an explicit model pin. */
+export function projectSessionCreateSpawnModelSelection(params: {
+  entry: SessionEntry;
+  creation: CreateGatewaySessionParams["creation"];
+  requestedModel?: string;
+  createdNewEntry: boolean;
+}): Partial<SessionEntry> {
+  // Match the requested model before using the patch owner's canonical selection.
+  const selection = params.creation?.spawnModelAutoSelection;
+  if (!params.createdNewEntry || !selection || selection.model !== params.requestedModel) {
+    return {};
+  }
+  return {
+    modelOverrideSource: "auto",
+    ...(selection.hasFallbackOrigin
+      ? {
+          modelOverrideFallbackOriginProvider: params.entry.providerOverride,
+          modelOverrideFallbackOriginModel: params.entry.modelOverride,
+        }
+      : {}),
+  };
+}
 
 export function resolveSessionCreateModelInputError(
   params: Pick<
@@ -48,7 +140,7 @@ export function resolveSessionCreateModelInputError(
   if (params.agentRuntime !== undefined && (!params.model || params.catalogTarget)) {
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
-      "agentRuntime requires an explicit canonical provider/model selection",
+      "agentRuntime requires an explicit provider/model selection using full IDs",
     );
   }
   const requestedProfile = splitTrailingAuthProfile(
@@ -135,36 +227,58 @@ export function prepareSessionCreateModelSelection(params: {
   };
 }
 
-/** Title preparation and the row commit retain the same caller, model, and account fences. */
-export function createSessionCreateCommitGuard(params: {
-  assertCallerCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  selections: readonly ({ assertCurrent: () => void } | undefined)[];
-  personalAccountDefaults?: ModelAccountConnectAction;
-  readDefaultProfile: () => string | undefined;
-  validateSelection: () => ErrorShape | undefined;
-}): () => void {
+/** Assemble the creation lifetime once, including host-only publication intent. */
+export function resolveSessionCreationCommitGuard(
+  params: CreateGatewaySessionParams,
+  prepared: {
+    readOperatorAuthority: () => AdmittedRunOperatorAuthority | undefined;
+    assertPreparedTargetCurrent: () => void;
+    validateSelection: () => ErrorShape | undefined;
+  },
+): (() => void) | undefined {
+  const assertDelegationCurrent = captureDelegatedToolPolicyAssertion(
+    params.cfg,
+    params.spawnToolPolicy?.delegatedToolPolicy,
+  );
+  const assertCallerCurrent =
+    params.childSessionPublication || assertDelegationCurrent
+      ? () => {
+          params.commitGuard?.();
+          params.childSessionPublication?.assertCurrent();
+          assertDelegationCurrent?.();
+        }
+      : params.commitGuard;
+  if (
+    !(
+      params.personalModelSelection ||
+      params.operatorAuthority ||
+      params.personalAccountDefaults ||
+      params.activeParentFork ||
+      params.preparedModelSelection ||
+      params.preparedPermissionSelection ||
+      typeof params.model === "string" ||
+      params.agentRuntime !== undefined
+    )
+  ) {
+    return assertCallerCurrent;
+  }
+  const selections = [
+    params.activeParentFork,
+    params.preparedModelSelection,
+    params.preparedPermissionSelection,
+    params.personalModelSelection,
+    params.personalAccountDefaults,
+  ];
   return () => {
-    params.assertCallerCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-    const error = params.validateSelection();
+    assertCallerCurrent?.();
+    prepared.assertPreparedTargetCurrent();
+    prepared.readOperatorAuthority()?.assertCurrent();
+    const error = prepared.validateSelection();
     if (error) {
       throw new Error(error.message);
     }
-    for (const selection of params.selections) {
+    for (const selection of selections) {
       selection?.assertCurrent();
-    }
-    const selectedProfile = params.readDefaultProfile();
-    if (
-      params.personalAccountDefaults &&
-      selectedProfile &&
-      isUserModelAuthProfileId(selectedProfile) &&
-      !isUserModelAuthProfileOwner({
-        profileId: params.personalAccountDefaults.owner,
-        authProfileId: selectedProfile,
-      })
-    ) {
-      throw new ModelAccountConnectAuthorityError();
     }
   };
 }
@@ -182,7 +296,8 @@ export async function prepareSessionCreateDefaultAccount(params: {
   | { ok: true; profileId?: string; validate: () => ErrorShape | undefined }
   | { ok: false; error: ErrorShape }
 > {
-  const { resolveUserLinkedAuthProfile } = await loadSessionAuthRuntime();
+  const { resolveUserLinkedAuthProfile } =
+    await import("../agents/auth-profiles/session-override.js");
   params.assertCurrent?.();
   params.defaults.assertCurrent();
   const selected = prepareSessionPatchModelSelection({
@@ -199,7 +314,7 @@ export async function prepareSessionCreateDefaultAccount(params: {
     return selected;
   }
   const model = selected.selection;
-  const linked = resolveUserLinkedAuthProfile({
+  const linked = await resolveUserLinkedAuthProfile({
     cfg: resolveModelProviderAuthConfig({
       config: params.cfg,
       provider: model.provider,
@@ -209,7 +324,23 @@ export async function prepareSessionCreateDefaultAccount(params: {
     provider: model.provider,
     requesterProfileId: params.defaults.owner,
   });
-  return { ok: true, profileId: linked?.profileId, validate: selected.validate };
+  const account =
+    linked && isUserModelAuthProfileId(linked.profileId)
+      ? await prepareUserModelAccountAuthority({
+          profileId: params.defaults.owner,
+          authProfileId: linked.profileId,
+        })
+      : undefined;
+  params.assertCurrent?.();
+  const validate = () => {
+    params.defaults.assertCurrent();
+    if (linked && isUserModelAuthProfileId(linked.profileId) && !account?.isCurrent()) {
+      throw new ModelAccountConnectAuthorityError();
+    }
+    return selected.validate();
+  };
+  const error = validate();
+  return error ? { ok: false, error } : { ok: true, profileId: linked?.profileId, validate };
 }
 
 /** Catalog-owned creations cannot mix independent model or key selections. */
@@ -257,6 +388,7 @@ export async function resolveSessionForkMaxTokens(params: {
             sessionKey: params.sessionKey,
             sessionEntry: params.entry,
           }),
+          allowApiFallback: false,
         }).entry
       : undefined;
   const childContextWindow = resolveModelContextWindowProfile({
@@ -269,8 +401,7 @@ export async function resolveSessionForkMaxTokens(params: {
     model: childModel.model,
     modelContextTokens: childCatalogEntry?.contextTokens,
     modelContextWindow: childContextWindow.contextTokens,
-    allowAsyncLoad: false,
-    allowUnscopedModelLookup: false,
+    allowCacheLookup: false,
   });
   return childContextWindow.contextTokens
     ? Math.min(

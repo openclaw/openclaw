@@ -26,7 +26,7 @@ export type InstanceBindingProbeResult = {
 };
 
 export const CHANNEL_BINDING_IDS = ["binding-first", "binding-second"] as const;
-export type ChannelBindingMonitor = {
+type ChannelBindingMonitor = {
   channelId: string;
   runtimeId: number;
   runtime: PluginRuntime;

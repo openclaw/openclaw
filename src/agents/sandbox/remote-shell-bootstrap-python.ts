@@ -37,7 +37,7 @@ export const PUBLISH_REMOTE_WORKSPACE = [
   "        rename_no_replace(parent_fd, os.path.basename(staging), parent_fd, os.path.basename(destination))",
   "    except OSError as error:",
   "        if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):",
-  "            raise OSError(error.errno, 'atomic no-replace directory publication failed; a supported remote rename primitive and writable parent directory are required: ' + str(error), destination) from error",
+  "            raise OSError(error.errno, 'remote workspace directory publication failed; check directory rename support and parent permissions: ' + str(error), destination) from error",
   "        winner = os.lstat(os.path.basename(destination), dir_fd=parent_fd)",
   "        if not stat.S_ISDIR(winner.st_mode):",
   "            raise",

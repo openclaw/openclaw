@@ -15,18 +15,13 @@ const MAX_PROMPT_BLOB_BYTES = 512 * 1024;
 const PROMPT_REF_CACHE_MAX_ENTRIES = 256;
 const VALID_PROMPT_BLOB_CACHE_MAX_ENTRIES = 256;
 
-type PersistedSessionStore = {
-  store: Record<string, SessionEntry>;
-  changed: boolean;
-};
-
 type SessionSkillPromptBlobProjection = {
   ref: SessionSkillPromptRef;
-  path: string | null;
   prompt: string;
 };
 
-type SessionStorePersistenceProjection = PersistedSessionStore & {
+type SessionStorePersistenceProjection = {
+  store: Record<string, SessionEntry>;
   promptBlobs: Map<string, SessionSkillPromptBlobProjection>;
 };
 
@@ -159,7 +154,6 @@ export function projectSessionStoreForPersistence(params: {
       const promptRef = buildPromptRef(prompt);
       promptBlobs.set(promptRef.hash, {
         ref: promptRef,
-        path: resolveSessionSkillPromptBlobPath(params.storePath, promptRef.hash),
         prompt,
       });
       projectedEntry = stripPromptForPersistence(projectedEntry, promptRef);
@@ -173,7 +167,7 @@ export function projectSessionStoreForPersistence(params: {
     }
     persisted[key] = projectedEntry;
   }
-  return { store: persisted, changed: persisted !== params.store, promptBlobs };
+  return { store: persisted, promptBlobs };
 }
 
 export async function ensureSessionStorePromptBlobsForPersistence(params: {

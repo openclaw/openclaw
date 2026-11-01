@@ -27,33 +27,36 @@ vi.mock("../infra/delivery-queue-sqlite.js", async () => {
 vi.mock("../infra/outbound/delivery-queue-media-spool.js", () => ({
   pruneOrphanedDeliveryQueueMedia: pruneOrphanedDeliveryQueueMediaMock,
 }));
+// mock-isolation: Delivery cleanup must not start the unrelated device expiry worker.
 vi.mock("../infra/device-bootstrap.js", () => ({
-  pruneExpiredDevicePairSetupCompletions: vi.fn(async () => 0),
+  startDevicePairSetupMaintenance: vi.fn(async () => 0),
 }));
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: GatewayScheduler;
 
-function createMaintenanceTimerDeps() {
-  return {
+function startMaintenance() {
+  return startGatewayMaintenanceTimers({
     ...createGatewayMaintenanceStateForTest(),
     scheduler,
     isNixMode: true,
-    runWorktreeGc: vi.fn(async () => undefined),
     runDeliveryQueueMediaGc: undefined,
-  };
+  });
 }
 
-async function stopMaintenanceTimers(
-  timers: ReturnType<typeof import("./server-maintenance.js").startGatewayMaintenanceTimers>,
-) {
+async function stopMaintenanceTimers(timers: ReturnType<typeof startMaintenance>) {
   await timers.stopPeriodicTasks();
   await timers.skillUsageCleanup();
 }
 
+function expectCleanupCalls(count: number) {
+  expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(count);
+  expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(count);
+}
+
 describe("delivery queue maintenance", () => {
   beforeEach(() => {
-    clock = createGatewaySchedulerClock();
+    clock = createGatewaySchedulerClock(1_234);
     scheduler = createTestGatewayScheduler(clock.clock);
   });
 
@@ -63,18 +66,15 @@ describe("delivery queue maintenance", () => {
     pruneOrphanedDeliveryQueueMediaMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("runs tombstone expiry with default queue media cleanup at startup and hourly", async () => {
-    const deps = createMaintenanceTimerDeps();
-    const timers = startGatewayMaintenanceTimers(deps);
-
+  it("defers tombstone and queue media cleanup through reconnects, then runs hourly", async () => {
+    const timers = startMaintenance();
     await waitForMediaCleanupDrainsToSettle();
-    await clock.advanceBy(0);
-    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(1);
-    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(1);
+    await clock.advanceBy(120_000);
+    expectCleanupCalls(0);
+    await clock.advanceBy(10_000);
+    expectCleanupCalls(1);
     await clock.advanceBy(60 * 60_000);
-    expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(2);
-    expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(2);
-
+    expectCleanupCalls(2);
     await stopMaintenanceTimers(timers);
   });
 
@@ -83,11 +83,10 @@ describe("delivery queue maintenance", () => {
     const media = createDeferredCore();
     pruneExpiredDeliveryQueueTombstonesMock.mockReturnValueOnce(expiry.promise);
     pruneOrphanedDeliveryQueueMediaMock.mockReturnValueOnce(media.promise);
-    const deps = createMaintenanceTimerDeps();
-    const timers = startGatewayMaintenanceTimers(deps);
+    const timers = startMaintenance();
     let stopped = false;
     await waitForMediaCleanupDrainsToSettle();
-    void clock.advanceBy(0);
+    void clock.advanceBy(130_000);
     const stopping = timers.stopMediaCleanup().then((result) => {
       stopped = true;
       return result;
@@ -103,8 +102,7 @@ describe("delivery queue maintenance", () => {
       media.resolve();
       await expect(stopping).resolves.toBe("drained");
       await clock.advanceBy(60 * 60_000);
-      expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledOnce();
-      expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledOnce();
+      expectCleanupCalls(1);
     } finally {
       expiry.resolve();
       media.resolve();

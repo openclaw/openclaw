@@ -32,16 +32,14 @@ export function formatRelativeDuration(durationMs: number): string {
   if (safeMs < ONE_MINUTE_MS) {
     return `${Math.ceil(safeMs / 1000)} seconds`;
   }
-  if (safeMs < ONE_HOUR_MS) {
-    const minutes = Math.ceil(safeMs / ONE_MINUTE_MS);
-    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-  }
-  if (safeMs < ONE_DAY_MS) {
-    const hours = Math.ceil(safeMs / ONE_HOUR_MS);
-    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  const days = Math.ceil(safeMs / ONE_DAY_MS);
-  return `${days} ${days === 1 ? "day" : "days"}`;
+  const [unitMs, unit] =
+    safeMs < ONE_HOUR_MS
+      ? ([ONE_MINUTE_MS, "minute"] as const)
+      : safeMs < ONE_DAY_MS
+        ? ([ONE_HOUR_MS, "hour"] as const)
+        : ([ONE_DAY_MS, "day"] as const);
+  const count = Math.ceil(safeMs / unitMs);
+  return `${count} ${unit}${count === 1 ? "" : "s"}`;
 }
 
 export function formatResetDuration(resetsAtMs: number, nowMs: number): string {

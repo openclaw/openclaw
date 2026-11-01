@@ -1,8 +1,8 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 
-// Tool Search's dispatcher name. Kept local: tool-search-types pulls session types,
+// Current and shipped dispatcher names. Kept local: tool-search-types pulls session types,
 // and activity projection imports this display leaf (architecture import cycle).
-const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
+const TOOL_CALL_DISPLAY_NAMES = new Set(["dispatch_action", "tool_call"]);
 
 /** Project the called tool for presentation without changing invocation identity or results. */
 export function unwrapToolCallForDisplay<Name extends string | undefined>(call: {
@@ -11,7 +11,7 @@ export function unwrapToolCallForDisplay<Name extends string | undefined>(call: 
 }): { name: Name | string; args?: unknown } {
   const args = asOptionalRecord(call.args);
   const id = typeof args?.id === "string" ? args.id.trim() : "";
-  if (call.name?.trim().toLowerCase() !== TOOL_CALL_RAW_TOOL_NAME || !id) {
+  if (!TOOL_CALL_DISPLAY_NAMES.has(call.name?.trim().toLowerCase() ?? "") || !id) {
     return call;
   }
   const innerArgs = args?.args;

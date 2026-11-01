@@ -71,13 +71,8 @@ struct BrowserProfileImportBannerContent: Equatable {
     }
 
     static func browserList(for profiles: [BrowserSystemProfile]) -> String {
-        var names: [String] = []
-        for profile in profiles {
-            let name = profile.browserDisplayName
-            if !names.contains(name) {
-                names.append(name)
-            }
-        }
+        var seen = Set<String>()
+        let names = profiles.map(\.browserDisplayName).filter { seen.insert($0).inserted }
         switch names.count {
         case 0:
             return String(localized: "your browser")
@@ -233,21 +228,17 @@ private struct BannerBadgeIcon: View {
             .padding(.trailing, 2)
     }
 
-    @ViewBuilder
     private var badgeSymbol: some View {
-        switch self.badge {
+        let (symbol, size, color): (String, CGFloat, Color) = switch self.badge {
         case .globe, .progress:
-            Image(systemName: "globe")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
+            ("globe", 11, .accentColor)
         case .success:
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.green)
+            ("checkmark.circle.fill", 13, .green)
         case .failure:
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.orange)
+            ("exclamationmark.triangle.fill", 11, .orange)
         }
+        return Image(systemName: symbol)
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(color)
     }
 }

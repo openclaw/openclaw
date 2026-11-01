@@ -2,7 +2,7 @@ import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/inde
 import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { prepareUserProfileSelectionAuthority } from "../state/user-channel-identity-operations.js";
-import { readUserProfileIdentity } from "../state/user-profile-list.js";
+import { readResidentUserProfileIdentity } from "../state/user-profile-list.js";
 import type { GatewayClient, RespondFn } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -29,7 +29,7 @@ export function prepareGatewayRecipientProfile(
     const profile = prepared
       ? prepared.identity
       : attached
-        ? readUserProfileIdentity(attached)
+        ? readResidentUserProfileIdentity(attached)
         : undefined;
     if (profile && profile.profileId.length <= USER_PROFILE_ID_MAX_LENGTH) {
       client.preparedSessionProfile = profile;

@@ -1,11 +1,9 @@
-import { getInternalSyncSteeringGetter } from "./internal-hooks.js";
+import {
+  attachInternalSteeringQueueObserver,
+  getInternalSteeringQueueObserver,
+  getInternalSyncSteeringGetter,
+} from "./internal-hooks.js";
 import type { AgentLoopConfig, AgentMessage } from "./types.js";
-
-export type ToolPlanState = { executionStarted: boolean };
-
-export function createToolPlanState(): ToolPlanState {
-  return { executionStarted: false };
-}
 
 export function getSteeringAtCheckpoint(
   config: AgentLoopConfig,
@@ -42,6 +40,12 @@ export function createStreamedSteeringConfig(config: AgentLoopConfig) {
       return messages;
     },
   };
+  if (streamedConfig.getSteeringMessages) {
+    attachInternalSteeringQueueObserver(
+      streamedConfig.getSteeringMessages,
+      getInternalSteeringQueueObserver(config.getSteeringMessages),
+    );
+  }
   return {
     config: streamedConfig,
     getTerminalConfig: () => (streamedSteering ? streamedConfig : config),

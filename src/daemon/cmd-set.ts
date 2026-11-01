@@ -1,7 +1,5 @@
-/** Windows cmd `set` assignment renderer/parser for managed service scripts. */
 type CmdSetAssignment = { key: string; value: string };
 
-/** Rejects line breaks before rendering values into Windows cmd scripts. */
 export function assertNoCmdLineBreak(value: string, field: string): void {
   if (/[\r\n]/.test(value)) {
     throw new Error(`${field} cannot contain CR or LF in Windows task scripts.`);

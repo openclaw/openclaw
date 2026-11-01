@@ -24,11 +24,19 @@ run_missing_configured_plugin_migration() {
 
   # Add the retired inputs after baseline validation so only the candidate owns them.
   phase seed-missing-plugin-inputs node "$helper" seed
-  phase update-missing-plugin update_candidate
-  [ "$update_outcome" = "success" ] && [ "$update_exit_code" = "0" ] || {
-    echo "Missing Codex must leave a successful update, not a repair-required result" >&2
+  local published_update_status=0
+  phase update-missing-plugin update_candidate || published_update_status=$?
+  if [ "$published_update_status" -ne 0 ]; then
+    phase assert-identityless-published-driver node "$helper" legacy-driver-refusal \
+      "$UPDATE_JSON" "$UPDATE_ERR" "$candidate_version" "$(package_root)"
+    # The shipped updater has exited and terminalized its identityless row. A standalone
+    # candidate Doctor now has fresh authority; do not forge driver identity or bypass admission.
+    phase recover-from-identityless-published-driver run_doctor
+  elif [ "$update_outcome" != "success" ] || [ "$update_exit_code" != "0" ]; then
+    echo "Missing Codex update returned an unexpected non-success outcome" >&2
     return 1
-  }
+  fi
+  phase assert-public-setup-migrations node "$helper" setup-outcomes
   phase assert-deferred-update node "$helper" pending post-update
   phase start-with-missing-plugin start_gateway
   phase missing-plugin-health check_gateway_probes

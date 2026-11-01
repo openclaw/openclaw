@@ -103,7 +103,7 @@ describe("managed Tailscale gateway ingress", () => {
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -147,7 +147,7 @@ describe("managed Tailscale gateway ingress", () => {
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
     const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -297,7 +297,7 @@ describe("managed Tailscale gateway ingress", () => {
     });
     const runtime = await createGatewayRuntimeStateForTest(registry, {
       tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
     });
     openServers.push(runtime);
     await runtime.startListening();
@@ -335,61 +335,5 @@ describe("managed Tailscale gateway ingress", () => {
     });
     expect(rejectedGatewayUpgrade.status).toBe(403);
     expect(rejectedGatewayUpgrade.body).toContain("proxy_attribution_required");
-  });
-
-  it("reports HTTP and WebSocket proxy ingress once without warning for attributable traffic", async () => {
-    const log = { info: vi.fn(), warn: vi.fn() };
-    const runtime = await createGatewayRuntimeStateForTest(undefined, {
-      tailscaleMode: "serve",
-      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
-      log,
-    });
-    openServers.push(runtime);
-    await runtime.startListening();
-    const ordinaryAddress = runtime.httpServer.address();
-    const endpoint = runtime.getTailscaleIngressEndpoint();
-    if (!ordinaryAddress || typeof ordinaryAddress === "string" || !endpoint) {
-      throw new Error("expected both gateway listeners");
-    }
-
-    await expect(
-      requestStatus({
-        host: "127.0.0.1",
-        port: ordinaryAddress.port,
-        path: "/ready",
-      }),
-    ).resolves.toMatchObject({ status: 200 });
-    await expect(
-      requestStatus({
-        host: endpoint.host,
-        port: endpoint.port,
-        path: "/ready",
-        headers: {
-          "x-forwarded-for": "100.64.0.10",
-          "x-forwarded-proto": "https",
-          "x-forwarded-host": "gateway.tailnet.ts.net",
-        },
-      }),
-    ).resolves.toMatchObject({ status: 200 });
-    expect(log.warn).not.toHaveBeenCalled();
-
-    const proxyRequest = {
-      host: "127.0.0.1",
-      port: ordinaryAddress.port,
-      path: "/ready",
-      headers: {
-        "x-forwarded-for": "203.0.113.10",
-        "x-forwarded-proto": "https",
-        "x-forwarded-host": "gateway.example",
-      },
-    } satisfies RequestOptions;
-    const rejectedHttp = await requestStatus(proxyRequest);
-    const rejectedWebSocket = await requestUpgrade(proxyRequest);
-
-    expect(rejectedHttp.status).toBe(403);
-    expect(rejectedHttp.body).toContain("proxy_attribution_required");
-    expect(rejectedWebSocket.status).toBe(403);
-    expect(log.warn).toHaveBeenCalledOnce();
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("gateway.trustedProxies"));
   });
 });

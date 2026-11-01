@@ -1,22 +1,18 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord as isJsonRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendQaChildOutput,
-  appendQaChildOutputTail,
   createQaChildOutputCapture,
-  createQaChildOutputTail,
-  formatQaChildOutputTail,
+  QA_CHILD_STDERR_TAIL_BYTES,
   QA_CHILD_STDOUT_MAX_BYTES,
   readQaChildOutput,
 } from "./child-output.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
-import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
 
@@ -111,13 +107,9 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
     if (expectedPayload !== undefined) {
       return expectedPayload;
     }
-    const payload = candidates.toReversed().find((value) => !isStructuredDiagnosticJson(value));
-    if (payload !== undefined) {
-      return payload;
-    }
-    const diagnosticOnly = candidates.at(-1);
-    if (diagnosticOnly !== undefined) {
-      return diagnosticOnly;
+    if (candidates.length > 0) {
+      const payload = candidates.findLast((value) => !isStructuredDiagnosticJson(value));
+      return payload !== undefined ? payload : candidates.at(-1);
     }
 
     // Keep a line-oriented fallback for compact payloads followed by diagnostics.
@@ -136,123 +128,75 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
   }
 }
 
-function killQaCliWindowsProcessTree(child: Pick<ChildProcessWithoutNullStreams, "kill" | "pid">) {
-  if (child.pid && runQaWindowsTaskkill({ pid: child.pid, signal: "SIGKILL" })) {
-    return;
-  }
-  child.kill("SIGKILL");
-}
-
 export async function runQaCli(
   env: Pick<QaSuiteRuntimeEnv, "gateway" | "repoRoot">,
   args: string[],
   opts?: { timeoutMs?: number; json?: boolean; env?: NodeJS.ProcessEnv },
 ) {
   const stdout = createQaChildOutputCapture();
-  const stdoutTail = createQaChildOutputTail();
-  const stderr = createQaChildOutputTail();
   const command = env.gateway.cliCommand ?? {
     executablePath: await resolveQaNodeExecPath(),
     argsPrefix: [path.join(env.repoRoot, "dist", "index.js")],
     cwd: env.gateway.tempRoot,
   };
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command.executablePath, [...command.argsPrefix, ...args], {
+  const result = await runUtf8CommandWithTimeout(
+    [command.executablePath, ...command.argsPrefix, ...args],
+    {
       cwd: command.cwd,
-      env: {
-        ...env.gateway.runtimeEnv,
-        ...opts?.env,
-      },
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
-    const rejectTimeout = () => {
-      const stdoutText = formatQaChildOutputTail(stdoutTail, "qa cli stdout");
-      const stderrText = formatQaChildOutputTail(stderr, "qa cli stderr");
-      const diagnostics = [
-        stdoutText ? `stdout:\n${stdoutText}` : "",
-        stderrText ? `stderr:\n${stderrText}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-      return new QaSuiteInfraError(
-        "qa_cli_timeout",
-        `qa cli timed out: openclaw ${args.join(" ")}${diagnostics ? `\n${diagnostics}` : ""}`,
-      );
-    };
-    const getExitError = (code: number | null) => {
-      if (code === 0) {
-        if (stdout.exceeded) {
-          return new Error(
-            `qa cli stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
-          );
+      baseEnv: env.gateway.runtimeEnv,
+      env: opts?.env,
+      input: "",
+      timeoutMs: resolveTimerTimeoutMs(opts?.timeoutMs, 60_000),
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      killSignal: "SIGKILL",
+      killGraceMs: 0,
+      maxOutputBytes: QA_CHILD_STDERR_TAIL_BYTES,
+      outputCapture: "tail",
+      terminateOnOutputError: true,
+      // Parse the full JSON head on success; the runner retains bounded tails through cleanup.
+      onOutputChunk: (chunk, stream) => {
+        if (stream === "stdout") {
+          appendQaChildOutput(stdout, chunk);
         }
-        return undefined;
-      }
-      const stderrText = formatQaChildOutputTail(stderr, "qa cli stderr");
-      return new Error(`qa cli failed (${code ?? "unknown"}): ${stderrText}`);
-    };
-    const onStdoutData = (chunk: Buffer) => {
-      appendQaChildOutput(stdout, chunk);
-      appendQaChildOutputTail(stdoutTail, chunk);
-    };
-    const onStderrData = (chunk: Buffer) => appendQaChildOutputTail(stderr, chunk);
-    if (process.platform !== "win32") {
-      createQaPosixCommandSettlement({
-        child,
-        settlementFailureMessage: "qa cli settlement failed",
-        executionTimeoutMs: timeoutMs,
-        forceKillAfterMs: 0,
-        initialSignal: "SIGKILL",
-        onSettled: (outcome) => {
-          const primary = outcome.primary;
-          const primaryError =
-            primary.type === "spawn-error" || primary.type === "stream-error"
-              ? primary.error
-              : primary.type === "timeout"
-                ? rejectTimeout()
-                : getExitError(primary.type === "exit" ? primary.exitCode : 1);
-          if (outcome.settlementFailure) {
-            reject(
-              primaryError
-                ? new AggregateError(
-                    [primaryError, outcome.settlementFailure],
-                    "qa cli command and settlement failed",
-                  )
-                : outcome.settlementFailure,
-            );
-            return;
-          }
-          if (primaryError) {
-            reject(primaryError);
-            return;
-          }
-          resolve();
-        },
-        onStderrData,
-        onStdoutData,
-        processGroupId: child.pid,
-        verifyAfterMs: 500,
-      });
-      return;
-    }
-    const timeout = setTimeout(() => {
-      killQaCliWindowsProcessTree(child);
-      reject(rejectTimeout());
-    }, timeoutMs);
-    child.stdout.on("data", onStdoutData);
-    child.stderr.on("data", onStderrData);
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      const error = getExitError(code);
-      return error ? reject(error) : resolve();
-    });
-  });
+      },
+    },
+  );
+  const diagnostic = (stream: "stdout" | "stderr") => {
+    const text = result[stream].trim();
+    return result[`${stream}TruncatedBytes`] && text
+      ? `[qa cli ${stream} truncated to last ${QA_CHILD_STDERR_TAIL_BYTES} bytes]\n${text}`
+      : text;
+  };
+  let error: Error | undefined;
+  if (result.termination === "timeout") {
+    const diagnostics = (["stdout", "stderr"] as const)
+      .map((stream) => {
+        const text = diagnostic(stream);
+        return text ? `${stream}:\n${text}` : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+    error = new QaSuiteInfraError(
+      "qa_cli_timeout",
+      `qa cli timed out: openclaw ${args.join(" ")}${diagnostics ? `\n${diagnostics}` : ""}`,
+    );
+  } else if (result.code !== 0) {
+    error = new Error(`qa cli failed (${result.code ?? "unknown"}): ${diagnostic("stderr")}`);
+  } else if (stdout.exceeded) {
+    error = new Error(
+      `qa cli stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
+    );
+  }
+  if (result.cleanup === "uncertain") {
+    const cleanup = new Error("qa cli settlement failed: process-tree cleanup unconfirmed");
+    throw error
+      ? new AggregateError([error, cleanup], "qa cli command and settlement failed")
+      : cleanup;
+  }
+  if (error) {
+    throw error;
+  }
   const text = readQaChildOutput(stdout).trim();
   if (!opts?.json) {
     return text;

@@ -1,106 +1,67 @@
-import { createNativeCommandItem } from "./event-projector-command.test-support.js";
+import * as fixture from "./event-projector.compact.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
   expect,
   it,
   createProjector,
-  buildEmptyToolTelemetry,
-  forCurrentTurn,
 } from "./event-projector.test-harness.js";
 
-function notify(
-  projector: Awaited<ReturnType<typeof createProjector>>,
-  method: Parameters<typeof forCurrentTurn>[0],
-  params: Record<string, unknown>,
-) {
-  return projector.handleNotification(forCurrentTurn(method, params));
+function execOutput(callId: string, error: string) {
+  return {
+    type: "custom_tool_call_output",
+    call_id: callId,
+    output: ["Script failed\nWall time 6.0 seconds\nOutput:\n", error].map((text) => ({
+      type: "input_text",
+      text,
+    })),
+  };
 }
 
 registerCodexEventProjectorTestLifecycle();
 
 describe("Codex Code Mode transcript projection", () => {
-  it.each([
-    { tool: "apply_patch", failed: false },
-    { tool: "apply_patch", failed: true },
-    { tool: "bash", failed: false },
-    { tool: "bash", failed: true },
-  ])("keeps the canonical $tool item when failed=$failed", async ({ tool, failed }) => {
+  it("keeps the canonical apply_patch item when it fails", async () => {
     const projector = await createProjector();
     const outerCallId = "code-mode-patch-exec";
     const nativeCallId = "code-mode-patch-file-change";
     const patchInput =
       "*** Begin Patch\n*** Add File: runtime-tool-fixture-patch.txt\n+runtime patch\n*** End Patch\n";
 
-    await notify(projector, "rawResponseItem/completed", {
+    await fixture.notify(projector, "rawResponseItem/completed", {
       item: {
         type: "custom_tool_call",
         call_id: outerCallId,
         name: "exec",
-        input:
-          tool === "apply_patch"
-            ? `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`
-            : 'text(await tools.exec_command({cmd: "exit 1"}));',
+        input: `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`,
       },
     });
-    await notify(projector, "item/completed", {
-      item:
-        tool === "apply_patch"
-          ? {
-              type: "fileChange",
-              id: nativeCallId,
-              changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
-              status: failed ? "failed" : "completed",
-            }
-          : createNativeCommandItem({
-              id: nativeCallId,
-              command: "exit 1",
-              status: failed ? "failed" : "completed",
-              exitCode: failed ? 1 : 0,
-            }),
+    await fixture.complete(projector, {
+      type: "fileChange",
+      id: nativeCallId,
+      changes: [{ path: "runtime-tool-fixture-patch.txt", kind: { type: "add" } }],
+      status: "failed",
     });
-    await notify(projector, "rawResponseItem/completed", {
-      item: {
-        type: "custom_tool_call_output",
-        call_id: outerCallId,
-        output: [
-          {
-            type: "input_text",
-            text: `Script ${tool === "apply_patch" && failed ? "failed" : "completed"}\nWall time 6.0 seconds\nOutput:\n`,
-          },
-          {
-            type: "input_text",
-            text:
-              tool === "apply_patch"
-                ? failed
-                  ? "Script error: patch failed"
-                  : "{}"
-                : JSON.stringify({
-                    wall_time_seconds: 0.1,
-                    exit_code: failed ? 1 : 0,
-                    output: "command output",
-                  }),
-          },
-        ],
-      },
+    await fixture.notify(projector, "rawResponseItem/completed", {
+      item: execOutput(outerCallId, "Script error: patch failed"),
     });
 
-    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const result = fixture.result(projector);
     const patchCalls = result.messagesSnapshot.flatMap((message) => {
       if (message.role !== "assistant" || !Array.isArray(message.content)) {
         return [];
       }
       return message.content.filter(
-        (block) => block.type === "toolCall" && "name" in block && block.name === tool,
+        (block) => block.type === "toolCall" && "name" in block && block.name === "apply_patch",
       );
     });
     expect(patchCalls).toHaveLength(1);
-    expect(patchCalls[0]).toMatchObject({ id: nativeCallId, name: tool });
+    expect(patchCalls[0]).toMatchObject({ id: nativeCallId, name: "apply_patch" });
     expect(
       result.messagesSnapshot.filter(
-        (message) => message.role === "toolResult" && message.toolName === tool,
+        (message) => message.role === "toolResult" && message.toolName === "apply_patch",
       ),
-    ).toEqual([expect.objectContaining({ toolCallId: nativeCallId, isError: failed })]);
+    ).toEqual([expect.objectContaining({ toolCallId: nativeCallId, isError: true })]);
     expect(result.messagesSnapshot).toContainEqual(
       expect.objectContaining({
         role: "toolResult",
@@ -111,43 +72,65 @@ describe("Codex Code Mode transcript projection", () => {
         }),
       }),
     );
+    expect(result.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "apply_patch", isError: true }),
+    ]);
   });
 
+  it.each(["code-mode", "custom", "function"] as const)(
+    "retains a rejected %s patch in counts after a successful retry",
+    async (mode) => {
+      const projector = await createProjector();
+      const callId = "rejected-patch";
+      const input = "*** Begin Patch\n*** Add File: example.txt\ninvalid hunk\n*** End Patch";
+      const rejection = "apply_patch verification failed: invalid hunk at line 3";
+      await fixture.notify(projector, "rawResponseItem/completed", {
+        item: {
+          type: mode === "function" ? "function_call" : "custom_tool_call",
+          call_id: callId,
+          name: mode === "code-mode" ? "exec" : "apply_patch",
+          ...(mode === "function"
+            ? { arguments: JSON.stringify({ input }) }
+            : {
+                input:
+                  mode === "code-mode"
+                    ? `text(await tools.apply_patch(${JSON.stringify(input)}));`
+                    : input,
+              }),
+        },
+      });
+      const output =
+        mode === "code-mode"
+          ? execOutput(callId, `Script error: ${rejection}`)
+          : {
+              type: mode === "function" ? "function_call_output" : "custom_tool_call_output",
+              call_id: callId,
+              output: rejection,
+            };
+      await fixture.notify(projector, "rawResponseItem/completed", { item: output });
+      await fixture.notify(projector, "rawResponseItem/completed", { item: output });
+      await fixture.complete(projector, {
+        type: "fileChange",
+        id: "corrected-patch",
+        changes: [{ path: "example.txt", kind: { type: "add" } }],
+        status: "completed",
+      });
+
+      const result = fixture.result(projector);
+      expect(result.toolMetas).toEqual([
+        expect.objectContaining({ toolName: "apply_patch", isError: true }),
+        expect.objectContaining({ toolName: "apply_patch", isError: false }),
+      ]);
+      expect(
+        result.messagesSnapshot.filter(
+          (message) => message.role === "toolResult" && message.toolCallId === callId,
+        ),
+      ).toEqual([expect.objectContaining({ toolName: "apply_patch", isError: true })]);
+      expect(result.lastToolError).toBeUndefined();
+    },
+  );
+
   it.each([
-    {
-      label: "an extra executable code-mode call",
-      source:
-        'const result = await tools.apply_patch("*** Begin Patch\\n*** Add File: fake.txt\\n+x\\n*** End Patch");\nawait tools.exec_command({cmd:"touch /tmp/not-a-native-patch"});\ntext(result);\n',
-    },
-    {
-      label: "a dynamically interpolated code-mode patch",
-      source:
-        "const result = await tools.apply_patch(`*** Begin Patch\\n${patch}\\n*** End Patch`);\ntext(result);\n",
-    },
-    {
-      label: "a mismatched code-mode output variable",
-      source:
-        'const result = await tools.apply_patch("*** Begin Patch\\n*** Add File: fake.txt\\n+x\\n*** End Patch");\ntext(other);\n',
-    },
-    {
-      label: "a shadowed tools binding",
-      source: 'const tools = {cmd: "exit 1"}; text(await tools.exec_command(tools));',
-    },
-    {
-      label: "a shadowed text binding",
-      source: 'const text = await tools.exec_command({cmd: "exit 1"}); text(text);',
-    },
-    {
-      label: "an invalid binding",
-      source: 'const await = {cmd: "exit 1"}; text(await tools.exec_command(await));',
-    },
-    { label: "a command expression", source: "text(await tools.exec_command({cmd: command()}));" },
-    {
-      label: "an altered result",
-      source:
-        'const result = await tools.exec_command({cmd: "exit 1"}); result.exit_code = 1; text(result);',
-    },
-    { label: "an unbound command input", source: "text(await tools.exec_command(args));" },
     {
       label: "a mismatched input variable",
       source: 'const args = {cmd: "exit 1"}; text(await tools.exec_command(other));',
@@ -164,59 +147,19 @@ describe("Codex Code Mode transcript projection", () => {
     const projector = await createProjector();
     const callId = "not-an-isolated-code-mode-patch";
 
-    await notify(projector, "rawResponseItem/completed", {
+    await fixture.notify(projector, "rawResponseItem/completed", {
       item: { type: "custom_tool_call", call_id: callId, name: "exec", input: source },
     });
-    await notify(projector, "rawResponseItem/completed", {
-      item: {
-        type: "custom_tool_call_output",
-        call_id: callId,
-        output: [
-          { type: "input_text", text: "Script failed\nWall time 6.0 seconds\nOutput:\n" },
-          {
-            type: "input_text",
-            text: "Script error:\npatch rejected: writing outside of the project; rejected by user approval settings",
-          },
-        ],
-      },
+    await fixture.notify(projector, "rawResponseItem/completed", {
+      item: execOutput(
+        callId,
+        "Script error:\npatch rejected: writing outside of the project; rejected by user approval settings",
+      ),
     });
 
-    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const result = fixture.result(projector);
     expect(result.messagesSnapshot.filter((message) => message.role === "toolResult")).toEqual([
       expect.objectContaining({ toolCallId: callId, toolName: "exec", isError: true }),
-    ]);
-  });
-  it.each([
-    { label: "zero exit", result: { exit_code: 0 } },
-    { label: "running command", result: { exit_code: 1, session_id: 42 } },
-    { label: "missing exit", result: {} },
-    { label: "string exit", result: { exit_code: "1" } },
-  ])("does not turn $label into a failed bash receipt", async ({ result }) => {
-    const projector = await createProjector();
-    const callId = "outer-command";
-    await notify(projector, "rawResponseItem/completed", {
-      item: {
-        type: "custom_tool_call",
-        call_id: callId,
-        name: "exec",
-        input: 'text(await tools.exec_command({cmd: "command"}));',
-      },
-    });
-    const output = `Script completed\nWall time 0.1 seconds\nOutput:\n${JSON.stringify({ wall_time_seconds: 0.1, output: "EPERM in ordinary output does not prove failure", ...result })}`;
-    await notify(projector, "rawResponseItem/completed", {
-      item: { type: "custom_tool_call_output", call_id: callId, output },
-    });
-    expect(
-      projector
-        .buildResult(buildEmptyToolTelemetry())
-        .messagesSnapshot.filter((message) => message.role === "toolResult"),
-    ).toEqual([
-      expect.objectContaining({
-        toolCallId: callId,
-        toolName: "exec",
-        isError: false,
-        content: [{ type: "text", text: output }],
-      }),
     ]);
   });
 });

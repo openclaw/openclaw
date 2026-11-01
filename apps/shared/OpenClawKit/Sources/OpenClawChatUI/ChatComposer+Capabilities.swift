@@ -92,9 +92,9 @@ extension OpenClawChatComposer {
     private var cleanInlinePermissionGlyph: some View {
         ZStack {
             Image(systemName: "shield")
-                .font(OpenClawChatTypography.display(size: 18, weight: .semibold, relativeTo: .body))
+                .font(.system(size: OpenClawChatTypography.scaled(18), weight: .semibold))
             Image(systemName: self.cleanInlinePermissionOverlaySymbol)
-                .font(OpenClawChatTypography.display(size: 7, weight: .bold, relativeTo: .caption2))
+                .font(.system(size: OpenClawChatTypography.scaled(7), weight: .bold))
                 .offset(y: -1)
         }
         .foregroundStyle(.secondary)

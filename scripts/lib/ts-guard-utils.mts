@@ -2,7 +2,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser, type NativeTypeScriptParser } from "./native-typescript.mts";
 
 const baseTestSuffixes = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
@@ -35,14 +35,17 @@ export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]) {
 }
 
 export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: string[] = []) {
-  return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
+  return [...baseTestSuffixes, ...extraTestSuffixes].some(
+    (suffix) =>
+      filePath.endsWith(suffix) || (suffix.endsWith(".ts") && filePath.endsWith(`${suffix}x`)),
+  );
 }
 
 async function collectTypeScriptFiles(
   targetPath: string,
   options: CollectTypeScriptFilesOptions = {},
 ): Promise<string[]> {
-  const fileExtensions = options.fileExtensions ?? [".ts"];
+  const fileExtensions = options.fileExtensions ?? [".ts", ".tsx"];
   const includeTests = options.includeTests ?? false;
   const extraTestSuffixes = options.extraTestSuffixes ?? [];
   const skipNodeModules = options.skipNodeModules ?? true;

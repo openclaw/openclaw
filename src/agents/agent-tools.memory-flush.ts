@@ -9,8 +9,6 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { recordModelFallbackStop } from "./model-fallback-stop.js";
 import { isToolResultError } from "./tool-result-error.js";
 
-/** Host-only persistence identity and completion recorder for one flush cycle. */
-
 type MemoryFlushToolProjection =
   | Parameters<typeof wrapToolMemoryFlushAppendOnlyWrite>[1]
   | MemoryFlushToolRunContext;
@@ -126,41 +124,22 @@ export function assertMemoryFlushPersistenceToolAvailable(
   }
   const availableNames = new Set(
     tools
-      .filter(
-        (tool) =>
-          tool.name !== "read" && getPluginToolMeta(tool)?.pluginId === context.ownerPluginId,
-      )
-      .map((tool) => tool.name),
-  );
-  if (context.persistenceToolNames.some((name) => availableNames.has(name))) {
-    warnIfMemoryFlushLookupToolsUnavailable(tools, context);
-    return;
-  }
-  throw new MemoryFlushToolsUnavailableError(
-    context.persistenceToolNames.filter((name) => !availableNames.has(name)),
-  );
-}
-
-/** Warn when policy removes provider lookup tools without blocking persistence. */
-function warnIfMemoryFlushLookupToolsUnavailable(
-  tools: readonly AnyAgentTool[],
-  context: MemoryFlushToolRunContext | undefined,
-): void {
-  if (!context?.lookupToolNames?.length) {
-    return;
-  }
-  const availableNames = new Set(
-    tools
       .filter((tool) => getPluginToolMeta(tool)?.pluginId === context.ownerPluginId)
       .map((tool) => tool.name),
   );
-  const missingNames = [
-    ...new Set(context.lookupToolNames.filter((name) => !availableNames.has(name))),
-  ];
-  if (missingNames.length === 0) {
-    return;
+  const isPersistenceToolAvailable = (name: string) => name !== "read" && availableNames.has(name);
+  if (!context.persistenceToolNames.some(isPersistenceToolAvailable)) {
+    throw new MemoryFlushToolsUnavailableError(
+      context.persistenceToolNames.filter((name) => !isPersistenceToolAvailable(name)),
+    );
   }
-  logWarn(
-    `plugin "${context.ownerPluginId}" flush cannot check for existing memory: ${missingNames.join(", ")} did not survive this agent's tool policy.`,
-  );
+  // Missing lookup tools warn without blocking an available persistence tool.
+  const missingNames = [
+    ...new Set((context.lookupToolNames ?? []).filter((name) => !availableNames.has(name))),
+  ];
+  if (missingNames.length > 0) {
+    logWarn(
+      `plugin "${context.ownerPluginId}" flush cannot check for existing memory: ${missingNames.join(", ")} did not survive this agent's tool policy.`,
+    );
+  }
 }
