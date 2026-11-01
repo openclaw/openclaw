@@ -2141,7 +2141,11 @@
     box-shadow: none;
   }
 
+  /* One rhythm: side inset, row gap, label, field height and value size. Real inputs sit on
+     iOS's 16px floor, so the facets match it instead of going below it. */
   .usage-filter-sheet__body {
+    --settings-control-height: 40px;
+
     display: grid;
     gap: var(--space-3);
     min-height: 0;
@@ -2150,15 +2154,41 @@
     overscroll-behavior: contain;
   }
 
-  .usage-filter-sheet__fields,
+  .usage-filter-sheet__fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
   .usage-filter-sheet__facets {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3) var(--space-2);
+    gap: var(--space-3);
   }
 
   .usage-filter-sheet__fields .field {
+    flex: 1 1 calc(50% - var(--space-3));
     min-width: 0;
+  }
+
+  /* A full date plus its calendar needs more than half of the narrowest phones. */
+  .usage-filter-sheet__fields .field:nth-child(-n + 2) {
+    flex-basis: 150px;
+  }
+
+  .usage-filter-sheet__body :is(input, select) {
+    font-size: 16px;
+  }
+
+  .usage-filter-sheet__body :is(.usage-query-section, .usage-query-bar) {
+    gap: var(--space-3);
+  }
+
+  .usage-filter-sheet__body .usage-query-bar .btn {
+    justify-content: center;
+    height: var(--settings-control-height);
+    min-height: var(--settings-control-height);
+    font-size: var(--control-ui-text-md);
   }
 
   .usage-filter-sheet__fields :is(.usage-date-input, .usage-select) {
@@ -2169,8 +2199,13 @@
   /* Wide mono themes keep the select one line tall. */
   .usage-filter-sheet__fields .usage-select {
     overflow: hidden;
+    padding-right: 10px;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .usage-filter-sheet__fields .usage-select::picker-icon {
+    flex: none;
   }
 
   .usage-filter-sheet__body > .settings-segmented {
@@ -2187,9 +2222,57 @@
     width: 100%;
   }
 
+  /* A facet reads as a labelled select: its label above, its value in the field. */
+  .usage-filter-sheet__facets .usage-filter-trigger,
+  .usage-filter-sheet__facets .usage-filter-trigger:hover,
+  .usage-filter-sheet__facets .usage-filter-trigger[aria-expanded="true"] {
+    display: block;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
   .usage-filter-sheet__facets .usage-filter-trigger > .oc-menu-item__label {
-    justify-content: space-between;
+    display: grid;
+    gap: 6px;
     width: 100%;
+    text-align: start;
+  }
+
+  .usage-filter-sheet__facets .oc-menu-item__label > span:first-child {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .usage-filter-sheet__facets .settings-count {
+    display: flex;
+    justify-content: space-between;
+    height: var(--settings-control-height);
+    padding: 0 var(--field-padding-inline);
+    border: 1px solid var(--field-border);
+    border-radius: var(--field-radius);
+    background: var(--field-bg);
+    color: var(--text);
+    font-size: 16px;
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  .usage-filter-sheet__facets .settings-count::after {
+    content: "";
+    flex: none;
+    width: 16px;
+    height: 16px;
+    background: var(--text-tertiary);
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+  }
+
+  .usage-filter-sheet__facets .usage-filter-trigger[aria-expanded="true"] .settings-count {
+    border-color: var(--field-focus-border);
   }
 }
 
