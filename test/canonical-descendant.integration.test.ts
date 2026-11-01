@@ -1131,6 +1131,44 @@ describe("canonical descendant lifecycle through real owners", () => {
     });
   }, 180_000);
 
+  it("retains a read-only app tool on a native fork", async () => {
+    await withFixture(
+      async (fixture, fork) => {
+        const source = await fixture.adopt();
+        await fixture.turn(source.sessionKey, "canonical");
+        const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+        const result = await withRetainedNativeForkAttempt(fixture, () =>
+          fork(source.sessionKey, selected.entryId),
+        );
+        expect(result, result.message).toMatchObject({ ok: true });
+        const binding = expectDefined(
+          bindingFor(fixture, expectDefined(result.key, "child key")),
+          "child binding",
+        );
+        expect(fixture.native.threads.get(binding.threadId)?.config).toMatchObject({
+          apps: {
+            "synthetic-app": {
+              default_tools_enabled: false,
+              tools: { "synthetic.lookup": { enabled: true } },
+            },
+          },
+        });
+      },
+      {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            synthetic: {
+              marketplaceName: "openai-curated",
+              pluginName: "synthetic",
+              read_only: true,
+            },
+          },
+        },
+      },
+    );
+  }, 180_000);
+
   it("forks with the current native model instead of the stale persisted model", async () => {
     await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();

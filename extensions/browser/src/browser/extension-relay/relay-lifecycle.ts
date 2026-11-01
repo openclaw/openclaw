@@ -145,8 +145,7 @@ async function ensureDesiredRelay(params: {
           existing.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth;
         if (matches && existing.ownership === "borrowed" && existing.client.connected) {
           try {
-            // A live socket can still have an unread retirement notice. Reuse requires
-            // a response from this owner; loss without cleanup acknowledgement stays blocked.
+            // Reuse requires a response; an unread retirement notice can invalidate a live socket.
             await existing.client.status();
           } catch (error) {
             if (existing.client.connected) {
@@ -276,24 +275,20 @@ async function ensureDesiredRelay(params: {
   });
 }
 
-/** Start relays for every extension-driver profile (control service startup). */
-export async function startConfiguredExtensionRelays(
-  state: BrowserServerState,
-  resolveProfileByName: (name: string) => ResolvedBrowserProfile | null,
-  onWarn: (message: string) => void,
-): Promise<void> {
+/** Start configured relays before browser requests; individual failures leave Browser control up. */
+export async function startConfiguredExtensionRelays(state: BrowserServerState): Promise<void> {
   for (const [name, profile] of Object.entries(state.resolved.profiles)) {
     if (profile.driver !== "extension") {
       continue;
     }
-    const resolved = resolveProfileByName(name);
+    const resolved = resolveProfile(state.resolved, name);
     if (!resolved) {
       continue;
     }
     try {
       await ensureExtensionRelayForProfile(state, resolved);
     } catch (err) {
-      onWarn(`extension relay for profile "${name}" failed to start: ${String(err)}`);
+      log.warn(`extension relay for profile "${name}" failed to start: ${String(err)}`);
     }
   }
 }

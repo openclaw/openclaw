@@ -1093,16 +1093,12 @@ it("fails index --force when the memory index has orphaned provenance", async ()
   expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
 });
 
-it("rejects an empty --query override before acquisition", async () => {
-  const writeJson = spyRuntimeJson(defaultRuntime);
-  await expect(run(["search", "positional", "--query", "", "--json"])).rejects.toThrow(
-    "Missing search query. Provide a positional query or use --query <text>.",
-  );
-  expect(getMemorySearchManager).not.toHaveBeenCalled();
-  expect(writeJson).not.toHaveBeenCalled();
-});
-
 it.each([
+  [
+    ["search", "positional", "--query", ""],
+    false,
+    "Missing search query. Provide a positional query or use --query <text>.",
+  ],
   [["forget", "--dry-run"], false, "Memory forget requires --session"],
   [["promote-explain", "   "], false, "Memory promote-explain requires a non-empty selector."],
   [
@@ -1180,31 +1176,27 @@ it("qualifies json search results when the index remains stale", async () => {
   });
 });
 
-it("prints no candidates when promote has no short-term recall data", async () => {
+it.each(["München", "Mu\u0308nchen"])("promote-explain finds %s", async (title) => {
   const workspaceDir = await createWorkspace();
-  mockWorkspace(workspaceDir);
+  getMemorySearchManager.mockResolvedValue({ manager: workspaceManager(workspaceDir) });
   const log = spyRuntimeLogs(defaultRuntime);
   await run("promote");
   expect(log).toHaveBeenCalledWith("No short-term recall candidates.");
   expect(process.exitCode).toBe(0);
-});
-
-it("explains a specific promote candidate as json", async () => {
-  const workspaceDir = await createWorkspace();
   await recordRecall(
     workspaceDir,
     "router notes",
-    recallResult("memory/2026-04-03.md", "Configured VLAN 10 for IoT on router", {
+    recallResult("memory/2026-04-03.md", `Configured VLAN 10 for IoT in ${title}`, {
       startLine: 4,
       endLine: 8,
       score: 0.86,
     }),
   );
-  mockWorkspace(workspaceDir);
   const writeJson = spyRuntimeJson(defaultRuntime);
-  await run(["promote-explain", "  router  ", "--json", "--include-promoted"]);
+  const query = title === "München" ? "Mu\u0308nchen" : "München";
+  await run(["promote-explain", `  ${query}  `, "--json", "--include-promoted"]);
   expect(jsonValue(writeJson)).toMatchObject({
-    candidate: { snippet: expect.stringContaining("Configured VLAN 10") },
+    candidate: { snippet: `Configured VLAN 10 for IoT in ${title}` },
   });
 });
 

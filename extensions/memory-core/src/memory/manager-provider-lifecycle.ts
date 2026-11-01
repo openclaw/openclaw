@@ -76,14 +76,18 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
   const configuredProvider = (
     agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider
   )?.trim();
-  if (params.settings.provider === "none" || configuredProvider === "none") {
+  if (params.settings.provider === "none" || configuredProvider?.toLowerCase() === "none") {
     return { mode: "fts-only", provider: params.settings.provider };
   }
   const adapterTransport = resolveEmbeddingProviderAdapterTransport(
     params.settings.provider,
     params.cfg,
   );
-  if (!configuredProvider || configuredProvider === "auto" || adapterTransport === "local") {
+  if (
+    !configuredProvider ||
+    configuredProvider.toLowerCase() === "auto" ||
+    adapterTransport === "local"
+  ) {
     return { mode: "optional", provider: params.settings.provider };
   }
   return {

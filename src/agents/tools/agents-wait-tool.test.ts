@@ -14,6 +14,7 @@ import {
 } from "../../sessions/session-controller.stop.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as codeModeState from "../code-mode-state.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "../code-mode.js";
 import {
   createCodeModeHarness,
@@ -795,17 +796,19 @@ describe("agents_wait", () => {
     });
   });
 
-  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
-    const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
-
-    expect(result.details).toEqual({
-      completed: [],
-      pending: [],
-      errors: [{ runId: "missing", error: "not_found" }],
-      success: false,
-    });
+  it("fails missing batches and guides announcing-only waits without dropping results", async () => {
+    const child = { collect: undefined, expectsCompletionMessage: true };
+    records.set("announcing", { ...collectorRun("announcing", MAIN), ...child });
+    records.set("quiet", { ...collectorRun("quiet", MAIN), collect: undefined });
+    records.set("plain", { ...collectorRun("plain", "agent:other:main"), ...child });
+    addRun("done", { status: "done" });
+    await expect(executeWait(["announcing"])).rejects.toThrow("report back to this session");
+    const notFound = (ids: string[]) => ids.map((runId) => ({ runId, error: "not_found" }));
+    const mix = (await executeWait(["done", "announcing"])).details;
+    expect(mix).toMatchObject({ completed: [{ runId: "done" }], errors: notFound(["announcing"]) });
+    const result = await executeWait(["missing", "plain", "quiet"]);
+    const errors = notFound(["missing", "plain", "quiet"]);
+    expect(result.details).toEqual({ completed: [], pending: [], errors, success: false });
     expect(isToolResultError(result)).toBe(true);
   });
 
@@ -839,6 +842,19 @@ describe("agents_wait", () => {
       const first = addRun("first-required", { status: "done" });
       const second = addRun("second-required");
       const read = observeRead();
+      const parked = createDeferred();
+      const settle = codeModeState.waitForPendingBridgeSettlement;
+      const settlement = vi
+        .spyOn(codeModeState, "waitForPendingBridgeSettlement")
+        .mockImplementation((...args) => {
+          if (
+            args[0].some((entry) => entry.method === "callValue" && entry.args[0] === "agents_wait")
+          ) {
+            parked.resolve();
+          }
+          return settle(...args);
+        });
+      onTestFinished(() => settlement.mockRestore());
       const h = createCodeModeHarness();
       applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createMainSessionWaitTool()] });
       const result = expectDefined(h.tools[0], "exec").execute("required-child-results", {
@@ -852,6 +868,11 @@ describe("agents_wait", () => {
       };
       try {
         await read;
+        // Registry I/O starts before the worker returns its checkpoint. Advance
+        // the fake clock only after its watchdog clears and off-VM waiting begins.
+        expect(
+          await Promise.race([parked.promise.then(() => "parked"), result.then(() => "finished")]),
+        ).toBe("parked");
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         await vi.advanceTimersByTimeAsync(60_000);
         const pending = Symbol("pending");
@@ -860,7 +881,8 @@ describe("agents_wait", () => {
         second.completion = { required: false, resultText: "child failure evidence" };
         complete();
         vi.useRealTimers();
-        expect((await result).details).toMatchObject({
+        const details = (await result).details;
+        expect(details, JSON.stringify(details)).toMatchObject({
           status: "completed",
           value: {
             pending: [],

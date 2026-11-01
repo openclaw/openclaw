@@ -10,7 +10,9 @@ type ImageResolution = {
 };
 type ImageDecision = {
   media: Map<number, MediaFact>;
+  /** Hashes of the sanitized images the model received, per media part. */
   hashes: Map<number | null, Set<string>>;
+  includedCount: number;
   failedMediaCount: number;
 };
 
@@ -74,11 +76,9 @@ export async function resolvePromptImageDecisions(params: {
             : fact,
         )
       : params.media,
-    previous
-      ? params.existingImages.filter((image) =>
-          [...previous.hashes.values()].some((hashes) => hashes.has(imageHash(image))),
-        )
-      : params.existingImages,
+    // Inline blocks can be resized again on every request, so pinned output
+    // hashes cannot filter these raw inputs. The comparison below owns replay.
+    params.existingImages,
   );
   if (!previous) {
     const hashes = new Map<number | null, Set<string>>();
@@ -93,24 +93,29 @@ export async function resolvePromptImageDecisions(params: {
         isImageMediaFact(fact) && hashes.has(index) ? [[index, fact] as const] : [],
       ),
     );
-    decisions.set(key, { media, hashes, failedMediaCount: result.failedMediaCount });
+    decisions.set(key, {
+      media,
+      hashes,
+      includedCount: result.images.length,
+      failedMediaCount: result.failedMediaCount,
+    });
     return result;
   }
   const images: ImageContent[] = [];
   const imageFactIndexes: (number | null)[] = [];
-  let changed = 0;
   result.images.forEach((image, index) => {
     const part = result.imageFactIndexes[index] ?? null;
     if (previous.hashes.get(part)?.has(imageHash(image))) {
       images.push(image);
       imageFactIndexes.push(part);
-    } else {
-      changed++;
     }
   });
+  // Pinned omissions are already counted; only a previously included image that
+  // is now missing or changed is a new failure.
   return {
     images,
     imageFactIndexes,
-    failedMediaCount: previous.failedMediaCount + result.failedMediaCount + changed,
+    failedMediaCount:
+      previous.failedMediaCount + Math.max(0, previous.includedCount - images.length),
   };
 }

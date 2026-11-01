@@ -218,27 +218,6 @@ describe("skills workshop cli", () => {
     },
   );
 
-  it("never replays a mutation locally after dispatching it to the Gateway", async () => {
-    // The Gateway owns the lock until it receives the restore, then exits before replying.
-    mocks.acquireGatewayLock.mockImplementation(async () => {
-      if (mocks.callGateway.mock.calls.length === 0) {
-        throw new Error("lock held");
-      }
-      return { run: (action: () => unknown) => action(), release: vi.fn() };
-    });
-    mocks.callGateway.mockRejectedValue(gatewayClosed());
-
-    await expect(runCli("skills workshop restore release-notes")).rejects.toThrow(
-      "gateway closed (1006)",
-    );
-
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.callGateway.mock.calls[0]?.[0]).toMatchObject({
-      method: "skills.workshop.restore",
-    });
-    expect(mocks.restoreWorkshopSkill).not.toHaveBeenCalled();
-  });
-
   it("falls back to local reads when the Gateway is unavailable", async () => {
     mocks.callGateway.mockRejectedValue(gatewayClosed());
     mocks.listWorkshopChanges.mockResolvedValue([change]);

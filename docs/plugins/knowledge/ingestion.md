@@ -45,7 +45,12 @@ Remembering and extraction are best effort; read back what was saved.
   claims. Useful decisions, commitments, beliefs, and timeline events become
   claim records.
 - **One event, many entities.** A meeting event is one dated claim that lists
-  every relevant entity, plus dated profile prose, not duplicate event records.
+  every relevant entity, not duplicate event records.
+- **Source notes, not Timeline prose.** What a source says about an entity is
+  the body of one relationship between them: `attended` (participant to meeting)
+  or `discusses` (source to entity). Entity Timelines are derived from these
+  notes and the source's claims; pages have no Timeline section, and agents
+  retire older written ones when they edit the page.
 - **Typed edges need support.** Co-mention is not evidence of employment,
   ownership, or attendance. `attended` runs from participant to meeting.
 - **Reconcile across sources.** Reuse duplicate imports, add evidence, link
@@ -130,6 +135,10 @@ mutation:
 - Upload originals first; batches take no inline source text.
 - Duplicate keys or targets and missing references reject before anything is
   saved. Required fields and evidence stay required.
+- Page items are subject to the [page budget](/plugins/knowledge/tools#page-budgets).
+  A batch with an over-budget page returns `state: "rejected"` and saves none of
+  its items, claims included; resubmit the claims alone or with
+  `knowledge_remember`.
 
 All items are validated together against one authorized snapshot and accepted
 into one journal entry. Retry with the same UUID and payload after an uncertain

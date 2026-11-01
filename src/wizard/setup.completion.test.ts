@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { completionInstallError as wrappedFsError } from "../cli/completion-profile.test-support.js";
 import {
   formatCompletionReloadCommand,
   resolveCompletionCachePath,
@@ -24,16 +25,20 @@ function createPrompter(confirmValue = false) {
 
 beforeEach(() => vi.restoreAllMocks());
 
-function createDeps(shell: "zsh" | "bash" | "fish" | "powershell" = "zsh") {
+function createDeps(
+  shell: "zsh" | "bash" | "fish" | "powershell" = "zsh",
+  profileInstalled = false,
+  usesSlowPattern = false,
+) {
   return {
     checkShellCompletionStatus: vi
       .spyOn(doctorCompletion, "checkShellCompletionStatus")
       .mockResolvedValue({
         shell,
-        profileInstalled: false,
+        profileInstalled,
         cacheExists: false,
         cachePath: `/tmp/openclaw.${shell === "powershell" ? "ps1" : shell}`,
-        usesSlowPattern: false,
+        usesSlowPattern,
       }),
     ensureCompletionCacheExists: vi
       .spyOn(doctorCompletion, "ensureCompletionCacheExists")
@@ -42,14 +47,6 @@ function createDeps(shell: "zsh" | "bash" | "fish" | "powershell" = "zsh") {
       .spyOn(completionRuntime, "installCompletion")
       .mockResolvedValue(undefined),
   };
-}
-
-function wrappedFsError(code: string, profilePath: string): Error {
-  const cause = Object.assign(new Error(`${code}: profile write failed`), {
-    code,
-    path: profilePath,
-  });
-  return new Error(`Failed to install completion: ${cause.message}`, { cause });
 }
 
 describe("setupWizardShellCompletion", () => {
@@ -66,23 +63,24 @@ describe("setupWizardShellCompletion", () => {
   });
 
   it.each([
-    { locale: "en", profileInstalled: true, usesSlowPattern: true },
-    { locale: "zh-TW", profileInstalled: false, usesSlowPattern: false },
-  ])(
-    "offers session recovery after a profile permission error ($locale, upgrade=$usesSlowPattern)",
-    async ({ locale, profileInstalled, usesSlowPattern }) => {
+    ["en", true, true, "EACCES"],
+    ["zh-TW", false, false, "EACCES"],
+    ["en", false, false, "ERR_INVALID_UTF8"],
+    ["en", false, false, "ENOSPC"],
+  ] as const)(
+    "handles completion failure (%s, installed=%s, slow=%s, %s)",
+    async (locale, profileInstalled, usesSlowPattern, code) => {
       await withEnvAsync({ OPENCLAW_LOCALE: locale }, async () => {
         const failedPath = "/tmp/read-only/.openclaw-completion-profile-stage";
         const prompter = createPrompter();
-        const deps = createDeps();
-        vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
-          shell: "zsh",
-          profileInstalled,
-          cacheExists: false,
-          cachePath: "/tmp/openclaw.zsh",
-          usesSlowPattern,
-        });
-        vi.mocked(deps.installCompletion!).mockRejectedValue(wrappedFsError("EACCES", failedPath));
+        const deps = createDeps("zsh", profileInstalled, usesSlowPattern);
+        vi.mocked(deps.installCompletion!).mockRejectedValue(wrappedFsError(code, failedPath));
+        if (code === "ENOSPC") {
+          await expect(
+            setupWizardShellCompletion({ flow: "quickstart", prompter }),
+          ).rejects.toThrow("ENOSPC");
+          return;
+        }
 
         await expect(
           setupWizardShellCompletion({ flow: "quickstart", prompter }),
@@ -101,41 +99,11 @@ describe("setupWizardShellCompletion", () => {
     },
   );
 
-  it("re-throws unexpected completion installation errors", async () => {
-    const prompter = createPrompter();
-    const deps = createDeps();
-    vi.mocked(deps.installCompletion!).mockRejectedValue(
-      wrappedFsError("ENOSPC", "/tmp/full/.zshrc"),
-    );
-
-    await expect(setupWizardShellCompletion({ flow: "quickstart", prompter })).rejects.toThrow(
-      "ENOSPC",
-    );
-  });
-
-  it.each([
-    {
-      description: "repairing a missing completion cache",
-      profileInstalled: true,
-      usesSlowPattern: false,
-    },
-    {
-      description: "installing a new completion profile",
-      profileInstalled: false,
-      usesSlowPattern: false,
-    },
-  ])(
-    "reports cache generation failure when $description",
-    async ({ profileInstalled, usesSlowPattern }) => {
+  it.each([true, false])(
+    "reports cache generation failure (profile installed=%s)",
+    async (profileInstalled) => {
       const prompter = createPrompter();
-      const deps = createDeps();
-      vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
-        shell: "zsh",
-        profileInstalled,
-        cacheExists: false,
-        cachePath: "/tmp/openclaw.zsh",
-        usesSlowPattern,
-      });
+      const deps = createDeps("zsh", profileInstalled, false);
       vi.mocked(deps.ensureCompletionCacheExists!).mockResolvedValue(false);
 
       await setupWizardShellCompletion({ flow: "quickstart", prompter });

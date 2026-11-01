@@ -230,8 +230,12 @@ describe("production lint suppressions", () => {
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
+        // The SQLite probe restores both native methods and forwards their original receivers.
+        "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // Rollback failure retains both caught errors in one AggregateError cause.
+        "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.
         "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
@@ -255,6 +259,8 @@ describe("production lint suppressions", () => {
         "src/agents/prepared-model-runtime.synthetic-auth.ts|unicorn/no-array-sort|1",
         "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
+        // Media list snapshots must honor the JSON serialization contract; structuredClone cannot materialize plugin-bound proxies.
+        "src/agents/tools/media-generate-tool-actions-shared.ts|unicorn/prefer-structured-clone|1",
         // Board private helpers only sort cloned layouts or freshly filtered arrays.
         "src/boards/board-layout.ts|unicorn/no-array-sort|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
@@ -280,17 +286,19 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
-        "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
+        "src/config/sessions/transcript-json-normalize.ts|unicorn/prefer-structured-clone|1",
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // Hello projections sort private arrays without copying them a second time.
+        "src/gateway/control-ui-plugin-tabs.ts|unicorn/no-array-sort|4",
         // These sort only freshly materialized arrays or locally owned swarm member lists.
         "src/gateway/health/collector.ts|unicorn/no-array-sort|3",
         "src/gateway/methods/read-share-keys.ts|unicorn/no-array-sort|1",
         "src/gateway/node-connection-notifications.ts|unicorn/no-array-sort|1",
         "src/gateway/node-plugin-tool-snapshot.ts|unicorn/no-array-sort|1",
         // These handlers sort only fresh private arrays, preserving their upstream sources.
-        "src/gateway/server-methods/sessions-files.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/session-files-root.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-search-projected.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/tools-catalog.ts|unicorn/no-array-sort|1",
@@ -300,9 +308,9 @@ describe("production lint suppressions", () => {
         "src/gateway/session-companion-prompt.ts|unicorn/no-array-sort|1",
         // Preserve the measured indexed fanout loop while reusing envelope tuples.
         "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
-        // Event field ordering sorts only the freshly filtered, audience-private key array.
+        // Session presentation keys, event fields, and sharing aliases sort fresh private arrays.
         "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
-        // Sharing keys sort the private alias spread without copying it a second time.
+        "src/gateway/session-row-presentation.ts|unicorn/no-array-sort|1",
         "src/gateway/session-sharing-read.ts|unicorn/no-array-sort|1",
         "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
@@ -399,6 +407,8 @@ describe("production lint suppressions", () => {
         // These Solid sinks consume HTML sanitized or escaped by their content owners.
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
+        // JSON materializes the bounded preview; structuredClone retains sliced string backing storage.
+        "ui/src/pages/activity/tool-activity.ts|unicorn/prefer-structured-clone|1",
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
         "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",

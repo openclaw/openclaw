@@ -446,22 +446,21 @@ describe("Skills discovery lifecycle", () => {
     await waitForFast(() => expect(page.textContent).not.toContain("retained-library-skill"));
   });
 
-  it("shows a settings heading with its four actions in one row below it", async () => {
+  it.each(["NFC", "NFD"] as const)("filters installed skills using a %s query", async (form) => {
+    const stored = "München".normalize(form === "NFC" ? "NFD" : "NFC");
     const { page } = mountSkills(
-      async (method) => (method === "skills.library.list" ? personalLibrary : { skills: [] }),
+      async (method) =>
+        method === "skills.library.list"
+          ? { ...personalLibrary, entries: [libraryEntry({ description: stored })] }
+          : { skills: [] },
       "settings",
     );
-    await waitForFast(() =>
-      expect(
-        page.querySelectorAll<HTMLButtonElement>(".plugins-toolbar button").length,
-      ).toBeGreaterThanOrEqual(4),
-    );
-
-    expect(page.querySelector(".content-header h1")?.textContent).toBe("Skills");
-    const actions = page.querySelector(".plugins-toolbar");
-    expect(
-      Array.from(actions?.querySelectorAll("button") ?? [], (button) => button.textContent?.trim()),
-    ).toEqual(["Search skills", "Workshop", "Create skill", "Import skill"]);
+    await waitForFast(() => expect(page.textContent).toContain(stored));
+    const input = page.querySelector<HTMLInputElement>('input[name="library-search"]')!;
+    input.value = "MÜNCHEN".normalize(form);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(page.querySelector(".settings-row__desc")?.textContent).toBe(stored);
   });
 
   it("opens Plugins and Skill workshop from the shared tabs", async () => {

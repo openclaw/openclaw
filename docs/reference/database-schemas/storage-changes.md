@@ -187,7 +187,8 @@ blob without encoding or compressing it again.
 The read worker prepares the immutable tree before acceptance. The writer
 inserts new packs and stamps reused packs in bounded short transactions.
 Incremental edits prepare the edited directory pack and each ancestor pack;
-replacing a tree already present inserts no packs. A large flat directory
+this includes a surviving subtree promoted to a directory's root by deletion,
+even when its records are unchanged. Replacing a tree already present inserts no packs. A large flat directory
 rewrites its complete pack on an edit. Acceptance retains the
 existing revision, baseline, lease, and registry checks, then publishes the root,
 changed target fingerprint, and receipt together. Checkpoints retain the previous
@@ -222,10 +223,28 @@ Workspace maintenance advances `workspace.manifest.sweepEpoch` in the existing
 in one read snapshot, and deletes unreachable packs and path sets older than the
 preceding epoch in bounded batches. Writers stamp the current epoch when
 preparing or reusing content. A writer stalled for more than an epoch can lose
-unaccepted packs. A missing-pack load reconstructs the saved root from the
-projection or canonical copy; if neither reproduces its digest, reconciliation
-reports an error and preserves files rather than changing the accepted baseline.
-This recoverable case uses no reference counts or cross-thread handshake.
+unaccepted packs. Preparation returns its sweep epoch; acceptance checks the
+oldest preparation epoch inside the writer transaction and refuses an expired
+preparation before publishing any root or checkpoint. Retry the session to
+prepare the preserved live files again. This uses the existing retention window,
+without reference counts or a new durable reservation.
+
+A missing-pack load reconstructs the saved root from the projection or canonical
+copy. The repair snapshot traverses surviving packs reachable from that saved
+root, using their paths and directory membership only as selection hints. Normal
+inventory reads still require every pack. Recovery scans current file content;
+it does not substitute retained hashes for live bytes or search unrelated old
+packs. After the ordinary candidates, one additional canonical candidate includes
+paths from a completed projection scan. This retains accepted guest additions
+outside initial admission and the current host index, while preserving the
+ordinary canonical candidate when later guest names overlap unrelated host files.
+Every candidate must still reproduce the exact saved root before metadata
+replacement; partial scan results never supply candidate membership.
+An intact pending-checkpoint result can also reconstruct the saved baseline
+by reversing its authenticated delta in memory and verifying the saved tree digest.
+Neither filesystem is changed by reconstruction. If no candidate reproduces the
+saved digest, reconciliation reports both preserved paths and an inspection
+command. It cannot safely invent a merge base or choose between divergent edits.
 
 ### PostgreSQL index ordering migrations
 
@@ -260,6 +279,17 @@ starts with cron paused and reports the available partitions. Run
 selection, noninteractive Doctor preserves retired heartbeat settings and reports
 the combined selection and migration step. Rollback restores the verified
 pre-migration backup with its matching binary.
+
+Agent schema 38 makes PostgreSQL full-text search tokenize like SQLite FTS5:
+punctuation runs are replaced by spaces before `to_tsvector` and before the query
+parser, so words inside dates, paths, and file names match. The stored `tsvector`
+is maintained by a `<table>_search_sync` trigger instead of a generated column,
+because PostgreSQL 16 cannot replace a generated expression in place and dropping
+the column would move it out of the sealed catalog position. The migration drops
+the generated expression in place, installs the trigger, and reparses existing
+rows once for the transcript index and every persisted search extension. SQLite
+advances version metadata only. Historical admission and backup descriptors keep
+the generated column; rollback restores the verified pre-upgrade backup.
 
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
@@ -1204,33 +1234,25 @@ rules, including the five-second polling deadline. The same plugin-owned worker
 reads iMessage's local startup watermark and finishes cleanup before the transport
 check and watch subscription. Empty databases retain the pre-first-row cursor;
 unavailable databases retain the existing fallback. Conversation-binding queries
-remain separate migration work.
+also use their plugin-owned worker.
 
 iMessage persisted echo reads, writes, and failed-send cleanup use the plugin-state
 worker. Sends await provisional echo persistence before transport and cleanup
 before reporting failure. Inbound echo matching awaits persisted facts before
-choosing whether to dispatch. Hosts with plugin-state comparison methods use the
-worker for recovery cursor writes; conditional writes preserve the greatest
-admitted row for each account and database. The declared OpenClaw 2026.9.4 peer
-and plugin API floor remains supported: hosts without those comparison methods
-run the same row decision in the retained synchronous store's transactional
-`update` callback. Failures from an available comparison method never fall back
-to synchronous writes. Remove this fallback only when the declared host floor
-excludes hosts without comparison support. Durable ingress joins each cursor
-update before admitting the next row and joins admitted work on shutdown.
-Existing namespaces, stored values, expiry, migration, and best-effort failure
+choosing whether to dispatch. Recovery cursor writes use the async keyed store
+and the selected state engine. The plugin serializes its cursor updates and
+preserves the greatest admitted row for each account and database. Cursor keys
+hash that pair so they work on PostgreSQL; legacy keys are adopted once.
+Durable ingress joins each cursor update before admitting the next row and joins
+admitted work on shutdown. Existing namespaces, stored values, expiry, and best-effort failure
 policies remain unchanged.
 
 The iMessage reply cache also hydrates and persists through worker-backed keyed
 stores. Its owner allocates short IDs in memory without yielding and serializes
 counter, eviction, and entry writes; callers join persistence before completion.
 A successfully read counter remains available if later entry hydration fails.
-The shared action dispatcher awaits the async conversation-matching companion
-before entering the action, including the first action after a restart. The
-existing boolean callback retains synchronous cold hydration for published
-OpenClaw 2026.9.4 hosts and other hosts without that companion. It remains a
-literal boolean, never a promise. Remove this plugin fallback only when its
-declared host floor excludes hosts without async matching. Existing cache
+The shared action dispatcher awaits async conversation matching and cold
+hydration before entering the action, including the first action after a restart. Existing cache
 namespaces, record shapes, TTLs, limits, and best-effort failure policy are unchanged.
 
 Discord presence cooldown reads, claims, and conditional rollback use the shared
@@ -1657,7 +1679,7 @@ opening, with Gateway schema authority granted by its live host operation.
 Classified database errors survive transport, and store close joins worker
 operations and native cleanup. Cold subagent-registry restoration reads through
 the shared-state read-only worker before installing its resident snapshot.
-Asynchronous runtime-configuration preparation also reads Claw consent provenance
+Asynchronous runtime-configuration preparation also reads Template consent provenance
 in the shared-state worker; the synchronous configuration loader retains its
 existing compatibility path.
 
@@ -2545,9 +2567,11 @@ The host retains refresh locks, current write authority, and pricing context.
 Incognito usage reads committed memory actor facts and allocates no database
 worker; its namespace is never reopened as a database.
 Cancellation and database closure join native worker work, accepted host effects,
-and refresh-lock cleanup before releasing custody. Atomic pruning retains all
-obsolete-row comparison bytes on the host until its transaction settles; bounded
-SQL batches do not impose an aggregate memory limit. Cache formats, schemas,
+and refresh-lock cleanup before releasing custody. Pruning retains only the current
+bounded snapshot batch on the host until its transaction settles, releasing the
+ordinary writer between batches. Each obsolete row and its partitions remain
+atomic; interrupted cleanup rediscovers remaining rows on the next refresh.
+Cache formats, schemas,
 retention, and update behavior are unchanged.
 
 Shared-state database drainage also joins resources registered while an earlier
@@ -2827,13 +2851,12 @@ Checkpoint modes, write admission, stored bytes, and reclamation limits are
 unchanged. Updates require no schema or configuration migration; the new process
 reconstructs its connection-owned schedules from the existing database owners.
 
-SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
-databases, WAL maintenance, integrity checks, and backup operations remain
-SQLite capabilities. Keep their implementation behind the memory or database
-lifecycle owner. A future backend must supply equivalent product behavior or
-an explicit capability boundary; a second SQL dialect alone cannot replace
-these features. Schema, retention, migration, and multi-host changes still use
-the review checkpoint below.
+Keep SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
+databases, WAL maintenance, integrity checks, and backup implementations behind
+the memory or database lifecycle owner. PostgreSQL supplies its own search and
+matched-backup behavior; see [database engines](/reference/database-engines).
+Schema, retention, migration, and multi-host changes still use the review
+checkpoint below.
 
 Prepared node-workspace registration, binding, mutation completion, and retirement
 run in the same shared-state worker as the node launch journal. Existing-only
@@ -3000,18 +3023,20 @@ other cache scopes, including durable voice sessions, remain unchanged.
 Usage-bearing transcript publications schedule advancement through the existing
 usage worker queue. Each dirty session waits for 30 seconds without another
 usage publication or an active agent turn. Its oldest pending change survives
-back-to-back turns: after five minutes, it can refresh in the next idle gap.
+back-to-back turns: after five minutes, it becomes eligible even during an active
+turn. This bounds coalescing delay; an existing refresh, retry backoff, scanning,
+and draining the ordinary writer queue still take additional time.
 A turn starting during a refresh may overlap its already-admitted bounded batch.
-User and metadata rows join the next usage scan. Cost and overview reads flush
-and await pending publication batches, bypassing the idle delay, so a completed
-turn's usage is visible immediately. Goal budgets and provider billing limits
+User and metadata rows join the next usage scan. Exact cost reads flush and await
+pending publication batches, bypassing the idle delay. Reports use their separate
+reader lane and wait up to 10 seconds for freshness before serving committed
+partial or stale totals. Goal budgets and provider billing limits
 use their own current accounting, independently of this display projection.
 Shutdown cancels pending delays without flushing; committed transcripts remain
 the source of truth. Startup and topology changes backfill in bounded batches,
 yielding between batches. Cache writes wait outside the agent writer FIFO until
-foreground work drains, then commit one session at a time. Report reads use their
-separate worker lane and return partial or stale totals during backfill. Restart
-rediscovers unfinished sessions from their committed checkpoints.
+foreground work drains, then commit a bounded batch. Restart rediscovers
+unfinished sessions from their committed checkpoints.
 Refresh or cleanup failures still warn.
 After in-process DDL, worker admission publishes its validated schema even if a
 retained reader adopted another wrapper of the previous shared receipt while it
@@ -3167,6 +3192,15 @@ mechanics are engineering decisions within an authorized repair when they
 preserve those contracts. Prove FIFO ordering, current authority after awaited
 work, integrity checks, publication fencing, and settlement of write-capable
 work. Assess performance and storage costs as part of that verification.
+
+Every migration PR states its upgrade cost on the largest known deployment.
+List each statement that touches an existing table (rebuild, `INSERT … SELECT`,
+backfill, index build, integrity-check scope) with that table's size, plus the
+backup scope. Migrations finish before the Gateway serves requests, so a large
+table rewritten in one transaction keeps the Gateway offline until it finishes.
+Prefer changes that leave existing rows untouched, and declare a table-scoped
+backup instead of a full-file copy. A rewrite of a large table needs a measured
+duration at that size and explicit acceptance.
 
 A Doctor or recovery repair that removes only invalid or unreachable rows (for
 example rows whose referenced parent row is missing) is also an engineering

@@ -42,6 +42,33 @@ export type RuntimeContextFragment = {
   text: string;
 };
 
+/** Move only the exact section annotated by its producer; later policy additions survive. */
+export function splitExtraSystemPrompt(params: {
+  extraSystemPrompt?: string;
+  extraSystemPromptTurnContext?: { start: number; text: string };
+}) {
+  const prompt = params.extraSystemPrompt;
+  const context = params.extraSystemPromptTurnContext;
+  if (!prompt || !context?.text || !Number.isInteger(context.start) || context.start < 0) {
+    return { persistent: prompt, turn: undefined };
+  }
+  const end = context.start + context.text.length;
+  if (
+    prompt.slice(context.start, end) !== context.text ||
+    (context.start > 0 && prompt.slice(context.start - 2, context.start) !== "\n\n") ||
+    (end < prompt.length && prompt.slice(end, end + 2) !== "\n\n")
+  ) {
+    return { persistent: prompt, turn: undefined };
+  }
+  return {
+    persistent:
+      context.start === 0
+        ? prompt.slice(end === prompt.length ? end : end + 2)
+        : prompt.slice(0, context.start - 2) + prompt.slice(end),
+    turn: context.text,
+  };
+}
+
 /** Render trusted runtime fragments without promoting quoted data to instructions. */
 export function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): string {
   return fragments

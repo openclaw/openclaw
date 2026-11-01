@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { parse } from "yaml";
 import { validateBundledPackageDependencyAlignment } from "../../scripts/package-source-dependencies.mjs";
 import {
   validatePackageSource,
@@ -10,7 +9,16 @@ import {
 } from "../../scripts/package-source-preflight.mjs";
 import { writeRunSummary } from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyFrozenTargetTooling, fixtureGit } from "./frozen-target-fixture.test-support.js";
+import {
+  readWorkflow,
+  readWorkflowOutputs as readOutputs,
+  runWorkflowShellScript,
+} from "./ci-workflow.test-support.js";
+import {
+  commitFixture,
+  copyFrozenTargetTooling,
+  fixtureGit,
+} from "./frozen-target-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -48,10 +56,6 @@ type WorkflowStep = Partial<Record<"if" | "name" | "run" | "uses", string>> & {
 
 type Workflow = { jobs: Record<string, { steps: WorkflowStep[] }> };
 
-function readWorkflow(file: string): Workflow {
-  return parse(readFileSync(file, "utf8")) as Workflow;
-}
-
 function workflowStep(workflow: Workflow, job: string, name: string): WorkflowStep {
   const found = workflow.jobs[job]?.steps.find((step) => step.name === name);
   expect(found, `${job}: ${name}`).toBeDefined();
@@ -72,18 +76,6 @@ function jobSteps(file: string, job: string) {
   };
 }
 
-function readOutputs(file: string) {
-  return Object.fromEntries(
-    readFileSync(file, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
-}
-
 function workflowFixture(prefix: string) {
   const root = tempDirs.make(prefix);
   const file = (...parts: string[]) => path.join(root, ...parts);
@@ -95,9 +87,10 @@ function workflowFixture(prefix: string) {
         mode: 0o755,
       }),
     run: (step: WorkflowStep, env: NodeJS.ProcessEnv, clearStepEnv = false) =>
-      spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
+      runWorkflowShellScript(step.run ?? "", {
         cwd: root,
-        encoding: "utf8",
+        tempDir: root,
+        linuxWorkflow: true,
         env: {
           ...process.env,
           ...(clearStepEnv
@@ -156,10 +149,7 @@ exit 64`,
   return { output, result };
 }
 
-function runReleaseInputCapture(params: {
-  candidateArtifactJson?: string;
-  releasePackageSpec?: string;
-}) {
+function createReleaseInputCapture() {
   const workflow = readWorkflow(".github/workflows/openclaw-release-checks.yml");
   const step = workflowStep(workflow, "resolve_target", "Capture selected inputs");
   const f = workflowFixture("openclaw-release-inputs-");
@@ -173,33 +163,33 @@ function runReleaseInputCapture(params: {
     "scripts/github/validate-release-suite-filters.sh",
     "scripts/lib/cross-os-release-checks/suite-filter.mjs",
   ]);
-  const git = (...args: string[]) => fixtureGit(tooling, ...args);
-  git("init", "-q");
-  git("add", ".");
-  git("commit", "-qm", "candidate tooling fixture");
-  const toolingSha = git("rev-parse", "HEAD");
-  const result = f.run(
-    step,
-    {
-      ADMISSION_TOOLING_ROOT: tooling,
-      ADMISSION_TOOLING_SHA: toolingSha,
-      CANDIDATE_ARTIFACT_JSON_INPUT: params.candidateArtifactJson ?? "",
-      RELEASE_FILTER_VALIDATOR: path.join(
-        tooling,
-        "scripts/github/validate-release-suite-filters.sh",
-      ),
-      RELEASE_MODE_INPUT: "both",
-      RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
-      RELEASE_PHASE_INPUT: "all",
-      RELEASE_PROFILE_INPUT: "beta",
-      RELEASE_PROVIDER_INPUT: "openai",
-      RELEASE_REF_INPUT: "main",
-      RELEASE_RERUN_GROUP_INPUT: "package",
-    },
-    true,
-  );
-  expect(result.status, result.stderr).toBe(0);
-  return readOutputs(f.file("output"));
+  const { sha: toolingSha } = commitFixture(tooling);
+  return (params: { candidateArtifactJson?: string; releasePackageSpec?: string }) => {
+    // Each real invocation owns fresh outputs while reusing only immutable tooling.
+    writeFileSync(f.file("output"), "");
+    const result = f.run(
+      step,
+      {
+        ADMISSION_TOOLING_ROOT: tooling,
+        ADMISSION_TOOLING_SHA: toolingSha,
+        CANDIDATE_ARTIFACT_JSON_INPUT: params.candidateArtifactJson ?? "",
+        RELEASE_FILTER_VALIDATOR: path.join(
+          tooling,
+          "scripts/github/validate-release-suite-filters.sh",
+        ),
+        RELEASE_MODE_INPUT: "both",
+        RELEASE_PACKAGE_SPEC_INPUT: params.releasePackageSpec ?? "",
+        RELEASE_PHASE_INPUT: "all",
+        RELEASE_PROFILE_INPUT: "beta",
+        RELEASE_PROVIDER_INPUT: "openai",
+        RELEASE_REF_INPUT: "main",
+        RELEASE_RERUN_GROUP_INPUT: "package",
+      },
+      true,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return readOutputs(f.file("output"));
+  };
 }
 
 it("validates selected split notes instead of accepting an index as package contents", () => {
@@ -305,6 +295,7 @@ it("rejects conflicting bundled dependencies before setup and reads only the sel
 });
 
 it("normalizes release-check package mode and guards the source resolver", () => {
+  const runReleaseInputCapture = createReleaseInputCapture();
   const { step, before } = jobSteps("openclaw-release-checks", "prepare_release_package");
   const preflight = step("Validate release package source metadata");
   const packageStep = step("Resolve release package artifact");

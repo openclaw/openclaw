@@ -6,6 +6,8 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import type { createSessionRowChildActivity } from "./session-row-child-activity.js";
+import type { createSessionRowChildVisibility } from "./session-row-child-visibility.js";
 import * as records from "./session-row-projection-record.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
@@ -73,6 +75,8 @@ export function toProjectedSessionSharingTarget(
 export type SessionRowSelectionPreparationOptions = {
   metadataOnly?: boolean;
   includeCatalog?: boolean;
+  requireCurrentCatalog?: boolean;
+  catalogSignal?: AbortSignal;
 };
 
 export type SessionRowPreparationOptions = {
@@ -88,7 +92,22 @@ export class SessionRowFactsPending extends Error {
   }
 }
 
+/** Only failed row materialization can request a catalog rebind, never its consumer. */
+export class SessionRowCatalogPending extends Error {
+  constructor() {
+    // RPC formatters include causes; keep model-facing plugin errors out of the response.
+    super("Session model catalog is unavailable; refresh and try again.");
+  }
+}
+
 export type SessionRowReadView = {
+  readChildVisibility: ReturnType<typeof createSessionRowChildVisibility>["read"];
+  readChildActivity(
+    record: records.MaterializedRow,
+    now: number,
+    excluded?: ReadonlySet<string>,
+    exclusionRevision?: object,
+  ): ReturnType<ReturnType<typeof createSessionRowChildActivity>["read"]>;
   describe(
     query: records.Lookup,
     captured?: records.Row,
@@ -102,11 +121,11 @@ export type SessionRowReadView = {
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
   readonly physicalPaths: (locator: string, agentId?: string) => readonly string[];
-  readonly state: {
+  readonly state: Readonly<{
     cfg: OpenClawConfig;
     policyConfig: OpenClawConfig;
     rowContext: SessionListRowContext;
-  };
+  }>;
 };
 
 export type PreparedPrivateSessionRepository = {
@@ -198,6 +217,14 @@ export function readPreparedSessionRows<T>(
     }
   };
   const read: SessionRowReadView = {
+    readChildVisibility(...args) {
+      assertActive();
+      return owner.readChildVisibility(...args);
+    },
+    readChildActivity(...args) {
+      assertActive();
+      return owner.readChildActivity(...args);
+    },
     readSource(row) {
       assertActive();
       return owner.readSource(row);
@@ -246,7 +273,11 @@ export function readPreparedSessionRows<T>(
     },
     get state() {
       assertActive();
-      return { ...state, policyConfig: owner.getPolicyConfig() };
+      const policyConfig = owner.getPolicyConfig();
+      if (state.policyConfig !== policyConfig) {
+        state = { ...state, policyConfig };
+      }
+      return state;
     },
   };
   try {

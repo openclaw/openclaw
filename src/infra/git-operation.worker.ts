@@ -27,6 +27,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                 ({ executeWorkspaceInventoryComputation }) =>
                   executeWorkspaceInventoryComputation(command),
               );
+            case "workspace.manifest.local":
             case "workspace.manifest.capture":
             case "workspace.manifest.base-refresh":
             case "workspace.manifest.equal":

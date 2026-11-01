@@ -582,7 +582,8 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       }
       bindPath(record, resolvedPath);
       // A retained actor's opening path cannot restore an alias retired by relocation.
-      bindPath(record, record.identity.canonicalPath);
+      // Native publication has just observed its own canonical alias.
+      bindPath(record, preparedIdentity ? record.identity.canonicalPath : identity.canonicalPath);
       // Private native binding may publish while reads are sealed. Retain its
       // generation now; every later worker use still checks the seal and lifetime.
       return { identity, admission: captureRecord(record, resolvedPath) };

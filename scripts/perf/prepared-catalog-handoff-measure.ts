@@ -89,7 +89,7 @@ const { remoteCatalog, pluginMetadataSnapshot, ...requestInput } = input;
 const request: PreparedModelCatalogWorkerTask["request"] = {
   kind: "catalog",
   syntheticAuth: [],
-  clawInstallSchemaVersions: {
+  templateInstallSchemaVersions: {
     path: "/synthetic/state.sqlite",
     snapshot: { kind: "ready", schemaVersions: [] },
   },

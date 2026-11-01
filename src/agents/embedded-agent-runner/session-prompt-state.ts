@@ -205,6 +205,10 @@ export function prepareSessionToolSurface(params: {
   let changed = !known;
   const tools = params.tools.map((tool) => {
     const pin = pinned.get(tool.name);
+    // Computer discovery supplies live execution facts, not a new session definition.
+    if (pin && tool.name === "computer") {
+      return copyAgentToolMetadata(tool, { ...tool, ...pin });
+    }
     if (changed && pin?.description === tool.description) {
       return tool;
     }

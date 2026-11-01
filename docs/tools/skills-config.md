@@ -366,14 +366,15 @@ different visible skill set per agent.
 
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
   `auto` lets agents save and update Workshop skills: a background review runs
-  after substantial work, and learned skills unused for 30 days are archived.
+  after substantial work, learned skills unused for 30 days are archived, and
+  one oversized learned skill a day is [dieted](/tools/skill-workshop#skill-diet).
   Review changes appear as a **Learned** row in the Control UI chat, separately
   from the assistant’s answer and collapsed **Worked** activity. Older plain-text
   review notices also stay separate. Every change can be undone. `propose` runs
   the background review but saves its changes as
   [drafts](/tools/skill-workshop#drafts) to review with `/learn drafts`; it does
-  not archive unused skills. `off` disables the background review and
-  unused-skill cleanup. User-prompted skill creation, `/learn`, and manual
+  not archive or diet skills. `off` disables the background review,
+  unused-skill cleanup, and the skill diet. User-prompted skill creation, `/learn`, and manual
   learning sessions work in every mode.
 </ParamField>
 

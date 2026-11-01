@@ -37,6 +37,7 @@ const spawnState = freshSpawnState();
 
 const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
+  readRegisteredSandboxRuntimeIds: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
   completeSandboxRegistryReservation: vi.fn(),
@@ -260,6 +261,7 @@ export function createSandboxContainerTestHarness() {
     Object.assign(spawnState, freshSpawnState());
     resolveDockerSourceNamespace.mockResolvedValue(undefined);
     registryMocks.readRegistryEntry.mockClear();
+    registryMocks.readRegisteredSandboxRuntimeIds.mockClear().mockResolvedValue([]);
     registryMocks.removeRegistryEntry.mockClear().mockResolvedValue(undefined);
     registryMocks.updateRegistry.mockClear().mockResolvedValue(undefined);
     registryMocks.completeSandboxRegistryReservation.mockClear().mockResolvedValue(undefined);

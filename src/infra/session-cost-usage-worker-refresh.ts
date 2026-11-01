@@ -6,7 +6,6 @@ import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
-import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -14,6 +13,10 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { sha256Base64Url } from "./crypto-digest.js";
+import {
+  dropInheritedTranscriptEvents,
+  projectUsageScanFields,
+} from "./session-cost-usage-inherited.js";
 import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
@@ -271,7 +274,8 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     previousCheckpoint.maxSeq < maxSeq &&
     previousCheckpoint.eventCount < eventCount,
   );
-  const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : 0;
+  // Full scans start before seq 0: the session header carries the inherited-history marker.
+  const afterSeq = appendCandidate ? (previousCheckpoint?.maxSeq ?? 0) : eventCount > 0 ? -1 : 0;
   type UsageRecord = Record<string, unknown> & {
     seq: number;
     usageEntry: ParsedTranscriptEntry | null;
@@ -290,7 +294,7 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
           usageEntry: isRecord(event) ? parseUsageCostTranscriptRecord(event) : null,
         };
         if (isRecord(event)) {
-          projectTranscriptNavigationFields(event, record);
+          projectUsageScanFields(event, record);
         }
         if (seq === maxSeq) {
           anchorHash = sqliteCheckpointAnchorHash(event);
@@ -312,11 +316,12 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   const appendOnly = Boolean(incremental && params.previous);
   if (!appendOnly && afterSeq > 0) {
     // A rewind or side branch needs the prefix, but the suffix is already decoded.
-    records = [...(await readRange(0, afterSeq)), ...records];
+    records = [...(await readRange(-1, afterSeq)), ...records];
   }
+  // Appended rows follow any inherited history, so only full scans drop it.
   const selected = appendOnly
     ? records.filter(isCanonicalSessionTranscriptEntry)
-    : selectVisibleTranscriptEvents(records);
+    : dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records));
   const scan = createUsageRollupScan({ ...params, appendOnly });
   await scan.addEntries(
     selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : [])),

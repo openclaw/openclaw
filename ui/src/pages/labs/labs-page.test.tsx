@@ -134,7 +134,6 @@ const codeMode = (value: unknown) => ({ tools: { codeMode: value } });
 const advisor = (value: Record<string, unknown>) => ({ plugins: { entries: { advisor: value } } });
 const hostDesktop = (value: Record<string, unknown>) => ({ desktop: { host: value } });
 const workerDesktop = (desktop: boolean) => ({ cloudWorkers: { desktop } });
-const customPlugins = (value: boolean | null) => experimental({ customPlugins: value });
 const hostEnabled = (enabled: boolean) => hostDesktop({ enabled });
 
 async function startSave(title = "Code Mode", config?: Record<string, unknown>) {
@@ -207,8 +206,13 @@ describe("LabsPage", () => {
 
   it.each([
     ["Code Mode", "codeMode", false, codeMode({ enabled: true }), codeMode({ enabled: null })],
-    ["Custom plugin UI", "customPluginUi", false, customPlugins(true), customPlugins(null)],
-    ["Claws", "claws", false, experimental({ claws: true }), experimental({ claws: null })],
+    [
+      "Templates",
+      "templates",
+      false,
+      experimental({ templates: true }),
+      experimental({ templates: null }),
+    ],
     [
       "Host Desktop",
       "hostDesktop",
@@ -227,8 +231,7 @@ describe("LabsPage", () => {
     ["Code Mode", "codeMode", true, codeMode({ enabled: false }), codeMode({ enabled: "auto" })],
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
-    ["Custom plugin UI", "customPluginUi", true, {}, customPlugins(true)],
-    ["Claws", "claws", true, {}, experimental({ claws: true })],
+    ["Templates", "templates", true, {}, experimental({ templates: true })],
     ["Host Desktop", "hostDesktop", true, hostEnabled(false), hostEnabled(true)],
     ["Cloud Worker Desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
     ["Advisor", "advisor", true, {}, advisor({ enabled: true })],

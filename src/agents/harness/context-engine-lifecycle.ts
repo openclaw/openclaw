@@ -177,6 +177,7 @@ type HarnessContextEngineAssemblyParams = Omit<
   sessionKey?: string;
   agentId?: string;
   appendOnlyRuntimeContext?: boolean;
+  clearsTurnScopedSystemUpdates?: boolean;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
@@ -213,6 +214,8 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
         ? undefined
         : resolveContextEngineTranscriptByteLimit(contextEngine),
       resolveAssemblyHistoryTokenBudget(params),
+      undefined,
+      params.clearsTurnScopedSystemUpdates,
     );
     return { result: bounded, snapshot: assembly.snapshot };
   });
@@ -359,6 +362,8 @@ export async function prepareHarnessContextEnginePrompt(
         },
         resolveContextEngineTranscriptByteLimit(contextEngine),
         resolveAssemblyHistoryTokenBudget(params),
+        undefined,
+        params.clearsTurnScopedSystemUpdates,
       );
     let bounded: AssembleResult;
     try {

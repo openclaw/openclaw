@@ -34,15 +34,15 @@ describe("hooks workspace", () => {
   beforeEach(() => {
     warnMock.mockClear();
     root = tempDirs.make("openclaw-hooks-workspace-");
-    hooksRoot = path.join(root, "hooks");
+    hooksRoot = path.join(root, process.platform === "win32" ? "hooks" : " hooks ");
   });
   afterEach(() => vi.restoreAllMocks());
 
-  function loadNames() {
+  function loadNames(extraDirs = [hooksRoot]) {
     return loadWorkspaceHookEntries(root, {
       managedHooksDir: path.join(root, "managed-none"),
       bundledHooksDir: path.join(root, "bundled-none"),
-      config: { plugins: { enabled: false }, hooks: { internal: { load: { extraDirs: [] } } } },
+      config: { plugins: { enabled: false }, hooks: { internal: { load: { extraDirs } } } },
     }).map((entry) => entry.hook.name);
   }
 

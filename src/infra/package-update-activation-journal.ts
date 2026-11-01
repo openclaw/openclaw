@@ -80,7 +80,7 @@ export function openPackageActivationJournal(anchor: string) {
   return openJournal(anchor, false);
 }
 
-/** Device drift permits settlement only, never publication or restoration. */
+/** Historical binding drift permits settlement only, never publication or restoration. */
 export function openPackageActivationSettlementJournal(anchor: string) {
   return openJournal(anchor, true);
 }
@@ -92,12 +92,25 @@ function openJournal(anchor: string, settlementOnly: boolean) {
   const parentIdentity = packageActivationIdentity(parent, "parent");
   const control = resolvePackageActivationControl(anchor);
   const journalParentIdentity = assertPrivate(control, "control");
-  const journalIdentity = assertPrivate(journalPath, "journal");
+  // Historical hard links may be inspected only to establish completed custody.
+  // Such a handle can archive evidence, but cannot write or recover the journal.
+  const completedOnly = settlementOnly && fs.lstatSync(journalPath).nlink > 1;
+  const journalFileIdentity = (file: string) => {
+    if (!completedOnly) {
+      return assertPrivate(file, "journal");
+    }
+    const identity = packageActivationIdentity(file, false);
+    if ((fs.lstatSync(file).mode & 0o077) !== 0) {
+      throw new Error("Completed package recovery evidence requires owner-only permissions.");
+    }
+    return identity;
+  };
+  const journalIdentity = journalFileIdentity(journalPath);
   const assertFiles = () => {
     if (
       packageActivationIdentity(parent, "parent") !== parentIdentity ||
       assertPrivate(control, "control") !== journalParentIdentity ||
-      assertPrivate(journalPath, "journal") !== journalIdentity ||
+      journalFileIdentity(journalPath) !== journalIdentity ||
       fs.realpathSync(control) !== control
     ) {
       throw new Error("Package publication journal identity changed");
@@ -106,8 +119,11 @@ function openJournal(anchor: string, settlementOnly: boolean) {
   const withDatabase = <T>(
     write: boolean,
     operation: (db: DatabaseSync, transact: ExistingSqliteTransaction) => T,
-  ): T =>
-    withExistingSqliteRollbackDatabase(
+  ): T => {
+    if (completedOnly && write) {
+      throw new Error("Completed package evidence inspection cannot admit a journal writer.");
+    }
+    return withExistingSqliteRollbackDatabase(
       journalPath,
       {
         write,
@@ -128,10 +144,41 @@ function openJournal(anchor: string, settlementOnly: boolean) {
         return operation(db, transact);
       },
     );
+  };
   const matchesInstallation = (descriptor: PackageActivationDescriptor) =>
     descriptor.parentIdentity === parentIdentity &&
     descriptor.journalParentIdentity === journalParentIdentity &&
     descriptor.journalIdentity === journalIdentity;
+  const isInstallationReplaced = (record: PackageActivationRecord) => {
+    const descriptor = record.descriptor;
+    // Ignore device drift when excluding the original generations: a remount
+    // must not turn a still-installed candidate into obsolete evidence.
+    const sameInode = (left: string, right: string) => left.split(":")[1] === right.split(":")[1];
+    const installed = packageActivationIdentity(descriptor.authority.installKey, true);
+    if (
+      [descriptor.previous.identity, descriptor.candidate.identity].some((id) =>
+        sameInode(id, installed),
+      )
+    ) {
+      return false;
+    }
+    const published = new Map(record.publications.map((entry) => [entry.name, entry.identity]));
+    if (record.intent?.kind === "launcher") {
+      published.set(record.intent.name, record.intent.identity);
+    }
+    return descriptor.launchers.every((entry) => {
+      const current = fs.lstatSync(path.join(descriptor.binDir, entry.name), {
+        bigint: true,
+        throwIfNoEntry: false,
+      });
+      return (
+        !current ||
+        ![entry.candidateIdentity, published.get(entry.name)].some(
+          (identity) => identity && sameInode(identity, `${current.dev}:${current.ino}`),
+        )
+      );
+    });
+  };
   const installationMismatchMessage = (descriptor: PackageActivationDescriptor) => {
     const bindings: [string, string, string][] = [
       ["parent", descriptor.parentIdentity, parentIdentity],
@@ -260,16 +307,24 @@ function openJournal(anchor: string, settlementOnly: boolean) {
       descriptor,
       publications,
     };
+    if (completedOnly && !isPackageActivationComplete(anchor, record)) {
+      assertPrivate(journalPath, "journal");
+      throw new Error("Only completed package recovery evidence can be archived.");
+    }
     // Closed history conveys no authority over today's package, helper, or
     // lease store. Only unfinished recovery needs its original identities.
     if (!matchesInstallation(descriptor) && !isPackageActivationComplete(anchor, record)) {
-      if (
-        !allowSettlementInspection ||
-        !["prepared", "publishing", "publication-complete", "superseded"].includes(record.phase)
-      ) {
+      if (!allowSettlementInspection) {
         throw new Error(installationMismatchMessage(descriptor));
       }
-      inspectRemount(descriptor);
+      if (!isInstallationReplaced(record)) {
+        if (
+          !["prepared", "publishing", "publication-complete", "superseded"].includes(record.phase)
+        ) {
+          throw new Error(installationMismatchMessage(descriptor));
+        }
+        inspectRemount(descriptor);
+      }
     }
     return record;
   };
@@ -379,10 +434,12 @@ function openJournal(anchor: string, settlementOnly: boolean) {
   };
   return {
     read,
+    isInstallationReplaced,
     inspectRemount(expected: PackageActivationRecord) {
       assertRecord(expected, read());
       return matchesInstallation(expected.descriptor) ||
-        isPackageActivationComplete(anchor, expected)
+        isPackageActivationComplete(anchor, expected) ||
+        isInstallationReplaced(expected)
         ? undefined
         : inspectRemount(expected.descriptor);
     },
@@ -465,8 +522,7 @@ function openJournal(anchor: string, settlementOnly: boolean) {
           fs.realpathSync(retained) !== retained ||
           packageActivationIdentity(retained, true) !== retainedIdentity ||
           assertPrivate(archive, "control") !== journalParentIdentity ||
-          assertPrivate(path.join(archive, PACKAGE_ACTIVATION_JOURNAL), "journal") !==
-            journalIdentity
+          journalFileIdentity(path.join(archive, PACKAGE_ACTIVATION_JOURNAL)) !== journalIdentity
         ) {
           throw new Error("Package settlement control archive identity changed.");
         }
@@ -474,8 +530,8 @@ function openJournal(anchor: string, settlementOnly: boolean) {
       }
       assertCurrent();
     },
-    readForAdmission(installKey: string) {
-      return withDatabase(false, (db) => decode(readRow(db), installKey, false));
+    readForAdmission(installKey: string, dryRun = false) {
+      return withDatabase(false, (db) => decode(readRow(db), installKey, dryRun));
     },
     recordPreviousCopy(
       expected: PackageActivationRecord,

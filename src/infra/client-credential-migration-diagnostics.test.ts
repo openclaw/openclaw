@@ -8,6 +8,7 @@ import { repairOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "../state/openclaw-state-schema.test-support.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -26,6 +27,7 @@ it("preserves an invalid socket cause through migration, candidate capture, and 
   {
     using db = openNodeSqliteDatabase(pathname);
     db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
     db.exec(`
       INSERT INTO schema_meta VALUES ('primary', 'global', 28, NULL, 'fixture', 123, 123);

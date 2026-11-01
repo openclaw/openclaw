@@ -1,3 +1,4 @@
+import { chmod, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessSupportContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
@@ -11,7 +12,7 @@ import {
   withNativeSessionMutationForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
@@ -32,6 +33,7 @@ import {
   createCodexAppServerNativeCompaction,
 } from "./harness.js";
 import codexPluginPackage from "./package.json" with { type: "json" };
+import { setManagedCodexPluginRoot } from "./src/app-server/managed-binary.js";
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
 import {
@@ -49,6 +51,8 @@ import {
 } from "./src/app-server/session-binding.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-harness-reset-");
+beforeAll(() => setManagedCodexPluginRoot(import.meta.dirname));
+afterAll(() => setManagedCodexPluginRoot(undefined));
 const resetSession = {
   agentId: "worker",
   sessionId: "session-1",
@@ -108,6 +112,51 @@ const isolatedTask = {
 
 describe("Codex agent harness supports()", () => {
   const harness = supportHarness;
+
+  it("rejects a missing managed native binary without declaring explicit fallback", async () => {
+    const originalPlatform = process.platform;
+    const originalArch = process.arch;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    Object.defineProperty(process, "arch", { value: "riscv64" });
+    vi.stubEnv("PATH", "/missing-codex-path");
+    vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "");
+    setManagedCodexPluginRoot("/missing-codex-plugin");
+    try {
+      expect(supports({})).toEqual({
+        supported: false,
+        reason: expect.stringContaining("native Codex app-server binary"),
+      });
+      for (const appServer of [
+        { command: "/custom/codex" },
+        { transport: "websocket", url: "ws://127.0.0.1:4501" },
+        { transport: "unix", homeScope: "user" },
+        { workerHostedCloud: true },
+      ]) {
+        expect(
+          makeHarness({ resolvePluginConfig: () => ({ appServer }) }).supports({
+            provider: "openai",
+            requestedRuntime: "codex",
+          }),
+        ).toEqual({ supported: true, priority: 100 });
+      }
+      vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "/custom/env-codex");
+      expect(supports({})).toEqual({ supported: true, priority: 100 });
+
+      const nativeDir = sessionDirs.make();
+      const native = path.join(nativeDir, "codex");
+      await writeFile(native, "\u007fELF native artifact fixture");
+      await chmod(native, 0o755);
+      vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_BIN", "");
+      vi.stubEnv("PATH", nativeDir);
+      // Source-built native executables need no published platform package.
+      expect(supports({})).toEqual({ supported: true, priority: 100 });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+      Object.defineProperty(process, "arch", { value: originalArch });
+      vi.unstubAllEnvs();
+      setManagedCodexPluginRoot(import.meta.dirname);
+    }
+  });
 
   it("keeps computer-control denies out of the native-surface exemption", () => {
     expect(harness.conversationToolPolicySafeDenyTools).toContain("image_generate");

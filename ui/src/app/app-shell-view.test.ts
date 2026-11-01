@@ -151,16 +151,59 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
   }
 });
 
-it("exposes the Claws navigation entry only while its Labs toggle is enabled", async () => {
+it("shows the read-only banner only for the serving Gateway while its configuration is read-only", async () => {
+  const { runtime, query, refresh, route } = await mountShell();
+  const { config, gateway } = runtime.context;
+  const fetch = vi.spyOn(globalThis, "fetch");
+  const loadConfig = async (configReadOnly: boolean, configReadOnlyNotice?: string) => {
+    fetch.mockResolvedValueOnce(Response.json({ configReadOnly, configReadOnlyNotice }));
+    await config.refresh();
+    refresh();
+  };
+  const getBanner = () => query(".shell-config-read-only");
+  await loadConfig(true);
+  const banner = getBanner();
+  expect(banner?.textContent?.trim()).toBe(
+    "Gateway configuration is read-only. To make changes, update the configuration file or deployment settings for this Gateway.",
+  );
+  expect(banner?.querySelector("a")).toBeNull();
+  route("settings");
+  expect(getBanner()).toBe(banner);
+
+  const docsUrl = "https://docs.example.org/gateway";
+  const notice = `Use the <admin> console. ${docsUrl}`;
+  await loadConfig(true, notice);
+  const custom = getBanner();
+  expect(custom?.textContent?.trim()).toBe(
+    "Gateway configuration is read-only. Use the <admin> console. Learn more",
+  );
+  expect(custom?.querySelector("a")?.href).toBe(docsUrl);
+
+  const serving = gateway.connection;
+  const connection = vi.spyOn(gateway, "connection", "get");
+  connection.mockReturnValue({ ...serving, gatewayUrl: serving.gatewayUrl + "/another-gateway" });
+  refresh();
+  expect(getBanner()).toBeNull();
+  connection.mockRestore();
+  refresh();
+  expect(getBanner()).not.toBeNull();
+
+  await loadConfig(false, notice);
+  expect(getBanner()).toBeNull();
+});
+
+it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
   const { owner, runtime } = await mountShell();
   const initial = runtime.context.runtimeConfig.state;
   const config = vi.spyOn(runtime.context.runtimeConfig, "state", "get");
   for (const enabled of [false, true, false]) {
     config.mockReturnValue({
       ...initial,
-      bootstrapConfig: { gateway: { controlUi: { experimental: { claws: enabled } } } },
+      bootstrapConfig: { gateway: { controlUi: { experimental: { templates: enabled } } } },
     });
-    expect(readShellView(owner).sidebarProperties.enabledRouteIds.includes("claws")).toBe(enabled);
+    expect(readShellView(owner).sidebarProperties.enabledRouteIds.includes("templates")).toBe(
+      enabled,
+    );
     expect(readShellView(owner).sidebarProperties.enabledRouteIds).toContain("agents");
   }
 });
@@ -363,6 +406,40 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   expect(query("openclaw-app-sidebar")).toBe(sidebar);
   expect(view.container.querySelectorAll("openclaw-app-sidebar")).toHaveLength(1);
   expect(query("openclaw-router-outlet")).toBe(outlet);
+});
+
+it("commits mobile drawer changes without republishing the full shell", async () => {
+  sidebarImport.resolve();
+  mockMobile(() => true);
+  const { owner, query } = await mountShell();
+  const fullCommit = vi.spyOn(owner, "afterCommit");
+  const revision = owner.shellRevision();
+  const sidebar = owner.navigationSidebar;
+  const outlet = query("openclaw-router-outlet");
+  for (const open of [true, false]) {
+    owner.navDrawerOpen = open;
+    expect(owner.navDrawerOpen).toBe(open);
+    const committed = vi.fn();
+    void owner.updateComplete.then(committed);
+    expect(committed).not.toHaveBeenCalled();
+    flush();
+    await owner.updateComplete;
+    expect(owner.shellRevision()).toBe(revision);
+    expect(fullCommit).not.toHaveBeenCalled();
+    expect(query(".shell")?.classList.contains("shell--nav-drawer-open")).toBe(open);
+    expect(query("#control-ui-main")?.hasAttribute("inert")).toBe(open);
+    expect(query(".shell-nav")?.getAttribute("aria-hidden")).toBe(open ? null : "true");
+    expect(sidebar.navigationVisible).toBe(open);
+    expect(query("openclaw-app-sidebar")).toBe(sidebar);
+    expect(query("openclaw-router-outlet")).toBe(outlet);
+  }
+
+  owner.navDrawerOpen = true;
+  owner.invalidate();
+  flush();
+  await owner.updateComplete;
+  expect(fullCommit).toHaveBeenCalledOnce();
+  expect(sidebar.navigationVisible).toBe(true);
 });
 
 it("keeps the mobile New Session action live across selection and access changes", async () => {

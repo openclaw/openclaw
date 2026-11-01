@@ -26,7 +26,8 @@ const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
-const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
+// Vite drains its active transforms and dependency optimizer before returning.
+const FORWARDED_SIGNAL_KILL_GRACE_MS = 5_000;
 const PUBLISH_RENAME_DELAYS_MS = [100, 200, 400, 800, 1600];
 const PUBLISH_RENAME_WAIT = new Int32Array(new SharedArrayBuffer(4));
 

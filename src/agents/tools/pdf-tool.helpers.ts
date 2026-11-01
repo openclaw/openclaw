@@ -103,13 +103,17 @@ export function buildPdfExtractionContext(
   extractions: PdfExtractedContent[],
   explicitSelectionLimit?: number,
   model?: { api?: string },
-): Context {
+): { context: Context; truncationNotices: string[] } {
   const content: Array<
     { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
   > = [];
+  const truncationNotices: string[] = [];
 
   for (const [i, extraction] of extractions.entries()) {
     const notice = renderDocumentTruncationNotice(extraction.metadata, explicitSelectionLimit);
+    if (notice) {
+      truncationNotices.push(extractions.length > 1 ? `PDF ${i + 1}: ${notice}` : notice);
+    }
     if (extraction.text.trim() || notice) {
       const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
       const text = extraction.text.trim()
@@ -131,7 +135,10 @@ export function buildPdfExtractionContext(
     model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
 
   return {
-    ...(systemPrompt ? { systemPrompt } : {}),
-    messages: [{ role: "user", content, timestamp: Date.now() }],
+    context: {
+      ...(systemPrompt ? { systemPrompt } : {}),
+      messages: [{ role: "user", content, timestamp: Date.now() }],
+    },
+    truncationNotices,
   };
 }

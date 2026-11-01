@@ -5,7 +5,11 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import { filterAndSortSessionEntries, prepareSessionRowSelection } from "./session-utils-list.js";
+import {
+  filterAndSortSessionEntries,
+  prepareSessionRowSelection,
+  selectSessionEntries,
+} from "./session-utils-list.js";
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
@@ -68,36 +72,50 @@ test.each(["München", "한국어"])("search finds both canonical forms of %s", 
   }
 });
 
-test("search reuses each candidate's selected row owner", () => {
+test("sigma variants preserve permitted membership, totals and page boundaries", () => {
+  const searchConfig = { agents: { entries: { main: {}, other: {} } } };
+  setRuntimeConfigSnapshot(searchConfig);
+  const first = "agent:main:first";
+  const second = "agent:main:second";
+  const denied = "agent:main:denied";
   projection = createSessionRowProjectionFixture({
-    cfg,
-    agentId: "main",
+    cfg: searchConfig,
     store: {
-      "agent:main:parent": entry("parent", 1, { displayName: "Investigation parent" }),
-      "agent:main:subagent:child": entry("child", 2, {
-        label: "Investigation child",
-        spawnedBy: "agent:main:parent",
-        modelProvider: "openai",
-        model: "gpt-4.1",
-      }),
+      [first]: entry("first", 3, { label: "Handoff review — ΕΛΕΓΧΟΣ" }),
+      [second]: entry("second", 1, { displayName: "κόσμος" }),
+      [denied]: entry("denied", 4, { label: "ΕΛΕΓΧΟΣ" }),
+      "agent:other:outside": entry("outside", 5, { label: "ΕΛΕΓΧΟΣ" }),
+      "agent:main:unrelated": entry("unrelated", 6, { label: "Review notes" }),
     },
   });
-  for (const search of ["investigation", "gpt-4.1", "zz-no-match"]) {
-    const prepared = prepareSessionRowSelection(projection, { search });
-    const getTarget = vi.fn(prepared.getTarget);
-    const result = filterAndSortSessionEntries({ ...prepared, getTarget });
-    expect(result.map(([key]) => key)).toEqual(
-      search === "investigation"
-        ? ["agent:main:subagent:child", "agent:main:parent"]
-        : search === "gpt-4.1"
-          ? ["agent:main:subagent:child"]
-          : [],
-    );
-    expect(getTarget).toHaveBeenCalledTimes(2);
+  const select = (search: string, offset = 0) =>
+    selectSessionEntries({
+      ...prepareSessionRowSelection(projection!, { search, agentId: "main", limit: 1, offset }),
+      entryFilter: (key) => key !== denied,
+    });
+  for (const search of ["Σ", "σ", "ς", " Σ "]) {
+    for (const [offset, expected] of [first, second].entries()) {
+      const result = select(search, offset);
+      expect(
+        result.entries.map(([key]) => key),
+        search,
+      ).toEqual([expected]);
+      expect(result, search).toMatchObject({
+        totalCount: 2,
+        offset,
+        nextOffset: offset === 0 ? 1 : null,
+        hasMore: offset === 0,
+      });
+    }
   }
+  projection.setEntry(first, entry("first", 3, { label: "Ready" }));
+  expect(select("Σ")).toMatchObject({ totalCount: 1, hasMore: false });
+  expect(select("Σ").entries.map(([key]) => key)).toEqual([second]);
 });
 
-test("model search reads full model facts only after the resolved identity misses", () => {
+test("search reuses row owners and reads model facts only after the resolved identity misses", () => {
+  const parentKey = "agent:main:parent";
+  const childKey = "agent:main:subagent:child";
   const modelConfig = {
     ...cfg,
     agents: { entries: { main: { model: "openai/gpt-4.1" } } },
@@ -107,32 +125,33 @@ test("model search reads full model facts only after the resolved identity misse
     cfg: modelConfig,
     agentId: "main",
     store: {
-      "agent:main:parent": entry("parent", 1, {
+      [parentKey]: entry("parent", 1, {
+        displayName: "Investigation parent",
         providerOverride: "anthropic",
         modelOverride: "claude-sonnet-4",
       }),
-      "agent:main:subagent:child": entry("child", 2, {
-        parentSessionKey: "agent:main:parent",
-        spawnedBy: "agent:main:parent",
+      [childKey]: entry("child", 2, {
+        label: "Investigation child",
+        parentSessionKey: parentKey,
+        spawnedBy: parentKey,
       }),
     },
   });
   for (const [search, expected, factKeys] of [
-    ["gpt-4.1", ["agent:main:subagent:child"], ["agent:main:parent"]],
-    [
-      "claude-sonnet-4",
-      ["agent:main:subagent:child", "agent:main:parent"],
-      ["agent:main:subagent:child"],
-    ],
+    ["investigation", [childKey, parentKey], []],
+    ["gpt-4.1", [childKey], [parentKey]],
+    ["claude-sonnet-4", [childKey, parentKey], [childKey]],
     ["zz-no-match", [], []],
   ] as const) {
     const prepared = prepareSessionRowSelection(projection, { search });
+    const getTarget = vi.fn(prepared.getTarget);
     const getModelFacts = vi.fn(prepared.getModelFacts);
-    const result = filterAndSortSessionEntries({ ...prepared, getModelFacts });
+    const result = filterAndSortSessionEntries({ ...prepared, getTarget, getModelFacts });
     expect(
       result.map(([key]) => key),
       search,
     ).toEqual(expected);
+    expect(getTarget).toHaveBeenCalledTimes(2);
     expect(getModelFacts.mock.calls.map(([key]) => key).toSorted(), search).toEqual(
       [...factKeys].toSorted(),
     );

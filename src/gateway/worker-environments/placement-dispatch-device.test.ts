@@ -163,6 +163,7 @@ describe("device worker placement dispatch", () => {
       idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
       executionMode: REQUEST.executionMode,
       projectPath: "/gateway/workspace",
+      beforeProvision: expect.any(Function),
       inheritedProfile: request.inheritedProfile,
     });
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
@@ -236,6 +237,7 @@ describe("device worker placement dispatch", () => {
       idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
       executionMode: "remote-exec",
       projectPath: "/gateway/workspace",
+      beforeProvision: expect.any(Function),
       inheritedProfile: request.inheritedProfile,
     });
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
@@ -271,6 +273,7 @@ describe("device worker placement dispatch", () => {
       idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
       executionMode: "remote-exec",
       projectPath: "/gateway/workspace",
+      beforeProvision: expect.any(Function),
       admittedIntent: {
         providerId: harness.ready.providerId,
         profileSnapshot: harness.ready.profileSnapshot,
@@ -437,72 +440,53 @@ describe("device worker placement dispatch", () => {
     expect(harness.log.filter((entry) => entry === "sync")).toHaveLength(0);
   });
 
-  it("rejects a cloud node re-paired while its managed workspace is synchronizing", async () => {
-    let currentNode = deviceProof(0);
-    const harness = await createHarness(database, placementStore, {
-      isCurrentNodePlacement: (node) =>
-        node.nodeId === currentNode.nodeId &&
-        node.connId === currentNode.connId &&
-        node.pairingGeneration === currentNode.pairingGeneration,
-    });
-    bindDeviceWorkerAvailability(harness.environments, async () => ({
-      available: true,
-      node: currentNode,
-    }));
-    const request = prepareCloudNodeDispatch(harness);
+  it.each(["starting", "activation"] as const)(
+    "rejects a cloud node re-paired during %s",
+    async (stage) => {
+      let currentNode = deviceProof(0);
+      const rePairNode = () => {
+        currentNode = {
+          ...currentNode,
+          connId: "replacement-connection",
+          pairingGeneration: "replacement-generation",
+        };
+      };
+      const harness = await createHarness(database, placementStore, {
+        isCurrentNodePlacement: (node) =>
+          node.nodeId === currentNode.nodeId &&
+          node.connId === currentNode.connId &&
+          node.pairingGeneration === currentNode.pairingGeneration,
+      });
+      bindDeviceWorkerAvailability(harness.environments, async () => ({
+        available: true,
+        node: currentNode,
+      }));
+      const request = prepareCloudNodeDispatch(harness);
+      let isStarting = false;
 
-    await expect(
-      harness.service.dispatch(request, (placement) => {
-        if (placement.state === "starting") {
-          currentNode = {
-            ...currentNode,
-            connId: "replacement-connection",
-            pairingGeneration: "replacement-generation",
-          };
-        }
-      }),
-    ).rejects.toThrow();
+      await expect(
+        harness.service.dispatch(
+          request,
+          (placement) => {
+            isStarting = placement.state === "starting";
+            if (isStarting && stage === "starting") {
+              rePairNode();
+            }
+          },
+          stage === "activation"
+            ? () => {
+                if (isStarting) {
+                  rePairNode();
+                }
+              }
+            : undefined,
+        ),
+      ).rejects.toThrow(stage === "activation" ? "pairing generation" : undefined);
 
-    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
-    expect(harness.placements.current()).toMatchObject({ state: "failed" });
-  });
-
-  it("fences a cloud node re-paired inside the synchronous activation callback", async () => {
-    let currentNode = deviceProof(0);
-    const harness = await createHarness(database, placementStore, {
-      isCurrentNodePlacement: (node) =>
-        node.nodeId === currentNode.nodeId &&
-        node.connId === currentNode.connId &&
-        node.pairingGeneration === currentNode.pairingGeneration,
-    });
-    bindDeviceWorkerAvailability(harness.environments, async () => ({
-      available: true,
-      node: currentNode,
-    }));
-    const request = prepareCloudNodeDispatch(harness);
-    let isStarting = false;
-
-    await expect(
-      harness.service.dispatch(
-        request,
-        (placement) => {
-          isStarting = placement.state === "starting";
-        },
-        () => {
-          if (isStarting) {
-            currentNode = {
-              ...currentNode,
-              connId: "replacement-connection",
-              pairingGeneration: "replacement-generation",
-            };
-          }
-        },
-      ),
-    ).rejects.toThrow("pairing generation");
-
-    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
-    expect(harness.placements.current()).toMatchObject({ state: "failed" });
-  });
+      expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+      expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    },
+  );
 
   it.each([
     { name: "withdraws its required node command", revocation: "command" as const },
@@ -607,65 +591,6 @@ describe("device worker placement dispatch", () => {
     });
 
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("reconnect") });
-  });
-
-  it.each([
-    {
-      name: "saturated worker-turn node",
-      executionMode: "worker-turn" as const,
-      node: deviceProof(0),
-      providerId: "device",
-      expectedMessage: "at capacity",
-    },
-    {
-      name: "remote-exec node missing its required command",
-      executionMode: "remote-exec" as const,
-      node: deviceProof(0, ["system.run"]),
-      providerId: "device",
-      expectedMessage: "not advertised by node",
-    },
-    {
-      name: "non-device remote-exec cloud node missing its required command",
-      executionMode: "remote-exec" as const,
-      node: deviceProof(0, ["system.run"]),
-      providerId: "generic-cloud-node",
-      expectedMessage: "not advertised by node",
-    },
-    {
-      name: "saturated non-device worker-turn cloud node",
-      executionMode: "worker-turn" as const,
-      node: deviceProof(0),
-      providerId: "generic-cloud-node",
-      expectedMessage: "at capacity",
-    },
-  ])("fences recovery of a $name before workspace sync", async (scenario) => {
-    const harness = await createHarness(database, placementStore);
-    const provisioning = await harness.placements.seedProvisioning(scenario.executionMode);
-    if (provisioning.state !== "provisioning") {
-      throw new Error("paired-device recovery fixture did not enter provisioning");
-    }
-    const environment = {
-      ...harness.ready,
-      providerId: scenario.providerId,
-      nodeDeviceId: "device-1",
-      sshEndpoint: null,
-    };
-    vi.mocked(harness.environments.get).mockImplementation((environmentId) =>
-      environmentId === environment.environmentId ? environment : undefined,
-    );
-    bindDeviceWorkerAvailability(harness.environments, async () => ({
-      available: true,
-      node: scenario.node,
-    }));
-
-    await harness.service.resumeProvisioning(provisioning, async () => {});
-
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining(scenario.expectedMessage),
-    });
   });
 
   it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {

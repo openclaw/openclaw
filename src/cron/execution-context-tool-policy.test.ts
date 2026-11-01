@@ -275,9 +275,9 @@ describe("scheduled automations scope", () => {
       expect(automations, "automations tool offered").toBeDefined();
       const actions = readActionEnum(automations!);
       expect(actions).toEqual(expect.arrayContaining(["status", "list", "get", "remove", "runs"]));
-      // No creation, edits, forced runs or wake: the parent wake action is not offered yet.
+      // Conversation schemas stay stable; execution enforces the scheduled scope.
       for (const action of ["add", "update", "run", "wake", "bind"]) {
-        expect(actions).not.toContain(action);
+        expect(await callError(automations!, { action })).toContain(SCOPE_ERROR);
       }
       for (const action of ["get", "remove", "runs"]) {
         expect(await callError(automations!, { action, jobId: "sibling-job" })).toContain(

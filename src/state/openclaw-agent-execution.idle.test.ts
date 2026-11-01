@@ -8,6 +8,7 @@ import * as databaseProcessRole from "../infra/database-engine/admission-scope.j
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
+  beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -132,10 +133,12 @@ it("retires a CLI one-shot's warm executor after the CLI window", async () => {
   expect(closedAgents()).toEqual(["one-shot"]);
 });
 
-it("closes all warm executors on restart drain", async () => {
+it("keeps warm executors through restart drain until marker persistence releases cleanup", async () => {
   await fillIdlePool();
-  expect(closedAgents()).toEqual([]);
   markGatewayRestartDraining();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(closedAgents()).toEqual([]);
+  beginGatewayShutdownCleanup();
   await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);

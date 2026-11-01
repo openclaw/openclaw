@@ -67,10 +67,9 @@ function createTokenGatewayConfig(customBindHost = "127.0.0.1") {
   };
 }
 
-function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
+function createRemoteQrConfig() {
   return {
     gateway: {
-      ...(params?.withTailscale ? { tailscale: { mode: "serve" } } : {}),
       publicOrigin: "https://gateway.example.test",
       remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
       auth: { mode: "token", token: "local-tok" },
@@ -186,14 +185,6 @@ describe("registerQrCli", () => {
     const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("setup code was limited for safety");
     expect(output).toContain("Use wss:// or Tailscale Serve");
-  }
-
-  function mockTailscaleStatusLookup() {
-    runCommandWithTimeout.mockResolvedValue({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"ts-host.tailnet.ts.net."}}',
-      stderr: "",
-    });
   }
 
   beforeEach(() => {
@@ -438,8 +429,6 @@ describe("registerQrCli", () => {
       resolvedConfig: createRemoteQrConfig(),
       diagnostics: ["gateway.remote.password inactive"] as string[],
     });
-    mockTailscaleStatusLookup();
-
     await runQr(["--json", "--remote"]);
 
     const payload = parseLastLoggedQrJson();

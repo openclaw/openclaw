@@ -64,6 +64,7 @@ const admission = vi.hoisted(
   (): {
     active: boolean;
     beforeGrant?: (stage: string) => void;
+    afterGrant?: (stage: string) => void;
   } => ({ active: false }),
 );
 vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) =>
@@ -77,6 +78,7 @@ vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) =>
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     admission.beforeGrant = undefined;
+    admission.afterGrant = undefined;
     await closeStateDatabaseForTest();
     cleanup();
   }),

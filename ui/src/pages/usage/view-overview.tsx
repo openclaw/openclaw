@@ -8,11 +8,13 @@ import {
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { ProviderUsagePanel } from "../../components/solid/provider-usage.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import {
   buildUsageCostWindows,
@@ -169,8 +171,7 @@ function windowDailyCosts(costs: Map<string, CostDailyEntry>, endDate: string, d
   const start = Date.parse(endDate) - (days - 1) * 86_400_000;
   return Array.from({ length: days }, (_, index) => {
     const date = new Date(start + index * 86_400_000).toISOString().slice(0, 10);
-    const entry = costs.get(date);
-    return { date, cost: entry?.totalCost ?? 0, usageReport: entry?.usageReport };
+    return { date, cost: costs.get(date)?.totalCost ?? 0 };
   });
 }
 
@@ -192,9 +193,9 @@ function CostColumns(props: {
       aria-label={props.label}
       onPointerLeave={() => setHover(null)}
     >
-      <For each={props.days}>
+      <For each={props.days} keyed={(day) => day.date}>
         {(day, index) => {
-          const share = () => (max() > 0 ? day.cost / max() : 0);
+          const share = () => (max() > 0 ? day().cost / max() : 0);
           return (
             <span
               class={[
@@ -205,7 +206,7 @@ function CostColumns(props: {
                 },
               ]}
               style={{
-                height: `${day.cost > 0 ? Math.max(6, share() * 100) : 0}%`,
+                height: `${day().cost > 0 ? Math.max(6, share() * 100) : 0}%`,
                 "--usage-bar-tint": `${Math.round(35 + share() * 50)}%`,
               }}
               onPointerEnter={() => setHover(index())}
@@ -216,8 +217,7 @@ function CostColumns(props: {
       <Show when={active()}>
         {(day) => (
           <span class="usage-bars__tip">
-            {formatDayLabel(day().date)} ·{" "}
-            <b>{formatAnalysisCost(day().cost, day().usageReport)}</b>
+            {formatDayLabel(day().date)} · <b>{formatAnalysisCost(day().cost)}</b>
           </span>
         )}
       </Show>
@@ -225,67 +225,82 @@ function CostColumns(props: {
   );
 }
 
-function renderCostWindowComparison(
-  daily: CostDailyEntry[],
-  rangeStartDate: string,
-  rangeEndDate: string,
-  timeZone: "local" | "utc",
-) {
-  const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
-  if (windows.length === 0 || daily.length === 0) {
-    return undefined;
-  }
-
-  const today = formatIsoDate(new Date(), timeZone);
-  const costs = new Map(daily.map((day) => [day.date, day]));
-  const comparisons = windows.map((summary, index) => ({
-    index,
-    summary,
-    columns: windowDailyCosts(costs, summary.endDate, summary.days),
-  }));
-
+export function CostWindowComparison(props: {
+  daily: CostDailyEntry[];
+  rangeStartDate: string;
+  rangeEndDate: string;
+  timeZone: "local" | "utc";
+}) {
+  const state = createMemo(() => {
+    const daily = props.daily;
+    const windows = buildUsageCostWindows(daily, props.rangeStartDate, props.rangeEndDate);
+    if (windows.length === 0 || daily.length === 0) {
+      return undefined;
+    }
+    const costs = new Map(daily.map((day) => [day.date, day]));
+    return {
+      today: formatIsoDate(new Date(), props.timeZone),
+      comparisons: windows.map((summary, index) => ({
+        index,
+        summary,
+        columns: windowDailyCosts(costs, summary.endDate, summary.days),
+      })),
+    };
+  });
   return (
-    <SettingsSection
-      title={t("usage.costWindows.title")}
-      description={t("usage.costWindows.subtitle", { date: formatFullDate(rangeEndDate) })}
-      actions={
-        <span class="usage-section-meta cost-window-range">
-          {formatDayLabel(rangeStartDate)} – {formatDayLabel(rangeEndDate)}
-        </span>
-      }
-    >
-      <div class="usage-summary-strip usage-summary-strip--windows">
-        <For each={comparisons}>
-          {({ index, summary, columns }) => {
-            const label = createMemo(() =>
-              index === 0
-                ? t("usage.costWindows.selectedRange")
-                : summary.days === 1
-                  ? summary.endDate === today
-                    ? t("usage.presets.today")
-                    : formatDayLabel(summary.endDate)
-                  : t("usage.costWindows.lastDays", { count: String(summary.days) }),
-            );
-            return (
-              <div class={["cost-window", { "cost-window--range": index === 0 }]}>
-                <div class="cost-window__label">{label()}</div>
-                <div class="cost-window__value">
-                  {formatAnalysisCost(summary.totals.totalCost, summary.totals.usageReport)}
-                </div>
-                <div class="cost-window__meta">
-                  {formatUsageTokens(summary.totals.totalTokens, summary.totals.usageReport)}{" "}
-                  {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
-                  {summary.days > 1
-                    ? ` · ${formatAnalysisCost(summary.totals.totalCost / summary.days, summary.totals.usageReport)} ${t("usage.costWindows.perDay")}`
-                    : undefined}
-                </div>
-                {columns ? <CostColumns days={columns} label={label()} /> : undefined}
-              </div>
-            );
-          }}
-        </For>
-      </div>
-    </SettingsSection>
+    <Show when={state()}>
+      {(current) => (
+        <SettingsSection
+          title={t("usage.costWindows.title")}
+          description={t("usage.costWindows.subtitle", {
+            date: formatFullDate(props.rangeEndDate),
+          })}
+          actions={
+            <span class="usage-section-meta cost-window-range">
+              {formatDayLabel(props.rangeStartDate)} – {formatDayLabel(props.rangeEndDate)}
+            </span>
+          }
+        >
+          <div class="usage-summary-strip usage-summary-strip--windows">
+            <For
+              each={current().comparisons}
+              keyed={(entry) => (entry.index === 0 ? "range" : entry.summary.days)}
+            >
+              {(entry) => {
+                const label = createMemo(() => {
+                  const { index, summary } = entry();
+                  return index === 0
+                    ? t("usage.costWindows.selectedRange")
+                    : summary.days === 1
+                      ? summary.endDate === current().today
+                        ? t("usage.presets.today")
+                        : formatDayLabel(summary.endDate)
+                      : t("usage.costWindows.lastDays", { count: String(summary.days) });
+                });
+                return (
+                  <div class={["cost-window", { "cost-window--range": entry().index === 0 }]}>
+                    <div class="cost-window__label">{label()}</div>
+                    <div class="cost-window__value">
+                      {formatAnalysisCost(entry().summary.totals.totalCost)}
+                    </div>
+                    <div class="cost-window__meta">
+                      {formatUsageTokens(entry().summary.totals.totalTokens)}{" "}
+                      {normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+                      {entry().summary.days > 1
+                        ? ` · ${formatAnalysisCost(entry().summary.totals.totalCost / entry().summary.days)} ${t("usage.costWindows.perDay")}`
+                        : undefined}
+                    </div>
+                    <Show when={entry().columns}>
+                      {(columns) => <CostColumns days={columns()} label={label()} />}
+                    </Show>
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+        </SettingsSection>
+      )}
+    </Show>
   );
 }
 
@@ -353,9 +368,6 @@ export function UsageInsights(props: {
       return undefined;
     }
 
-    // Ratios of partial counters are neither exact nor lower bounds.
-    const report = totals.usageReport;
-    const partial = report?.state === "unavailable";
     const empty = t("usage.common.emptyValue");
     const avgTokens = aggregates.messages.total
       ? Math.round(totals.totalTokens / aggregates.messages.total)
@@ -363,14 +375,14 @@ export function UsageInsights(props: {
     const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
     const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
     const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
-    const cacheHitLabel = cacheBase > 0 && !partial ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
+    const cacheHitLabel = cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
     const errorRatePct = stats.errorRate * 100;
     const throughputLabel =
-      stats.throughputTokensPerMin !== undefined && !partial
+      stats.throughputTokensPerMin !== undefined
         ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
         : t("usage.common.emptyValue");
     const throughputCostLabel =
-      stats.throughputCostPerMin !== undefined && !partial
+      stats.throughputCostPerMin !== undefined
         ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
         : t("usage.common.emptyValue");
     const avgDurationLabel =
@@ -385,7 +397,7 @@ export function UsageInsights(props: {
         label: formatDayLabel(day.date),
         value: `${((day.errors / day.messages) * 100).toFixed(2)}%`,
         weight: day.errors / day.messages,
-        sub: `${day.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages.toLocaleString()} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens, day.usageReport)}`,
+        sub: `${day.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${day.messages.toLocaleString()} ${t("usage.overview.messagesAbbrev")} · ${formatUsageTokens(day.tokens)}`,
       }));
 
     const costAttribution = (
@@ -399,12 +411,12 @@ export function UsageInsights(props: {
       value:
         entryTotals.totalCost === 0 && entryTotals.missingCostEntries > 0
           ? t("usage.overview.unpriced")
-          : formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
+          : formatAnalysisCost(entryTotals.totalCost),
       // Bars rank by cost, which reflects model, speed tier and cache use better than tokens.
       weight: entryTotals.totalCost || entryTotals.totalTokens / 1e9,
       sub: [
         source ?? null,
-        formatUsageTokens(entryTotals.totalTokens, entryTotals.usageReport),
+        formatUsageTokens(entryTotals.totalTokens),
         count === undefined
           ? null
           : `${count.toLocaleString()} ${t("usage.overview.messagesAbbrev")}`,
@@ -481,10 +493,8 @@ export function UsageInsights(props: {
       aggregates,
       throughputLabel,
       throughputCostLabel,
-      avgTokensLabel: partial ? empty : formatUsageTokens(avgTokens),
-      avgCostLabel: partial ? empty : formatAnalysisCost(avgCost),
-      partial,
-      report,
+      avgTokensLabel: formatUsageTokens(avgTokens),
+      avgCostLabel: formatAnalysisCost(avgCost),
       cacheHitLabel,
       totals,
       cacheBase,
@@ -534,15 +544,13 @@ export function UsageInsights(props: {
                   metric="cacheHitRate"
                   hint={t("usage.overview.cacheHint")}
                   value={insights().cacheHitLabel}
-                  sub={`${formatUsageTokens(insights().totals.cacheRead, insights().report)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase, insights().report)} ${t("usage.overview.prompt")}`}
+                  sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
                   tone={
-                    insights().partial
-                      ? undefined
-                      : insights().cacheHitRate > 0.6
-                        ? "good"
-                        : insights().cacheHitRate > 0.3
-                          ? "warn"
-                          : "bad"
+                    insights().cacheHitRate > 0.6
+                      ? "good"
+                      : insights().cacheHitRate > 0.3
+                        ? "warn"
+                        : "bad"
                   }
                 />
                 <SummaryStat
@@ -568,7 +576,7 @@ export function UsageInsights(props: {
                       : "usage.overview.avgCostHint",
                   )}
                   value={insights().avgCostLabel}
-                  sub={`${formatAnalysisCost(insights().totals.totalCost, insights().report)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
+                  sub={`${formatAnalysisCost(insights().totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
                 />
                 <SummaryStat
                   hintId="sessions"
@@ -612,4 +620,81 @@ export function UsageInsights(props: {
   );
 }
 
-export { renderCostWindowComparison, renderFilterChips, renderInsightList };
+export { renderFilterChips, renderInsightList };
+
+export function renderProviderUsage(
+  providers: ProviderUsageSummary["providers"][number][],
+  unavailable: boolean,
+  stalled: boolean,
+) {
+  const notice =
+    stalled || unavailable ? (
+      <div class="callout warning usage-callout">
+        {t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
+      </div>
+    ) : undefined;
+  if (providers.length === 0) {
+    return notice;
+  }
+  return (
+    <SettingsSection
+      title={t("usage.providerUsage.title")}
+      count={providers.length}
+      description={t("usage.providerUsage.subtitle")}
+    >
+      {notice}
+      <div class="usage-panel provider-usage-section">
+        <div class="provider-usage-grid">
+          <For each={providers}>
+            {(provider) => (
+              <article class="provider-usage-card">
+                <div class="provider-usage-card__header">
+                  <div>
+                    <div class="provider-usage-card__name">{provider.displayName}</div>
+                    <div class="provider-usage-card__id">{provider.provider}</div>
+                  </div>
+                  {provider.plan ? (
+                    <>
+                      {" "}
+                      <span class="provider-usage-plan">{provider.plan}</span>{" "}
+                    </>
+                  ) : undefined}
+                </div>
+                <ProviderUsagePanel usage={provider} />
+              </article>
+            )}
+          </For>
+        </div>
+      </div>
+    </SettingsSection>
+  );
+}
+
+type UsageOverviewData = Pick<UsageProps["data"], "totals" | "sessions" | "costDaily" | "overview">;
+
+export function usageOverview(data: UsageOverviewData, complete: boolean) {
+  // Cold caches can list sessions before usage arrives. Zero-filled aggregates
+  // are not evidence of zero usage while that read is pending.
+  const awaitingUsage =
+    !complete &&
+    !data.totals?.totalTokens &&
+    !data.totals?.totalCost &&
+    !data.sessions.some(
+      (session) =>
+        session.usage?.computedAt !== undefined ||
+        session.usage?.totalTokens ||
+        session.usage?.totalCost,
+    ) &&
+    !data.costDaily.some((day) => day.totalTokens || day.totalCost);
+  return {
+    awaitingUsage,
+    hasOverviewData:
+      !awaitingUsage && Boolean(data.totals || data.sessions.length || data.costDaily.length),
+    isEmpty:
+      complete &&
+      data.totals !== null &&
+      data.sessions.length === 0 &&
+      (data.overview?.unfilteredSessionCount ?? 0) === 0 &&
+      (data.totals?.totalTokens ?? 0) === 0,
+  };
+}

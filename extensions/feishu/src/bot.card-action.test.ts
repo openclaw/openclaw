@@ -1,8 +1,11 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { handleFeishuMessage } from "./bot.js";
-import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
+import { cardActionReplayGuard, resolvedCardActionChatTypes } from "./card-action-state.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import {
   createFeishuCardInteractionEnvelope as envelope,
@@ -78,14 +81,44 @@ const buttonEvent = (index: number, overrides: Partial<FeishuCardActionEvent> = 
     ...overrides,
   });
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("feishu-card-action-"));
   vi.clearAllMocks();
   getChat.mockReset().mockResolvedValue({ code: 0, data: { chat_type: "group" } });
   createClient.mockReset().mockReturnValue({ im: { chat: { get: getChat } } });
   vi.mocked(handleFeishuMessage).mockReset().mockResolvedValue(undefined);
-  processedCardActions.clear();
+  cardActionReplayGuard.clearMemory();
   resolvedCardActionChatTypes.clear();
 });
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  vi.unstubAllEnvs();
+});
+
+it.each(["cancel", "approval", "invalid"])(
+  "does not repeat a completed %s effect after restarting",
+  async (kind) => {
+    const event = cardEvent(
+      kind === "approval" ? approvalAction() : envelope({ k: "meta", a: CANCEL, c: context() }),
+      kind === "invalid" ? { operator: { open_id: "u999" } } : {},
+    );
+    await dispatch(event);
+    const effect = kind === "approval" ? sendCard : sendMessage;
+    expect(effect).toHaveBeenCalledTimes(1);
+    await closeOpenClawStateDatabaseAsync();
+    cardActionReplayGuard.clearMemory();
+    await dispatch(event);
+    expect(effect).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 15 * 60_000);
+    await dispatch(event);
+    expect(sendCard.mock.calls.length + sendMessage.mock.calls.length).toBe(2);
+  },
+);
 
 it("handles card action with JSON object payload without logging content", async () => {
   await dispatch(cardEvent({ a: "b" }, { context: { chat_id: "" } }));
@@ -222,12 +255,29 @@ it("keeps a claimed token completed after a non-retryable dispatch failure", asy
 it("keeps an in-flight token claimed while a slow dispatch is still running", async () => {
   vi.useFakeTimers();
   const pending = createDeferred<void>();
-  vi.mocked(handleFeishuMessage).mockReturnValue(pending.promise);
+  const started = createDeferred<void>();
+  vi.mocked(handleFeishuMessage).mockImplementation(async () => {
+    started.resolve();
+    await pending.promise;
+  });
   const event = cardEvent();
   const first = dispatch(event);
+  await started.promise;
   await vi.advanceTimersByTimeAsync(61_000);
   await dispatch(event);
   expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
   pending.resolve();
   await first;
+});
+
+it("allows failed direct sends to retry and persists only successful completion", async () => {
+  const event = cardEvent(envelope({ k: "meta", a: CANCEL, c: context() }));
+  sendMessage.mockRejectedValueOnce(new Error("send failed"));
+  await expect(dispatch(event)).rejects.toThrow("send failed");
+  await dispatch(event);
+  expect(sendMessage).toHaveBeenCalledTimes(2);
+  await closeOpenClawStateDatabaseAsync();
+  cardActionReplayGuard.clearMemory();
+  await dispatch(event);
+  expect(sendMessage).toHaveBeenCalledTimes(2);
 });

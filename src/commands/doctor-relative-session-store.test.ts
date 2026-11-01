@@ -130,6 +130,8 @@ async function withRelativeStore(
   }) => Promise<void>,
 ) {
   await withDoctorConfigPreflightHome(async (home) => {
+    fs.writeFileSync(path.join(home, "package.json"), '{"name":"openclaw"}');
+    mocks.packageRoot.mockReturnValue(home);
     const stateDir = path.join(home, ".openclaw");
     const workspace = path.join(stateDir, "workspace");
     fs.mkdirSync(workspace, { recursive: true });

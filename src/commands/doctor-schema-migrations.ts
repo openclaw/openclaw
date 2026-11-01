@@ -17,19 +17,40 @@ import {
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
   openOpenClawStateDatabase,
+  prepareOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 
+/** Backups precede both callers; agent lease acquisition must not do shared repair. */
+async function prepareSharedStateForAgentMaintenance(
+  params: Parameters<typeof prepareDoctorDatabaseMigrations>[0],
+  changes: string[],
+) {
+  if (isStatePostgres()) {
+    return;
+  }
+  const prepared = await prepareOpenClawStateDatabaseSchema(
+    { env: params.env, integrityCheck: params.check ?? "quick" },
+    "doctor-preparation",
+  );
+  if (prepared.warnings.length > 0) {
+    throw new Error(prepared.warnings.join("\n"));
+  }
+  changes.push(...prepared.changes);
+}
+
 async function prepareUpdateAgentAdditiveSchemas(
   params: Parameters<typeof prepareDoctorDatabaseMigrations>[0],
+  changes: string[],
 ) {
   const targets = params.agentDatabaseTargets;
   if (!hasUpdateDoctorMigrationCapture() || agentEngineInput() || !targets?.length) {
     return;
   }
+  await prepareSharedStateForAgentMaintenance(params, changes);
   await withAgentDatabaseMaintenanceLease(
     { env: params.env, processBound: true },
     async (lease) => {
@@ -55,7 +76,7 @@ export async function prepareDoctorDatabaseMigrations(
   const result = await backupDoctorMigrationDatabases({ ...params, versionMigrationsOnly: true });
   const migrations = result.versionMigrations;
   if (!migrations?.length) {
-    await prepareUpdateAgentAdditiveSchemas(params);
+    await prepareUpdateAgentAdditiveSchemas(params, result.changes);
     return result;
   }
   const capture = result.postgresGenerations
@@ -101,6 +122,8 @@ export async function prepareDoctorDatabaseMigrations(
   }
   const agentMigrations = migrations.filter((entry) => entry.kind === "agent");
   if (agentMigrations.length > 0) {
+    // Version publication can leave earlier additive repairs pending.
+    await prepareSharedStateForAgentMaintenance(params, result.changes);
     await withAgentDatabaseMaintenanceLease(
       {
         env: params.env,
@@ -161,6 +184,6 @@ export async function prepareDoctorDatabaseMigrations(
   }
   // Scoped version backups settle before ordinary schema repair changes siblings.
   // Finish these writes before session readers enter; admission needs no exclusion.
-  await prepareUpdateAgentAdditiveSchemas(params);
+  await prepareUpdateAgentAdditiveSchemas(params, result.changes);
   return result;
 }

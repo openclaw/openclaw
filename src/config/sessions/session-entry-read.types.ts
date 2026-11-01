@@ -51,9 +51,6 @@ export type SessionEntryListWorkerInput = {
   database: { agentId: string; path: string };
   scope: SessionEntryListScope & {
     cleanupSession?: string;
-    mainSessionRecovery?: "claims" | "orphans";
-    pendingInputRecovery?: true;
-    pendingExecRecovery?: { afterSessionKey?: string; limit: number };
   };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
@@ -70,8 +67,6 @@ export type SessionEntryListWorkerResult = {
   nextCronRunUpdatedAt?: number | null;
   /** Last scanned cron key when another retention page may remain. */
   nextCronRunSessionKey?: string | null;
-  /** Last selected exec owner when another recovery page may remain. */
-  nextExecRecoverySessionKey?: string | null;
 };
 
 export type SessionExactEntriesWorkerInput = {
@@ -135,6 +130,9 @@ export type SessionExactEntriesWorkerRequest = (
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
+  /** Inspect authority facts without opening the original SQLite family. */
+  preserveSourceArtifacts?: true;
+  inspectionSourcePath?: string;
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
   continuation?: CanonicalSessionReaderContinuation;
@@ -173,6 +171,8 @@ export type SessionEntryCohortRequest = Pick<
 export type SessionExactEntriesWorkerResult = {
   kind: "session-exact-entries";
   source?: SessionEntryListWorkerResult["source"];
+  /** Original copy source, distinct from the private reader's native databaseIdentity. */
+  snapshotSource?: NonNullable<SessionEntryListWorkerResult["source"]>;
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   sourceValidation?: SessionSourceValidation;

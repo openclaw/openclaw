@@ -6,10 +6,17 @@ import {
   readAssistantTextBlocksForPhase,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
+import {
+  hasUnsettledPlainTextToolCall,
+  toolCallXmlTextFilter,
+} from "../shared/text/assistant-visible-text.js";
 import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
 import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
-import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
+import {
+  createTextProjection,
+  trimTextFilter,
+  type TextProjection,
+} from "../shared/text/text-projection.js";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -398,6 +405,7 @@ export function handleMessageUpdate(
   const hasSnapshotText = next !== undefined;
   let nextRawStreamText = next ?? "";
   let projection: NonNullable<EmbeddedAgentSubscribeState["assistantStream"]>["projection"];
+  let blockProjected: TextProjection | undefined;
   let rawDirectiveDelta: string | undefined;
   if (next === undefined && deliveryPhase === "final_answer" && (reprojectBlockReply || chunk)) {
     // A late phase can reveal inline examples; retain already scoped snapshots above.
@@ -450,8 +458,11 @@ export function handleMessageUpdate(
     });
   }
   if (next !== undefined) {
-    // Held fence fragments change this delta before the visible projection trims it.
-    const unchangedBlockAppend = textIsAppend && visibleDelta === chunk;
+    // A prior projection can hold bytes that this append must restore through a snapshot.
+    const unchangedBlockAppend =
+      textIsAppend &&
+      visibleDelta === chunk &&
+      ctx.state.assistantStream?.projection?.projector.matchesTrimmedSource !== false;
     if (!hasSnapshotText) {
       const kind =
         deliveryPhase !== "final_answer"
@@ -488,6 +499,9 @@ export function handleMessageUpdate(
           )
         : projection.projector.replace(nextRawStreamText);
       nextRawStreamText = projection.projector.source;
+      blockProjected = textIsAppend
+        ? projection.blockProjector?.append(visibleDelta, nextRawStreamText)
+        : projection.blockProjector?.replace(nextRawStreamText);
       next = projected.text;
       appendDelta = projected.delta;
       // Generic directives retain their raw chunk coordinates: restored trim whitespace
@@ -536,22 +550,49 @@ export function handleMessageUpdate(
       (hasVisibleReply || replace) &&
       (replace ? cleanedText !== previousCleaned || hasAudio : Boolean(deltaText || hasAudio));
 
-    const plainAppend =
+    const sameBlockAppend =
       evtType === "text_delta" &&
-      unchangedBlockAppend &&
       !snapshot &&
       !reprojectBlockReply &&
       !replace &&
       !ctx.params.enforceFinalTag &&
       (priorBlockIndex === streamContentIndex ||
-        (priorBlockIndex === undefined && !priorBlockText)) &&
+        (priorBlockIndex === undefined && !priorBlockText));
+    const plainAppend =
+      sameBlockAppend &&
+      unchangedBlockAppend &&
       projection?.projector.matchesTrimmedSource &&
+      (previousText.length > 0 || appendDelta === chunk) &&
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
     // Block snapshots only serve the optional block-delivery consumer.
     if (ctx.params.onBlockReply && plainAppend) {
+      if (projection) {
+        projection.blockProjector = undefined;
+        projection.blockSourceLength = undefined;
+      }
       ctx.blockChunker.append(chunk);
+    } else if (
+      ctx.params.onBlockReply &&
+      sameBlockAppend &&
+      !streamItemChanged &&
+      textIsAppend &&
+      projection?.kind === "final" &&
+      projection.blockSourceLength !== undefined &&
+      ctx.blockChunker.sourceLength === projection.blockSourceLength &&
+      previousText === previousCleaned &&
+      next === cleanedText &&
+      appendDelta !== null &&
+      replyDelta === appendDelta &&
+      blockProjected &&
+      blockProjected.delta !== null
+    ) {
+      ctx.blockChunker.append(blockProjected.delta);
+      projection.blockSourceLength = blockProjected.text.length;
     } else if (ctx.params.onBlockReply) {
+      if (projection) {
+        projection.blockSourceLength = undefined;
+      }
       const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
         throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
         observedText: streamItemChanged ? "" : priorBlockText,
@@ -563,6 +604,21 @@ export function handleMessageUpdate(
         final: finalText,
       });
       reconcileBlockReplySnapshot(ctx, previousBlock, nextBlock);
+      if (projection?.kind === "final" && !projection.projector.matchesTrimmedSource) {
+        if (!projection.blockProjector) {
+          projection.blockProjector = createAssistantVisibleStreamText("final_answer", {
+            preserveTrailingWhitespace: true,
+          });
+          projection.blockProjector.replace(nextRawStreamText);
+        }
+      }
+      if (
+        projection?.kind === "final" &&
+        nextBlock.blockText === projection.blockProjector?.text &&
+        ctx.blockChunker.sourceLength === nextBlock.blockText.length
+      ) {
+        projection.blockSourceLength = nextBlock.blockText.length;
+      }
     }
     if (isTerminalSnapshot) {
       ctx.state.streamBlockText = content;
@@ -610,7 +666,20 @@ export function handleMessageUpdate(
     return undefined;
   }
   if (ctx.params.onBlockReply && ctx.blockChunking) {
-    ctx.blockChunker.drain({ force: false, emit: ctx.emitBlockChunk });
+    // Delivered messages cannot retract mutable Markdown or tool-call prefixes. The
+    // projection owns settlement after activation; the raw grammar covers short prefixes.
+    const projector = projection?.projector;
+    const unsettled =
+      deliveryPhase === "final_answer" &&
+      !finalText &&
+      ((projector
+        ? projector.settledLength < projector.text.length
+        : ctx.state.blockReplyTextUnsettled) ||
+        hasUnsettledPlainTextToolCall(ctx.blockChunker.bufferedText));
+    ctx.state.blockReplyTextUnsettled = unsettled;
+    if (!unsettled) {
+      ctx.blockChunker.drain({ force: false, emit: ctx.emitBlockChunk });
+    }
   }
   if (evtType === "text_end") {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;

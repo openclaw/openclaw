@@ -9,19 +9,16 @@ import {
 } from "@tanstack/virtual-core";
 import { createMemo, createSignal, For, onSettled, type Accessor } from "solid-js";
 import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
-import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { observeDocumentRootAttributes } from "../../lib/reactive/document-root-attributes.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { observeResize } from "../../lib/reactive/observers.ts";
 
 /** Keep one keyed card list while row tracks limit layout to the visible catalog. */
-export function PluginCatalogGrid(props: {
-  items: readonly PluginDiscoveryEntry[];
+export function PluginCatalogGrid<T extends { id: string }>(props: {
+  items: readonly T[];
   results?: boolean;
-  children: (
-    plugin: Accessor<PluginDiscoveryEntry>,
-    contentRef: (element: HTMLDivElement) => void,
-  ) => JSX.Element;
+  busy?: boolean;
+  children: (plugin: Accessor<T>, contentRef: (element: HTMLDivElement) => void) => JSX.Element;
 }) {
   let grid!: HTMLDivElement;
   let scroller: HTMLElement | null = null;
@@ -30,7 +27,7 @@ export function PluginCatalogGrid(props: {
   let blockInset = 0;
   let sizingRows = false;
   const rowSizeKey = {};
-  let keyInput: { items: readonly PluginDiscoveryEntry[]; columns: number } | undefined;
+  let keyInput: { items: readonly T[]; columns: number } | undefined;
   let pinnedRows: number[] = [];
   let syncScrollOffset: (() => void) | undefined;
   let measuredFocus: Element | null | undefined;
@@ -212,6 +209,12 @@ export function PluginCatalogGrid(props: {
             cardStyle.borderBottomWidth,
           ].reduce((sum, value) => sum + Number.parseFloat(value), 0)
         : 0;
+      // Measure the natural bootstrap rows together before positioning the window.
+      for (const content of mounted.values()) {
+        if (content.height === 0) {
+          content.height = content.element.getBoundingClientRect().height;
+        }
+      }
       const heights = rowHeights(next.indexes, nextColumns, inset);
       const count = Math.ceil(next.items.length / nextColumns);
       return () => {
@@ -254,7 +257,7 @@ export function PluginCatalogGrid(props: {
         next?.windowed
           ? [
               grid,
-              grid.closest(".plugin-catalog-results__body") ?? grid,
+              grid.closest(".plugin-catalog-results__body, .plugin-catalog-results") ?? grid,
               ...(scroller ? [scroller] : []),
             ]
           : [],
@@ -271,16 +274,16 @@ export function PluginCatalogGrid(props: {
     const columnCount = view().columns;
     const rowCount = Math.ceil(props.items.length / columnCount);
     const visibleRows = new Set(view().rows.map((row) => row.index));
-    // Bootstrap a bounded window before the first layout measurement.
+    const focusedIndex = indexes().get(focused() ?? "");
+    // Natural tracks keep the first rows stable while geometry is measured.
+    // Retain a focused row and its neighbor when crossing the windowing threshold.
     if (visibleRows.size === 0) {
-      for (let row = 0; row < Math.min(4, rowCount); row++) {
-        visibleRows.add(row);
-      }
-      visibleRows.add(rowCount - 1);
+      const focusedEnd =
+        focusedIndex === undefined ? 0 : (Math.floor(focusedIndex / columnCount) + 2) * columnCount;
+      return props.items.slice(0, Math.max(24, focusedEnd));
     }
     // Data can move a focused card before the next measured frame. Keep its
     // native focus and adjacent Tab destinations alive at their new positions.
-    const focusedIndex = indexes().get(focused() ?? "");
     if (focusedIndex !== undefined) {
       const focusedRow = Math.floor(focusedIndex / columnCount);
       for (const row of [focusedRow - 1, focusedRow, focusedRow + 1]) {
@@ -293,7 +296,7 @@ export function PluginCatalogGrid(props: {
       .toSorted((a, b) => a - b)
       .flatMap((row) => props.items.slice(row * columnCount, (row + 1) * columnCount));
   });
-  function Card(card: { plugin: Accessor<PluginDiscoveryEntry> }) {
+  function Card(card: { plugin: Accessor<T> }) {
     let content!: HTMLDivElement;
     onSettled(() => {
       const id = card.plugin().id;
@@ -323,7 +326,7 @@ export function PluginCatalogGrid(props: {
     });
     const index = () => indexes().get(card.plugin().id)!;
     const position = (): JSX.CSSProperties | undefined => {
-      if (!windowed()) {
+      if (!windowed() || view().rows.length === 0) {
         return undefined;
       }
       const row = Math.floor(index() / view().columns);
@@ -363,12 +366,14 @@ export function PluginCatalogGrid(props: {
       ref={(element) => (grid = element)}
       class={["plugin-catalog-grid", { "plugin-catalog-grid--results": props.results }]}
       role="list"
+      aria-busy={props.busy === undefined ? undefined : props.busy ? "true" : "false"}
       style={
         windowed()
           ? {
               position: "relative",
               height: `${view().height || Math.ceil(props.items.length / 4) * 136}px`,
               contain: "layout",
+              "align-content": "start",
             }
           : undefined
       }

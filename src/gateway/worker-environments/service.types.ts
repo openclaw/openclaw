@@ -26,6 +26,8 @@ export type WorkerEnvironmentCreateRequest = {
   runSetupScript?: boolean;
   inheritedProfile?: { providerId: string; profileSnapshot: WorkerProfile };
   admittedIntent?: WorkerProviderPreparedIntent;
+  /** Revalidate caller authority after preparation, immediately before provider effects. */
+  beforeProvision?: () => void;
 };
 
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &

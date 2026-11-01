@@ -42,7 +42,7 @@ import {
 } from "./mcp-content.js";
 import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
 import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
-import { isMcpToolAllowed } from "./mcp-tool-filter.js";
+import { createMcpToolFilter, mcpCatalogToolFilterScope } from "./mcp-tool-filter.js";
 import {
   buildMcpAppCanvasPayload,
   fetchMcpAppView,
@@ -236,7 +236,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
   for (const server of Object.values(params.catalog.servers).toSorted((a, b) =>
     a.serverName.localeCompare(b.serverName),
   )) {
-    const safeServerName = server.safeServerName ?? server.serverName;
+    const filterScope = mcpCatalogToolFilterScope(params.catalog, server.serverName);
+    const isToolAllowed = createMcpToolFilter(server.toolFilter, filterScope);
     const instructions = serverInstructions.get(server.serverName);
     const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
       ? "parallel"
@@ -259,7 +260,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       if (
         !server[capability] ||
         (server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly ||
-        !isMcpToolAllowed(server.toolFilter, operation)
+        !isToolAllowed(operation)
       ) {
         return;
       }
@@ -267,7 +268,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         ? params[definition.createExecute]?.(server.serverName)
         : undefined;
       const name = buildSafeToolName({
-        serverName: safeServerName,
+        serverName: filterScope.safeServerName,
         toolName: operation,
         reservedNames,
       });
@@ -290,7 +291,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         optional: false,
         mcp: {
           serverName: server.serverName,
-          safeServerName,
+          safeServerName: filterScope.safeServerName,
           toolName: operation,
           operation,
           ...(instructions ? { instructions } : {}),

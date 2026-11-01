@@ -17,13 +17,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -175,9 +176,6 @@ function run(count: number, mutate = !values.warm && !values.cold) {
   }
   return checksum;
 }
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 const encodeSummary = (summary: Summary) =>
   JSON.stringify({ ...summary, byAgent: [...summary.byAgent] });
 const inspector = new Session();
@@ -212,7 +210,7 @@ try {
   const memoryAfter = process.memoryUsage();
   const counts = { selectionCalls, selectedRows };
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   global.gc();
   const retainedMemoryAfter = process.memoryUsage();

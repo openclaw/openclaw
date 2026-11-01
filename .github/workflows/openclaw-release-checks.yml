@@ -616,23 +616,25 @@ jobs:
             fi
           fi
 
-          selection="$(RUN_RELEASE_SOAK="$run_release_soak" QA_FILTER_SEEN="$qa_filter_seen" \
+          while IFS='=' read -r key value; do
+            printf -v "$key" '%s' "$value"
+          done < <(RUN_RELEASE_SOAK="$run_release_soak" QA_FILTER_SEEN="$qa_filter_seen" \
             REPO_LIVE_SUITE_FILTER="$repo_live_suite_filter" node --input-type=module <<'NODE'
           import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs';
-          console.log(JSON.stringify(createReleaseCheckSelection({
+          const selection = createReleaseCheckSelection({
             phase: process.env.RELEASE_PHASE_INPUT,
             rerunGroup: process.env.RELEASE_RERUN_GROUP_INPUT,
             runReleaseSoak: process.env.RUN_RELEASE_SOAK,
             qaFilterSeen: process.env.QA_FILTER_SEEN,
             repoLiveSuiteFilter: process.env.REPO_LIVE_SUITE_FILTER,
-          })));
+          });
+          for (const [key, value] of Object.entries(selection)) {
+            console.log(`${key}=${value}`);
+          }
           NODE
-          )"
-          for key in release_check_groups_json install_smoke_scheduled cross_os_scheduled windows_node_scheduled \
-            live_e2e_scheduled package_acceptance_scheduled qa_parity_scheduled \
-            qa_live_scheduled docker_required package_required package_acceptance_lanes; do
-            printf -v "$key" '%s' "$(jq -r --arg key "$key" '.[$key]' <<< "$selection")"
-          done
+          )
+          # Process substitution does not propagate the selector's failure to the loop.
+          wait "$!"
           if [[ "$phase" == "candidate" ]]; then run_maturity_scorecard=false; fi
           if [[ "$phase" == "candidate" && -z "$candidate_artifact_json" ]]; then
             candidate_artifact_required=false
@@ -1074,6 +1076,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: ${{ steps.artifact.outputs.name }}
           path: |
             .artifacts/docker-e2e-package/${{ steps.artifact.outputs.file_name }}
@@ -1086,6 +1089,7 @@ jobs:
         if: needs.resolve_target.outputs.package_mode != 'artifact' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/prepublish-plugin-registry/
           retention-days: 14
@@ -1374,6 +1378,7 @@ jobs:
         if: steps.windows_node_candidate.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: windows-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-node-candidate/openclaw-current.tgz

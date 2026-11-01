@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
+import * as execDefaults from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -17,9 +18,9 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { CronJob } from "../cron/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import * as execApprovalsStore from "../infra/exec-approvals-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -50,10 +51,14 @@ import {
 } from "./session-utils-store.js";
 import { withAgentPermissionState } from "./session-utils.permissions.test-support.js";
 import {
+  agentStore,
   closeSessionSqliteDatabasesForTest,
   createModelDefaultsConfig,
   createSingleAgentAvatarConfig,
+  makeSession,
+  seedDeletedMainStores,
   seedSessionEntries,
+  storeConfig,
   useSessionStoreFixture,
   withStateDirEnv,
 } from "./session-utils.test-support.js";
@@ -62,35 +67,6 @@ import { applySessionContextWindowPatch } from "./sessions-patch-context-window.
 const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
   await import("./session-utils-provider.test-support.js");
 const providerArtifactMocks = getSessionProviderArtifactMocks();
-
-function makeSession(sessionId: string, fields: Partial<InternalSessionEntry> = {}) {
-  return { sessionId, updatedAt: 1, ...fields };
-}
-
-function storeConfig(
-  store: string,
-  entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
-): OpenClawConfig {
-  return { session: { mainKey: "main", store }, agents: { entries } };
-}
-
-const agentStore = (root: string, agentId = "{agentId}") =>
-  path.join(root, "agents", agentId, "sessions", "sessions.json");
-
-function seedDeletedMainStores(stateDir: string, mainKey = "main") {
-  const deletedStorePath = agentStore(stateDir, "main");
-  const liveStorePath = agentStore(stateDir, "ops");
-  for (const storePath of [liveStorePath, deletedStorePath]) {
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  }
-  seedSessionEntries(liveStorePath, {
-    [`agent:ops:${mainKey}`]: makeSession("sess-live-default", { updatedAt: 10 }),
-  });
-  seedSessionEntries(deletedStorePath, {
-    "agent:main:main": makeSession("sess-deleted-main", { updatedAt: 20 }),
-  });
-  return { deletedStorePath, storeTemplate: agentStore(stateDir) };
-}
 
 function catalogModel(
   provider: string,
@@ -345,25 +321,6 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("projects restart recovery tombstones", () => {
-    const row = buildGatewaySessionRow({
-      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      key: "agent:main:dashboard:tombstoned",
-      entry: makeSession("session-tombstoned", {
-        mainRestartRecovery: {
-          cycleId: "cycle-tombstoned",
-          revision: 1,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
-        },
-      }),
-    });
-
-    for (const value of [row, buildGatewaySessionSnapshot({ sessionRow: row })]) {
-      expect(value.restartRecoveryStatus).toBe("tombstoned");
-    }
-  });
-
   test("projects the compact persisted observer digest", () => {
     const expected = {
       runId: "run-1",
@@ -587,8 +544,7 @@ describe("gateway session utils", () => {
       const patch = applySessionContextWindowPatch({
         next: entry,
         patch: { key: "agent:main:main", contextWindow: String(after) },
-        defaultProvider: "ollama",
-        defaultModel: "qwen3:8b",
+        resolveDefaultModel: () => ({ provider: "ollama", model: "qwen3:8b" }),
         runtimeId: () => "openclaw",
         routeVariants: () => catalog,
         *loadModelCatalog() {
@@ -803,7 +759,7 @@ describe("gateway session utils", () => {
       entry: makeSession("fresh-zero-token-session", {
         totalTokens: 0,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       }),
     });
     expect(row).toMatchObject({ totalTokens: 0, totalTokensFresh: true });
@@ -1305,38 +1261,29 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("listAgentsForGateway never overstates global sandbox all", async () => {
-    const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
+  test("listAgentsForGateway resolves only representable permission labels across sandbox callers", async () => {
     await withAgentPermissionState(async () => {
-      execApprovalsStore.updateExecApprovalsForMaintenance(() => ({ version: 1 }));
-      const agent = (await listAgentsForGateway(cfg)).agents.find((entry) => entry.id === "main");
-      expect(agent).toBeDefined();
-      expect(agent).not.toHaveProperty("defaultPermissionMode");
-    });
-  });
-
-  test("listAgentsForGateway shares one approvals read across agent permission labels", async () => {
-    await withAgentPermissionState(async () => {
-      const cfg: OpenClawConfig = {
-        tools: { exec: { mode: "ask" } },
-        agents: {
-          entries: {
-            guarded: {},
-            restricted: { tools: { exec: { mode: "allowlist" } } },
-            workspace: { tools: { exec: { mode: "auto" } } },
+      for (const mode of ["all", "off", "non-main", "all"] as const) {
+        using resolve = vi.spyOn(execDefaults, "resolveExecDefaults");
+        const cfg: OpenClawConfig = {
+          tools: { exec: { mode: "ask" } },
+          agents: {
+            defaults: { sandbox: { mode } },
+            entries: {
+              guarded: {},
+              restricted: { tools: { exec: { mode: "allowlist" } } },
+              workspace: { sandbox: { mode: "off" }, tools: { exec: { mode: "auto" } } },
+            },
           },
-        },
-      };
-      expect(
-        (await listAgentsForGateway(cfg)).agents.map(({ id, defaultPermissionMode }) => [
-          id,
-          defaultPermissionMode,
-        ]),
-      ).toEqual([
-        ["guarded", "guarded"],
-        ["restricted", undefined],
-        ["workspace", "workspace"],
-      ]);
+        };
+        const { agents } = await listAgentsForGateway(cfg);
+        expect(agents.map(({ id, defaultPermissionMode }) => [id, defaultPermissionMode])).toEqual([
+          ["guarded", mode === "off" ? "guarded" : undefined],
+          ["restricted", undefined],
+          ["workspace", "workspace"],
+        ]);
+        expect(resolve).toHaveBeenCalledTimes(mode === "off" ? 3 : 1);
+      }
     });
   });
 

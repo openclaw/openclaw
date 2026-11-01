@@ -1,124 +1,74 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, expect, it, vi } from "vitest";
 import {
   materializeErrorStack,
   throwIfSettledRejected,
   throwSettledAggregate,
 } from "./error-graph-internal.js";
 
-describe("materializeErrorStack", () => {
-  it("does not replace failures when diagnostic properties cannot be read or written", () => {
-    const frozen = Object.freeze(
-      Object.defineProperty(new TypeError("frozen failure"), "stack", {
-        value: "TypeError: frozen failure",
-        writable: false,
-      }),
-    );
-    const opaque = new Error("opaque failure");
-    Object.defineProperties(opaque, {
-      stack: {
-        get: () => {
-          throw new Error("stack unavailable");
-        },
-        set: undefined,
-      },
-      cause: {
-        get: () => {
-          throw new Error("cause unavailable");
-        },
-      },
-    });
-    for (const error of [frozen, opaque]) {
-      expect(() => materializeErrorStack(error)).not.toThrow();
-    }
+it("formats aggregate siblings through immutable cyclic parents without replacing errors", () => {
+  const child = new TypeError("child failure");
+  const format = vi.fn(() => "child stack");
+  Object.defineProperty(child, "stack", {
+    get: format,
+    set() {},
   });
+  const parent = new AggregateError([child], "aggregate failure");
+  parent.cause = parent;
+  Object.defineProperty(parent, "stack", { value: "fixed", writable: false });
+  materializeErrorStack(parent);
+  expect(format).toHaveBeenCalledOnce();
 });
 
-describe("throwIfSettledRejected", () => {
-  it("accepts empty or successful work", () => {
-    expect(() => throwIfSettledRejected([], "cleanup failed")).not.toThrow();
-    expect(() =>
-      throwIfSettledRejected([{ status: "fulfilled", value: undefined }], "cleanup failed"),
-    ).not.toThrow();
-  });
+it("does not replace failures when diagnostic properties cannot be read or written", () => {
+  const opaque = new Error("opaque");
+  const unavailable = () => {
+    throw new Error("unavailable");
+  };
+  Object.defineProperties(opaque, { stack: { get: unavailable }, cause: { get: unavailable } });
+  expect(() => materializeErrorStack(opaque)).not.toThrow();
+});
 
-  it.each([new Error("cleanup failed"), "failure", undefined])(
-    "preserves a single rejection reason: %s",
+describe.each([throwIfSettledRejected, throwSettledAggregate])("%s", (settle) => {
+  it("accepts empty and successful work", () => {
+    settle([], "cleanup failed");
+    settle([{ status: "fulfilled", value: undefined }], "cleanup failed");
+  });
+  it.each([new Error("first"), "failure", undefined])(
+    "preserves sole rejection identity: %s",
     (reason) => {
       let caught = false;
       try {
-        throwIfSettledRejected([{ status: "rejected", reason }], "cleanup failed");
+        settle([{ status: "rejected", reason }], "cleanup failed");
       } catch (error) {
         caught = true;
-        expect(error).toBe(reason);
+        if (settle === throwIfSettledRejected) {
+          expect(error).toBe(reason);
+        } else {
+          assert(error instanceof AggregateError);
+          expect(error.message).toBe("cleanup failed");
+          expect(error.errors).toEqual([reason]);
+          expect(error.errors[0]).toBe(reason);
+          expect(Object.hasOwn(error, "cause")).toBe(false);
+        }
       }
       expect(caught).toBe(true);
     },
   );
-
-  it("aggregates failures in input order with the caller's message", () => {
+  it("aggregates independent failures in order among successes", () => {
     const first = new Error("first");
     try {
-      throwIfSettledRejected(
+      settle(
         [
           { status: "rejected", reason: first },
-          { status: "fulfilled", value: "success" },
-          { status: "rejected", reason: "second" },
-        ],
-        "Some cleanup failed",
-      );
-      expect.unreachable("multiple failures must be reported");
-    } catch (error) {
-      expect(error).toBeInstanceOf(AggregateError);
-      if (!(error instanceof AggregateError)) {
-        throw error;
-      }
-      expect(error.message).toBe("Some cleanup failed");
-      expect(error.errors).toEqual([first, "second"]);
-      expect(error.errors[0]).toBe(first);
-    }
-  });
-});
-
-describe("throwSettledAggregate", () => {
-  it("accepts empty or successful work", () => {
-    expect(() => throwSettledAggregate([], "cleanup failed")).not.toThrow();
-    expect(() =>
-      throwSettledAggregate([{ status: "fulfilled", value: undefined }], "cleanup failed"),
-    ).not.toThrow();
-  });
-
-  it("retains an aggregate envelope for a single non-Error rejection", () => {
-    try {
-      throwSettledAggregate([{ status: "rejected", reason: undefined }], "cleanup failed");
-      expect.unreachable("the sole failure must be reported");
-    } catch (error) {
-      expect(error).toBeInstanceOf(AggregateError);
-      if (!(error instanceof AggregateError)) {
-        throw error;
-      }
-      expect(error.message).toBe("cleanup failed");
-      expect(error.errors).toEqual([undefined]);
-      expect(Object.hasOwn(error, "cause")).toBe(false);
-    }
-  });
-
-  it("preserves rejection identities and input order among successful work", () => {
-    const first = new Error("first");
-    try {
-      throwSettledAggregate(
-        [
-          { status: "fulfilled", value: "success" },
-          { status: "rejected", reason: first },
+          { status: "fulfilled", value: "ok" },
           { status: "rejected", reason: "second" },
         ],
         "joined cleanup failed",
       );
-      expect.unreachable("the joined failures must be reported");
+      expect.unreachable("must reject");
     } catch (error) {
-      expect(error).toBeInstanceOf(AggregateError);
-      if (!(error instanceof AggregateError)) {
-        throw error;
-      }
+      assert(error instanceof AggregateError);
       expect(error.message).toBe("joined cleanup failed");
       expect(error.errors).toEqual([first, "second"]);
       expect(error.errors[0]).toBe(first);

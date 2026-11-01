@@ -122,7 +122,7 @@ it.each([
       await expect(ready).resolves.toEqual({ schemaPublicationDeferred: false });
     }
     if (refused || scenario === "recorded-secondary") {
-      expect(fs.readFileSync(pathname)).toEqual(before);
+      expect(fs.readFileSync(pathname).equals(before), pathname).toBe(true);
     } else {
       using migrated = new DatabaseSync(pathname, { readOnly: true });
       const sql = sessionSqlFixture(migrated);

@@ -1,9 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, latest, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
 import {
   listSubagents,
   type ChatSubagentActivity as ChatSubagentActivityRow,
@@ -204,6 +206,24 @@ export function ChatDetailsBackground(
   const subagents = createMemo(() => attentionOrder(roster(), subagentState));
   const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
   const desktopPresentation = createMemo(() => props.desktopSubagents);
+  const collection = createMemo(() => roster().filter((row) => row.listed));
+  // A hydrated child read can still be waiting for its observed parent.
+  const liveSummary = createMemo(() =>
+    desktopPresentation() &&
+    props.details.subagentSessionsHydrated &&
+    props.details.subagentSessions?.some((row) =>
+      areUiSessionKeysEquivalent(row.key, props.details.selectedSession?.key),
+    )
+      ? projectDetailsSubagents(collection())
+      : undefined,
+  );
+  const summary = () =>
+    liveSummary() ?? (desktopPresentation() ? props.details.cachedDetails?.subagents : undefined);
+  const receipt = createMemo(() =>
+    liveSummary() && props.details.onDetailsSnapshot
+      ? { summary: liveSummary()!, write: props.details.onDetailsSnapshot }
+      : undefined,
+  );
   const desktopSubagents = createMemo<ChatDetailsSubagentsProps | undefined>(() => {
     const presentation = desktopPresentation();
     const snapshot = props.details;
@@ -214,8 +234,8 @@ export function ChatDetailsBackground(
     }
     const current = () => props.presented && props.details === snapshot;
     return {
-      // Keep launch order for T36; its collection summary must name only collection members.
-      rows: roster().filter((row) => row.listed),
+      rows: collection(),
+      presentation: summary(),
       mobile: false,
       workingLabel: presentation.workingLabel,
       onOpenSubagent: (key) => {
@@ -238,7 +258,13 @@ export function ChatDetailsBackground(
   };
   return (
     <>
-      <Show when={subagents().length > 0}>
+      <Show when={receipt()} keyed>
+        {(value) => {
+          onSettled(() => value.write({ subagents: value.summary }));
+          return null;
+        }}
+      </Show>
+      <Show when={subagents().length > 0 || (summary()?.total ?? 0) > 0}>
         <Show
           when={desktopSubagents()}
           fallback={

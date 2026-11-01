@@ -4,12 +4,14 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
+import { captureChatDetailsSnapshot } from "./chat-details-snapshot.ts";
 import { chatGoalPresentation } from "./chat-goals.ts";
 import {
   canLoadChatBranches,
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -18,7 +20,11 @@ import type { ChatProps } from "./chat-view.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
-import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
+import {
+  chatPullRequestId,
+  publicationPullRequest,
+  retainedPublication,
+} from "./components/chat-pull-requests.ts";
 import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
@@ -44,6 +50,7 @@ export type PaneDetailsActions = Pick<
   | "onOpenTaskProgressSettings"
   | "onClearSavedProgressCard"
   | "progressCardRefresh"
+  | "progressCardRefreshReserved"
 >;
 
 export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRender {
@@ -119,9 +126,11 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         openDetailsPage({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
       publication: chatProps.githubPublication
         ? {
+            // One PR keeps one pill: once its PR is listed, the PR pill continues the lifecycle.
             eligible: Boolean(
-              (!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
-              retainedPublication(chatProps.githubPublication),
+              ((!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
+                retainedPublication(chatProps.githubPublication)) &&
+              !publicationPullRequest(chatProps.githubPublication, chatProps.pullRequests ?? []),
             ),
             onOpen: (source) =>
               openDetailsPage(
@@ -286,12 +295,22 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           }
         : undefined;
     const detailsProgress = this.detailsProgressCardPresentation;
+    const cached = captureChatDetailsSnapshot(state);
     const conversationMain =
       (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") === "conversation";
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
+            cachedDetails: cached?.details,
+            onDetailsSnapshot: cached?.write,
+            selectedSession: paneChatProps.transcriptMetadata
+              ? {
+                  ...selectedSession,
+                  ...paneChatProps.transcriptMetadata,
+                  sessionId: state.currentSessionId ?? undefined,
+                }
+              : selectedSession,
             environment,
             outputs: detailsOutputs.outputs
               ? {
@@ -330,7 +349,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                     : detailsOutputs.outputs.dashboard,
                 }
               : undefined,
-            progressCard: detailsProgress?.card ?? null,
+            progressCard:
+              detailsProgress?.card ??
+              (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null),
             progressCardIdentity: detailsProgress?.identity,
             progressCardLifetime: detailsProgress?.lifetime,
             progressCardInitialLoading: this.detailsProgressCardInitialLoading,
@@ -390,7 +411,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           mobile: this.mergedChrome && !this.onBackToSubagents,
           nativePresentation: this.sessionPresentation,
           mobileHost,
-          contentPending: this.deferredSessionHydration !== null,
+          contentPending:
+            this.deferredSessionHydration !== null ||
+            chatHistoryRequests(state).initialSnapshotHydration?.titlePending === true,
           // Details reserves header-owned geometry during retained navigation previews.
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,

@@ -1,3 +1,9 @@
+import {
+  resolveRequesterPrincipalKey,
+  requesterCreatorProfileId,
+} from "../../agents/requester-origin.js";
+import { isCronSessionKey } from "../../routing/session-key.js";
+import { isCronExecutionInputProvenance } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import type { FollowupRun } from "./queue/types.js";
@@ -10,6 +16,13 @@ export function buildTranscriptFollowupRun(
   const source = base.queuedFollowupReplyDisposition;
   return {
     ...base,
+    sessionPrincipalTurn:
+      base.sessionPrincipalTurn ??
+      (!base.run.scheduledAutomation &&
+        !isCronSessionKey(base.run.sessionKey ?? "") &&
+        !isCronExecutionInputProvenance(base.run.inputProvenance) &&
+        !resolveRequesterPrincipalKey({ requesterOrigin: base.run.requesterOrigin }) &&
+        !requesterCreatorProfileId(base.run.requesterOrigin)),
     prompt: formatSystemTurnPrompt(params.prompt),
     disableCollectBatching: true,
     enqueuedAt: Date.now(),
