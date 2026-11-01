@@ -6,6 +6,7 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import { isPlainObject } from "../infra/plain-object.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -40,14 +41,18 @@ export async function resolveAgentExecPrompt(
     throw new Error("--message-file must not be empty.");
   }
   if (file) {
+    const signal = getAsyncWorkSignal();
     const stream = file === "-" ? process.stdin : createReadStream(file);
     try {
       const source = file === "-" ? "stdin" : `Message file ${file}`;
       const bytes = await readByteStreamWithLimit(stream, {
         maxBytes: AGENT_EXEC_MESSAGE_MAX_BYTES,
+        signal,
         onOverflow: () =>
           new Error(`${source} exceeds ${String(AGENT_EXEC_MESSAGE_MAX_BYTES)} bytes`),
       });
+      // A cancellation accepted after EOF must not start the exec turn.
+      signal?.throwIfAborted();
       let value: string;
       try {
         value = UTF8_DECODER.decode(bytes).replace(/^\uFEFF/, "");

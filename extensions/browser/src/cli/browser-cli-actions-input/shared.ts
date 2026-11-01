@@ -1,5 +1,6 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -139,10 +140,14 @@ export async function readActionsPayload(opts: {
 }): Promise<string> {
   if (opts.actionsFile) {
     if (opts.actionsFile === "-") {
+      const signal = getAsyncWorkSignal();
       const bytes = await readByteStreamWithLimit(process.stdin, {
         maxBytes: ACTIONS_INPUT_MAX_BYTES,
+        signal,
         onOverflow: () => createActionsInputTooLargeError("--actions-file - stdin"),
       });
+      // A cancellation accepted after EOF must not dispatch the browser action batch.
+      signal?.throwIfAborted();
       return decodeJsonInput(bytes, "--actions-file - stdin");
     }
     const filePath = opts.actionsFile;

@@ -5,15 +5,20 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 
 export const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
 
 export async function readStdin(): Promise<string> {
+  const signal = getAsyncWorkSignal();
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes: EXEC_APPROVALS_STDIN_MAX_BYTES,
+    signal,
     onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
   });
+  // A cancellation accepted after EOF must not reach the approval writer.
+  signal?.throwIfAborted();
   return decodeUtf8Input(bytes, "Exec approvals stdin");
 }
 
