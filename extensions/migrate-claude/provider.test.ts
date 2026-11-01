@@ -151,14 +151,19 @@ it.each([
   const context = configContext(source);
   const config = context.config;
   const original = structuredClone(config);
-  const malformed = Buffer.from([0xc3, 0x28]);
-  await fs.writeFile(sourceFile, malformed);
-
-  await expect(provider.apply(context)).rejects.toThrow(`Claude configuration file ${sourceFile}`);
-  expect(config).toEqual(original);
-  expect(await readText(target)).toBe("Existing instructions.\n");
-  expect(await fs.readFile(sourceFile)).toEqual(malformed);
-  await expect(fs.access(reportDir)).rejects.toThrow();
+  for (const malformed of [
+    Buffer.from([0xc3, 0x28]),
+    Buffer.from('{"mcpServers":{"fixture":{"command":"node"}},'),
+  ]) {
+    await fs.writeFile(sourceFile, malformed);
+    await expect(provider.apply(context)).rejects.toThrow(
+      `Claude configuration file ${sourceFile}`,
+    );
+    expect(config).toEqual(original);
+    expect(await readText(target)).toBe("Existing instructions.\n");
+    expect(await fs.readFile(sourceFile)).toEqual(malformed);
+    await expect(fs.access(reportDir)).rejects.toThrow();
+  }
 
   const value = "中文 🦞 literal �";
   await writeJson(sourceFile, {

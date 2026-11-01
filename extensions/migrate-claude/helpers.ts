@@ -55,11 +55,17 @@ export async function readJsonObject(
     opened.buffer,
     `Claude configuration file ${filePath} (re-save or re-encode it as UTF-8, then rerun the migration)`,
   );
+  if (!content.trim()) {
+    return {};
+  }
   try {
     const parsed = JSON.parse(content) as unknown;
     return isRecord(parsed) ? parsed : {};
   } catch {
-    return {};
+    // JSON parser diagnostics can contain source credentials; report only the path.
+    throw new Error(
+      `Claude configuration file ${filePath} is not valid JSON. Repair its JSON syntax and retry the migration.`,
+    );
   }
 }
 
