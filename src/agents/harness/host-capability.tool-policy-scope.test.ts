@@ -85,6 +85,10 @@ it.for([
 });
 
 it("keeps native tool reconstruction after its captured discovery audience changes", async () => {
+  setRuntimeConfigSnapshot({});
+  vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockReturnValue([
+    createStubTool("file_fetch"),
+  ]);
   let current = true;
   const host = await createAdmittedHostCapabilityTestFixture({
     runId: "expired-discovery",
@@ -104,5 +108,18 @@ it("keeps native tool reconstruction after its captured discovery audience chang
   hosts.push(host);
   current = false;
   // Presentation staleness fences preparation only; current authority still fences each call.
-  expect(() => host.hostCapabilities.createToolSurface?.({})).not.toThrow();
+  const tools = host.hostCapabilities.createToolSurface?.({
+    sessionKey: KEY,
+    runSessionKey: KEY,
+    runtimeToolAllowlist: ["file_fetch"],
+    includeCoreTools: false,
+    toolConstructionPlan: {
+      includeBaseCodingTools: false,
+      includeShellTools: false,
+      includeChannelTools: false,
+      includeOpenClawTools: false,
+      includePluginTools: true,
+    },
+  });
+  expect(tools?.map((tool) => tool.name)).toContain("file_fetch");
 });
