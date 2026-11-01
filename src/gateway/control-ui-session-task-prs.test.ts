@@ -674,6 +674,40 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
   expect(snapshots()).toHaveLength(delivered);
 });
 
+it("gives passive rows the PR state an active viewer already verified, without GitHub reads", async () => {
+  receipt(sessionKey, 1);
+  const phone = fixture.addReader("phone");
+  const fetcher = stubOffline("No GitHub allowed for passive rows");
+  await passive(phone.client);
+  const phoneLatest = () => snapshots(phone.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest;
+  expect(phoneLatest()).toBeUndefined();
+  fetcher.mockImplementation(async (input) =>
+    githubJson(
+      pullListItem({
+        number: Number(new URL(requestUrl(input)).pathname.split("/").at(-1)),
+        state: "closed",
+        merged_at: "2026-11-01T00:00:00Z",
+        html_url: "https://github.com/example/repository/pull/1",
+        base: { repo: { name: "repository", owner: { login: "example" } } },
+      }),
+    ),
+  );
+  await fixture.subscribe();
+  await fixture.subscriptions.pollNow();
+  expect(latest()?.taskPullRequests?.[0]?.pullRequest?.state).toBe("merged");
+  const verifiedReads = fetcher.mock.calls.length;
+  // The retained passive audience learns the verified state without its own lookup.
+  await vi.waitFor(() => expect(phoneLatest()?.state).toBe("merged"));
+  // A reconnecting sidebar receives it too.
+  const reconnected = fixture.addReader("phone-reconnected");
+  await passive(reconnected.client);
+  expect(snapshots(reconnected.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest?.state).toBe(
+    "merged",
+  );
+  await fixture.subscriptions.pollNow();
+  expect(fetcher).toHaveBeenCalledTimes(verifiedReads);
+});
+
 it("keeps a known cold URL when GitHub metadata fails, and ignores a replaced session lifecycle", async () => {
   receipt(sessionKey, 1);
   stubOffline();

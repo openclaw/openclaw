@@ -36,6 +36,31 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
   }
 });
 
+function metadataKey(
+  target: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
+  read: Pick<Read, "host" | "apiBaseUrl" | "cacheScope">,
+  bindingIdentity?: string,
+) {
+  return JSON.stringify([
+    read.host,
+    read.apiBaseUrl,
+    read.cacheScope,
+    target.owner.toLowerCase(),
+    target.repo.toLowerCase(),
+    target.number,
+    bindingIdentity,
+  ]);
+}
+
+/** Last verified metadata this credential scope already holds; never starts a GitHub read. */
+export function peekSessionPullRequestMetadata(
+  target: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
+  read: Pick<Read, "host" | "apiBaseUrl" | "cacheScope">,
+): ControlUiSessionPullRequest | undefined {
+  const entry = metadata.get(metadataKey(target, read));
+  return entry?.access.signal.aborted ? undefined : entry?.lastGood;
+}
+
 /** One GitHub metadata read per credential/repository/number, across task and branch views. */
 export async function readSessionPullRequestMetadata(
   target: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
@@ -52,15 +77,7 @@ export async function readSessionPullRequestMetadata(
   } = {},
 ): Promise<ControlUiSessionPullRequest> {
   read.assertCurrent();
-  const key = JSON.stringify([
-    read.host,
-    read.apiBaseUrl,
-    read.cacheScope,
-    target.owner.toLowerCase(),
-    target.repo.toLowerCase(),
-    target.number,
-    options.bindingIdentity,
-  ]);
+  const key = metadataKey(target, read, options.bindingIdentity);
   let entry = metadata.get(key);
   const now = Date.now();
   const matches = !options.expected || entry?.signature === options.expected;

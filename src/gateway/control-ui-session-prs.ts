@@ -15,6 +15,7 @@ import {
   finishPullRequest,
   loadBoundSessionPullRequest,
   parsePullListItem,
+  peekSessionPullRequestMetadata,
   readSessionPullRequestDisplay,
   stateOnlyPullRequestChip,
   readSessionPullRequestMetadata,
@@ -406,7 +407,22 @@ export async function loadControlUiSessionPullRequests(
     recordSessionPrDiagnostic("load-returned", deps.read.target);
     return {
       ...branch,
-      taskPullRequests: task.taskPullRequests,
+      // Passive rows reuse metadata an active viewer already verified; they never start a lookup.
+      taskPullRequests: task.taskPullRequests.map((known) => {
+        const host = new URL(known.url).hostname;
+        if (host !== "github.com" && host !== deps.read.target.githubHost) {
+          return known;
+        }
+        try {
+          const pullRequest = peekSessionPullRequestMetadata(
+            known,
+            prepareSessionPullRequestGitHubRead(host, deps.read.assertCurrent),
+          );
+          return pullRequest ? { ...known, pullRequest } : known;
+        } catch {
+          return known;
+        }
+      }),
       taskPullRequestCount: task.taskPullRequestCount,
       ...(deps.read.branchSnapshot ? { pullRequestCount: task.pullRequestCount } : {}),
       branchRead: false,
