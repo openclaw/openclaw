@@ -2056,14 +2056,11 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-recent-session__aside {
-  padding-right: 2px;
-}
-
-.sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
   inset: 50% 6px auto auto;
   transform: translateY(-50%);
   pointer-events: none;
+  padding-right: 2px;
 }
 
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
@@ -2077,18 +2074,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
-  position: absolute;
   z-index: 1;
   display: inline-flex;
   inset: 50% 8px auto auto;
-  flex: none;
   padding-right: 0;
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-
-.sidebar-recent-session--child:is(:hover, :focus-within) .sidebar-recent-session__text {
-  padding-right: var(--session-row-actions-reserve);
 }
 
 .shell:not(.shell--mobile-nav)
@@ -2097,22 +2086,33 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   display: none;
 }
 
-/* Rows with a child toggle keep it as the rightmost in-flow control; the
-   overlaid actions land just left of it, at the link's right edge — the
-   same link-relative geometry as toggle-less rows, so one mask fits both. */
+/* The disclosure stays rightmost; actions sit beside it. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
+/* A disappearing disclosure must not move Archive under the resting pointer. */
+@media (hover: hover) and (pointer: fine) {
+  .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team):has(
+      [data-sidebar-session-archive]
+    ) {
+    > .sidebar-recent-session__aside {
+      right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+    }
+
+    &:not(:has(> .sidebar-child-session-toggle)):is(:hover, :focus-within) {
+      padding-right: calc(2px + var(--sidebar-child-session-toggle-width));
+    }
+  }
+}
+
+.sidebar-recent-session--child:is(:hover, :focus-within) .sidebar-recent-session__text,
 .sidebar-recent-session:not(
     .sidebar-recent-session--child,
     .sidebar-recent-session--single-line
   ):where(:hover, :focus-within)
-  .sidebar-recent-session__title-row {
-  padding-right: var(--session-row-actions-reserve);
-}
-
+  .sidebar-recent-session__title-row,
 .sidebar-recent-session--single-line:not(.sidebar-recent-session--child):is(:hover, :focus-within)
   .sidebar-recent-session__text {
   padding-right: var(--session-row-actions-reserve);
@@ -3939,7 +3939,6 @@ html.openclaw-native-web-chrome
 
 .sidebar-recent-session--single-line > .sidebar-recent-session__aside {
   display: flex;
-  align-items: center;
 }
 
 .sidebar-recent-session__subtitle {
