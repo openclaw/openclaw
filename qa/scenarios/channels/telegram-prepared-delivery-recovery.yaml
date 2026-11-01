@@ -152,6 +152,7 @@ flow:
                           telegram.richMessages = false;
                           if (caseName !== "stream") {
                             await fs.mkdir(path.dirname(auditPath), { recursive: true });
+                            await fs.chmod(path.dirname(auditPath), 0o777);
                             await fs.mkdir(fixtureDir, { recursive: true });
                             const { pathToFileURL } = await qaImport("node:url");
                             const pluginEntryUrl = pathToFileURL(path.join(env.repoRoot, "dist/plugin-sdk/plugin-entry.js")).href;
