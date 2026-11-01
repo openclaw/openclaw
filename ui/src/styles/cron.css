@@ -1244,6 +1244,11 @@
   .cron-run-entry + .cron-run-entry {
     border-top: 0;
   }
+
+  .cron-run-entry__meta > :has(> .btn),
+  .cron-run-entry__meta > :has(> .btn) + * {
+    margin-top: var(--space-2);
+  }
 }
 
 .shell--embed-settings .cron-editor-actions {
