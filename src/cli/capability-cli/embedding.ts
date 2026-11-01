@@ -5,6 +5,15 @@ import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
+type EmbeddingCreateOptions = {
+  text: string[];
+  inputType: "document" | "query";
+  provider?: string;
+  model?: string;
+  agent?: string;
+  json: boolean;
+};
+
 export function registerEmbeddingCapabilityCommands(capability: Command): void {
   const embeddingCommand = capability
     .command("embedding")
@@ -27,20 +36,20 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action((opts, command) =>
+    .action((opts: EmbeddingCreateOptions, command: Command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const {
           requireProviderModelOverride,
           resolveLocalCapabilityAgent,
           resolveCapabilityAgentOption,
         } = await import("./shared.js");
-        const texts = opts.text as string[];
+        const texts = opts.text;
         const agent = resolveCapabilityAgentOption(command, opts.agent);
         const { getMemoryEmbeddingCommandSecretTargetIds } =
           await import("../command-secret-targets.js");
         const { createEmbeddingProvider } =
           await import("../../plugin-sdk/memory-core-bundled-runtime.js");
-        const modelRef = requireProviderModelOverride(opts.model as string | undefined);
+        const modelRef = requireProviderModelOverride(opts.model);
         const { cfg, agentDir } = await resolveLocalCapabilityAgent({
           commandName: "infer embedding create",
           targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
@@ -71,7 +80,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
         let embeddings: number[][];
         try {
           embeddings = await provider.embedBatch(texts, {
-            inputType: opts.inputType as "document" | "query",
+            inputType: opts.inputType,
           });
         } catch (err) {
           // Cleanup failure must not replace the embedding error.
