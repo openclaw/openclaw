@@ -426,6 +426,33 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expectNoServiceWrite("install", "stage");
   });
 
+  it("keeps a running service's Node version change visible and points at doctor", async () => {
+    mockProcessPlatform("linux");
+    const entrypoint =
+      "/home/example/.nvm/versions/node/v24.16.0/lib/node_modules/openclaw/dist/index.js";
+    const nodePath = "/home/example/.nvm/versions/node/v24.22.1/bin/node";
+    mocks.readCommand.mockResolvedValue({
+      ...createGatewayCommand(entrypoint, nodePath),
+      sourcePath: "/home/example/.config/systemd/user/openclaw-gateway.service",
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-node-prefix-skew",
+        "Gateway Node v24.22.1 (/home/example/.nvm/versions/node/v24.22.1) does not own this install (v24.16.0 at /home/example/.nvm/versions/node/v24.16.0). Removing the install's Node version stops the gateway before OpenClaw can start.",
+      ),
+    );
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand(entrypoint, nodePath),
+      workingDirectory: "/tmp",
+    });
+    mocks.isSystemdUnitActive.mockResolvedValue(ok(true));
+    await runRepair();
+    configNote("does not own this install");
+    configNote("openclaw doctor --fix");
+    expectNoNoteContaining("gateway install --force", "Gateway service config");
+    expectNoServiceWrite("install", "stage");
+  });
+
   it.each([
     ["command", { launcher: "command" as const }, "gateway-port-mismatch"],
     ["directory", { launcher: "working-directory" as const }, "gateway-entrypoint-mismatch"],
