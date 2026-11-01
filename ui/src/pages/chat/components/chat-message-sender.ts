@@ -11,14 +11,10 @@ registerChatSessionEnglish();
 
 export function isOwnSenderGroup(
   group: Pick<MessageGroup, "sender">,
-  viewer: { userId?: string | null; userSenderId?: string | null },
+  userId: string | null | undefined,
 ): boolean {
-  const sender = group.sender;
-  if (sender?.identity) {
-    return sender.identity.type === "profile" && sender.identity.id === viewer.userId;
-  }
-  // Tailscale or trusted-proxy access without a profile stamps only the authenticated id.
-  return Boolean(viewer.userSenderId && sender?.id === viewer.userSenderId);
+  const identity = group.sender?.identity;
+  return identity?.type === "profile" && identity.id === userId;
 }
 
 export function isSourceOnlyUserGroup(
@@ -36,12 +32,7 @@ export function resolveMessageGroupSenderLabel(
   group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "sourceClients"> & {
     messages: ReadonlyArray<{ message: unknown }>;
   },
-  opts: {
-    assistantName?: string;
-    userId?: string | null;
-    userSenderId?: string | null;
-    userName?: string | null;
-  },
+  opts: { assistantName?: string; userId?: string | null; userName?: string | null },
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   if (isSourceOnlyUserGroup(group)) {
@@ -71,7 +62,7 @@ export function resolveMessageGroupSenderLabel(
   const resolvedUserName = resolveLocalUserName({ name: opts.userName });
   const userLabel = group.senderLabel?.trim();
   return normalizedRole === "user"
-    ? isOwnSenderGroup(group, opts)
+    ? isOwnSenderGroup(group, opts.userId)
       ? resolvedUserName
       : (userLabel ?? t("chat.messages.unattributedSender"))
     : normalizedRole === "assistant"

@@ -250,27 +250,26 @@ it("does not give provider speech unframed answer actions", () => {
   expect(prepared.source.displayMarkdown).toBe(speech.content);
 });
 
-it("keeps the viewer's own bubble on the accent skin on every access path", () => {
+it("paints every right-side user turn with the viewer accent and only peers with identity hues", () => {
   const message = { role: "user", content: "Hello", timestamp: 1000 };
-  const frame = (
-    sender: MessageGroupData["sender"],
-    viewer: { userId?: string; userSenderId?: string; showOwnSenderName?: boolean } = {},
-  ) =>
+  const frame = (sender: MessageGroupData["sender"], userId?: string) =>
     prepareMessageGroupFrame(createMessageGroup(message, "user", { sender }), {
       showReasoning: false,
-      ...viewer,
+      userId,
     });
   const profile = (id: string) => ({ id, name: id, identity: { type: "profile" as const, id } });
-  // Profile access: own turns keep the accent skin; peers keep their identity hue.
-  const ownProfile = frame(profile("viewer"), { userId: "viewer", showOwnSenderName: false });
-  expect(ownProfile.senderHue).toBeNull();
-  expect(ownProfile.showSenderName).toBe(false);
-  expect(frame(profile("peer"), { userId: "viewer" }).senderHue).not.toBeNull();
-  // Tailscale or trusted-proxy access without a profile stamps only the authenticated id.
-  const own = frame({ id: "pat@github" }, { userSenderId: "pat@github", showOwnSenderName: false });
-  expect(own.senderHue).toBeNull();
-  expect(own.showSenderName).toBe(false);
-  expect(frame({ id: "sam@github" }, { userSenderId: "pat@github" }).senderHue).not.toBeNull();
+  const cases = [
+    { sender: profile("viewer"), userId: "viewer", peer: false },
+    { sender: profile("peer"), userId: "viewer", peer: true },
+    // Without a viewer profile every user turn is the viewer's, whatever the sender stamp.
+    { sender: { id: "pat@example.com" }, userId: undefined, peer: false },
+    { sender: profile("viewer"), userId: undefined, peer: false },
+  ];
+  for (const { sender, userId, peer } of cases) {
+    const prepared = frame(sender, userId);
+    expect(prepared.isPeerGroup).toBe(peer);
+    expect(prepared.senderHue === null).toBe(!peer);
+  }
 });
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {

@@ -143,7 +143,7 @@ export function prepareMessageGroupFrame(
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
   const assistantName = opts.assistantName ?? "Assistant";
-  const isOwnGroup = isOwnSenderGroup(group, opts);
+  const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
   const forwardedSource = hasForwardedSource(group);
@@ -211,11 +211,12 @@ export function prepareMessageGroupFrame(
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   // Source sessions share stable sender hues; the shared participant palette owns contrast
-  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
+  // in each theme. Only peers (left side) take their identity hue: a right-side user turn is
+  // the viewer's, so it keeps the accent skin even when the viewer has no profile to match.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender && !isOwnGroup
+      : isPeerGroup && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
   const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);

@@ -368,7 +368,6 @@ export function projectChatTranscript(
       mainKey: props.mainKey,
       basePath: props.basePath,
       userId: props.userId ?? null,
-      userSenderId: props.userSenderId ?? null,
       userName: props.userName ?? null,
       showOwnSenderName,
       userAvatar: props.userAvatar ?? null,
