@@ -22,6 +22,25 @@ type GatewayCredentials = Pick<
   "offlineRecoveryScope" | "url" | "token" | "bootstrapToken" | "bootstrapProfile" | "password"
 >;
 
+export function readCredentialBootRecord(
+  connection: Pick<
+    ApplicationGatewayConnection,
+    "gatewayUrl" | "token" | "bootstrapToken" | "password"
+  >,
+) {
+  return !connection.bootstrapToken && !connection.password
+    ? readBootRecord(gatewayCredentialScope(connection.gatewayUrl), (method) =>
+        method === "token"
+          ? connection.token
+          : connection.token.trim()
+            ? null
+            : method === "device-token"
+              ? loadCurrentDeviceAuthToken(connection.gatewayUrl)
+              : "",
+      )
+    : null;
+}
+
 /** Credential admission owns both the read boot record and its successor hello. */
 export function createGatewayCredentials(ownsWarmBoot: boolean) {
   const canOwnWarmBoot = ownsWarmBoot && !isRemoteControlUiIngress();
@@ -39,17 +58,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
     ): GatewayCredentials {
       scope = gatewayCredentialScope(connection.gatewayUrl);
       const boot =
-        canOwnWarmBoot && !credentialsChanged && !connection.bootstrapToken && !connection.password
-          ? readBootRecord(scope, (method) =>
-              method === "token"
-                ? connection.token
-                : connection.token.trim()
-                  ? null
-                  : method === "device-token"
-                    ? loadCurrentDeviceAuthToken(connection.gatewayUrl)
-                    : "",
-            )
-          : null;
+        canOwnWarmBoot && !credentialsChanged ? readCredentialBootRecord(connection) : null;
       if (boot) {
         capturedOwner = bootRecordOwner(boot);
       }

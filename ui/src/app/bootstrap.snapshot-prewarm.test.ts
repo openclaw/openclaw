@@ -1,7 +1,8 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
-import * as prewarm from "../pages/chat/session-snapshot-prewarm.ts";
+import * as prewarm from "../pages/chat/chat-snapshot-prewarm.ts";
+import { readSidebarBootSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
 import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { makeBootRecord as bootRecord, makeBootRoster } from "./bootstrap.test-support.ts";
@@ -98,7 +99,7 @@ it.each([
     }
     expect(runtime.context.gateway.snapshot.phase).not.toBe("connected");
   } finally {
-    await prewarm.readSidebarBootSnapshot(runtime.context.gateway);
+    await readSidebarBootSnapshot(runtime.context.gateway);
   }
 });
 it.each([

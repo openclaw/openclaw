@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 89354,
-  "reason": "New Session socket preconnect: 20 paired observations per profile improve 100 ms RTT composer readiness by 8.1%; accept measured startup 89354 B (+219 B vs exact base), with unchanged request counts and CPU/tail caveats recorded in PR evidence.",
+  "startupJsGzipBytes": 90111,
+  "reason": "First-pane snapshot admission starts the scoped read and validation before application loading: 11 interleaved warm chat pairs improve first rows by a 96 ms paired median, with breadcrumb and archived footer present at first mount in all 11. Exact-base startup grows 794 B to 90111 B; complete Chat/New boot shrinks 279/200 B, with unchanged request counts and FCP/hello/LoAF within A/A. Record the measured earlier-load redistribution; keep existing growth and variance allowances.",
   "updatedAt": "2026-10-31"
 }

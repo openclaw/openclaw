@@ -15,7 +15,9 @@ import {
   DEVICE_AUTH_STORAGE_KEY_PREFIX,
 } from "../../src/shared/control-ui-storage.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
+import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
@@ -37,6 +39,8 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "3000" },
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
+    "transcript-late-paint": { type: "boolean", default: false },
+    "reload-after-navigation": { type: "boolean", default: false },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -48,6 +52,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
+  --transcript-late-paint --reload-after-navigation
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -129,7 +134,12 @@ async function readProbe(page: Page) {
       "__warmReloadProof",
     );
     data.stopped = true;
-    return { ...data, timeOrigin: performance.timeOrigin, capturedUntilMs: performance.now() };
+    return {
+      ...data,
+      paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
+      timeOrigin: performance.timeOrigin,
+      capturedUntilMs: performance.now(),
+    };
   });
 }
 async function regionBoxes(page: Page) {
@@ -165,74 +175,102 @@ async function regionBoxes(page: Page) {
   }, proofRegions);
 }
 
-async function readWarmCache(page: Page, sessionKey: string) {
-  return await page.evaluate(async (key) => {
-    // Inspect the existing disposable cache; never create or populate a database for proof.
-    const name = "openclaw-chat-snapshots";
-    if (!(await indexedDB.databases()).some((database) => database.name === name)) {
-      return { targetSnapshots: 0, snapshots: 0, sidebarSnapshots: 0 };
-    }
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(name);
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener(
-        "error",
-        () => reject(new Error("Unable to open snapshot cache", { cause: request.error })),
-        { once: true },
-      );
-    });
-    try {
-      const readKeys = (store: string) =>
-        new Promise<IDBValidKey[]>((resolve, reject) => {
-          const request = database.transaction(store, "readonly").objectStore(store).getAllKeys();
-          request.addEventListener("success", () => resolve(request.result), { once: true });
-          request.addEventListener(
-            "error",
-            () => reject(new Error("Unable to read snapshot cache", { cause: request.error })),
-            { once: true },
-          );
-        });
-      const snapshots = await readKeys("snapshots");
-      const sidebar = await readKeys("sidebarSnapshots");
-      const targetKeys = snapshots.filter(
-        (value) =>
-          typeof value === "string" &&
-          value.startsWith("scope:[") &&
-          value.endsWith(`\u0000${key}`),
-      );
-      const targetRecords = await Promise.all(
-        targetKeys.map(
+async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = false) {
+  return await page.evaluate(
+    async ({ key, removeTarget: shouldRemoveTarget }) => {
+      // Inspect the existing disposable cache; never create or populate a database for proof.
+      const name = "openclaw-chat-snapshots";
+      if (!(await indexedDB.databases()).some((database) => database.name === name)) {
+        return { targetSnapshots: 0, snapshots: 0, sidebarSnapshots: 0 };
+      }
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(name);
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener(
+          "error",
+          () => reject(new Error("Unable to open snapshot cache", { cause: request.error })),
+          { once: true },
+        );
+      });
+      try {
+        const readKeys = (store: string) =>
+          new Promise<IDBValidKey[]>((resolve, reject) => {
+            const request = database.transaction(store, "readonly").objectStore(store).getAllKeys();
+            request.addEventListener("success", () => resolve(request.result), { once: true });
+            request.addEventListener(
+              "error",
+              () => reject(new Error("Unable to read snapshot cache", { cause: request.error })),
+              { once: true },
+            );
+          });
+        const snapshots = await readKeys("snapshots");
+        const sidebar = await readKeys("sidebarSnapshots");
+        const targetKeys = snapshots.filter(
           (value) =>
-            new Promise<unknown>((resolve, reject) => {
-              const request = database
-                .transaction("snapshots", "readonly")
-                .objectStore("snapshots")
-                .get(value);
-              request.addEventListener("success", () => resolve(request.result), { once: true });
-              request.addEventListener(
-                "error",
-                () => reject(new Error("Unable to read warm snapshot", { cause: request.error })),
-                { once: true },
-              );
-            }),
-        ),
-      );
-      return {
-        targetSnapshots: targetKeys.length,
-        targetSnapshotBytes: targetRecords.reduce<number>(
-          (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
-          0,
-        ),
-        snapshots: snapshots.length,
-        sidebarSnapshots: sidebar.length,
-      };
-    } finally {
-      database.close();
-    }
-  }, sessionKey);
+            typeof value === "string" &&
+            value.startsWith("scope:[") &&
+            value.endsWith(`\u0000${key}`),
+        );
+        const targetRecords = await Promise.all(
+          targetKeys.map(
+            (value) =>
+              new Promise<unknown>((resolve, reject) => {
+                const request = database
+                  .transaction("snapshots", "readonly")
+                  .objectStore("snapshots")
+                  .get(value);
+                request.addEventListener("success", () => resolve(request.result), { once: true });
+                request.addEventListener(
+                  "error",
+                  () => reject(new Error("Unable to read warm snapshot", { cause: request.error })),
+                  { once: true },
+                );
+              }),
+          ),
+        );
+        if (shouldRemoveTarget && targetKeys.length) {
+          // The caller has left the app. Retain sidebar/settings while making the
+          // next document's target visit genuinely uncached, including its memory.
+          await new Promise<void>((resolve, reject) => {
+            const transaction = database.transaction(
+              ["snapshots", "snapshotMetadata"],
+              "readwrite",
+            );
+            for (const store of ["snapshots", "snapshotMetadata"]) {
+              for (const target of targetKeys) {
+                transaction.objectStore(store).delete(target);
+              }
+            }
+            transaction.addEventListener("complete", () => resolve(), { once: true });
+            transaction.addEventListener(
+              "abort",
+              () => reject(transaction.error ?? new Error("Snapshot cache removal aborted")),
+              { once: true },
+            );
+          });
+        }
+        return {
+          targetSnapshots: targetKeys.length,
+          targetSnapshotBytes: targetRecords.reduce<number>(
+            (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
+            0,
+          ),
+          snapshots: snapshots.length,
+          sidebarSnapshots: sidebar.length,
+        };
+      } finally {
+        database.close();
+      }
+    },
+    { key: sessionKey, removeTarget },
+  );
 }
 
 type WireFrame = { file: string; epochMs: number; clockSource: "surface" | "arrival" };
+type ShortVisit = {
+  cache: Awaited<ReturnType<typeof inspectWarmCache>>;
+  elapsedBeforeCaptureMs: number;
+};
 async function captureReload(
   page: Page,
   cdp: CDPSession,
@@ -240,6 +278,7 @@ async function captureReload(
   outputDir: string,
   warm: boolean,
   route: string,
+  shortVisit?: ShortVisit,
 ) {
   await mkdir(outputDir, { recursive: true });
   const oldAnimationSample = warm
@@ -386,6 +425,7 @@ async function captureReload(
     for (const key of [
       "firstAppDomMs",
       "firstMainDomMs",
+      "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
       "firstPaintedRowsMs",
       "finalRowsDomMs",
@@ -405,6 +445,12 @@ async function captureReload(
       ...probe.animationSamples,
     ]) {
       entry.atMs += documentOffsetMs;
+    }
+    for (const entry of probe.indexedDb) {
+      entry.atMs += documentOffsetMs;
+      if (entry.completedAtMs !== null) {
+        entry.completedAtMs += documentOffsetMs;
+      }
     }
     probe.capturedUntilMs += documentOffsetMs;
     probe.timeOrigin = navigationOrigin;
@@ -490,6 +536,7 @@ async function captureReload(
     }
     const report = {
       warm,
+      ...(shortVisit ? { shortVisit } : {}),
       oldPage: oldPage
         ? {
             ...oldPage,
@@ -582,7 +629,7 @@ const results: Array<{
   arm: string;
   route: "chat" | "dashboard";
   coldReset: unknown;
-  warmCache: Awaited<ReturnType<typeof readWarmCache>> | null;
+  warmCache: Awaited<ReturnType<typeof inspectWarmCache>> | null;
   runs: Array<Awaited<ReturnType<typeof captureReload>>>;
 }> = [];
 try {
@@ -621,6 +668,7 @@ try {
     port,
     uiRoot: servedUiRoot,
     sessions,
+    transcriptLatePaint: values["transcript-late-paint"],
     ...(admission
       ? {
           admission: {
@@ -759,7 +807,7 @@ try {
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
@@ -788,6 +836,12 @@ try {
             await page.goto(handoffUrl.href);
           }
           await waitForControlUiGatewayReady(page, 60000);
+          const operator = values["transcript-late-paint"]
+            ? await evaluateControlUiContext(page, (application) => ({
+                gatewayUrl: application.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
+                userId: application.gateway.snapshot.selfUser?.id,
+              }))
+            : null;
           await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
             timeout: 60000,
           });
@@ -818,12 +872,37 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
+          if (operator && fixture.fixtureSummary.transcriptLatePaint) {
+            if (!operator.userId) {
+              throw new Error("Transcript late-paint fixture requires an identified operator");
+            }
+            await page.evaluate(
+              ({ gatewayUrl, userId, settings }) => {
+                localStorage.setItem("openclaw:sidebar:sessions:grouping", settings.grouping);
+                localStorage.setItem("openclaw:sidebar:sessions:sort-mode", settings.sort);
+                localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+                localStorage.setItem(
+                  "openclaw:sidebar:sessions:collapsed-sections",
+                  JSON.stringify(settings.collapsedSections),
+                );
+                localStorage.setItem(
+                  `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(userId!)}`,
+                  settings.ownerFilter,
+                );
+                localStorage.setItem(
+                  `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(userId!)}`,
+                  settings.emptyGroups,
+                );
+              },
+              { ...operator, settings: fixture.fixtureSummary.transcriptLatePaint },
+            );
+          }
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,
             route,
             coldReset,
-            warmCache: null as Awaited<ReturnType<typeof readWarmCache>> | null,
+            warmCache: null as Awaited<ReturnType<typeof inspectWarmCache>> | null,
             runs: [
               await captureReload(
                 page,
@@ -867,7 +946,7 @@ try {
               .waitFor({ state: "visible" });
           }
           const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
-          const cache = await readWarmCache(page, target.key);
+          const cache = await inspectWarmCache(page, target.key);
           results.at(-1)!.warmCache = cache;
           await writeFile(
             path.join(arm.directory, route, "warm-cache.json"),
@@ -898,16 +977,47 @@ try {
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "active" });
           }
-          item.result.runs.push(
-            await captureReload(
+          let shortVisit: ShortVisit | undefined;
+          if (values["reload-after-navigation"]) {
+            await item.page.goto(`${baseUrl}/healthz`);
+            const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
+            await inspectWarmCache(item.page, target.key, true);
+            await item.page.goto(`${baseUrl}/new`);
+            await waitForControlUiGatewayReady(item.page, 60000);
+            const visitedAtMs = await evaluateControlUiContext(
               item.page,
-              item.cdp,
-              `${baseUrl}${routePath}`,
-              path.join(item.arm.directory, route, `warm-${String(index).padStart(2, "0")}`),
-              true,
-              route,
-            ),
+              async (application, routeTarget) => {
+                const started = performance.now();
+                await application.navigateAndWait(routeTarget.route, {
+                  pathname: routeTarget.pathname,
+                });
+                return started;
+              },
+              { route, pathname: routePath },
+            );
+            // Four seconds is the short-visit workload, not a cache-readiness wait.
+            await item.page.waitForFunction(
+              (start) => performance.now() >= start + 4000,
+              visitedAtMs,
+            );
+            shortVisit = {
+              cache: await inspectWarmCache(item.page, target.key),
+              elapsedBeforeCaptureMs: await item.page.evaluate(
+                (start) => performance.now() - start,
+                visitedAtMs,
+              ),
+            };
+          }
+          const run = await captureReload(
+            item.page,
+            item.cdp,
+            `${baseUrl}${routePath}`,
+            path.join(item.arm.directory, route, `warm-${String(index).padStart(2, "0")}`),
+            true,
+            route,
+            shortVisit,
           );
+          item.result.runs.push(run);
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "frozen" });
           }
@@ -927,6 +1037,9 @@ try {
     rttMs,
     captureMs,
     reloads,
+    reloadSequence: values["reload-after-navigation"]
+      ? "Remove target snapshot outside the app, fresh /new document → target navigation, four-second first visit, reload; sidebar/settings retained"
+      : "Repeated reload after the initial cold capture",
     admission: admission
       ? {
           mode: "signed-in",
