@@ -1,6 +1,5 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { gitReadOnlyEnvironment } from "../../infra/git-exec.js";
@@ -9,7 +8,7 @@ import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import { killProcessTree } from "../../process/kill-tree.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
-import { spawnProcess } from "../../process/spawn-utils.js";
+import { spawnProcessToFile } from "../../process/spawn-to-file.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import type { WorkspaceInventoryWriteCommand } from "./workspace-inventory-computation.js";
 import { workspaceInventoryError } from "./workspace-inventory-error.js";
@@ -91,7 +90,6 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   if (!command) {
     throw new Error("Worker workspace command requires an executable");
   }
-  const output = await fs.open(params.outputPath, "wx", 0o600);
   let input: FileHandle | undefined;
   let stderr = "";
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -100,26 +98,24 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   let abortedCommand = false;
   let timedOut = false;
   let outputError: Error | undefined;
-  let outputBytes = 0;
-  let outputWrite = Promise.resolve();
   let inputWrite = Promise.resolve();
   try {
     input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
     params.signal.throwIfAborted();
     const env = params.baseEnv ?? workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv;
-    const child = withGitProcessOperation(
+    const { child, output } = await withGitProcessOperation(
       "workspace.inventory",
       () =>
-        spawnProcess(
+        spawnProcessToFile(
           command,
           args,
           {
             env: command === "git" ? gitReadOnlyEnvironment(args, env) : env,
-            // Numeric descriptors force native spawning; stream files through broker-owned pipes.
             stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],
             ...(process.platform !== "win32" ? { detached: true } : {}),
             windowsHide: true,
           },
+          { path: params.outputPath, maxBytes: params.maxOutputBytes },
           (launch) => {
             params.signal.throwIfAborted();
             if (timedOut) {
@@ -132,6 +128,15 @@ export async function runWorkspaceInventoryCommandToFile(params: {
         ),
       "default",
     );
+    const outputWrite = output.catch((error: unknown) => {
+      outputError = hasNodeErrorCode(error, "ERR_PROCESS_OUTPUT_LIMIT")
+        ? workspaceInventoryError(
+            `Cloud workspace pack exceeds the ${params.maxOutputBytes} byte limit`,
+          )
+        : error instanceof Error
+          ? error
+          : new Error(String(error));
+    });
     const result = await new Promise<{ code: number | null; error?: Error }>((resolve) => {
       let settled = false;
       const finish = (value: { code: number | null; error?: Error }) => {
@@ -189,26 +194,6 @@ export async function runWorkspaceInventoryCommandToFile(params: {
             }
           });
         }
-        outputWrite = pipeline(
-          child.stdout!,
-          new Transform({
-            transform(chunk: Buffer, _encoding, callback) {
-              outputBytes += chunk.byteLength;
-              callback(
-                params.maxOutputBytes !== undefined && outputBytes > params.maxOutputBytes
-                  ? workspaceInventoryError(
-                      `Cloud workspace pack exceeds the ${params.maxOutputBytes} byte limit`,
-                    )
-                  : null,
-                chunk,
-              );
-            },
-          }),
-          output.createWriteStream(),
-        ).catch((error: unknown) => {
-          outputError = error instanceof Error ? error : new Error(String(error));
-          terminate();
-        });
       });
       child.once("error", (error) => finish({ code: null, error }));
       child.once("close", (code) => finish({ code }));
@@ -252,7 +237,6 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     if (abort) {
       params.signal.removeEventListener("abort", abort);
     }
-    await output.close();
     await input?.close();
   }
 }

@@ -3,6 +3,7 @@ import { tracingChannel } from "node:diagnostics_channel";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -133,8 +134,8 @@ function transferList(
 
 describe("runWorkspaceInventoryCommandToFile", () => {
   it.skipIf(!supportsSpawnBrokerCommandTransport())(
-    "streams inventory and pack input through the broker without forking the Gateway",
-    async () => {
+    "writes inventory files in the broker without forking the Gateway",
+    async ({ signal, onTestFinished }) => {
       const broker = await startBroker();
       const { root } = commandFixture();
       const inputPath = path.join(root, "input");
@@ -147,15 +148,16 @@ describe("runWorkspaceInventoryCommandToFile", () => {
             [
               process.execPath,
               "-e",
-              "process.stdout.write(`${process.ppid}\\n`); process.stdin.pipe(process.stdout);",
+              "process.stdout.write(`${process.ppid}:${require('node:fs').fstatSync(1).isFile()}\\n`); process.stdin.pipe(process.stdout);",
             ],
             outputPath,
             { inputPath, ...(bounded ? { maxOutputBytes: payload.length + 32 } : {}) },
           ),
         );
-        expect(await fs.readFile(outputPath)).toEqual(
-          Buffer.concat([Buffer.from(`${broker!.pid}\n`), payload]),
-        );
+        const written = await fs.readFile(outputPath);
+        const prefix = `${broker!.pid}:${!bounded}\n`;
+        expect(written.subarray(0, prefix.length).toString()).toBe(prefix);
+        expect(written.subarray(prefix.length)).toEqual(payload);
       }
       await expect(
         runWithSpawnBroker(broker, () =>
@@ -168,28 +170,27 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       ).rejects.toThrow("pack exceeds the 16 byte limit");
       const controller = new AbortController();
       const stoppedOutput = path.join(root, "stopped");
-      interceptOutput(stoppedOutput, (handle) => {
-        const create = handle.createWriteStream.bind(handle);
-        handle.createWriteStream = (...args) => {
-          const stream = create(...args);
-          stream.once("pipe", (source: NodeJS.ReadableStream) => {
-            source.once("data", () => controller.abort());
-          });
-          return stream;
-        };
-      });
-      const stopped = await runWithSpawnBroker(broker, () =>
+      const readyPath = path.join(root, "ready");
+      const stopped = runWithSpawnBroker(broker, () =>
         inventoryCommand(
           [
             process.execPath,
             "-e",
-            'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000);',
+            'process.on("SIGTERM", () => {}); process.stdout.write("ready", () => require("node:fs").writeFileSync(process.argv[1], "ready")); setInterval(() => {}, 1000);',
+            readyPath,
           ],
           stoppedOutput,
           { signal: controller.signal },
         ),
       ).catch((error: unknown) => error);
-      expect(stopped).toBe(controller.signal.reason);
+      onTestFinished(async () => {
+        controller.abort();
+        await stopped;
+      });
+      await withinTest(waitForFixtureFile(readyPath, stopped, "ready"), signal);
+      controller.abort();
+      expect(await stopped).toBe(controller.signal.reason);
+      await expect(fs.readFile(stoppedOutput, "utf8")).resolves.toBe("ready");
     },
   );
 
@@ -339,23 +340,14 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     }
   });
 
-  it("closes its output when opening the input fails", async () => {
+  it("does not create output when opening the input fails", async () => {
     const { root, outputPath } = commandFixture();
-    let output: Awaited<ReturnType<typeof fs.open>> | undefined;
-    interceptOutput(outputPath, (handle) => {
-      output = handle;
-    });
-    try {
-      await expect(
-        inventoryCommand([process.execPath, "-e", ""], outputPath, {
-          inputPath: path.join(root, "missing"),
-        }),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      expect(output).toBeDefined();
-      await expect(output!.stat()).rejects.toMatchObject({ code: "EBADF" });
-    } finally {
-      await output?.close();
-    }
+    await expect(
+      inventoryCommand([process.execPath, "-e", ""], outputPath, {
+        inputPath: path.join(root, "missing"),
+      }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   // Windows taskkill cannot recover descendants after their parent has exited.

@@ -6,6 +6,8 @@
  *   node workspace-inventory-spawn-measure.ts --fixture /task/workspace
  *   node workspace-inventory-spawn-measure.ts --compare /task/proof --fixture /task/workspace
  * Add --control for A/A; --samples 5 --commands 5 --rss-mib 2048 --mappings 2000 are defaults.
+ * Separate allocation diagnostics: --sample <bundle> --heap-profile <output-prefix> samples
+ * each warm inventory command at 1 KiB intervals; do not use its timings for comparison.
  * Preparation builds the original owner from --base-ref and the current owner, sharing each
  * owner's real dependency graph with its broker context. No production module is mocked.
  * Acceptance: identical bytes, zero candidate host forks, lower blocking; flag >=20% increases
@@ -18,6 +20,7 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { Session } from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +38,7 @@ const { values } = parseArgs({
     fixture: { type: "string" },
     compare: { type: "string" },
     sample: { type: "string" },
+    "heap-profile": { type: "string" },
     control: { type: "boolean", default: false },
     samples: { type: "string", default: "5" },
     commands: { type: "string", default: "5" },
@@ -120,6 +124,12 @@ if (values.prepare) {
       .trim(),
     beforeSha256: hash(Buffer.from(baseline)),
     afterSha256: hash(Buffer.from(candidate)),
+    bundleSha256: Object.fromEntries(
+      ["before.mjs", "after.mjs", "broker.mjs"].map((name) => [
+        name,
+        hash(fs.readFileSync(path.join(directory, name))),
+      ]),
+    ),
   };
   fs.writeFileSync(path.join(directory, "source.json"), JSON.stringify(provenance));
   console.log(JSON.stringify({ prepared: directory, ...provenance }));
@@ -317,6 +327,8 @@ if (values.prepare) {
   });
   syncBuiltinESMExports();
   const rows = [];
+  const inspector = values["heap-profile"] ? new Session() : undefined;
+  inspector?.connect();
   try {
     for (let iteration = 0; iteration <= commands; iteration++) {
       for (const [index, operation] of operations.entries()) {
@@ -325,6 +337,14 @@ if (values.prepare) {
         const outputPath = path.join(scratch, `${iteration}-${operation.name}`);
         const beforeBroker = ticks(broker.pid),
           beforeChildren = ticks(process.pid).children;
+        const profileInventory = inspector && iteration > 0 && operation.name !== "pack";
+        if (profileInventory) {
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 1024,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
+        }
         const allocation = getHeapStatistics().total_allocated_bytes;
         const cpu = process.cpuUsage(),
           thread = process.threadCpuUsage(),
@@ -344,6 +364,13 @@ if (values.prepare) {
           threadDelta = process.threadCpuUsage(thread),
           cpuDelta = process.cpuUsage(cpu);
         const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocation;
+        if (profileInventory) {
+          const { profile } = await inspector.post("HeapProfiler.stopSampling");
+          fs.writeFileSync(
+            `${values["heap-profile"]}-${iteration}-${operation.name}.heapprofile`,
+            JSON.stringify(profile),
+          );
+        }
         const afterBroker = ticks(broker.pid);
         const output = fs.readFileSync(outputPath);
         assert.equal(hash(output), expected[index]);
@@ -385,6 +412,7 @@ if (values.prepare) {
     assert.equal(retained.length, rssMiB * 1024 * 1024);
     assert.equal(mappings.length, mappingCount);
   } finally {
+    inspector?.disconnect();
     Object.defineProperty(childProcess, "spawn", { value: nativeSpawn });
     syncBuiltinESMExports();
     await broker.close();
