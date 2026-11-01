@@ -128,7 +128,8 @@ suite.define(() => {
         };
         await prepareComposer();
 
-        for (const width of [1100, 1280, 560, 393, 320]) {
+        // Files keeps the first two composers narrow; 600 keeps the phone touch target.
+        for (const width of [1100, 1280, 560, 600, 900, 393, 320]) {
           if (width === 560) {
             await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
             await workspace.waitFor({ state: "hidden" });
@@ -136,12 +137,41 @@ suite.define(() => {
           await page.setViewportSize({ width, height: 729 });
           await composer.locator("textarea").click();
           await page.mouse.move(0, 0);
-          const composerWidth = await composer.evaluate(
-            (node) => node.getBoundingClientRect().width,
-          );
+          // The permission label is whole beside its icon or absent, never clipped.
           await expect
             .poll(() => composer.locator(".chat-controls__permission-label").isVisible())
-            .toBe(composerWidth > 560);
+            .toBe(width === 900);
+          if (width === 900) {
+            const chips = await composer.evaluate((node) => {
+              const read = (selector: string) => {
+                const trigger = node.querySelector(selector)!;
+                const label = trigger.querySelector(".chat-controls__inline-select-label")!;
+                const chip = getComputedStyle(trigger);
+                const text = getComputedStyle(label);
+                const box = label.getBoundingClientRect();
+                return {
+                  style: [
+                    chip.paddingLeft,
+                    chip.paddingRight,
+                    chip.columnGap,
+                    text.fontSize,
+                    text.fontWeight,
+                    text.lineHeight,
+                    text.letterSpacing,
+                  ],
+                  center: box.y + box.height / 2,
+                  clipped: label.scrollWidth > label.clientWidth,
+                };
+              };
+              return {
+                permission: read("[data-chat-permission-select]"),
+                model: read("[data-chat-model-select]"),
+              };
+            });
+            expect(chips.permission.style).toEqual(chips.model.style);
+            expect(Math.abs(chips.permission.center - chips.model.center)).toBeLessThanOrEqual(0.5);
+            expect(chips.permission.clipped).toBe(false);
+          }
           await expect
             .poll(() =>
               composer.locator(".agent-chat__composer-footer").evaluate((footer) => {

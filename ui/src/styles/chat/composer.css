@@ -2130,6 +2130,9 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: transparent;
   color: var(--text);
   font-size: var(--chat-composer-chip-text, 13px);
+  /* Button triggers otherwise take the UA's normal tracking; summary triggers
+     already inherit the app's, so every chip label sets the same way. */
+  letter-spacing: inherit;
   line-height: 1.35;
   overflow: hidden;
   user-select: none;
@@ -2142,7 +2145,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .agent-chat__composer-lead .chat-controls__permission-trigger {
   justify-content: center;
   min-width: 32px;
-  padding-inline: 6px;
 }
 
 .chat-controls__inline-select-trigger:hover,
@@ -3581,6 +3583,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     width: 44px;
     justify-content: center;
     padding-inline: 0;
+  }
+
+  /* The fixed touch target holds only the icon; a label would be clipped. */
+  .agent-chat__composer-meta .chat-controls__permission-label {
+    display: none;
   }
 
   .agent-chat__composer-controls {
