@@ -324,7 +324,6 @@ const enCron = {
       transcriptUnavailable:
         "The exact run transcript is unavailable or ambiguous. Refresh run history and try again.",
       next: "Next {rel}",
-      due: "Due {rel}",
     },
     events: {
       label: "Event",

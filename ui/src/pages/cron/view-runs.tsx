@@ -376,10 +376,6 @@ export function RunsSection(props: CronRunsSectionProps) {
     </div>
   );
 }
-function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
-  const rel = formatRelativeTimestamp(nextRunAtMs);
-  return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
-}
 export function runStatusLabel(
   value: string,
   completion?: CronRunLogEntry["completionStatus"],
@@ -473,7 +469,9 @@ function Run(props: {
               : t("common.na")}
           </div>
           {props.entry.nextRunAtMs !== undefined ? (
-            <div class="muted">{formatRunNextLabel(props.entry.nextRunAtMs)}</div>
+            <div class="muted">
+              {t("cron.runEntry.next", { rel: props.formatTimestamp(props.entry.nextRunAtMs) })}
+            </div>
           ) : undefined}
           {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (
             <div>
