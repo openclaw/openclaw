@@ -172,6 +172,50 @@ describe("CodexNativeSubagentMonitor", () => {
     }
   });
 
+  it("projects child hooks while a follow-up native turn is pending", async () => {
+    const events: Parameters<Parameters<typeof onAgentEvent>[0]>[0][] = [];
+    const unsubscribe = onAgentEvent((event) => events.push(event));
+    const { client, monitor } = createFixture();
+    try {
+      await registerDetachedChild(client, monitor);
+      await client.notify(turnStartedNotification("first-turn"));
+      await client.notify(turnStartedNotification("follow-up-turn"));
+      await client.notify({
+        method: "hook/completed",
+        params: {
+          threadId: "child-thread",
+          turnId: "follow-up-turn",
+          run: {
+            id: "hook-run",
+            eventName: "SubagentStop",
+            handlerType: "command",
+            executionMode: "sync",
+            status: "completed",
+            entries: [{ kind: "stdout", text: "hook output" }],
+          },
+        },
+      });
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: "codex-thread:child-thread",
+            stream: "codex_app_server.hook",
+            data: expect.objectContaining({
+              phase: "completed",
+              turnId: "follow-up-turn",
+              hookRunId: "hook-run",
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      unsubscribe();
+      client.close();
+      await monitor.dispose();
+    }
+  });
+
   it("publishes native attention and idle observations without finalizing the task", async () => {
     const events: Parameters<Parameters<typeof onAgentEvent>[0]>[0][] = [];
     const unsubscribe = onAgentEvent((event) => events.push(event));

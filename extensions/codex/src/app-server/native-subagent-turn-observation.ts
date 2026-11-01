@@ -28,6 +28,10 @@ export class CodexNativeSubagentTurnObservation {
   private readonly observationSourceId = randomUUID();
   private readonly projectedActivityWaits = new WeakSet<ChildState>();
 
+  static pending(method: CodexServerNotification["method"]): boolean {
+    return method === "turn/completed" || method === "hook/started" || method === "hook/completed";
+  }
+
   constructor(private readonly callbacks: NativeSubagentTurnObservationCallbacks) {}
 
   invalidate(childState: ChildState): void {

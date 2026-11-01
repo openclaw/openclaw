@@ -1110,7 +1110,7 @@ class Monitor {
     if (this.disposed || (notificationState && !this.isCurrentParent(notificationState))) {
       return;
     }
-    const childState = threadId && !pendingNativeTurn ? this.currentChild(threadId) : undefined;
+    const childState = threadId ? this.currentChild(threadId) : undefined;
     const nativeNotification = readCodexNativeSubagentNotification(notification);
     if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
       observeCodexNativeSubagentDeliveryReceipts({
@@ -1123,7 +1123,7 @@ class Monitor {
     if (
       childState &&
       !childState.terminal &&
-      (!pendingTurns?.length || notification.method === "turn/completed")
+      (!pendingTurns?.length || CodexNativeSubagentTurnObservation.pending(notification.method))
     ) {
       this.turnObservation.emitChildTaskActivity(notification, childState);
     }

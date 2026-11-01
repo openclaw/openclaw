@@ -37,9 +37,10 @@ import { readHookOutputEntries, readNullableString } from "./event-projector-val
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
+type CodexHookMethod = "hook/started" | "hook/completed";
 
 export function projectCodexHookEventData(
-  method: "hook/started" | "hook/completed",
+  method: CodexHookMethod,
   params: JsonObject,
   threadId: string,
   fallbackTurnId?: string,
@@ -445,13 +446,8 @@ export class CodexEventProjection {
     });
   }
 
-  handleHook(method: string, params: JsonObject): void {
-    const data = projectCodexHookEventData(
-      method as "hook/started" | "hook/completed",
-      params,
-      this.threadId,
-      this.turnId,
-    );
+  handleHook(method: CodexHookMethod, params: JsonObject): void {
+    const data = projectCodexHookEventData(method, params, this.threadId, this.turnId);
     if (!data) {
       return;
     }
