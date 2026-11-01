@@ -141,11 +141,11 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   const packageManifest = readPackageManifest(rootDir);
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
   const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
-  const currentManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : undefined;
+  const authored = fs.existsSync(manifestPath) ? readJsonFile(manifestPath, true) : undefined;
   const manifest = buildToolPluginManifest({
     metadata,
     packageManifest,
-    existingManifest: currentManifest,
+    existingManifest: authored,
   });
   const browserSource = controlUiSource(packageManifest);
   if (browserSource) {
@@ -161,12 +161,11 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   });
 
   if (opts.check) {
-    const currentPackage = readJsonFile(packagePath);
     const currentControlUi = withPluginCache(createPluginCache(), () =>
       loadPluginControlUiDeclaration({
         rootDir,
-        controlUi: currentManifest?.controlUi,
-        channels: currentManifest?.channels,
+        controlUi: authored?.controlUi,
+        channels: authored?.channels,
         rejectHardlinks: false,
       }),
     );
@@ -174,8 +173,8 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
       (browserSource &&
         (!currentControlUi.ok ||
           !jsonSchemaValuesEqual(currentControlUi.value, manifest.controlUi))) ||
-      !jsonSchemaValuesEqual(currentManifest, manifest) ||
-      !jsonSchemaValuesEqual(currentPackage, nextPackageManifest)
+      !jsonSchemaValuesEqual(authored, manifest) ||
+      !jsonSchemaValuesEqual(packageManifest, nextPackageManifest)
     ) {
       defaultRuntime.error("Generated plugin metadata is out of date. Run openclaw plugins build.");
       return defaultRuntime.exit(1);
@@ -220,7 +219,7 @@ export async function collectPluginsValidationResult(
   if (!manifestResult.ok) {
     return { valid: false, errors: [manifestResult.error] };
   }
-  const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
+  const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), true);
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
   const errors = validateToolPluginProject({
     metadata,

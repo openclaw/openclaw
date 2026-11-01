@@ -819,6 +819,45 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
   await current.empty();
 });
 
+it("describes one-shot automations by local day and time instead of a full numeric date", async () => {
+  const now = new Date();
+  const at = (year: number, month: number, day: number, hour: number) => ({
+    kind: "at" as const,
+    at: new Date(year, month, day, hour).toISOString(),
+  });
+  const year = now.getFullYear();
+  const current = component(
+    jobsRequest(
+      job({
+        id: "today",
+        name: "Verify main CI",
+        scheduleKind: "at",
+        schedule: at(year, now.getMonth(), now.getDate(), 11),
+      }),
+      job({
+        id: "tomorrow",
+        name: "Morning check",
+        scheduleKind: "at",
+        schedule: at(year, now.getMonth(), now.getDate() + 1, 9),
+      }),
+      job({
+        id: "later",
+        name: "Renewal",
+        scheduleKind: "at",
+        schedule: at(year + 1, 2, 3, 9),
+      }),
+    ),
+  );
+  await current.ready("Renewal");
+  const state = (id: string) =>
+    current.element.querySelector<HTMLAnchorElement>(`a[href$="job=${id}"]`)!.textContent;
+  expect(state("today")).toContain("Today at 11:00 AM");
+  expect(state("tomorrow")).toContain("Tomorrow at 9:00 AM");
+  expect(state("later")).toContain(`Mar 3, ${year + 1} at 9:00 AM`);
+  expect(current.element.textContent).not.toMatch(/At \d/);
+  current.unmount();
+});
+
 it("describes cron weekdays and non-uniform minute steps without inventing a fixed interval", async () => {
   const current = component(
     jobsRequest(

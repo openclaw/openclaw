@@ -4,6 +4,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repos
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isExactAttachedEnvironment } from "./placement-target.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { aliasSessionRepositoryCheckpoint } from "./session-repository-checkpoint-refs.js";
 import {
@@ -23,7 +24,7 @@ export async function captureRepositoryDiskCheckpoint<T>(
     additionalRefs?: readonly string[];
     purpose: "publication" | "gateway-move";
     placements: WorkerSessionPlacementStore;
-    environments: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+    environments: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
     assertCurrent: () => void;
     quiescence?: WorkerWorkspaceQuiescence;
   },
@@ -102,6 +103,18 @@ export async function captureRepositoryDiskCheckpoint<T>(
     }
   };
   assertCurrent();
+  // Move prepares before quiescing. Refresh here could stop its admitted native owner.
+  if (
+    !params.quiescence &&
+    !isWorkerRetainedWindowOpen(environments.get(authority.environmentId))
+  ) {
+    await environments.ensureRetainedRunning({
+      environmentId: authority.environmentId,
+      expectedOwnerEpoch: placement.activeOwnerEpoch,
+      assertCurrent,
+    });
+    assertCurrent();
+  }
   const tunnel = await environments.startTunnel({
     environmentId: authority.environmentId,
     ownerEpoch: placement.activeOwnerEpoch,

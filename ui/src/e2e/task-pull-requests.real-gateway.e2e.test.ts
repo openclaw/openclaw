@@ -552,6 +552,33 @@ suite.define(() => {
             },
           );
           if (stage === "initial") {
+            // A reopened sidebar (new socket, passive row) keeps the state the Gateway already verified.
+            const requestsBeforeReopen = githubRequests.length;
+            await suite.withPage(
+              { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
+              async ({ page }) => {
+                await page.addInitScript(() =>
+                  localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]"),
+                );
+                const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
+                url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
+                await page.goto(url.href);
+                await page
+                  .locator("openclaw-gateway-url-confirmation")
+                  .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
+                  .click();
+                await waitForControlUiRoute(page, { routeId: "chat" });
+                const badge = page.locator(
+                  '.sidebar-recent-session[data-session-key="' +
+                    parentKey +
+                    '"] .session-row-badge--pull-request',
+                );
+                await expect
+                  .poll(() => badge.getAttribute("data-pull-request-state"))
+                  .toMatch(/^(open|draft|merged|closed)$/);
+                expect(githubRequests.length).toBe(requestsBeforeReopen);
+              },
+            );
             await gateway.close({ reason: "task PR persistence proof restart" });
             // Reopen persisted rows, not this process's retained projection/database handles.
             await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });

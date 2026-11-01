@@ -356,6 +356,8 @@ timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
+  Finalized user voice transcripts update this only with a new committed entry;
+  replayed, assistant-only, and rejected transcripts do not.
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 

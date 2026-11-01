@@ -311,9 +311,10 @@ export class CommandPaletteState {
   }
 
   readonly togglePalette = () => {
+    // A closed launcher keeps custody of an in-flight start and reports its outcome.
     if (!this.open) {
       this.openPalette();
-    } else if (!this.draft.submitting) {
+    } else {
       this.closePalette();
     }
   };

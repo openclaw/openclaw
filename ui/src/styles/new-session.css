@@ -1166,19 +1166,21 @@ span.new-session-page__select {
     padding: 52px 0 0;
   }
 
+  /* Dock the draft at the bottom like the chat composer: the welcome fills the
+     page and the identity centers in the space above the draft. Auto margins
+     yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome {
+    flex: 1 0 auto;
     min-height: auto;
-    margin-block: auto;
-    padding: 24px 0;
+    margin-block: 0;
+    padding: 24px 0 0;
   }
 
-  /* Center the whole composition, not the introduction alone. Auto margins
-     yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome-identity {
     flex-direction: column;
     gap: 12px;
     width: 100%;
-    margin-block: 0;
+    margin-block: auto;
     padding-inline: var(--chat-mobile-edge-inset);
     text-align: center;
   }
@@ -1214,6 +1216,9 @@ span.new-session-page__select {
   }
 
   .new-session-page__composer {
+    /* Matches .agent-chat__composer-shell[data-mobile-composer="true"]. */
+    --chat-composer-bottom-gap: 10px;
+
     /* Keep privacy context above the writing surface, never below it. */
     order: 1;
   }
@@ -1243,7 +1248,7 @@ span.new-session-page__select {
    keyboard shrinks the shell. Use the page's actual available canvas instead. */
 @container new-session (max-width: 932px) and (max-height: 500px) {
   .new-session-page .agent-chat__welcome {
-    padding-block: 8px;
+    padding-block: 8px 0;
   }
 
   .new-session-page__draft {
@@ -1587,6 +1592,14 @@ span.new-session-page__select {
 .new-session-page__environment-detail-trigger {
   display: flex;
   align-items: center;
+}
+
+/* Tooltips add no box, so a row's gap lands on the box inside them. */
+.new-session-page__environment-details + .session-menu__item,
+:is(.session-menu__item, .new-session-page__environment-details)
+  + .new-session-page__environment-details
+  > :is(.session-menu__item, .new-session-page__environment-detail-trigger) {
+  margin-block-start: var(--menu-item-gap);
 }
 
 .new-session-page__environment-detail-trigger > .session-menu__item {

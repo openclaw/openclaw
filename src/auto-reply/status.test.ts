@@ -1,5 +1,6 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -14,7 +15,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as commandsRegistry from "./commands-registry.js";

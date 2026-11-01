@@ -1,7 +1,10 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { iterateSessionColdRecords } from "../config/sessions/session-cold-storage-chunks.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
@@ -111,6 +114,16 @@ export async function executeUsageCostWorker(
     control,
     target,
     readStore,
+    readCheckpoint: (marker) => {
+      if (operation.kind !== "refresh") {
+        return undefined;
+      }
+      const database = target(marker.agentId, marker.storePath);
+      const checkpoint = byPath.get(
+        formatSqliteSessionFileMarker({ ...marker, storePath: database.path }),
+      )?.envelope?.checkpoint;
+      return checkpoint?.kind === "sqlite" ? checkpoint : undefined;
+    },
   });
   if (operation.kind === "inventory") {
     const selected = operation.sessionFiles;
@@ -146,22 +159,16 @@ export async function executeUsageCostWorker(
   }
 
   // Resolve keys before synchronously capturing the report's bounded cache inputs.
-  const selectedFiles =
-    operation.kind === "refresh" && operation.sessionFiles
-      ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
-      : [];
   const sessionPaths =
     operation.kind === "sessions"
       ? await resolveUsageCostTranscriptPaths(
           operation.sessions.map((session) => session.sessionFile),
           access,
         )
-      : undefined;
-  const selectedPaths = sessionPaths
-    ? sessionPaths.filter((file) => file !== undefined)
-    : operation.kind === "refresh" && operation.sessionFiles
-      ? selectedFiles.flatMap((file) => (file ? [file.filePath] : []))
-      : undefined;
+      : operation.kind === "refresh" && operation.sessionFiles
+        ? await resolveUsageCostTranscriptPaths(operation.sessionFiles, access)
+        : undefined;
+  const selectedPaths = sessionPaths?.filter((file) => file !== undefined);
   const cacheDatabase = input.databases.find(
     (entry) => entry.path === location.databasePath && entry.agentId === location.agentId,
   );
@@ -351,7 +358,18 @@ export async function executeUsageCostWorker(
   }
 
   const rows = await readMetadata();
-  const byPath = new Map(rows.map((row) => [row.key, row]));
+  const byPath = new Map(
+    rows.map((row) => [
+      row.key,
+      {
+        row,
+        envelope: decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint),
+      },
+    ]),
+  );
+  const selectedFiles = operation.sessionFiles
+    ? await resolveUsageCostTranscriptFiles(operation.sessionFiles, access)
+    : [];
 
   const requestedFiles = selectedFiles.filter((file) => file !== undefined);
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
@@ -407,10 +425,9 @@ export async function executeUsageCostWorker(
     if (old && !gap) {
       continue;
     }
-    const row = byPath.get(file.filePath);
-    const envelope = row
-      ? decodeUsageCostRollupEnvelope(row.valueJson, operation.pricingFingerprint)
-      : undefined;
+    const cached = byPath.get(file.filePath);
+    const row = cached?.row;
+    const envelope = cached?.envelope;
     const invalid = rebuildByPath.get(file.filePath);
     const rebuild =
       row &&

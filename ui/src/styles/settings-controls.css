@@ -25,10 +25,6 @@ select.settings-select:not([multiple]) {
   padding-inline: 0;
 }
 
-.settings-section__actions .agent-select__trigger:not(:focus-visible) {
-  border-color: var(--border);
-}
-
 .settings-section__actions .btn--xs.btn--icon {
   width: 28px;
   min-width: 28px;
@@ -220,35 +216,23 @@ select.settings-select:not([multiple]) {
 .settings-input {
   --control-ui-touch-input-size: var(--control-ui-input-text-size);
 
-  font-size: var(--control-ui-input-text-size);
+  font-size: var(--field-font-size);
 }
 
 .settings-select {
   --control-ui-touch-input-size: var(--control-ui-text-sm);
 
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--field-font-size);
 }
 
 /* Native controls own their box. */
 .settings-input,
 select.settings-select {
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-md);
-  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background-color: var(--field-bg);
   color: var(--text);
-  padding: 7px 10px;
-  transition: border-color var(--duration-fast) var(--ease-out);
-}
-
-.settings-input::placeholder {
-  color: var(--muted);
-}
-
-.settings-input:focus-visible,
-select.settings-select:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  padding: 7px var(--field-padding-inline);
 }
 
 /* Secret inputs also appear in the startup login gate. Keep these selectors
@@ -314,4 +298,10 @@ select.settings-select:focus-visible {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  :root {
+    --settings-control-height: 38px;
+  }
 }

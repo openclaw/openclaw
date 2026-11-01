@@ -9,6 +9,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -49,6 +50,7 @@ function PendingSessionCreateContent(
     projectOwner(context.placementStartup, (owner) => owner),
     projectOwner(context.theme, (owner) => owner),
     projectOwner(context.agents, (owner) => owner.state),
+    projectOwner(context.sessions, (owner) => owner.state),
     projectSource(context.chatSubmissions, {
       read: (owner) => owner,
       subscribe: (owner, notify) => owner.subscribeCreate(notify),
@@ -88,12 +90,15 @@ function PendingSessionCreateContent(
     const submissions = context.chatSubmissions;
     const identity = snapshot.selfUser?.identity;
     const startup = readDeletedSessionStartup(context, props.sessionKey);
-    const failed = startup?.phase === "failed";
+    const pendingCreate = submissions.readCreateFor(props.sessionKey);
+    const failure = pendingCreate?.failure;
+    const failed = startup?.phase === "failed" || failure !== undefined;
     const cancelled = startup?.phase === "cancelled";
     const submitting = !failed && !cancelled;
     const turn = startup?.initialTurn;
-    const errorAction =
-      failed && startup
+    const errorAction = failure
+      ? { label: t("newSession.tryAgain"), onClick: failure.retry }
+      : failed && startup
         ? startup.discardAndReload
           ? {
               label: t("newSession.discardUnsavedAndReload"),
@@ -118,16 +123,17 @@ function PendingSessionCreateContent(
         )
       : submissions.readCreateMessage(props.sessionKey);
     const creationComposer = composerProjection()?.read();
-    const pendingCreate = submissions.readCreate();
-    const displayName =
-      pendingCreate?.creation.sessionKey === props.sessionKey
-        ? pendingCreate.displayName
-        : undefined;
+    const displayName = pendingCreate?.displayName;
+    // A background start can be opened from the Gateway's row before it answers.
+    const row = context.sessions.state.result?.sessions.find(
+      (candidate) => candidate.key === props.sessionKey,
+    );
     const agentId = parseAgentSessionKey(props.sessionKey)?.agentId ?? "";
     const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === agentId);
     const creatingAgent =
-      pendingCreate?.creation.sessionKey === props.sessionKey &&
-      context.agents.state.pendingAgent?.id === agentId;
+      pendingCreate !== undefined && context.agents.state.pendingAgent?.id === agentId;
+    // Foreground handoffs await a generated title; a background start is plainly "New session".
+    const background = pendingCreate !== undefined && pendingCreate !== submissions.readCreate();
     const statusLabel =
       snapshot.phase !== "connected"
         ? t("connection.reconnecting")
@@ -145,8 +151,10 @@ function PendingSessionCreateContent(
         narrow: props.narrow,
         mergedChrome: props.mergedChrome,
         gatewayStatus: props.gatewayStatus,
-        title: submissions.readCreate()?.displayName ?? t("newSession.title"),
-        titlePending: submitting && !submissions.readCreate()?.displayName,
+        title:
+          displayName ??
+          (row ? resolveSessionDisplayName(props.sessionKey, row) : t("newSession.title")),
+        titlePending: submitting && !displayName && !row && !background,
         session: undefined,
         incognito: isIncognitoSessionKey(props.sessionKey),
         catalog: false,
@@ -173,11 +181,14 @@ function PendingSessionCreateContent(
       } satisfies ChatPaneHeaderProps,
       body: {
         inChat: true,
-        error: failed ? (startup.error ?? t("newSession.createFailed")) : null,
+        error: failed ? (failure?.error ?? startup?.error ?? t("newSession.createFailed")) : null,
         errorAction: errorAction
           ? {
               ...errorAction,
-              disabled: snapshot.phase !== "connected" || !snapshot.client?.recoveryScopeReady,
+              // Placement recovery needs its recovery scope; a background retry only a connection.
+              disabled:
+                snapshot.phase !== "connected" ||
+                (!failure && !snapshot.client?.recoveryScopeReady),
             }
           : undefined,
         pendingMessage,

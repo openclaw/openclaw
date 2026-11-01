@@ -44,9 +44,7 @@ export function scheduleSkillExperienceReview(
   // The change feed records the run that made each edit; a foreground turn that saved
   // its own learning resets the session's review counter.
   void import("./library.js")
-    .then(({ listWorkshopChanges }) =>
-      listWorkshopChanges(params.ctx.foregroundPromptContext.agentId, { runId, limit: 1 }),
-    )
+    .then(({ listWorkshopChanges }) => listWorkshopChanges(params.ctx.agentId, { runId, limit: 1 }))
     .then((changes) =>
       defaultScheduler.schedule({ ...params, workshopMutated: changes.length > 0 }),
     )
