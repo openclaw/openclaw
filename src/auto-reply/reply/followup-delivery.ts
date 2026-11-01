@@ -46,7 +46,10 @@ import {
   retainAutomationReasoningWithFinal,
 } from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
-import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
+import {
+  resolveFollowupDeliveryPayloads,
+  resolveFollowupPayloadContext,
+} from "./followup-delivery-payloads.js";
 import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -67,23 +70,11 @@ import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { buildWaitingStatusPayload } from "./waiting-status.js";
 
-function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
-  return {
-    cfg: turn.config,
-    messageProvider: turn.queued.run.messageProvider,
-    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-    originatingChannel: turn.queued.originatingChannel,
-    originatingChatType: turn.queued.originatingChatType,
-    originatingReplyToMode: turn.queued.originatingReplyToMode,
-    originatingTo: turn.queued.originatingTo,
-    originatingThreadId: turn.queued.originatingThreadId,
-  };
-}
-
 /** Resolves one final queued delivery action without performing transport I/O. */
 export async function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
   execution: AgentTurnExecutionResult;
+  normalizePayload?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   accounting?: Pick<
     AccountedAgentTurn,
     | "providerUsed"
@@ -136,7 +127,10 @@ export async function resolveFollowupDeliveryDecision(params: {
         opts?.onBlockReply ||
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver",
       ));
-  const deliveryContext = resolveFollowupPayloadContext(turn);
+  const deliveryContext = {
+    ...resolveFollowupPayloadContext(turn),
+    normalizePayload: params.normalizePayload,
+  };
   const preparePayloads = (
     payloads: ReplyPayload[],
     options: Omit<
@@ -151,7 +145,7 @@ export async function resolveFollowupDeliveryDecision(params: {
       turn.queued.stalledTurnRecovery === true &&
       isReplyOperationStalledBeforeOutput(turn.operation)
     ) {
-      const payloads = preparePayloads([
+      const payloads = await preparePayloads([
         markReplyPayloadForSourceSuppressionDelivery({
           text: resolveStalledTurnNoticeText(turn.operation),
           isError: true,
@@ -182,7 +176,7 @@ export async function resolveFollowupDeliveryDecision(params: {
       return { kind: "suppress" as const, reason: "message-tool-only" as const };
     }
     const payloads = renderFailurePayloads(
-      preparePayloads([execution.outcome.payload], {
+      await preparePayloads([execution.outcome.payload], {
         reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
         commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
       }),
@@ -265,7 +259,7 @@ export async function resolveFollowupDeliveryDecision(params: {
   const assistantFinalText = normalizeAssistantFinalDeliveryText(
     result.meta?.finalAssistantVisibleText ?? "",
   );
-  let payloads = preparePayloads(sourcePayloads, {
+  let payloads = await preparePayloads(sourcePayloads, {
     reasoningPayloadsEnabled,
     commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
     sentMediaUrls: result.messagingToolSentMediaUrls,
@@ -307,7 +301,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     };
   }
   if (recovery.kind === "diagnostic") {
-    const [payload] = preparePayloads([recovery.payload]);
+    const [payload] = await preparePayloads([recovery.payload]);
     return payload
       ? { kind: "deliver" as const, payloads: [payload], resolved: runtimeResolved }
       : { kind: "suppress" as const, reason: "silent" as const };
@@ -358,13 +352,13 @@ export async function resolveFollowupDeliveryDecision(params: {
         ? createMissingReplyNotice()
         : undefined));
   if (!hasTerminalPayload && fallbackPayload) {
-    payloads.push(...preparePayloads([fallbackPayload]));
+    payloads.push(...(await preparePayloads([fallbackPayload])));
   }
   if (accounting.compactionNotice) {
-    payloads.unshift(...preparePayloads([accounting.compactionNotice]));
+    payloads.unshift(...(await preparePayloads([accounting.compactionNotice])));
   }
   if (accounting.diagnosticsPayload && payloads.length > 0) {
-    payloads.push(...preparePayloads([accounting.diagnosticsPayload]));
+    payloads.push(...(await preparePayloads([accounting.diagnosticsPayload])));
   }
   const responseUsageLine = resolveResponseUsageLine({
     config: turn.config,
@@ -480,7 +474,7 @@ export async function deliverFollowupDecision(params: {
     if (enqueued) {
       return { kind: "source-retry" as const };
     }
-    payloads = resolveFollowupDeliveryPayloads({
+    payloads = await resolveFollowupDeliveryPayloads({
       ...resolveFollowupPayloadContext(turn),
       payloads: [createMissingReplyNotice()],
     });

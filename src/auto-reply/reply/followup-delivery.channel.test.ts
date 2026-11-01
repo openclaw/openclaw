@@ -358,10 +358,10 @@ describe("follow-up delivery channel boundary", () => {
     );
   });
 
-  it("dedupes a current-reply status against its actual thread root", () => {
+  it("dedupes a current-reply status against its actual thread root", async () => {
     registerCurrentReplyThreading();
     expect(
-      resolveFollowupDeliveryPayloads({
+      await resolveFollowupDeliveryPayloads({
         cfg: {},
         payloads: [currentReply],
         messageProvider: "slack",
@@ -399,11 +399,11 @@ describe("follow-up delivery channel boundary", () => {
     });
   });
 
-  it("preserves the batched reply slot when earlier media was already sent", () => {
+  it("preserves the batched reply slot when earlier media was already sent", async () => {
     const duplicatePayload = { mediaUrl: "/tmp/already-sent.png", replyToId: "parent" };
 
     expect(
-      resolveFollowupDeliveryPayloads({
+      await resolveFollowupDeliveryPayloads({
         cfg: {},
         payloads: [duplicatePayload, { text: "actual answer", replyToId: "parent" }],
         originatingChannel: "discord",
@@ -414,7 +414,7 @@ describe("follow-up delivery channel boundary", () => {
     ).toEqual([{ text: "actual answer", replyToId: "parent" }]);
   });
 
-  it("dedupes later Slack replies against their actual first-mode transport thread", () => {
+  it("dedupes later Slack replies against their actual first-mode transport thread", async () => {
     const slack = createChannelPlugin("slack");
     slack.threading = {
       resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit }) => {
@@ -432,7 +432,7 @@ describe("follow-up delivery channel boundary", () => {
     register(slack);
 
     expect(
-      resolveFollowupDeliveryPayloads({
+      await resolveFollowupDeliveryPayloads({
         cfg: {},
         payloads: [
           { text: "first answer", replyToId: "111.000" },

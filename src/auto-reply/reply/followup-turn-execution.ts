@@ -18,6 +18,7 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
@@ -26,6 +27,7 @@ import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
+import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
@@ -38,6 +40,8 @@ export type FollowupExecutionResult = {
   runStartedAt: number;
   sessionCtx: TemplateContext;
   pendingToolTasks: Set<Promise<void>>;
+  /** Shared by runtime presentation and final delivery; preflight-only outcomes have no context. */
+  replyMediaContext?: ReplyMediaContext;
   progress: {
     drain(): Promise<void>;
   };
@@ -346,6 +350,7 @@ export async function executeFollowupTurn(params: {
   });
   let accepted = false;
   let execution: AgentTurnExecutionResult;
+  let replyMediaContext: ReplyMediaContext | undefined;
   const runStartedAt = Date.now();
   try {
     // A session event rejected for stale policy is re-admitted by its owner under the
@@ -382,8 +387,16 @@ export async function executeFollowupTurn(params: {
       if (gatewayOwnsCompletion) {
         turn.queued.run.mediaNormalizationOwner = "gateway";
       }
+      replyMediaContext = createReplyMediaContext(
+        buildReplyMediaContextParams(
+          turn.queued,
+          turn.session.kind === "session" ? turn.session.key : undefined,
+          turn.config,
+        ),
+      );
       const execute = () =>
         executeAgentTurn({
+          replyMediaContext,
           recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
@@ -487,6 +500,7 @@ export async function executeFollowupTurn(params: {
     runStartedAt,
     sessionCtx,
     pendingToolTasks,
+    replyMediaContext,
     progress: {
       drain: async () => {
         await drainPendingWork();

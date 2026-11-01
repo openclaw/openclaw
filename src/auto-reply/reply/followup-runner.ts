@@ -332,6 +332,7 @@ export function createFollowupRunner(
               execution: execution.execution,
               accounting,
               opts: deliveryOpts,
+              normalizePayload: execution.replyMediaContext?.normalizePayload,
             });
             await turnCompletion?.complete();
             return { decision: resolved, accounting };
