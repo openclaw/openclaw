@@ -20,6 +20,33 @@ function gh(args: string[]): void {
   execFileSync("gh", ["api", ...args], { stdio: ["ignore", "ignore", "pipe"] });
 }
 
+function approvalReconciliationError({
+  endpoint,
+  environment,
+  environmentId,
+  repo,
+  runId,
+  submitted,
+}: {
+  endpoint: string;
+  environment: string;
+  environmentId: number;
+  repo: string;
+  runId: number;
+  submitted: boolean;
+}): Error {
+  const approvalsEndpoint = `repos/${repo}/actions/runs/${runId}/approvals`;
+  return new Error(
+    [
+      `Approval for ${environment} (${environmentId}) on run ${runId} ${submitted ? "was submitted" : "may have been submitted"}, but its effect was not confirmed.`,
+      "Do not retry this approval until its state is reconciled with these read-only checks:",
+      `  gh api ${endpoint}`,
+      `  gh api ${approvalsEndpoint}`,
+      `Retry only if ${environment} (${environmentId}) is still pending and no approved review is recorded.`,
+    ].join("\n"),
+  );
+}
+
 function positiveId(value: unknown, label: string): number {
   const id = Number(value);
   if (!Number.isSafeInteger(id) || id < 1) {
@@ -48,6 +75,7 @@ export async function runReleaseApproval(argv: string[] = process.argv.slice(2))
   if (!ENVIRONMENTS.includes(environment as ReleaseEnvironment)) {
     throw new Error(`--env must be one of ${ENVIRONMENTS.join(", ")}`);
   }
+  const releaseEnvironment = environment as ReleaseEnvironment;
   if (!values.sha || !/^[a-f0-9]{40}$/u.test(values.sha)) {
     throw new Error("--sha must be a full lowercase commit SHA");
   }
@@ -81,14 +109,13 @@ export async function runReleaseApproval(argv: string[] = process.argv.slice(2))
     throw new Error(`Run ${runId} head ref ${headBranch} does not match ${values.ref}`);
   }
   const displayTitle = typeof run.display_title === "string" ? run.display_title : "";
-  const releaseIdentity = `${displayTitle} ${headBranch}`;
   const escapedRelease = values.release.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   if (
-    !new RegExp(`(?:^|[^0-9A-Za-z.-])${escapedRelease}(?:$|[^0-9A-Za-z.-])`, "u").test(
-      releaseIdentity,
+    !new RegExp(`(?:^|[^0-9A-Za-z.-])v?${escapedRelease}(?:$|[^0-9A-Za-z.-])`, "u").test(
+      displayTitle,
     )
   ) {
-    throw new Error(`Run ${runId} metadata does not identify release ${values.release}`);
+    throw new Error(`Run ${runId} title does not identify release ${values.release}`);
   }
   const status = typeof run.status === "string" ? run.status : "";
   if (!["queued", "in_progress", "waiting"].includes(status)) {
@@ -104,12 +131,22 @@ export async function runReleaseApproval(argv: string[] = process.argv.slice(2))
     (deployment) =>
       isRecord(deployment) &&
       isRecord(deployment.environment) &&
-      deployment.environment.name === environment,
+      deployment.environment.name === releaseEnvironment,
   );
   if (matches.length !== 1 || !isRecord(matches[0]?.environment)) {
-    throw new Error(`Expected exactly one pending ${environment} deployment for run ${runId}`);
+    throw new Error(
+      `Expected exactly one pending ${releaseEnvironment} deployment for run ${runId}`,
+    );
   }
-  const environmentId = positiveId(matches[0].environment.id, `${environment} environment id`);
+  if (matches[0].current_user_can_approve !== true) {
+    throw new Error(
+      `Authenticated GitHub identity cannot approve ${releaseEnvironment} for run ${runId}`,
+    );
+  }
+  const environmentId = positiveId(
+    matches[0].environment.id,
+    `${releaseEnvironment} environment id`,
+  );
   const user = ghJson(["user"]);
   const login = isRecord(user) && typeof user.login === "string" ? user.login : undefined;
   if (!login) {
@@ -123,19 +160,42 @@ export async function runReleaseApproval(argv: string[] = process.argv.slice(2))
     "-f",
     "state=approved",
     "-f",
-    `comment=${values.release} ${environment} approved by ${login}`,
+    `comment=${values.release} ${releaseEnvironment} approved by ${login}`,
     "-F",
     `environment_ids[]=${environmentId}`,
   ];
   if (values["dry-run"]) {
     console.log(
-      `Would approve ${environment} for ${values.repo} run ${runId} at ${values.sha} as ${login}`,
+      `Would approve ${releaseEnvironment} for ${values.repo} run ${runId} at ${values.sha} as ${login}`,
     );
     return;
   }
-  gh(approvalArgs);
+  try {
+    gh(approvalArgs);
+  } catch {
+    throw approvalReconciliationError({
+      endpoint,
+      environment: releaseEnvironment,
+      environmentId,
+      repo: values.repo,
+      runId,
+      submitted: false,
+    });
+  }
 
-  const remaining = ghJson([endpoint]);
+  let remaining: unknown;
+  try {
+    remaining = ghJson([endpoint]);
+  } catch {
+    throw approvalReconciliationError({
+      endpoint,
+      environment: releaseEnvironment,
+      environmentId,
+      repo: values.repo,
+      runId,
+      submitted: true,
+    });
+  }
   if (
     !Array.isArray(remaining) ||
     remaining.some(
@@ -145,10 +205,17 @@ export async function runReleaseApproval(argv: string[] = process.argv.slice(2))
         deployment.environment.id === environmentId,
     )
   ) {
-    throw new Error(`Approval for ${environment} on run ${runId} was not confirmed`);
+    throw approvalReconciliationError({
+      endpoint,
+      environment: releaseEnvironment,
+      environmentId,
+      repo: values.repo,
+      runId,
+      submitted: true,
+    });
   }
   console.log(
-    `Approved ${environment} for ${values.repo} run ${runId} at ${values.sha} as ${login}`,
+    `Approved ${releaseEnvironment} for ${values.repo} run ${runId} at ${values.sha} as ${login}`,
   );
 }
 

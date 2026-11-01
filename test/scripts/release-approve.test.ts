@@ -5,11 +5,16 @@ import { delimiter, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SHA = "a".repeat(40);
+const REF = `release-publish/${"b".repeat(12)}-123`;
 const ENDPOINT = "repos/openclaw/openclaw/actions/runs/123/pending_deployments";
 
 function runApproval(
   options: {
+    canApprove?: boolean;
+    displayTitle?: string;
     dryRun?: boolean;
+    failConfirmationRead?: boolean;
+    failPost?: boolean;
     headSha?: string;
     headBranch?: string;
     retainPending?: boolean;
@@ -29,14 +34,22 @@ const calls = fs.existsSync(callsFile) ? fs.readFileSync(callsFile, "utf8").trim
 fs.appendFileSync(callsFile, JSON.stringify(args) + "\\n");
 const endpoint = args.find((arg) => arg.startsWith("repos/") || arg === "user");
 if (endpoint === "repos/openclaw/openclaw/actions/runs/123") {
-  console.log(JSON.stringify({ id: 123, head_sha: ${JSON.stringify(options.headSha ?? SHA)}, head_branch: ${JSON.stringify(options.headBranch ?? "release/2026.10.10")}, path: ${JSON.stringify(options.workflowPath ?? ".github/workflows/openclaw-npm-release.yml")}, display_title: "OpenClaw 2026.10.10 publish", status: "in_progress" }));
+  console.log(JSON.stringify({ id: 123, head_sha: ${JSON.stringify(options.headSha ?? SHA)}, head_branch: ${JSON.stringify(options.headBranch ?? REF)}, path: ${JSON.stringify(options.workflowPath ?? ".github/workflows/openclaw-npm-release.yml")}, display_title: ${JSON.stringify(options.displayTitle ?? "openclaw-npm-release.yml [v2026.10.10] publish parent=manual/1")}, status: "in_progress" }));
 } else if (endpoint === "user") {
   console.log(JSON.stringify({ login: "release-operator" }));
 } else if (endpoint === ${JSON.stringify(ENDPOINT)} && args.includes("POST")) {
+  if (${JSON.stringify(options.failPost ?? false)}) {
+    console.error("approval response unavailable");
+    process.exit(19);
+  }
   console.log("{}");
 } else if (endpoint === ${JSON.stringify(ENDPOINT)}) {
   const priorReads = calls.filter((call) => call.includes(${JSON.stringify(ENDPOINT)}) && !call.includes("POST")).length;
-  console.log(JSON.stringify(priorReads === 0 || ${JSON.stringify(options.retainPending ?? false)} ? [{ environment: { id: 77, name: "npm-release" } }] : []));
+  if (priorReads > 0 && ${JSON.stringify(options.failConfirmationRead ?? false)}) {
+    console.error("confirmation unavailable");
+    process.exit(18);
+  }
+  console.log(JSON.stringify(priorReads === 0 || ${JSON.stringify(options.retainPending ?? false)} ? [{ environment: { id: 77, name: "npm-release" }, current_user_can_approve: ${JSON.stringify(options.canApprove ?? true)} }] : []));
 } else {
   console.error("unexpected gh call: " + JSON.stringify(args));
   process.exit(17);
@@ -61,7 +74,7 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/123") {
       "--workflow",
       "openclaw-npm-release.yml",
       "--ref",
-      "release/2026.10.10",
+      REF,
       ...(options.dryRun ? ["--dry-run"] : []),
     ],
     {
@@ -93,7 +106,10 @@ describe("release approval helper", () => {
   it.each([
     { name: "SHA", options: { headSha: "b".repeat(40) } },
     { name: "workflow", options: { workflowPath: ".github/workflows/unrelated.yml" } },
-    { name: "release ref", options: { headBranch: "release/2026.10.9" } },
+    {
+      name: "release ref",
+      options: { headBranch: `release-publish/${"c".repeat(12)}-456` },
+    },
   ])("refuses a run whose $name does not match the requested release", ({ options }) => {
     const { calls, result } = runApproval(options);
     expect(result.status).toBe(1);
@@ -101,11 +117,46 @@ describe("release approval helper", () => {
     expect(calls).toHaveLength(1);
   });
 
-  it("fails when GitHub does not confirm the approval effect", () => {
-    const { calls, result } = runApproval({ retainPending: true });
+  it("refuses a mismatched release title even when the tooling ref matches", () => {
+    const { calls, result } = runApproval({
+      displayTitle: "openclaw-npm-release.yml [v2026.10.11] publish parent=manual/1",
+    });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("was not confirmed");
-    expect(calls.some((call) => call.includes("POST"))).toBe(true);
+    expect(result.stderr).toContain("title does not identify release 2026.10.10");
+    expect(calls).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "the approval response is unavailable",
+      options: { failPost: true },
+      status: "may have been submitted",
+    },
+    {
+      name: "the gate remains pending",
+      options: { retainPending: true },
+      status: "was submitted",
+    },
+    {
+      name: "the confirmation read fails",
+      options: { failConfirmationRead: true },
+      status: "was submitted",
+    },
+  ])("gives read-only reconciliation steps when $name", ({ options, status }) => {
+    const { calls, result } = runApproval(options);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`${status}, but its effect was not confirmed`);
+    expect(result.stderr).toContain("Do not retry this approval");
+    expect(result.stderr).toContain(ENDPOINT);
+    expect(result.stderr).toContain("repos/openclaw/openclaw/actions/runs/123/approvals");
+    expect(calls.filter((call) => call.includes("POST"))).toHaveLength(1);
+  });
+
+  it("refuses an approval the authenticated identity cannot perform", () => {
+    const { calls, result } = runApproval({ canApprove: false });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Authenticated GitHub identity cannot approve npm-release");
+    expect(calls.some((call) => call.includes("POST"))).toBe(false);
   });
 
   it("previews the exact bound approval without writing", () => {
