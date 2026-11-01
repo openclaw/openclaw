@@ -18,7 +18,7 @@ import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
-import { writeRestartSentinel } from "./restart-sentinel.js";
+import { readRestartSentinelSnapshot, writeRestartSentinel } from "./restart-sentinel.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readManagedHandoffArtifacts } from "./update-managed-service-handoff-artifacts.test-support.js";
 // Register the real-process fixture before importing its consumers.
@@ -355,8 +355,8 @@ export async function waitForGatewayUpdateRecovery(...args) {
               }
               expect(JSON.stringify(args)).not.toContain(connection);
             },
-            readSentinel(env) {
-              return withEngineStoreAdmission(() => readRestartSentinelPayload(env));
+            async readSentinel(env) {
+              return (await readRestartSentinelSnapshot(env)).sentinel;
             },
           });
           expectNoConnection(result.log);
