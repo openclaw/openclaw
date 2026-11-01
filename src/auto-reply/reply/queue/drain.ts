@@ -86,29 +86,29 @@ export function handoffCompletedSourceReply(operation: ReplyOperation, source: F
 }
 
 function consumeQueueSummaryDelivery(
-  queue: Pick<
-    SessionControllerMailbox,
-    "summarySources" | "summaryLines" | "summaryElisions" | "droppedCount"
-  >,
+  queue: Pick<SessionControllerMailbox, "summaryEntries" | "summaryElisions" | "droppedCount">,
   delivery: { droppedCount: number; sources: readonly FollowupRun[] },
   completeLifecycles = true,
 ): void {
   let consumedCount = delivery.sources.length === 0 ? delivery.droppedCount : 0;
   for (const source of delivery.sources) {
-    const sourceIndex = queue.summarySources.indexOf(source);
+    const sourceIndex = queue.summaryEntries.findIndex((summary) => summary.source === source);
     const entry =
       sourceIndex < 0
         ? queue.summaryElisions.find(
-            (candidate) => candidate.sources.includes(source) || candidate.sourceRefs.has(source),
+            (candidate) =>
+              candidate.entries.some((summary) => summary.source === source) ||
+              candidate.sourceRefs.has(source),
           )
         : undefined;
     if (sourceIndex >= 0 || entry) {
       const index = entry
-        ? entry.sources.indexOf(entry.sourceRefs.get(source) ?? source)
+        ? entry.entries.findIndex(
+            (summary) => summary.source === (entry.sourceRefs.get(source) ?? source),
+          )
         : sourceIndex;
       if (index >= 0) {
-        (entry?.sources ?? queue.summarySources).splice(index, 1);
-        (entry?.summaryLines ?? queue.summaryLines).splice(index, 1);
+        (entry?.entries ?? queue.summaryEntries).splice(index, 1);
       }
       consumedCount += 1;
       if (entry) {
@@ -117,8 +117,7 @@ function consumeQueueSummaryDelivery(
             entry.sourceRefs.delete(original);
           }
         }
-        entry.count = entry.sources.length;
-        if (entry.sources.length === 0) {
+        if (entry.entries.length === 0) {
           queue.summaryElisions.splice(queue.summaryElisions.indexOf(entry), 1);
         }
       }
@@ -208,14 +207,14 @@ async function executeClaim(
   // A summary prompt shows only the newest cap lines; source context pairs with those lines.
   const summarizedSources = queue.cap > 0 ? sources.slice(-queue.cap) : sources;
   const summaryLines = summarizedSources.map((item) => {
-    const index = queue.summarySources.indexOf(item);
-    if (index >= 0) {
-      return queue.summaryLines[index] ?? "";
+    const summary = queue.summaryEntries.find((entry) => entry.source === item);
+    if (summary) {
+      return summary.line;
     }
     for (const elision of queue.summaryElisions) {
-      const elisionIndex = elision.sources.indexOf(item);
-      if (elisionIndex >= 0) {
-        return elision.summaryLines[elisionIndex] ?? "";
+      const entry = elision.entries.find((candidate) => candidate.source === item);
+      if (entry) {
+        return entry.line;
       }
     }
     return item.summaryLine ?? item.prompt;

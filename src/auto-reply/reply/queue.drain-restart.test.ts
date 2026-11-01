@@ -371,9 +371,9 @@ it.each(["old", "new"] as const)(
     expect(queue).toMatchObject({
       dropPolicy: "summarize",
       droppedCount: 1,
-      summaryLines: ["first overflowed message"],
+      summaryEntries: [{ source: first, line: "first overflowed message" }],
     });
-    expect(queue?.summarySources).toEqual([first]);
+    expect(queue?.summaryEntries.map(({ source }) => source)).toEqual([first]);
     expect(queue?.items).toEqual([second]);
 
     const admitted = enqueueFollowupRun(key, third, {
@@ -385,9 +385,9 @@ it.each(["old", "new"] as const)(
     expect(queue).toMatchObject({
       dropPolicy,
       droppedCount: 1,
-      summaryLines: ["first overflowed message"],
+      summaryEntries: [{ source: first, line: "first overflowed message" }],
     });
-    expect(queue?.summarySources).toEqual([first]);
+    expect(queue?.summaryEntries.map(({ source }) => source)).toEqual([first]);
     expect(queue?.items).toEqual([dropPolicy === "old" ? third : second]);
 
     const timer = new Promise<void>((resolve) => {

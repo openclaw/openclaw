@@ -15,7 +15,10 @@ import {
 export function captureSessionControllerMailboxSummarySources(
   mailbox: SessionControllerMailbox,
 ): FollowupRun[] {
-  return [...mailbox.summaryElisions.flatMap((part) => part.sources), ...mailbox.summarySources];
+  return [
+    ...mailbox.summaryElisions.flatMap((part) => part.entries.map(({ source }) => source)),
+    ...mailbox.summaryEntries.map(({ source }) => source),
+  ];
 }
 
 /** Removes only authorized captured sources; reentrant successors keep their summaries. */
@@ -24,18 +27,16 @@ function detachSummarySources(
   selectedSource: (source: FollowupRun) => boolean,
 ): number {
   let removed = 0;
-  for (let index = mailbox.summarySources.length - 1; index >= 0; index--) {
-    if (selectedSource(mailbox.summarySources[index]!)) {
-      mailbox.summarySources.splice(index, 1);
-      mailbox.summaryLines.splice(index, 1);
+  for (let index = mailbox.summaryEntries.length - 1; index >= 0; index--) {
+    if (selectedSource(mailbox.summaryEntries[index]!.source)) {
+      mailbox.summaryEntries.splice(index, 1);
       removed++;
     }
   }
   for (const entry of mailbox.summaryElisions) {
-    for (let index = entry.sources.length - 1; index >= 0; index--) {
-      if (selectedSource(entry.sources[index]!)) {
-        entry.sources.splice(index, 1);
-        entry.summaryLines.splice(index, 1);
+    for (let index = entry.entries.length - 1; index >= 0; index--) {
+      if (selectedSource(entry.entries[index]!.source)) {
+        entry.entries.splice(index, 1);
         removed++;
       }
     }
@@ -44,9 +45,8 @@ function detachSummarySources(
         entry.sourceRefs.delete(original);
       }
     }
-    entry.count = entry.sources.length;
   }
-  mailbox.summaryElisions = mailbox.summaryElisions.filter((entry) => entry.count > 0);
+  mailbox.summaryElisions = mailbox.summaryElisions.filter((entry) => entry.entries.length > 0);
   mailbox.droppedCount = Math.max(0, mailbox.droppedCount - removed);
   return removed;
 }
