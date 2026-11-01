@@ -646,4 +646,69 @@ describe("createInboundDebouncer", () => {
     debouncer.cancelKey("c");
     await debouncer.drain();
   });
+
+  it("seals by the stricter of a channel byte cap and the shared item cap", async () => {
+    const byteBudget = 18;
+    const { calls, debouncer } = createRecordingDebouncer({
+      debounceMs: 50,
+      maxItemsPerFlush: 5,
+      canAppend: (item, pending) =>
+        pending.reduce((total, entry) => total + entry.id.length, 0) + item.id.length <= byteBudget,
+    });
+
+    for (const index of [0, 1, 2, 3, 4]) {
+      await debouncer.enqueue({ key: "a", id: `m${String(index).padStart(4, "0")}` });
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    await debouncer.drain();
+
+    // Each id is 6 chars, so the byte budget admits three per batch even though
+    // the shared item cap would admit five.
+    expect(calls).toEqual([
+      ["m0000", "m0001", "m0002"],
+      ["m0003", "m0004"],
+    ]);
+  });
+
+  it("keeps fire-and-forget enqueues lossless while backpressured", async () => {
+    const firstGate = createDeferred();
+    const calls: string[][] = [];
+    const debouncer = batchDebouncer<Message>(
+      {
+        debounceMs: 50,
+        buildKey: () => "sender",
+        maxPendingBatchesPerKey: 1,
+        canAppend: () => false,
+      },
+      async (items) => {
+        calls.push(items.map((item) => item.id));
+        if (items[0]?.id === "1") {
+          await firstGate.promise;
+        }
+      },
+    );
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    const fireAndForget = ["2", "3", "4"].map((id) =>
+      debouncer.enqueue({ key: "a", id }).catch(() => undefined),
+    );
+    let resolvedCount = 0;
+    for (const pending of fireAndForget) {
+      void pending.then(() => {
+        resolvedCount += 1;
+      });
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    expect(resolvedCount).toBe(0);
+    expect(calls).toEqual([["1"]]);
+
+    firstGate.resolve();
+    for (let step = 0; step < 8 && calls.length < 4; step += 1) {
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    await Promise.all([...fireAndForget, debouncer.drain()]);
+
+    expect(resolvedCount).toBe(3);
+    expect(calls).toEqual([["1"], ["2"], ["3"], ["4"]]);
+  });
 });
