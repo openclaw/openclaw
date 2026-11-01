@@ -11,6 +11,7 @@ import type {
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createPluginDeclaredSurface } from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin request ownership" });
@@ -74,18 +75,7 @@ function inspection(skill: string): PluginsInspectResult {
       enabled: true,
     },
     source: { kind: "npm", packageName: "workboard" },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    declared: createPluginDeclaredSurface(),
     components: {
       mapped: ["skills"],
       skills: [skill],

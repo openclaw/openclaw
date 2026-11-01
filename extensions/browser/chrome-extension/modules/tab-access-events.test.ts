@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chromeEvent, deferred } from "./browser.test-support.js";
+import { chromeEvent } from "./browser.test-support.js";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
@@ -108,7 +108,7 @@ async function overlapUpdates(
   url: string,
   accessible: boolean,
 ) {
-  const first = deferred<{ accessible: boolean }>();
+  const first = Promise.withResolvers<{ accessible: boolean }>();
   let resumed = false;
   h.policy.inspectTab
     .mockImplementationOnce(async () => {
@@ -129,7 +129,7 @@ async function overlapUpdates(
 
 describe("tab access event epochs", () => {
   it("waits for stored access mode before handling Chrome's cancel revocation", async () => {
-    const ready = deferred<void>();
+    const ready = Promise.withResolvers<void>();
     const h = createHarness("selected", ready.promise);
 
     h.debuggerDetachListener({ tabId: 7 }, "canceled_by_user");
@@ -181,7 +181,7 @@ describe("tab access event epochs", () => {
 
   it("does not refresh epochs from a stale group-wide access snapshot", async () => {
     const h = createHarness();
-    const firstList = deferred<Array<{ id: number }>>();
+    const firstList = Promise.withResolvers<Array<{ id: number }>>();
     h.policy.listAccessibleTabs
       .mockImplementationOnce(async () => await firstList.promise)
       .mockResolvedValueOnce([{ id: 7 }]);

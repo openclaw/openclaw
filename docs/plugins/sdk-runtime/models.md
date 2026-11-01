@@ -119,7 +119,11 @@ path; importing it alone does not load model or secret runtime code.
 The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a
 model once and completing with it repeatedly. Successful preparation retains the
 provider resources used by its `model`, `auth`, and `selection` fields. The host
-owns those resources, so callers can reuse the result without a disposer:
+owns those resources, so callers can reuse the result without a disposer.
+
+Preparation loads the selected provider and inference plugins without evaluating
+the agent's configured memory or context-engine plugins. Image preparation and
+one-shot decision inference use the same isolated plugin-loading scope.
 
 ```typescript
 const result = await prepareSimpleCompletionModelForAgent({ cfg, agentId });
@@ -212,7 +216,13 @@ Backend adapters retain protocol validation and special-mode handling.
     const result = await api.runtime.llm.complete({
       messages: [{ role: "user", content: "Return one JSON value." }],
       systemPrompt: "You are a JSON-only function.",
-      model: "openai/gpt-6-astra",
+      outputSchema: {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+        additionalProperties: false,
+      },
+      model: "openai/gpt-5.6-sol",
       execution: {
         mode: "isolated-agent-runtime",
         authProfileId: "openai:work",
@@ -233,6 +243,15 @@ Backend adapters retain protocol validation and special-mode handling.
     from acting during inference. Callers requiring zero tools must select a
     runtime that enforces that boundary. See the
     [isolated-completion contract](/plugins/sdk-agent-harness/registration#isolated-completion).
+
+    `outputSchema` is an advisory native final-output constraint. The host
+    forwards the schema by reference only when its JSON encoding fits within
+    1 KiB; otherwise generation continues without the native constraint.
+    Callers must not mutate it after handoff. Harnesses such as Codex pass it
+    to transports that support structured
+    output. Codex retries with a prompt-level constraint when its transport
+    explicitly rejects the schema dialect; other owners may ignore it. Callers
+    must still parse and validate the returned value.
 
     Completion failures expose a stable `code` on the thrown error. Isolated
     callers can distinguish authorization, invalid isolated input, unsupported
@@ -268,6 +287,11 @@ Backend adapters retain protocol validation and special-mode handling.
     `models.providers.<providerId>.localService`; callers cannot supply a
     command, arguments, environment, or lifecycle policy. Process spawning,
     readiness, diagnostics, and idle-stop policy remain internal to the host.
+
+    The optional target callback `onReadinessWait(waiting)` reports `true` when
+    host readiness starts and `false` when it ends, including readiness failures.
+    Reconciliation and provider requests stay outside that phase. Caller
+    cancellation remains on `signal`; consume the request before releasing its lease.
 
     Pass the exact configured provider id and resolved request base URL. Do not
     replace aliases with an adapter id: separate aliases can point at separate

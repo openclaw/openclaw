@@ -5,8 +5,10 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { createGatewayBrowserClientFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { requestChatSend } from "./chat-send-request.ts";
+import { startupAdmissionResponse } from "./chat-startup-response.test-support.ts";
 
 afterEach(() => vi.useRealTimers());
 
@@ -25,22 +27,7 @@ async function submitWhilePreparing() {
       if (ready) {
         writes.push(request);
       }
-      pending.handleResponse({
-        type: "res",
-        id: request.id,
-        ok: ready,
-        ...(ready
-          ? { payload: { status: "ok", runId: "started" } }
-          : {
-              error: {
-                code: "UNAVAILABLE",
-                message: "Agent is preparing",
-                retryable: true,
-                retryAfterMs: 1_000,
-                details: { reason: "startup-sidecars", method: request.method },
-              },
-            }),
-      });
+      pending.handleResponse(startupAdmissionResponse(request, ready));
       issued.resolve();
     },
   };

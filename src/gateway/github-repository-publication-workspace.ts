@@ -3,11 +3,11 @@ import type { RepositoryGitHubPublicationRow } from "../state/github-publication
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   prepareGitHubPublicationWorkspaceOwner,
-  type PublicationSessionIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import {
   failRepositoryGitHubPublicationPreparationAsync,
   type GitHubPublicationTransitionAuthority,
@@ -121,6 +121,11 @@ export async function captureCheckpoint<T>(
     releaseOwner = preparedOwner.release;
     assertCurrent();
     const { workspace } = assertReceiptOwner(row, preparedOwner);
+    if (workspace.diskAuthority) {
+      throw new Error(
+        "GitHub publication requires a fresh snapshot from the repository disk; a stored mirror cannot be used.",
+      );
+    }
     checkpointRef = workspace.checkpointRef ?? null;
     if (!checkpointRef) {
       throw new Error(

@@ -5,7 +5,11 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
 /** One terminal notice, separate from assistant prose and preserved partial output. */
-export function ChatRunFailureNotice(props: { summary: string; onRetry?: () => void }) {
+export function ChatRunFailureNotice(props: {
+  summary: string;
+  repeatCount?: number;
+  onRetry?: () => void;
+}) {
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -21,6 +25,11 @@ export function ChatRunFailureNotice(props: { summary: string; onRetry?: () => v
           <div class="chat-run-failure__header">
             <div class="chat-run-failure__heading">
               <strong class="chat-run-failure__title">{t("chat.recovery.failedTitle")}</strong>
+              <Show when={(props.repeatCount ?? 1) > 1}>
+                <span class="chat-run-failure__repeat">
+                  · {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
+                </span>
+              </Show>
               <span class="chat-run-failure__copy">
                 <CopyButton text={props.summary} idleLabel={t("chat.copyError")} bare />
               </span>

@@ -6,8 +6,34 @@ import { createReplyOperationExecutionCustody } from "../../sessions/session-con
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { createSessionControllerWatchdog } from "../../sessions/session-controller.watchdog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingController } from "./typing.js";
+
+export function createReplyParams(
+  followupRun: RunReplyAgentParams["followupRun"],
+  overrides: Partial<RunReplyAgentParams> = {},
+): RunReplyAgentParams {
+  return {
+    commandBody: followupRun.prompt,
+    followupRun,
+    queueKey: followupRun.run.sessionKey!,
+    defaultModel: followupRun.run.model,
+    sessionCtx: {},
+    resolvedQueue: { mode: "interrupt" },
+    shouldSteer: false,
+    shouldFollowup: false,
+    isActive: false,
+    typing: createMockTypingController(),
+    resolvedVerboseLevel: "off",
+    isNewSession: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    shouldInjectGroupIntro: false,
+    typingMode: "never",
+    ...overrides,
+  };
+}
 
 /** Creates a stateful reply-operation double without registering global run state. */
 export function createMockReplyOperation(

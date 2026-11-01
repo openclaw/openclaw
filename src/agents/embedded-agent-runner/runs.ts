@@ -44,6 +44,7 @@ import {
   type SessionTarget,
 } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
 import {
@@ -400,10 +401,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   revokeCompletionClaim(sessionId, undefined, target);
   EMBEDDED_RUN_COMPLETION_CLAIMS.add(claim);
   const consume = (allowUnregistered: boolean): boolean => {
-    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim)) {
+    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim)) {
       return false;
     }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
     if (!claim.promoted) {
       claim.settleRegistration(undefined);
     }
@@ -722,7 +722,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
   registration: ActiveEmbeddedRunAttachment | undefined,
 ): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const settleDeadline = Date.now() + resolveTimerTimeoutMs(settleMs, 100, 100);
+  const settleDeadline = monotonicNow() + resolveTimerTimeoutMs(settleMs, 100, 100);
   const handle = registration?.handle;
   let aborted = false;
   if (params.reason === "stuck_recovery" && operation) {
@@ -763,7 +763,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
       diag.warn(`abort failed: sessionId=${params.sessionId} err=${String(err)}`);
     }
   }
-  const remainingMs = Math.max(0, settleDeadline - Date.now());
+  const remainingMs = Math.max(0, settleDeadline - monotonicNow());
   const nativeSettlement = waitForCapturedSessionNativeAttemptEnd(
     params.sessionId,
     remainingMs,

@@ -99,8 +99,8 @@ export async function enablePluginWithCapabilityConsent(
     return result;
   }
   try {
-    const { withPluginLifecycleLease } = await import("./plugin-lifecycle-lease.js");
-    return await withPluginLifecycleLease({ env: options.env }, async () => {
+    const { withPluginLifecycleLeaseAsync } = await import("./plugin-lifecycle-lease.js");
+    return await withPluginLifecycleLeaseAsync({ env: options.env }, async () => {
       const { loadInstalledPluginIndexInstallRecords } =
         await import("./installed-plugin-index-records.js");
       const records = await loadInstalledPluginIndexInstallRecords({ env: options.env });

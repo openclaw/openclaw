@@ -299,9 +299,7 @@ suite.define(() => {
     const { search, input } = await openSearch(page);
     const submit = search.getByRole("button", { name: "Search transcripts" });
     const empty = page.getByText("No transcript messages match that search.", { exact: true });
-    const indexing = page.getByText(
-      "The transcript index is still updating. Retry to include recent messages.",
-    );
+    const indexing = page.getByText("Results may be incomplete — search again shortly.");
     const retry = page.getByRole("button", { name: "Retry" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
@@ -321,6 +319,7 @@ suite.define(() => {
     expect(await page.getByText("stale result must stay hidden", { exact: true }).count()).toBe(0);
     await input.press("Enter");
     await indexing.waitFor({ state: "visible", timeout: 10_000 });
+    await captureUiProof("04-search-completeness-unconfirmed.png");
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
     expect(await page.getByText("No transcript messages match that search.").count()).toBe(0);
 

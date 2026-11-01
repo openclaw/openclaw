@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { expect, it } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
 
 it("keeps voice rows keyed through streaming updates and reordered speaker turns", () => {

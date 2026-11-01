@@ -27,6 +27,7 @@ suite.define(() => {
       };
       const session = {
         key,
+        sessionId: `session:${key}`,
         label: "Device startup",
         kind: "direct",
         updatedAt: now,
@@ -66,7 +67,7 @@ suite.define(() => {
             ts: now,
             sessions: [session],
           },
-          "sessions.describe": { session: { placement } },
+          "sessions.describe": { session: { sessionId: `session:${key}`, placement } },
           "sessions.reclaim": { ok: true },
         },
       });
@@ -104,7 +105,7 @@ suite.define(() => {
       await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await dialog.waitFor({ state: "detached" });
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       await openChatDetails(page);
       await details.locator(".chat-environment__machine-trigger").click();
@@ -121,6 +122,7 @@ suite.define(() => {
         "Worker stop requested. Review the initial message before retrying.",
       );
       await gateway.resolveDeferred("sessions.dispatch", {
+        sessionId: `session:${key}`,
         placement: {
           ...placement,
           state: "active",
@@ -137,7 +139,7 @@ suite.define(() => {
         "Worker stop requested. Review the initial message before retrying.",
       );
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(1);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
     });
   });

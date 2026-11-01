@@ -1,11 +1,14 @@
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
-import type { MessagePort, Worker } from "node:worker_threads";
+import type { MessagePort } from "node:worker_threads";
 
 export type PostgresBridge = {
   port: MessagePort;
   control: Int32Array;
-  worker: Worker;
+  service: Int32Array;
+  nextStep?: string;
   requestId: number;
+  /** Last completed server status; unknown while a request is unsettled or failed. */
+  inTransaction?: boolean;
 };
 
 export type PostgresResult = {
@@ -27,15 +30,29 @@ export type PostgresErrorData = {
   column?: string;
 };
 export type BridgeCommand =
-  | { operation: "connect" }
+  | { operation: "connect"; schema: string }
   | { operation: "close" }
   | { operation: "release" }
-  | { operation: "recovery-generation"; storeId: string; lock: boolean }
-  | { operation: "query"; sql: string; parameters: readonly SQLInputValue[] };
+  | {
+      operation: "recovery-generation";
+      schema: string;
+      storeId: string;
+      lock: boolean;
+      reconnectIfIdle?: boolean;
+      validateIfIdle?: boolean;
+    }
+  | {
+      operation: "query";
+      schema: string;
+      sql: string;
+      parameters: readonly SQLInputValue[];
+      reconnectIfIdle?: boolean;
+      validateIfIdle?: boolean;
+    };
 export type BridgeRequest = BridgeCommand & { id: number };
 export type BridgeReply = { id: number } & (
   | { result: PostgresResult }
-  | { generation: string }
+  | { generation: string; inTransaction: boolean }
   | { reusable: boolean }
   | { error: PostgresErrorData }
 );

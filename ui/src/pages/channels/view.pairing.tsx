@@ -8,6 +8,7 @@ import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
+  SettingsRow,
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
@@ -307,31 +308,31 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
                 ).length,
             );
             return (
-              <div class="settings-row">
-                <div class="settings-row__text">
-                  <span class="settings-row__title">{accountName(account())}</span>
-                  <span class="settings-row__desc">{account().accountId}</span>
-                </div>
-                <div class="settings-row__control">
-                  <SettingsStatus
-                    kind={pending() > 0 ? "warn" : "muted"}
-                    label={
-                      pending() > 0
-                        ? t("channels.pairing.pendingCount", { count: String(pending()) })
-                        : t("channels.pairing.noPending")
-                    }
-                  />
-                  <button
-                    type="button"
-                    class="btn btn--sm"
-                    onClick={() =>
-                      props.onPairingReviewAccount(account().channel, account().accountId)
-                    }
-                  >
-                    {t("channels.pairing.review")}
-                  </button>
-                </div>
-              </div>
+              <SettingsRow
+                title={accountName(account())}
+                description={account().accountId}
+                control={
+                  <>
+                    <SettingsStatus
+                      kind={pending() > 0 ? "warn" : "muted"}
+                      label={
+                        pending() > 0
+                          ? t("channels.pairing.pendingCount", { count: String(pending()) })
+                          : t("channels.pairing.noPending")
+                      }
+                    />
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() =>
+                        props.onPairingReviewAccount(account().channel, account().accountId)
+                      }
+                    >
+                      {t("channels.pairing.review")}
+                    </button>
+                  </>
+                }
+              />
             );
           }}
         </For>

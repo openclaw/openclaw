@@ -9,6 +9,18 @@ export function isOwnedTranscriptPayload(value: object): boolean {
   return ownedTranscriptRoots.has(value);
 }
 
+/** Keep admitted children shared when replacing an immutable payload's envelope. */
+export function cloneTranscriptEnvelope<T extends object>(value: T): T {
+  if (ownedTranscriptRoots.has(value)) {
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") {
+        ownedTranscriptRoots.add(child);
+      }
+    }
+  }
+  return { ...value };
+}
+
 /** Preserve ordinary transcript objects while admitting their JSON storage shape. */
 export function normalizeTranscriptJsonValue(value: unknown, key: string): unknown {
   const visited = new Set<object>();
@@ -27,6 +39,10 @@ export function normalizeTranscriptJsonValue(value: unknown, key: string): unkno
 function requiresNativeJson(value: unknown, ancestors: Set<object>): boolean {
   if (value === null || typeof value !== "object") {
     return typeof value === "bigint" || typeof value === "function";
+  }
+  // Admission already checked and sealed the entire payload, including its descendants.
+  if (ownedTranscriptRoots.has(value)) {
+    return false;
   }
   if (isProxy(value)) {
     return true;
@@ -93,12 +109,12 @@ function normalizePlainJson(
     return value;
   }
   const array = Array.isArray(value);
-  const keys = Object.keys(value);
+  const keys = array ? undefined : Object.keys(value);
   const mutable = Object.isExtensible(value);
   let normalized = value;
-  const length = array ? value.length : keys.length;
+  const length = array ? value.length : keys!.length;
   for (let index = 0; index < length; index++) {
-    const member = array ? String(index) : keys[index]!;
+    const member = array ? String(index) : keys![index]!;
     const descriptor = Object.getOwnPropertyDescriptor(value, member);
     const current: unknown = descriptor?.value;
     const next = normalizePlainJson(current, admitted, copyStrings, false);

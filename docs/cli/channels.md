@@ -129,6 +129,8 @@ Run these commands on the Gateway host so they access the same shared state data
 
 `openclaw health` reports dead-letter counts and oldest failure age per channel account. `openclaw doctor` names affected accounts and points back to the inspection command.
 
+Resubmission writes directly to the queue without waking the channel. A running channel picks it up on its next recovery sweep, within five minutes by default plus scheduling and execution time (longer if its plugin configures a larger interval). A stopped channel sweeps immediately when it starts.
+
 Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
 `sessions_list` tool as a channel socket-health signal. Those surfaces report
 stored conversation rows, not provider runtime state. After a Discord provider

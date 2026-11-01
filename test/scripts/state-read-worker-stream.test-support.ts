@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import {
   createSubagentStoreRunFixture,
   saveSubagentRegistryToSqlite,
 } from "../../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { readAllSubagentRunsInWorker } from "../../src/agents/subagents/registry/subagent-registry.store.read.js";
 import {
-  registerSealedRuntimeProcessEntrypoint,
+  registerSealedRuntimeProcessEntrypoints,
   resolveRuntimeProcessEntrypointUrl,
 } from "../../src/infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../../src/infra/runtime-worker-generation.js";
@@ -16,6 +17,7 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../src/state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { writeSealedRuntimeProcessFixture } from "../../src/test-utils/sealed-runtime-process-fixture.js";
 import { transcriptSessionSelector, TranscriptsStore } from "../../src/transcripts/store.js";
 
 const [mode, entrypoint] = process.argv.slice(2);
@@ -71,7 +73,10 @@ try {
 
   // Seeding may capture source workers. Retire them before the first emitted read capture.
   await closeRuntime();
-  registerSealedRuntimeProcessEntrypoint("stateRead", emitted);
+  await writeSealedRuntimeProcessFixture(fileURLToPath(new URL("./", emitted)), "worker", {
+    workerNativeLifecycle: resolveRuntimeProcessEntrypointUrl("workerNativeLifecycle"),
+  });
+  registerSealedRuntimeProcessEntrypoints("worker", emitted.href);
   const nativeSource = captureRetainedNativeWorkerSource();
   assert.equal(nativeSource.hasActiveWorkers, false);
   const captured = captureRuntimeWorkerSource(resolveRuntimeProcessEntrypointUrl("stateRead"));

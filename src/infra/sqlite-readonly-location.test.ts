@@ -390,15 +390,13 @@ it("names retry count and guidance for artifact-preserving synchronous inspectio
   }
   assert(error instanceof Error);
   expect.soft(error.message).toContain("after 10 read-only inspection attempts");
-  expect.soft(error.message).toContain("the database may be under concurrent write activity");
+  expect.soft(error.message).toContain("reason=source-disappeared, attempts=10");
   expect
     .soft(error.message)
     .toContain("Wait a moment for write activity to settle, then retry the inspection");
-  expect.soft(error.message).toContain(canonicalPath);
+  expect.soft(error.message).not.toContain(canonicalPath);
   expect.soft(error.cause).toBeInstanceOf(SqliteSourceChangedError);
-  expect.soft(error.cause).toMatchObject({
-    message: `SQLite source disappeared: ${canonicalPath}`,
-  });
+  expect.soft(error.cause).toMatchObject({ reason: "source-disappeared" });
   expect.soft(error.message).not.toContain("SQLite source disappeared");
 });
 
@@ -712,7 +710,7 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
       return result;
     });
     await expect(prepareSqliteReadOnlyCopyInProcess(source, staging)).rejects.toThrow(
-      `did not stabilize after ${MAX_SNAPSHOT_ATTEMPTS}`,
+      "reason=wal-copy-unstable, attempts=10",
     );
     expect(raw).toHaveBeenCalledTimes(MAX_SNAPSHOT_ATTEMPTS);
     raw.mockRestore();

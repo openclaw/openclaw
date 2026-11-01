@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ensureSessionGroupCatalog } from "../../gateway/session-group-catalog.js";
 import { readSessionGroupCatalogSnapshot } from "../../gateway/session-group-catalog.kernel.js";
-import { putSessionGroups, updateSessionGroupDefaults } from "../../gateway/session-groups.js";
+import {
+  ensureSessionGroupRegistered,
+  putSessionGroups,
+  updateSessionGroupDefaults,
+} from "../../gateway/session-groups.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
@@ -22,6 +26,20 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           return readSessionGroupCatalogSnapshot(db);
         });
       expect(read()).toEqual({ groups: [], defaults: [], sectionOrder: [] });
+      expect(await ensureSessionGroupRegistered("First", env)).toBe(true);
+      expect(read().groups).toEqual([{ name: "First", position: 0 }]);
+      expect(
+        await Promise.all([
+          ensureSessionGroupRegistered("Second", env),
+          ensureSessionGroupRegistered("Second", env),
+          ensureSessionGroupRegistered("Third", env),
+        ]),
+      ).toEqual([true, false, true]);
+      expect(read().groups).toEqual([
+        { name: "First", position: 0 },
+        { name: "Second", position: 1 },
+        { name: "Third", position: 2 },
+      ]);
       await putSessionGroups({ cfg: {}, names: [], sectionOrder: ["work"] });
       expect(read()).toEqual({ groups: [], defaults: [], sectionOrder: ["work"] });
       await putSessionGroups({ cfg: {}, names: ["Zulu", "Alpha"] });

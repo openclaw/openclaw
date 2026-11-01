@@ -11,6 +11,7 @@ import * as participantRecording from "../../sessions/session-participant-record
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { registerAgentResetAuthorityTests } from "./agent.reset-authority.test-support.js";
 import {
   REAL_PNG,
@@ -74,12 +75,11 @@ describe("gateway agent handler", () => {
         },
         ...(kind !== "profileless"
           ? {
-              authenticatedUserProfile: {
-                profileId: profile.id,
-                displayName: profile.displayName,
-                hasAvatar: false,
-                updatedAt: profile.updatedAt,
-              },
+              authenticatedUserProfile: gatewayProfile(
+                profile.id,
+                profile.displayName,
+                profile.updatedAt,
+              ),
             }
           : {}),
         ...(kind === "synthetic" ? { internal: { syntheticClient: true } } : {}),

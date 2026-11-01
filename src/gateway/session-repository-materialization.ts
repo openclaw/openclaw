@@ -9,6 +9,8 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readProjectCheckoutRemoteHead,
@@ -80,6 +82,11 @@ async function materializeCapturedRepositoryWorkspace(
     !repository.baseCommit
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
+  }
+  if (repository.diskAuthority) {
+    throw new Error(
+      "Moving this repository to the Gateway requires a fresh disk export; preserve the original runner and retry after export support is available.",
+    );
   }
   const githubHost = resolveConfiguredGitHubHost(params.cfg);
   const remote = parseGitHubRemoteUrl(repository.url, githubHost);
@@ -294,7 +301,16 @@ async function materializeCapturedRepositoryWorkspace(
           ...snapshot,
           indexBase: { root, commit: await git(["rev-parse", "HEAD"]), assertCurrent },
         })) {
-          await command(restore.argv, { cwd: root, input: restore.input });
+          await command(
+            [
+              process.execPath,
+              ...resolveRuntimeWorkerArgv(
+                resolveRuntimeProcessEntrypointUrl("repositoryPublicationRestore"),
+              ),
+              restore.action,
+            ],
+            { cwd: root, input: restore.input },
+          );
         }
         await applied.verifyLocalStable();
         assertCurrent();
@@ -302,7 +318,7 @@ async function materializeCapturedRepositoryWorkspace(
     } else {
       await alignPublication();
     }
-    const bind = async (assertSourceCurrent: SessionSourceAssertion) =>
+    const bind = async (assertSourceCurrent: SessionSourceAssertion, sourceSignal?: AbortSignal) =>
       await patchSessionEntryCore(
         { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
         (current) => {
@@ -320,6 +336,10 @@ async function materializeCapturedRepositoryWorkspace(
         },
         {
           replaceEntry: true,
+          signal:
+            params.signal && sourceSignal
+              ? AbortSignal.any([params.signal, sourceSignal])
+              : (params.signal ?? sourceSignal),
           ...sessionEntryCommitGuardOptions(
             composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]),
           ),

@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { AgentHarnessProjectionSettlement } from "../../plugin-sdk/agent-harness-attempt-runtime.js";
 import { createAttemptParams } from "./lifecycle.test-support.js";
-import { AgentHarnessProjectionSettlement } from "./projection-settlement.js";
 
 it("drains concurrent presentation callbacks and refuses new presentation after close", async () => {
   const first = createDeferred();

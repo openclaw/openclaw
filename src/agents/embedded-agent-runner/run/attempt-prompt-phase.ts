@@ -9,7 +9,10 @@ import {
   buildAgentRunBlockedUserMessage,
   runBeforeAgentRunGate,
 } from "../../harness/before-agent-run.js";
-import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
+import {
+  isOpenClawSystemUpdateMessage,
+  resolvePendingRuntimeContextReplay,
+} from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import {
   createCompactionRequestBudget,
@@ -179,6 +182,11 @@ export async function runEmbeddedAttemptPromptPhase(
 
   let transcriptLeafId: string | null = null;
   try {
+    if (attempt.inputAlreadyDelivered) {
+      runAbortController.signal.throwIfAborted();
+      input.sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      return { promptStartedAt, transcriptLeafId };
+    }
     const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
       attempt,
       activeSession,
@@ -189,7 +197,8 @@ export async function runEmbeddedAttemptPromptPhase(
       isRawModelRun,
       ...(orphanRepair ? { orphanRepair } : {}),
       sessionAgentId,
-      runtimeModel: runtimeInfo.model,
+      // A blind child's prompt never names its own model.
+      runtimeModel: attempt.blindPrompt ? undefined : runtimeInfo.model,
       systemPromptText,
       runAbortSignal: input.runAbortController.signal,
       hasBaselineTools: promptToolPolicy.hasBaselineTools,
@@ -218,6 +227,7 @@ export async function runEmbeddedAttemptPromptPhase(
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
+      systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,
@@ -383,7 +393,9 @@ export async function runEmbeddedAttemptPromptPhase(
         pendingImageCount: imageResult.images.length,
         // The SDK replaces the queued reservation at submission. Transient
         // installation remains separate because that carrier never enters its queue.
-        ...(appendOnlyRuntimeContext
+        ...(appendOnlyRuntimeContext ||
+        (promptContext.runtimeContextMessageForCurrentTurn &&
+          isOpenClawSystemUpdateMessage(promptContext.runtimeContextMessageForCurrentTurn))
           ? {
               pendingQueuedContextMessages: resolvePendingRuntimeContextReplay({
                 messages: activeSession.messages,
@@ -392,9 +404,9 @@ export async function runEmbeddedAttemptPromptPhase(
               }).pendingContextMessages,
             }
           : { pendingContextMessages }),
-        pendingAdditivePrompt: [promptBuildPrependContext, promptBuildAppendContext]
-          .filter(Boolean)
-          .join("\n\n"),
+        pendingAdditivePrompt: promptContext.isDispatchedCanonicalFallback
+          ? undefined
+          : [promptBuildPrependContext, promptBuildAppendContext].filter(Boolean).join("\n\n"),
         pendingUserIdempotencyKey,
       });
       attempt.onCompactionRequestBudget?.(compactionRequestBudget);
@@ -501,6 +513,7 @@ export async function runEmbeddedAttemptPromptPhase(
             }
           : {}),
         onModelRequest: preparedStreamRuntime.cache.onModelRequest,
+        normalizeToolCallIds: preparedStreamRuntime.normalizeToolCallIds,
         images: imageResult.images,
         modelPrompt: promptContext.promptForModel,
         onFinalPromptText: (prompt) => {

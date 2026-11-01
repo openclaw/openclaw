@@ -91,7 +91,7 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
   };
 }
 
-type SlackMarkdownOptions = {
+export type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
   /** The caller wraps the output in this emphasis; Slack cannot nest the same style, so inner markers are dropped. */
   enclosingStyle?: "bold" | "italic";

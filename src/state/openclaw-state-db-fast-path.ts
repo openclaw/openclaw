@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runWithSqliteCleanup } from "../infra/sqlite-lifecycle-errors.js";
@@ -9,16 +10,19 @@ import {
   readSqliteSchemaCookie,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
+import { throwSqliteSchemaMismatches } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { hasLegacyCronRunLogs } from "../infra/state-migrations.cron-run-logs.js";
+import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
+import { readAgentDatabaseLeaseProvenance } from "./openclaw-agent-db-lease-provenance.js";
 import {
   getStateRuntimeSchemaAdmission,
   publishStateRuntimeSchemaAdmission,
 } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { hasHistoricalImageReserveSnapshots } from "./openclaw-state-db-image-snapshot-migration.js";
 import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -28,7 +32,10 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
-import { STATE_RUNTIME_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import {
+  findMissingLazyStateStartupColumn,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+} from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function needsOpenClawStateDatabaseSchemaRepair(
@@ -51,7 +58,8 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     assertSupportedStateSchemaVersion(database, pathname);
     const needsRepair =
       readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
-      hasLegacyCronRunLogs(database);
+      hasLegacyCronRunLogs(database) ||
+      (scope === "doctor" && hasHistoricalImageReserveSnapshots(database));
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
       if (scope === "doctor") {
@@ -74,6 +82,12 @@ export function assertCurrentStateRuntimeSchema(
   pathname: string,
   readTable: SqliteTableContractReader = createSqliteTableContractReader(database),
 ): void {
+  const missing = findMissingLazyStateStartupColumn(readTable);
+  if (missing) {
+    throwSqliteSchemaMismatches(pathname, [
+      "missing column " + missing.tableName + "." + missing.columnName,
+    ]);
+  }
   assertCanonicalStateSchemaShape(database, pathname);
   assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);
   assertSqliteSchemaContains(
@@ -118,12 +132,21 @@ export function isOpenClawStateSchemaFastPathEligible(
         const readTable = createSqliteTableContractReader(database);
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
         assertNoLegacyStateRuntimeRepair(database, pathname);
-        publishIntegrity = assertOpenClawStateRuntimeIntegrity(
-          database,
-          pathname,
-          { schemaVersion, userVersion },
-          integrity,
-        );
+        const owner = readGatewayOwnerLeaseFromDatabase(database);
+        const liveGatewayOwner =
+          owner?.state === "live" &&
+          owner.pid !== process.pid &&
+          Boolean(owner.stateDatabaseProvenance) &&
+          owner.stateDatabaseProvenance === readAgentDatabaseLeaseProvenance(pathname);
+        // Trust the live Gateway's exact-file ownership; borrowers record no verification or seal.
+        if (!liveGatewayOwner) {
+          publishIntegrity = assertOpenClawStateRuntimeIntegrity(
+            database,
+            pathname,
+            { schemaVersion, userVersion },
+            integrity,
+          );
+        }
         return true;
       },
       { operationLabel: "state.admission.fast-path" },

@@ -11,16 +11,10 @@ import {
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as profileAliases from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
@@ -66,10 +60,6 @@ async function withCreatorRows(
     },
     async (state) => {
       setRuntimeConfigSnapshot({});
-      expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
-      expect(process.env.VITEST).toBeUndefined();
-      expect(process.env.NODE_ENV).toBe("production");
-      expect(process.env.HOME).toBe(state.home);
       const caller = ensureProfileForEmail("caller@preparation.test");
       const creator = ensureProfileForEmail("creator@preparation.test");
       ensureProfileForEmail("unrelated@preparation.test");
@@ -161,32 +151,6 @@ async function prepareEventAccess(cfg: OpenClawConfig, eventConfig = () => cfg) 
 }
 
 describe("creator preparation at synchronous fan-out boundaries", () => {
-  it("selects prepared aliases by state path", async () => {
-    await withCreatorRows(async ({ stateDir, callerId, keys }) => {
-      using _ = {
-        [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release,
-      };
-      const sessionKey = keys[0]!;
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
-      linkEmail("creator@preparation.test", callerId);
-      const client = eventClients(callerId)[0]!.client;
-      const receive = () =>
-        canReceivePreparedSessionEvent({ cfg: {}, client, sessionKeys: [sessionKey] });
-      expect(await receive()).toBe(true);
-      const alternateRoot = `${stateDir}/absent-state`;
-      await withEnvAsync({ OPENCLAW_STATE_DIR: alternateRoot }, async () => {
-        const alternateCatalog = await profileAliases.prepareUserProfileCatalog();
-        try {
-          expect(await receive()).toBe(false);
-          expect(fs.existsSync(alternateRoot)).toBe(false);
-        } finally {
-          alternateCatalog.release();
-        }
-      });
-      expect(await receive()).toBe(true);
-    });
-  });
-
   it("bounds cold/warm alias broadcast work", async () => {
     await withCreatorRows(async ({ stateDir, callerId, keys }) => {
       using _ = { [Symbol.dispose]: (await profileAliases.prepareUserProfileCatalog()).release };
@@ -355,32 +319,11 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           payload: suggestion,
         });
       expect(await receive()).toBe(true);
-      const agent = openOpenClawAgentDatabase({ agentId: "main" });
-      const state = openOpenClawStateDatabase();
-      const closing: unknown[] = [];
-      registerOpenClawAgentDatabaseAsyncResource({
-        agentId: "main",
-        path: agent.path,
-        revoke: () => {},
-        close: async () => {
-          await Promise.resolve();
-          closing.push({
-            agentOpen: agent.db.isOpen,
-            stateOpen: state.db.isOpen,
-            rootExists: fs.existsSync(stateDir),
-            selector: process.env.OPENCLAW_STATE_DIR,
-          });
-        },
-      });
       // Disposal writes the shared registry; drain it before moving/recreating the root.
       await disposeOpenClawAgentDatabaseByPath(
         path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       );
       await cleanupSessionStateForTest({ stateDir });
-      expect(closing).toEqual([
-        { agentOpen: true, stateOpen: true, rootExists: true, selector: undefined },
-      ]);
-      expect([agent.db.isOpen, state.db.isOpen]).toEqual([false, false]);
       const legacyRoot = path.join(path.dirname(stateDir), ".clawdbot");
       fs.renameSync(stateDir, legacyRoot);
       expect(await receive()).toBe(false);

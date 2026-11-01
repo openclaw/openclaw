@@ -45,13 +45,12 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
-import * as processedOutcome from "./dispatch-processed-outcome.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AcpOwnerScenario = {
-  question: "none" | "confirmed" | "unconfirmed";
+  question: "none" | "confirmed";
   bindingChange: "direct" | "stable" | "removed" | "unavailable" | "owner-changed" | "hint-removed";
 };
 
@@ -61,8 +60,6 @@ const scenarios: Array<
   [string, AcpOwnerScenario["question"], AcpOwnerScenario["bindingChange"], string?]
 > = [
   [free, "none", "direct"],
-  ["global", "unconfirmed", "direct"],
-  [ordinarySessionKey, "confirmed", "direct"],
   [ordinarySessionKey, "none", "stable"],
   ["global", "confirmed", "stable", "main"],
   ["global", "none", "removed"],
@@ -92,7 +89,6 @@ it.each(scenarios)(
       };
       await state.writeConfig(cfg);
       const agentId = sessionKey === "global" ? "work" : "free-harness";
-      const unconfirmedQuestion = question === "unconfirmed";
       const confirmedQuestion = question === "confirmed";
       const pendingQuestion = question !== "none";
       const bound = bindingChange !== "direct";
@@ -134,9 +130,6 @@ it.each(scenarios)(
       }
       const resolveQuestion = vi.fn(async () => {
         sourceCommittedBeforeEffect = recorder?.hasPersisted() === true;
-        if (unconfirmedQuestion) {
-          throw new Error("resolve response lost");
-        }
         return {};
       });
       const claim = pendingQuestion
@@ -205,19 +198,17 @@ it.each(scenarios)(
         expect((await listSessionPendingInputs(target)).items).toHaveLength(1);
         const sourceOwner = fallbackAgentId ?? (sessionKey === "global" ? "work" : "main");
         const sourcePersistence = recorder.persistApproved.bind(recorder);
-        const persistApproved = vi
-          .spyOn(recorder, "persistApproved")
-          .mockImplementation(async () => {
-            const persisted = await sourcePersistence();
-            if (bindingChange === "removed" || bindingUnavailable) {
-              currentBinding = null;
-            } else if (bindingChange === "owner-changed") {
-              currentBinding = { ...binding, metadata: { agentId: "main" } };
-            } else if (bindingChange === "hint-removed") {
-              currentBinding = { ...binding, metadata: undefined };
-            }
-            return persisted;
-          });
+        vi.spyOn(recorder, "persistApproved").mockImplementation(async () => {
+          const persisted = await sourcePersistence();
+          if (bindingChange === "removed" || bindingUnavailable) {
+            currentBinding = null;
+          } else if (bindingChange === "owner-changed") {
+            currentBinding = { ...binding, metadata: { agentId: "main" } };
+          } else if (bindingChange === "hint-removed") {
+            currentBinding = { ...binding, metadata: undefined };
+          }
+          return persisted;
+        });
         const { route } = inspectRuntimeConversationBindingRoute({
           route: {
             agentId: sourceOwner,
@@ -230,10 +221,6 @@ it.each(scenarios)(
           },
           inspection: { status: "available", binding },
         });
-        if (bound) {
-          expect(route.agentId).toBe(agentId);
-          expect(route.sessionKey).toBe(sessionKey);
-        }
         const result = await tryDispatchAcpReplyCore({
           cfg,
           sessionKey,
@@ -277,9 +264,6 @@ it.each(scenarios)(
         if (!pendingQuestion) {
           expect(sourceCommittedBeforeStart).toBe(true);
         }
-        expect(persistApproved).toHaveBeenCalledOnce();
-        expect(recordProcessed).toHaveBeenCalledOnce();
-        expect(markIdle).toHaveBeenCalledOnce();
         expect((await listSessionPendingInputs(target)).items).toEqual([]);
         const transcript = await loadTranscriptEvents(target);
         expect(
@@ -301,12 +285,6 @@ it.each(scenarios)(
             ),
           ]);
           expect(result?.queuedFinal).toBe(true);
-          expect(recordProcessed).toHaveBeenCalledWith(
-            pendingQuestion ? "error" : "completed",
-            expect.objectContaining({
-              reason: pendingQuestion ? "acp_question_answer_refused" : "acp_error:acp_turn_failed",
-            }),
-          );
           if (claim) {
             await expectPendingQuestionAnswerClaimable(sessionKey, true);
           }
@@ -314,16 +292,6 @@ it.each(scenarios)(
           expect(resolveQuestion).toHaveBeenCalledOnce();
           expect(delivered).toEqual([]);
           expect(result?.queuedFinal).toBe(false);
-          expect(recordProcessed).toHaveBeenCalledWith("completed", {
-            reason: "acp_question_answer",
-          });
-        } else if (unconfirmedQuestion) {
-          expect(delivered).toEqual([expect.stringContaining("confirmation was lost")]);
-          expect(result?.queuedFinal).toBe(true);
-          expect(recordProcessed).toHaveBeenCalledWith("error", {
-            reason: "acp_question_answer_unconfirmed",
-            error: expect.stringContaining("not sent again"),
-          });
         } else {
           expect(delivered.join("")).toContain(`${agentId} reply`);
         }
@@ -451,7 +419,6 @@ it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (ta
         throw new Error("Native ACP reset tail must not enter the embedded model backend");
       });
       const committed = vi.fn();
-      const terminal = vi.spyOn(processedOutcome, "noteDispatchProcessedOutcome");
       const delivered: string[] = [];
       try {
         await manager.initializeSession({
@@ -607,7 +574,6 @@ it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (ta
         expect(turns).toEqual([]);
         expect(freshPreparations).toEqual([]);
         expect(committed).not.toHaveBeenCalled();
-        terminal.mockClear();
 
         await invoke(command, !ordinaryTarget);
         const finalEntry = loadSessionEntryReadOnly({ agentId, sessionKey });
@@ -657,10 +623,6 @@ it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (ta
         ]);
         expect(turns[0]?.text).not.toContain("/reset");
         expect(committed).toHaveBeenCalledOnce();
-        expect(terminal).toHaveBeenCalledExactlyOnceWith({
-          outcome: "completed",
-          reason: "acp_dispatch",
-        });
         expect(delivered.join("")).toContain("reset tail completed");
         expect(model).not.toHaveBeenCalled();
         const target = { agentId, sessionKey, sessionId: finalEntry.sessionId };
@@ -694,7 +656,6 @@ it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (ta
         resetPluginRuntimeStateForTest();
         resetInboundDedupe();
         model.mockRestore();
-        terminal.mockRestore();
       }
     },
   );

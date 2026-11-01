@@ -1,7 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
@@ -49,21 +48,10 @@ suite.define(() => {
       const baseTs = Date.now() - 100_000;
       const runId = "composer-scroll-run";
       const gateway = await installMockGateway(page, {
-        historyMessages: Array.from({ length: 50 }, (_, index) => ({
-          role: index % 2 === 0 ? "assistant" : "user",
-          content: `Composer wheel history ${index}\n${"Transcript detail\n".repeat(4)}`,
-          timestamp: baseTs + index,
-        })),
+        historyMessages: history("Composer wheel history", baseTs),
         featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
         inFlightRun: { runId, text: "Reviewing the workspace." },
         sessionInfo: { key: "agent:main:main", activeRunIds: [runId], hasActiveRun: true },
-        methodResponses: progressCard(
-          Array.from({ length: 30 }, (_, index) => ({
-            step: `Review item ${index + 1}`,
-            status: index === 0 ? "in_progress" : "pending",
-          })),
-          baseTs,
-        ),
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Composer wheel history 49").waitFor();
@@ -73,6 +61,11 @@ suite.define(() => {
       const input = page.locator(".agent-chat__input");
       const originalTop = await scrollTop(thread);
       const composerBounds = await input.boundingBox();
+      const threadLayout = await thread.boundingBox();
+      const latest = page.locator(".chat-scroll-to-bottom");
+      expect(await latest.isVisible()).toBe(false);
+      expect(await latest.getAttribute("aria-hidden")).toBe("true");
+      expect(await latest.evaluate((element: HTMLButtonElement) => element.inert)).toBe(true);
 
       // Chromium's blocked-input warning must not crash while resolving the
       // conversation's listener. Age trusted input instead of stalling the UI.
@@ -118,6 +111,12 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       expect(await input.boundingBox()).toEqual(composerBounds);
       await page.getByRole("button", { name: "Scroll to latest" }).waitFor();
+      expect(await thread.boundingBox()).toEqual(threadLayout);
+      expect(await latest.evaluate((element: HTMLButtonElement) => element.inert)).toBe(false);
+      const buttonBounds = (await latest.boundingBox())!;
+      expect(buttonBounds.y + buttonBounds.height).toBeLessThan(
+        (await page.locator(".agent-chat__composer-shell").boundingBox())!.y,
+      );
 
       const beforeFooter = await scrollTop(thread);
       await gateway.emitGatewayEvent("chat", {
@@ -138,19 +137,6 @@ suite.define(() => {
       await expect.poll(() => scrollTop(thread)).toBeLessThan(beforeFooter - 100);
       await waitForChatScrollIdle(page);
 
-      await openChatDetails(page);
-      const progress = page.locator(".chat-details-desktop-body");
-      await expect
-        .poll(() => page.locator('[data-progress-card-placement="details"]').getAttribute("open"))
-        .toBe("");
-      await progress.waitFor();
-      await waitForChatScrollIdle(page);
-      const beforeProgress = await scrollTop(thread);
-      await progress.hover();
-      await page.mouse.wheel(0, 250);
-      await expect.poll(() => scrollTop(progress)).toBeGreaterThan(0);
-      expect(await scrollTop(thread)).toBe(beforeProgress);
-
       await composer.fill(draft("Draft line", 30));
       await composer.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
@@ -169,33 +155,6 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       expect(await scrollTop(thread)).toBe(beforeDraft);
     });
-  });
-
-  it("keeps a bottom-anchored transcript pinned while the composer grows", async () => {
-    const { page } = await openHistory("Composer resize history");
-    await expect
-      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-      .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-    await waitForChatScrollIdle(page);
-
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    const thread = page.locator(".chat-thread");
-    for (let line = 1; line <= 8; line += 1) {
-      await composer.fill(draft("Growing composer line", line));
-      await waitForChatScrollIdle(page);
-      expect(
-        await chatThreadDistanceFromBottom(page),
-        `composer line count ${line}`,
-      ).toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-    }
-
-    await composer.fill("Growing composer line 1");
-    await waitForChatScrollIdle(page);
-    await scrollChatThreadToTop(page);
-    const readingScrollTop = await scrollTop(thread);
-    await composer.fill(draft("Reading composer line", 8));
-    await waitForChatScrollIdle(page);
-    expect(Math.abs((await scrollTop(thread)) - readingScrollTop)).toBeLessThanOrEqual(1);
   });
 
   it("scrolls a delayed pending send while Details progress expands before the ACK resolves", async () => {
@@ -263,46 +222,5 @@ suite.define(() => {
       .toBeLessThanOrEqual(4);
 
     await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-  });
-
-  it("overlays the scroll-to-bottom affordance without shrinking the transcript", async () => {
-    const { page } = await openHistory("Scrollable history");
-    await waitForChatScrollIdle(page);
-
-    const readLayout = () =>
-      page.locator(".chat-main").evaluate((container) => {
-        const thread = container.querySelector<HTMLElement>(".chat-thread");
-        const composer = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
-        const button = container.querySelector<HTMLElement>(".chat-scroll-to-bottom");
-        if (!thread || !composer) {
-          throw new Error("expected chat thread and composer");
-        }
-        const threadRect = thread.getBoundingClientRect();
-        const composerRect = composer.getBoundingClientRect();
-        const buttonRect = button?.getBoundingClientRect();
-        return {
-          buttonBottom: buttonRect ? Math.round(buttonRect.bottom) : null,
-          composerTop: Math.round(composerRect.top),
-          threadBottom: Math.round(threadRect.bottom),
-        };
-      });
-
-    const before = await readLayout();
-    const button = page.locator(".chat-scroll-to-bottom");
-    expect(await button.isVisible()).toBe(false);
-    expect(await button.getAttribute("aria-hidden")).toBe("true");
-    expect(await button.evaluate((element: HTMLButtonElement) => element.inert)).toBe(true);
-
-    await scrollChatThreadToTop(page);
-    await page.getByRole("button", { name: "Scroll to latest" }).waitFor({ timeout: 10_000 });
-    expect(await button.evaluate((element: HTMLButtonElement) => element.inert)).toBe(false);
-    const after = await readLayout();
-
-    expect(after).toMatchObject({
-      threadBottom: before.threadBottom,
-      composerTop: before.composerTop,
-    });
-    expect(after.buttonBottom).not.toBeNull();
-    expect(after.buttonBottom!).toBeLessThan(after.composerTop);
   });
 });

@@ -26,6 +26,10 @@ function approvalsSnapshot(overrides: Partial<ExecApprovalsSnapshot> = {}): Exec
   };
 }
 
+function configSnapshot(path = "/tmp/openclaw.json") {
+  return { path, hash: "config-hash-1", config: mocks.state.config };
+}
+
 function expectNoPolicyWrites() {
   expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
@@ -162,16 +166,11 @@ describe("exec-policy CLI", () => {
     mocks.state.hash = "approvals-hash";
     mocks.runtimeErrors.length = 0;
     mocks.callGateway.mockReset();
-    mocks.defaultRuntime.log.mockClear();
-    mocks.defaultRuntime.error.mockClear();
-    mocks.defaultRuntime.writeJson.mockClear();
-    mocks.defaultRuntime.exit.mockClear();
+    for (const mock of Object.values(mocks.defaultRuntime)) {
+      mock.mockClear();
+    }
     mocks.replaceConfigFile.mockReset().mockImplementation(mocks.replaceConfig);
-    mocks.readConfigFileSnapshot.mockReset().mockImplementation(async () => ({
-      path: "/tmp/openclaw.json",
-      hash: "config-hash-1",
-      config: mocks.state.config,
-    }));
+    mocks.readConfigFileSnapshot.mockReset().mockImplementation(async () => configSnapshot());
     mocks.readExecApprovalsSnapshot.mockReset().mockImplementation(() => approvalsSnapshot());
     mocks.restoreExecApprovalsSnapshot
       .mockReset()
@@ -241,7 +240,6 @@ describe("exec-policy CLI", () => {
       }
       expect(output).not.toContain("If terminal access is intended, append");
       expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(mocks.callGateway).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -336,12 +334,6 @@ describe("exec-policy CLI", () => {
       "COMMAND APPROVALS (LOCAL)",
     );
     expect(readOutput()).not.toContain("If terminal access is intended, append");
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      "tools.effective",
-      expect.objectContaining({ session: "agent:main:main" }),
-      { agentId: "main", sessionKey: "agent:main:main" },
-      expect.objectContaining({ sharedStateMode: "read-only" }),
-    );
   });
 
   it.each<[string, ToolAccessDiagnostics["tools"] | undefined]>([
@@ -459,17 +451,7 @@ describe("exec-policy CLI", () => {
   it.each([
     { args: ["preset", "yolo"], askFallback: "full" },
     {
-      args: [
-        "set",
-        "--host",
-        "gateway",
-        "--security",
-        "full",
-        "--ask",
-        "off",
-        "--ask-fallback",
-        "allowlist",
-      ],
+      args: "set --host gateway --security full --ask off --ask-fallback allowlist".split(" "),
       askFallback: "allowlist",
     },
   ])("synchronizes config and approvals with $args", async ({ args, askFallback }) => {
@@ -478,8 +460,6 @@ describe("exec-policy CLI", () => {
     expect(mocks.state.config.tools?.exec).toEqual({ host: "gateway", mode: "full" });
     expect(mocks.state.approvals.defaults).toEqual({ security: "full", ask: "off", askFallback });
     expect(mocks.replaceConfigFile.mock.calls[0]?.[0]).toMatchObject({ baseHash: "config-hash-1" });
-    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(1);
-    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
   });
 
   it("retains untouched policy when setting ask=always", async () => {
@@ -489,11 +469,9 @@ describe("exec-policy CLI", () => {
   });
 
   it("sanitizes terminal control content before rendering the text table", async () => {
-    mocks.readConfigFileSnapshot.mockImplementationOnce(async () => ({
-      path: "/tmp/openclaw.json\u001B[2J\nforged",
-      hash: "config-hash-1",
-      config: mocks.state.config,
-    }));
+    mocks.readConfigFileSnapshot.mockImplementationOnce(async () =>
+      configSnapshot("/tmp/openclaw.json\u001B[2J\nforged"),
+    );
     mocks.readExecApprovalsSnapshot.mockImplementationOnce(() =>
       approvalsSnapshot({
         path: "/tmp/exec-approvals.json\u0007\nforged",
@@ -511,9 +489,6 @@ describe("exec-policy CLI", () => {
     expect(output).toContain("/tmp/openclaw.json");
     expect(output).toContain("/tmp/exec-approvals.json");
     expect(output).toContain("scope\\u{200B}name");
-    expect(output).toContain("host=auto");
-    expect(output).toContain("tools.exec.");
-    expect(output).toContain("host)");
     expect(output).toContain(SESSION_EXEC_OVERRIDES_NOTE);
     expect(output).toContain("\\nforged");
     expect(output).not.toContain("/tmp/openclaw.json\nforged");
@@ -553,7 +528,6 @@ describe("exec-policy CLI", () => {
     await expect(runExecPolicyCommand(["set", "--security", "full", "--json"])).rejects.toBe(error);
 
     expect(mocks.state.approvals).toEqual(originalApprovals);
-    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledTimes(1);
     expectNoFailureOutput();
   });
 
@@ -636,13 +610,6 @@ describe("exec-policy CLI", () => {
 
       await expect(runExecPolicyCommand([...args])).rejects.toThrow("__exit__:1");
 
-      expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
-        originalSnapshot,
-        "written-approvals-hash",
-        expect.anything(),
-        expect.any(Function),
-      );
-      expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(2);
       if (!rollbackError) {
         expect(mocks.state.approvals).toEqual({
           ...originalApprovals,

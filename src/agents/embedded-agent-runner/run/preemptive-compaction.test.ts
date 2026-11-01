@@ -3,6 +3,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
@@ -36,6 +37,16 @@ function makeAssistantHistory(text: string): AgentMessage {
   } as AgentMessage;
 }
 
+function shortHistoryInput() {
+  return {
+    messages: [makeAssistantHistory("short history")],
+    systemPrompt: "sys",
+    prompt: "hello",
+    contextTokenBudget: 10_000,
+    reserveTokens: 1_000,
+  };
+}
+
 function makeProviderAssistant(params: {
   promptTokens: number;
   totalTokens: number;
@@ -45,17 +56,15 @@ function makeProviderAssistant(params: {
     role: "assistant",
     content: [{ type: "text", text: params.text ?? "provider answer" }],
     usage: {
+      ...createZeroUsageFixture(),
       input: params.promptTokens,
       output: params.totalTokens - params.promptTokens,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: params.totalTokens,
       contextUsage: {
         state: "available",
         promptTokens: params.promptTokens,
         totalTokens: params.totalTokens,
       },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     timestamp: timestamp++,
@@ -71,13 +80,10 @@ function makeUnavailableAssistant(params: {
     content: [{ type: "text", text: "usage unavailable" }],
     api: params.legacyCli ? "cli" : "anthropic-messages",
     usage: {
+      ...createZeroUsageFixture(),
       input: params.totalTokens,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: params.totalTokens,
       ...(params.legacyCli ? {} : { contextUsage: { state: "unavailable" as const } }),
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     timestamp: timestamp++,
@@ -184,11 +190,7 @@ describe("preemptive-compaction", () => {
 
   it("does not scan past a zero unavailable context marker", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 0 }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 0 }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -200,11 +202,7 @@ describe("preemptive-compaction", () => {
 
   it("treats legacy CLI usage without context provenance as a barrier", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 1_000, legacyCli: true }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 1_000, legacyCli: true }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -216,11 +214,7 @@ describe("preemptive-compaction", () => {
 
   it("can reuse an older provider boundary past nonzero unavailable billing usage", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 927_907 }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 927_907 }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -231,13 +225,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("formats all-route pre-prompt diagnostics for a fits decision", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 10_000,
-      reserveTokens: 1_000,
-    });
+    const result = shouldPreemptivelyCompactBeforePrompt(shortHistoryInput());
     const line = formatPrePromptPrecheckLog({
       result,
       sessionKey: "discord:channel:thread",
@@ -267,13 +255,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("builds a durable estimated context budget status snapshot", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 10_000,
-      reserveTokens: 1_000,
-    });
+    const result = shouldPreemptivelyCompactBeforePrompt(shortHistoryInput());
 
     const status = buildPrePromptContextBudgetStatus({
       result,
@@ -604,3 +586,11 @@ describe("preemptive-compaction", () => {
     expect(Number.isFinite(result.estimatedPromptTokens)).toBe(true);
   });
 });
+
+function createUnavailableUsageHistory(params: Parameters<typeof makeUnavailableAssistant>[0]) {
+  return [
+    { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+    makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+    makeUnavailableAssistant(params),
+  ];
+}

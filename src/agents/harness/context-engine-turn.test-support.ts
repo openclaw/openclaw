@@ -15,15 +15,14 @@ export const createCommitTurn = () =>
   vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({ status: "committed" }));
 
 type FinalizeParams = Parameters<typeof finalizeHarnessContextEngineTurn>[0];
+const successFlags = { promptError: false, aborted: false, yieldAborted: false };
 export function finalizeTurn(
   params: Pick<FinalizeParams, "sessionFile" | "sessionIdUsed"> & Partial<FinalizeParams>,
 ) {
   return finalizeHarnessContextEngineTurn({
     messagesSnapshot: [],
     prePromptMessageCount: 0,
-    promptError: false,
-    aborted: false,
-    yieldAborted: false,
+    ...successFlags,
     warn: vi.fn(),
     ...params,
   });
@@ -35,24 +34,17 @@ export function createTurnBoundary(
   sessionId = "session-a",
   sequence = 1,
 ): TranscriptTurnBoundary {
-  const anchor = (
-    role: "user" | "assistant",
-    rawSeq: number,
-    effectiveParentId: string | null,
-  ) => ({
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath,
+  const anchor = (role: "user" | "assistant", rawSeq: number) => ({
+    ...createTurnTarget(storePath, sessionId),
     generation: "generation-1",
     entryId: `${logicalTurnId}:${role}`,
     rawSeq,
     activeMessagePosition: rawSeq,
-    effectiveParentId,
+    effectiveParentId: role === "user" ? null : `${logicalTurnId}:user`,
   });
   return {
-    admission: { ...anchor("user", sequence, null), logicalTurnId, role: "user" },
-    terminal: anchor("assistant", sequence + 1, `${logicalTurnId}:user`),
+    admission: { ...anchor("user", sequence), logicalTurnId, role: "user" },
+    terminal: anchor("assistant", sequence + 1),
   };
 }
 
@@ -72,9 +64,7 @@ export const createTurnFacts = (
   sessionTarget,
   sessionIdUsed: boundary.admission.sessionId,
   sessionKey: boundary.admission.sessionKey,
-  promptError: false,
-  aborted: false,
-  yieldAborted: false,
+  ...successFlags,
 });
 
 export function createTurnEngine<T extends NonNullable<ContextEngine["commitTurn"]>>(
@@ -105,6 +95,8 @@ export const createTurnLease = (engine: ContextEngine) =>
     selectForHost: vi.fn(),
     degradeBeforeStart: vi.fn(),
     begin: vi.fn(),
+    handOver: vi.fn(async () => undefined),
+    rebind: vi.fn(async () => undefined),
     onDispose: vi.fn(),
     deferDisposalUntil: vi.fn(),
     dispose: vi.fn(async () => undefined),

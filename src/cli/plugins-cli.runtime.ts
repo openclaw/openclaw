@@ -1,7 +1,7 @@
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { collectConfiguredRuntimePluginIds } from "../commands/doctor/shared/configured-runtime-plugin-owners.js";
 import {
@@ -24,7 +24,7 @@ import type { PluginPackageInstall } from "../plugins/package-manifest.types.js"
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
-import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { displayPath, shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
@@ -69,9 +69,11 @@ async function applyPluginEnabledThroughGateway(
     consent.onCapabilityConsent,
   );
   for (const warning of result.warnings ?? []) {
-    defaultRuntime.log(theme.warn(warning));
+    defaultRuntime.log(theme.warn(terminalText`${warning}`));
   }
-  defaultRuntime.log(`${enabled ? "Enabled" : "Disabled"} plugin "${result.plugin.id}".`);
+  defaultRuntime.log(
+    terminalText`${enabled ? "Enabled" : "Disabled"} plugin "${result.plugin.id}".`,
+  );
   return true;
 }
 
@@ -111,26 +113,26 @@ async function runPluginPolicyCommand(
         });
         if (result.status === "missing") {
           const message = formatMissingPluginMessage({ id: result.pluginId, includeSearch: true });
-          defaultRuntime.error(message);
+          defaultRuntime.error(terminalText`${message}`);
           return defaultRuntime.exit(1);
         }
         if (result.status === "blocked") {
           defaultRuntime.error(
-            `Plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"}).`,
+            terminalText`Plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"}).`,
           );
           return defaultRuntime.exit(1);
         }
         for (const warning of result.warnings) {
-          defaultRuntime.log(theme.warn(warning));
+          defaultRuntime.log(theme.warn(terminalText`${warning}`));
         }
         defaultRuntime.log(
-          `${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Saved for the next Gateway start.`,
+          terminalText`${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Saved for the next Gateway start.`,
         );
       } catch (error) {
         if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
           throw error;
         }
-        defaultRuntime.error(error.message);
+        defaultRuntime.error(terminalText`${error.message}`);
         return defaultRuntime.exit(1);
       }
     });
@@ -162,11 +164,9 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   const formatDifferences = (
     differences: Awaited<ReturnType<typeof inspectPluginRegistry>>["differences"],
   ) => {
-    const formatSource = (source: string | null) =>
-      source ? sanitizeTerminalText(shortenHomePath(source)) : "missing";
     return differences.map(
       (difference) =>
-        `${sanitizeTerminalText(difference.pluginId)}: ${difference.changed.join("+")} changed; persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
+        terminalText`${difference.pluginId}: ${difference.changed.join("+")} changed; persisted ${difference.persistedSource ? shortenHomePath(difference.persistedSource) : "missing"}; derived ${difference.derivedSource ? shortenHomePath(difference.derivedSource) : "missing"}`,
     );
   };
 
@@ -245,7 +245,9 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     `${theme.muted("Persisted:")} ${persistedEnabled}/${persistedTotal} enabled plugins`,
   ];
   if (inspection.refreshReasons.length > 0) {
-    lines.push(`${theme.muted("Refresh reasons:")} ${inspection.refreshReasons.join(", ")}`);
+    lines.push(
+      `${theme.muted("Refresh reasons:")} ${terminalText`${inspection.refreshReasons.join(", ")}`}`,
+    );
     lines.push(...formatDifferences(inspection.differences).map((difference) => `- ${difference}`));
     lines.push(`${theme.muted("Repair:")} ${theme.command("openclaw plugins registry --refresh")}`);
   }
@@ -424,14 +426,14 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
         theme.error("Plugin errors:"),
         errors.map((entry) => {
           const phase = entry.failurePhase ? ` [${entry.failurePhase}]` : "";
-          return `- ${entry.id}${phase}: ${entry.error ?? "failed to load"} (${entry.source})`;
+          return terminalText`- ${entry.id}${phase}: ${entry.error ?? "failed to load"} (${entry.source})`;
         }),
       );
       appendSection(
         theme.warn("Diagnostics:"),
         diags.map((diag) => {
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";
-          return `- ${target}${diag.message}`;
+          return terminalText`- ${target}${diag.message}`;
         }),
       );
       appendSection(
@@ -439,22 +441,24 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
         shadowed.flatMap((diag) => {
           const active = report.plugins.find((plugin) => plugin.id === diag.pluginId);
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";
-          const details = [`- ${target}${diag.message}`];
+          const details = [terminalText`- ${target}${diag.message}`];
           if (active) {
-            details.push(`  active: ${shortenHomePath(active.source)} (${active.origin})`);
+            details.push(terminalText`  active: ${displayPath(active.source)} (${active.origin})`);
             if (active.status === "error") {
-              details.push(`  active status: error${active.error ? `: ${active.error}` : ""}`);
+              details.push(
+                terminalText`  active status: error${active.error ? `: ${active.error}` : ""}`,
+              );
             }
           }
           if (diag.source) {
-            details.push(`  shadowed: ${shortenHomePath(diag.source)}`);
+            details.push(`  shadowed: ${displayPath(diag.source)}`);
           }
           details.push(
             "  repair:",
-            "    openclaw plugins inspect " + (diag.pluginId ?? "<plugin-id>"),
+            terminalText`    openclaw plugins inspect ${diag.pluginId ?? "<plugin-id>"}`,
             "    edit or remove the config-selected plugin source",
             "    openclaw plugins registry --refresh",
-            "    openclaw plugins reload " + (diag.pluginId ?? "<plugin-id>"),
+            terminalText`    openclaw plugins reload ${diag.pluginId ?? "<plugin-id>"}`,
           );
           return details;
         }),
@@ -463,10 +467,13 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
         theme.warn("Compatibility:"),
         compatibility.map((notice) => {
           const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
-          return `- ${formatPluginCompatibilityNotice(notice)} [${marker}]`;
+          return `- ${terminalText`${formatPluginCompatibilityNotice(notice)}`} [${marker}]`;
         }),
       );
-      appendSection(theme.warn("Plugin configuration:"), [...pluginConfigWarnings]);
+      appendSection(
+        theme.warn("Plugin configuration:"),
+        [...pluginConfigWarnings].map((warning) => terminalText`${warning}`),
+      );
       if (!hasInstallTreeIssues) {
         const summary = pluginConfigWarnings.size
           ? "No plugin install-tree issues detected; configuration warnings remain."
@@ -653,13 +660,13 @@ function formatMarketplaceEntryLine(entry: MarketplaceEntryPayload): string {
   const id = entry.id ?? entry.name ?? entry.label;
   const install =
     resolvePluginInstallSources(entry.install ?? {})[0]?.spec ?? entry.install?.localPath;
-  const suffix = install ? " " + theme.muted(install) : "";
-  const label = entry.label !== id ? " " + theme.muted(entry.label) : "";
-  return theme.command(id) + label + suffix;
+  const suffix = install ? " " + theme.muted(terminalText`${install}`) : "";
+  const label = entry.label !== id ? " " + theme.muted(terminalText`${entry.label}`) : "";
+  return theme.command(terminalText`${id}`) + label + suffix;
 }
 
 function formatMarketplaceFeedTrust(trust: HostedOfficialExternalPluginCatalogTrustState): string {
-  return `${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
+  return terminalText`${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
 }
 
 function formatMarketplaceFeedLines(
@@ -678,23 +685,23 @@ function formatMarketplaceFeedLines(
   ];
   if (payload.feed) {
     lines.push(
-      `${theme.muted("Feed:")} ${payload.feed.id} ${theme.muted(`sequence ${payload.feed.sequence}`)}`,
+      `${theme.muted("Feed:")} ${terminalText`${payload.feed.id}`} ${theme.muted(terminalText`sequence ${payload.feed.sequence}`)}`,
     );
   }
   if (payload.metadata?.url) {
-    lines.push(`${theme.muted("URL:")} ${payload.metadata.url}`);
+    lines.push(`${theme.muted("URL:")} ${terminalText`${payload.metadata.url}`}`);
   }
   if (options.includeChecksum && payload.metadata?.checksum) {
-    lines.push(`${theme.muted("SHA-256:")} ${payload.metadata.checksum}`);
+    lines.push(`${theme.muted("SHA-256:")} ${terminalText`${payload.metadata.checksum}`}`);
   }
   if (payload.snapshot?.savedAt) {
-    lines.push(`${theme.muted("Snapshot:")} ${payload.snapshot.savedAt}`);
+    lines.push(`${theme.muted("Snapshot:")} ${terminalText`${payload.snapshot.savedAt}`}`);
   }
   if (payload.trust) {
     lines.push(`${theme.muted("Trust:")} ${formatMarketplaceFeedTrust(payload.trust)}`);
   }
   if (payload.error) {
-    lines.push(`${theme.muted("Fallback reason:")} ${payload.error}`);
+    lines.push(`${theme.muted("Fallback reason:")} ${terminalText`${payload.error}`}`);
   }
   return lines;
 }
@@ -813,7 +820,7 @@ export async function runPluginMarketplaceRefreshCommand(
     }
     if (failedPinnedRefresh) {
       defaultRuntime.error(
-        `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`,
+        terminalText`Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`,
       );
     }
     if (failedPinnedRefresh) {

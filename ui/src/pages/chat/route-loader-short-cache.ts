@@ -59,10 +59,6 @@ export async function findSnapshotSessionReference(
   const revision = context.gateway.connectionRevision;
   const { readPrewarmedChatSnapshot } = await import("./session-snapshot-store.ts");
   const admitted = await readPrewarmedChatSnapshot(entry.cacheKey);
-  const gateway = context.gateway.snapshot;
-  if (admitted && gateway.client && gateway.phase !== "connected") {
-    await gateway.client.initialConnectSent;
-  }
   return admitted &&
     scopeKey() === entry.cacheKey &&
     context.gateway.connectionRevision === revision

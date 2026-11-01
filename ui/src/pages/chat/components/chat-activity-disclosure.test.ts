@@ -13,7 +13,6 @@ import {
   createActivityGroupHarness,
   createMessageGroupHarness,
 } from "./chat-message-native.test-support.tsx";
-import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import {
   createAssistantMessage,
   createMessageEntry,
@@ -24,6 +23,7 @@ import {
   prepareHistoryGroups,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 type WorkProps = Parameters<typeof WorkGroupSummary>[0];
 let summaryContainer: HTMLDivElement;
@@ -38,6 +38,20 @@ beforeEach(() => {
   onTestFinished(() => summaryContainer.remove());
 });
 const visibleTools = { showToolCalls: true, showReasoning: true };
+
+it("commits a cached activity summary with its transcript row", () => {
+  const group = createToolGroup("cached", [
+    createMessageEntry(
+      "cached-tool",
+      createAssistantMessage([], { activity: [preparedOutcome("failed")] }),
+    ),
+  ]);
+  activityRoot.render([group], visibleTools);
+  const row = summaryContainer.querySelector('[data-chat-row-key="cached"]');
+  expect(row).not.toBeNull();
+  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain("1 read");
+  expect(row?.querySelector(".chat-tool-failure")).toBeNull();
+});
 
 function read(id: string, overrides: Record<string, unknown> = {}) {
   return createToolCall(id, "read", { path: `/repo/${id}.ts` }, overrides);
@@ -164,35 +178,32 @@ it.each([
   ["work", "anonymous"],
   ["work", "missing-card"],
   ["work", "matched"],
-] as const)(
-  "retains prepared failures exactly once in %s summaries (%s)",
-  async (kind, pairing) => {
-    const message = createAssistantMessage(
-      pairing === "missing-card"
-        ? [{ type: "text", text: "Operation details unavailable" }]
-        : [
-            read("call-failed"),
-            createToolResultBlock("call-failed", "read", "Permission denied", { isError: true }),
-          ],
-      {
-        activity: [
-          preparedOutcome("failed", pairing === "matched" ? "call-failed" : null, {
-            itemId: "prepared-failure",
-            title: "Read file",
-          }),
+] as const)("leaves a prepared failure to its row in %s summaries (%s)", async (kind, pairing) => {
+  const message = createAssistantMessage(
+    pairing === "missing-card"
+      ? [{ type: "text", text: "Operation details unavailable" }]
+      : [
+          read("call-failed"),
+          createToolResultBlock("call-failed", "read", "Permission denied", { isError: true }),
         ],
-      },
-    );
-    for (const expanded of [false, true]) {
-      const summary = await renderSummary([message], kind, { expanded });
-      expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
-      expect(summary?.textContent?.match(/1 failed/gu)).toHaveLength(1);
-      if (kind === "work") {
-        expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
-      }
+    {
+      activity: [
+        preparedOutcome("failed", pairing === "matched" ? "call-failed" : null, {
+          itemId: "prepared-failure",
+          title: "Read file",
+        }),
+      ],
+    },
+  );
+  for (const expanded of [false, true]) {
+    const summary = await renderSummary([message], kind, { expanded });
+    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
+    expect(summary?.textContent).not.toContain("failed");
+    if (kind === "work") {
+      expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
     }
-  },
-);
+  }
+});
 
 it.each(["activity", "work"] as const)(
   "uses current prepared outcomes in %s summaries",
@@ -223,14 +234,13 @@ it.each(["activity", "work"] as const)(
     expect(summary?.textContent).not.toContain("failed");
     if (kind === "work") {
       expect(summary?.textContent).not.toContain("tool call");
-      expect(summary?.querySelector(".chat-work-group__outcomes")).toBeNull();
     }
     expect(summary?.querySelector(".chat-tool-failure")).toBeNull();
   },
 );
 
 it.each(["blocked", "skipped", undefined] as const)(
-  "retains %s outcomes when completed work is expanded",
+  "keeps blocked and unknown but not skipped outcomes in completed work (%s)",
   async (status) => {
     const message = createAssistantMessage([], {
       activity: [preparedOutcome("completed", null, { itemId: "outcome", status })],
@@ -239,31 +249,34 @@ it.each(["blocked", "skipped", undefined] as const)(
       const summary = await renderSummary([message], "work", { expanded });
       expect(summary?.textContent).toContain("Worked for 1 second");
       expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
-      expect(summary?.textContent).toContain(`1 ${status ?? "unknown"}`);
       if (status === "skipped") {
-        expect(summary?.textContent?.match(/1 skipped/g)).toHaveLength(1);
-        expect(summary?.textContent).not.toMatch(/blocked|failed/);
+        expect(summary?.textContent).not.toMatch(/skipped|blocked|failed/);
+      } else {
+        expect(summary?.textContent).toContain(`1 ${status ?? "unknown"}`);
       }
     }
   },
 );
 
-it.each([0, 10])("keeps failures visible without a duration (%i calls)", async (total) => {
-  const message = createAssistantMessage(
-    Array.from({ length: total }).flatMap((_, index) => [
-      read(`call-${index}`),
-      createToolResultBlock(`call-${index}`, "read", index < 2 ? "Unavailable" : "Loaded", {
-        isError: index < 2,
-      }),
-    ]),
-  );
-  const summary = await renderSummary(total ? [message] : [], "work", {
-    durationMs: null,
-    prepareHistory: true,
-  });
-  const text = summary?.textContent?.replace(/\s+/gu, " ").trim();
-  expect(text).toBe(total ? "Worked · 2 failed" : "Worked");
-});
+it.each([0, 10])(
+  "does not tally recovered failures in completed work (%i calls)",
+  async (total) => {
+    const message = createAssistantMessage(
+      Array.from({ length: total }).flatMap((_, index) => [
+        read(`call-${index}`),
+        createToolResultBlock(`call-${index}`, "read", index < 2 ? "Unavailable" : "Loaded", {
+          isError: index < 2,
+        }),
+      ]),
+    );
+    const summary = await renderSummary(total ? [message] : [], "work", {
+      durationMs: null,
+      prepareHistory: true,
+    });
+    const text = summary?.textContent?.replace(/\s+/gu, " ").trim();
+    expect(text).toBe("Worked");
+  },
+);
 
 async function workSummaryText(messages: Record<string, unknown>[]) {
   return (await renderSummary(messages, "work", { durationMs: null, expanded: true }))?.textContent
@@ -297,7 +310,7 @@ it.each([
       content: isError ? "Command failed" : "Command completed",
       isError,
     })),
-    expected: "Worked · 2 tool calls · 1 failed",
+    expected: "Worked · 2 tool calls",
   },
   ...[false, true].map((reverse) => {
     const prepared = readResult("prepared", true, { activity: [preparedOutcome()] });
@@ -313,7 +326,7 @@ it.each([
     return {
       name: `mixed history, reverse=${reverse}`,
       messages,
-      expected: "Worked · 2 tool calls · 1 failed",
+      expected: "Worked · 2 tool calls",
     };
   }),
   ...["empty", "hidden", "suppressed"].map((kind) => ({
@@ -332,7 +345,7 @@ it.each([
       }),
       readResult("visible"),
     ],
-    expected: "Worked · 1 tool call · 1 failed",
+    expected: "Worked · 1 tool call",
   })),
   ...["raw", "blocked", "skipped"].map((kind) => ({
     name: `${kind} steering skip`,
@@ -351,14 +364,14 @@ it.each([
             }),
       }),
     ],
-    expected: `Worked · 1 tool call · 1 ${kind === "blocked" ? "blocked" : "skipped"}`,
+    expected: kind === "blocked" ? "Worked · 1 tool call · 1 blocked" : "Worked · 1 tool call",
   })),
   {
-    name: "unresolved anonymous raw call",
+    name: "unpaired anonymous raw call does not claim an unknown outcome",
     messages: [
       createAssistantMessage([{ type: "toolCall", name: "exec", arguments: { command: "pwd" } }]),
     ],
-    expected: "Worked · 1 tool call · 1 unknown",
+    expected: "Worked · 1 tool call",
   },
 ])("summarizes work outcomes: $name", async ({ messages, expected }) => {
   expect(await workSummaryText(messages)).toBe(expected);
@@ -410,15 +423,10 @@ it.each([
   );
   const { container, draw } = mountGroup(history.messages);
   await draw(false);
-  if (isError) {
-    const summary = container.querySelector(".chat-activity-group__summary");
-    expect(summary?.textContent).toContain("1 command");
-    expect(summary?.textContent).toContain("1 failed");
-    expect(container.querySelector(".chat-tool-row__title")).toBeNull();
-    return;
-  }
   expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
   expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(title);
+  // The step's own row carries its outcome now that groups no longer count it.
+  expect(container.querySelector(".chat-tool-failure") !== null).toBe(isError);
   expect(container.querySelector(".chat-progress-card-receipt")).toBeNull();
   await draw(true);
   expect(

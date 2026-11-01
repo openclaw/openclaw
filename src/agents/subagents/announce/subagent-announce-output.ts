@@ -211,7 +211,7 @@ export async function readSubagentOutput(
   const collectorTurn = options?.completedCollectorTurn;
   if (
     collectorTurn &&
-    (!options?.sessionTarget ||
+    (!options.sessionTarget ||
       !Number.isFinite(collectorTurn.startedAt) ||
       !Number.isFinite(collectorTurn.endedAt) ||
       collectorTurn.endedAt < collectorTurn.startedAt)

@@ -6,9 +6,11 @@ import { clampText } from "../lib/format.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
+import {
+  sharedAgentsProjection,
+  sharedSessionsRevision,
+} from "../lib/reactive/shared-application-projections.ts";
 import { findUiSessionRow, sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
@@ -30,8 +32,8 @@ export function renderSidebarOutboxItem(
   const connectionRevision = context.gateway.connectionRevision;
   const recoveryScope = context.gateway.snapshot.client?.recoveryScope;
   const gateway = projectGateway(context.gateway);
-  const agents = projectAgents(context.agents);
-  const sessions = projectOwner(context.sessions, () => undefined);
+  const agents = sharedAgentsProjection(context.agents);
+  const sessions = sharedSessionsRevision(context.sessions);
   const view = createMemo(() => {
     gateway.revision();
     agents.revision();
@@ -48,12 +50,10 @@ export function renderSidebarOutboxItem(
       ? `${clampText(normalizeAgentLabel(agent), 60)} · ${conversation}`
       : conversation;
     const label = t(
-      entry.command
-        ? entry.unconfirmed
-          ? "attention.outbox.commandUnconfirmed"
-          : "attention.outbox.commandFailed"
-        : entry.unconfirmed
-          ? "attention.outbox.unconfirmed"
+      entry.held
+        ? "attention.outbox.held"
+        : entry.command
+          ? "attention.outbox.commandFailed"
           : "attention.outbox.failed",
     );
     const target = sessionNavigationTarget({
@@ -66,13 +66,7 @@ export function renderSidebarOutboxItem(
     });
     const offline = context.gateway.snapshot.phase !== "connected";
     const guidance = [
-      t(
-        entry.unconfirmed
-          ? entry.command
-            ? "attention.outbox.checkCommandBeforeRetry"
-            : "attention.outbox.checkBeforeRetry"
-          : "attention.outbox.reviewHint",
-      ),
+      t("attention.outbox.reviewHint"),
       ...(offline ? [t("attention.outbox.offlineHint")] : []),
     ].join(" ");
     return { label, scope, target, offline, guidance, entry };

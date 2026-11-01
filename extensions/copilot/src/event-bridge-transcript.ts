@@ -124,8 +124,16 @@ export function buildAssistantProjectionGroup(
     });
     return message.content.length > 0 ? [message] : [];
   });
-  const replayIncomplete = group.chunks.some(({ event }) =>
-    hasUnprojectedAssistantReplayState(event),
+  // The SDK contract marks these as provider/session-bound state or custom
+  // call shape. AgentMessage cannot represent them, so native replay must stay.
+  const replayIncomplete = group.chunks.some(
+    ({ event }) =>
+      event.data.citations !== undefined ||
+      event.data.serverTools !== undefined ||
+      event.data.reasoningWireField !== undefined ||
+      event.data.reasoningOpaque !== undefined ||
+      event.data.encryptedContent !== undefined ||
+      event.data.toolRequests?.some((request) => request.type === "custom") === true,
   );
   const last = messages.at(-1);
   if (!last) {
@@ -174,21 +182,6 @@ export function buildAssistantProjectionGroup(
     replayIncomplete,
     toolCallIds,
   };
-}
-
-function hasUnprojectedAssistantReplayState(
-  event: Extract<SessionEvent, { type: "assistant.message" }>,
-): boolean {
-  // The SDK contract marks these as provider/session-bound state or custom
-  // call shape. AgentMessage cannot represent them, so native replay must stay.
-  return (
-    event.data.citations !== undefined ||
-    event.data.serverTools !== undefined ||
-    event.data.reasoningWireField !== undefined ||
-    event.data.reasoningOpaque !== undefined ||
-    event.data.encryptedContent !== undefined ||
-    event.data.toolRequests?.some((request) => request.type === "custom") === true
-  );
 }
 
 export function resolveAssistantUsage(

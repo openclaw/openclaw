@@ -16,6 +16,8 @@ import {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../test-helpers/control-ui-sidebar-list-fixture.ts";
+import { installTeamScaleSidebarPresentation } from "../test-helpers/control-ui-sidebar-presentation.test-support.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
@@ -25,15 +27,15 @@ const suite = createControlUiE2eSuite({ name: "Complete sidebar roster handoff" 
 suite.define(() => {
   it.each([
     { face: "chat", cap: false, rootLast: false },
-    { face: "dashboard", cap: false, rootLast: false },
     { face: "chat", cap: true, rootLast: false },
-    { face: "chat", cap: false, rootLast: true },
+    { face: "dashboard", cap: false, rootLast: true },
   ] as const)(
     "releases the $face sidebar when complete or capped (cap=$cap, rootLast=$rootLast)",
     async ({ face, cap, rootLast }) => {
       const fixture = createControlUiTeamScaleFixture({
         baseUrl: suite.server.baseUrl,
         sidebarPersistentChildren: true,
+        sidebarPresentation: true,
       });
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
       const owner = fixture.sidebarListInput.rows[0]!.owner!;
@@ -96,12 +98,33 @@ suite.define(() => {
           await page.addInitScript({
             content: `{ const __name = (fn) => fn; (${warmReloadProbe.toString()})(); }`,
           });
+          await page.addInitScript({
+            content: `(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});`,
+          });
           await page.goto(
             controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),
           );
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
           const sidebar = page.locator("aside.sidebar");
+          const viewport = sidebar.locator(".sidebar-shell__body");
+          const geometry = () =>
+            sidebar.evaluate((element) => {
+              const scroller = element.querySelector<HTMLElement>(".sidebar-shell__body")!;
+              return {
+                scrollTop: scroller.scrollTop,
+                height: scroller.clientHeight,
+                scrollHeight: scroller.scrollHeight,
+                top: scroller.getBoundingClientRect().top,
+                rows: [...element.querySelectorAll<HTMLElement>(".sidebar-recent-session")].map(
+                  (row) => ({
+                    key: row.getAttribute("data-session-key"),
+                    top: row.getBoundingClientRect().top,
+                    height: row.getBoundingClientRect().height,
+                  }),
+                ),
+              };
+            });
           const capture = async (stage: string) => {
             const frame = await takeControlUiScreenshotFrame(page, sidebar, [sidebar], {
               animations: "disabled",
@@ -113,7 +136,7 @@ suite.define(() => {
             page.locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]');
           await saved().waitFor();
           const toggle = sidebar.locator(`[data-child-session-toggle="${parentKey}"]`);
-          await toggle.waitFor();
+          await revealSidebarTarget(viewport, toggle);
           if ((await toggle.getAttribute("aria-expanded")) !== "true") {
             await toggle.click();
           }
@@ -147,16 +170,64 @@ suite.define(() => {
           await expansion.evaluate((observation) => observation.done);
           await expansion.dispose();
           await saved().waitFor();
-          const rowKeys = () =>
-            sidebar
-              .locator(".sidebar-session-content .sidebar-recent-session")
-              .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-session-key")));
-          const expected = await rowKeys();
-          expect(expected.length).toBeGreaterThan(10);
+          await viewport.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          // The selected pin is retained offscreen; wait for an unretained top
+          // row to prove the scroll event has published the new visible window.
+          await sidebar.locator(`[data-session-key="${fixture.pinnedKeys[1]}"]`).waitFor();
+          await sidebar.locator(".session-row-badge--pull-request").nth(6).waitFor();
+          const beforeReload = await geometry();
+          const indicators = () =>
+            sidebar.locator(".sidebar-recent-session").evaluateAll((rows) =>
+              rows.map((row) => ({
+                key: row.getAttribute("data-session-key"),
+                unread: row.querySelectorAll(".session-unread-dot,.session-glyph__badge--unread")
+                  .length,
+                badges: [...row.querySelectorAll(".session-row-badge")].map((badge) => ({
+                  class: badge.className,
+                  state: badge.getAttribute("data-pull-request-state"),
+                })),
+              })),
+            );
+          const beforeIndicators = await indicators();
+          expect(beforeIndicators.some((row) => row.unread > 0)).toBe(true);
+          await writeFile(
+            path.join(suite.artifactDir, `${face}-before-reload-geometry.json`),
+            JSON.stringify(beforeReload, null, 2),
+          );
 
           await page.reload();
           await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
           await capture("cached");
+          const cachedGeometry = await geometry();
+          // Connection status owns a footer while the Gateway reconnects. Keep
+          // exact content and geometry proof over the viewport both states share.
+          const commonTop = Math.max(beforeReload.top, cachedGeometry.top);
+          const commonBottom = Math.min(
+            beforeReload.top + beforeReload.height,
+            cachedGeometry.top + cachedGeometry.height,
+          );
+          const visibleGeometry = (layout: typeof beforeReload) =>
+            layout.rows.filter((row) => row.top + row.height > commonTop && row.top < commonBottom);
+          const expectedGeometry = visibleGeometry(beforeReload);
+          const expected = expectedGeometry.map((row) => row.key);
+          expect((await indicators()).filter((row) => expected.includes(row.key))).toEqual(
+            beforeIndicators.filter((row) => expected.includes(row.key)),
+          );
+          expect(expected.length).toBeGreaterThan(10);
+          expect(visibleGeometry(cachedGeometry)).toEqual(expectedGeometry);
+          const rowKeys = () =>
+            sidebar.locator(".sidebar-session-content .sidebar-recent-session").evaluateAll(
+              (rows, bounds) =>
+                rows
+                  .filter((row) => {
+                    const rect = row.getBoundingClientRect();
+                    return rect.bottom > bounds.top && rect.top < bounds.bottom;
+                  })
+                  .map((row) => row.getAttribute("data-session-key")),
+              { top: commonTop, bottom: commonBottom },
+            );
           const childMatch = { spawnedBy: parentKey };
           await gateway.deferNext("sessions.list", childMatch);
           await gateway.deferNext("sessions.list", ownerMatch);
@@ -175,6 +246,10 @@ suite.define(() => {
             match: ownerMatch,
           });
           expect(await sidebar.getAttribute("data-snapshot-state")).toBe("cached");
+          await writeFile(
+            path.join(suite.artifactDir, `${face}-cached-geometry.json`),
+            JSON.stringify(await geometry(), null, 2),
+          );
           expect(await rowKeys()).toEqual(expected);
           await gateway.resolveDeferred(
             "sessions.list",
@@ -202,6 +277,13 @@ suite.define(() => {
               await gateway.resolveDeferred("sessions.list", childResult, { match: childMatch });
             }
           };
+          const cachedVisibleRows = await sidebar.evaluateHandle(
+            (element, keys) =>
+              [
+                ...element.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+              ].filter((row) => keys.includes(row.getAttribute("data-session-key"))),
+            expected,
+          );
           try {
             if (rootLast) {
               await releaseChildren();
@@ -234,6 +316,7 @@ suite.define(() => {
               await page.clock.runFor(3001);
               await page.clock.resume();
               await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+              await revealSidebarTarget(viewport, toggle);
               for (const key of childKeys) {
                 await sidebar.locator(`[data-session-key="${key}"]`).waitFor({ state: "detached" });
               }
@@ -272,6 +355,7 @@ suite.define(() => {
                 snapshotAt: now,
               } satisfies GatewaySessionRow;
               const renamedRow = sidebar.locator(`[data-session-key="${renamed.key}"]`);
+              await revealSidebarTarget(viewport, renamedRow);
               const retainedRow = await renamedRow.elementHandle();
               expect(retainedRow).not.toBeNull();
               const stoppedRow = sidebar.locator(`[data-session-key="${stopped.key}"]`);
@@ -328,7 +412,10 @@ suite.define(() => {
               await sidebar
                 .getByText(created.label, { exact: true })
                 .waitFor({ state: "detached" });
-              await sidebar.locator(`[data-session-key="${otherOwnerRow.key}"]`).waitFor();
+              await revealSidebarTarget(
+                viewport,
+                sidebar.locator(`[data-session-key="${otherOwnerRow.key}"]`),
+              );
             }
 
             await releaseChildren();
@@ -376,23 +463,36 @@ suite.define(() => {
               }
             } else {
               expect(finalRows).toEqual(expected);
+              expect(visibleGeometry(await geometry())).toEqual(expectedGeometry);
             }
             expect(first).toBeGreaterThanOrEqual(0);
             if (!cap) {
-              expect(frames.every((frame) => frame.rowIds.length === expected.length)).toBe(true);
               expect(
-                frames.every((frame) =>
-                  frame.rowIds.every((key, index) => key === expected[index]),
-                ),
+                frames.every((frame) => {
+                  const visible = frame.rowIds.filter((key) => expected.includes(key));
+                  return (
+                    visible.length === expected.length &&
+                    visible.every((key, index) => key === expected[index])
+                  );
+                }),
               ).toBe(true);
-              expect(frames.at(-1)?.retained).toBe(expected.length);
+              expect(frames.at(-1)?.retained).toBeGreaterThanOrEqual(expected.length);
+              expect(
+                await cachedVisibleRows.evaluate((rows) => rows.every((row) => row.isConnected)),
+              ).toBe(true);
             }
             expect(
               frames.filter(
                 (frame, index) => index > 0 && frame.cached !== frames[index - 1]!.cached,
               ),
             ).toHaveLength(1);
+            if (!cap) {
+              await revealSidebarTarget(viewport, toggle);
+              expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+              await sidebar.locator(`[data-session-key="${childKeys[0]}"]`).waitFor();
+            }
           } finally {
+            await cachedVisibleRows.dispose();
             await releaseChildren();
           }
         },

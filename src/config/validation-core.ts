@@ -30,7 +30,7 @@ import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
-import { findLegacyConfigRuleIssues } from "./legacy.js";
+import { findLegacyConfigRuleIssues } from "./legacy.shared.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import {
   createModelPolicyRefValidator,

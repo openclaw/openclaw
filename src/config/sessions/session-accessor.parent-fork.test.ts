@@ -22,6 +22,7 @@ import { resolveSqliteStoreScope, toDatabaseOptions } from "./session-accessor.s
 import { withTranscriptWriteSequence } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as storeTargetRuntime from "./session-store-target-runtime.js";
+import { messageEvent as createMessageEvent } from "./transcript-message.test-support.js";
 
 const forkableClaudeCliBackend = {
   id: "claude-cli",
@@ -196,54 +197,49 @@ it("checks authority inside same- and cross-database transcript commits", async 
   }
 });
 
-it("forks the active branch across stores without caller-thread SQL", async () => {
-  const { root, storePath } = await createStore();
-  const targetStorePath = path.join(root, "target-sessions.json");
-  const cwd = path.join(root, "workspace");
-  await fs.mkdir(cwd);
-  const parentSessionId = "parent-session";
-  const lines: Record<string, unknown>[] = [
-    header(parentSessionId, cwd, "2026-05-01T00:00:00.000Z"),
-    messageEvent("user-1", null, "user", "hello"),
-    messageEvent("assistant-1", "user-1", "assistant", [{ type: "text", text: "hi" }]),
-    labelEvent("label-1", "assistant-1", "user-1", "start"),
-    messageEvent("delivery-side-branch", "label-1", "assistant", "side delivery"),
-    leafEvent("active-leaf", "delivery-side-branch", "label-1"),
-  ];
-  await seedParentTranscript(storePath, parentSessionId, lines);
+it.each([undefined, "missing-ancestor"])(
+  "forks the active branch across stores (ancestor=%s)",
+  async (ancestor) => {
+    const { root, storePath } = await createStore();
+    const targetStorePath = path.join(root, "target-sessions.json");
+    const cwd = path.join(root, "workspace");
+    await fs.mkdir(cwd);
+    const parentSessionId = "parent-session";
+    const lines: Record<string, unknown>[] = [
+      header(parentSessionId, cwd, "2026-05-01T00:00:00.000Z"),
+      messageEvent("user-1", ancestor, "user", "hello"),
+      messageEvent("assistant-1", undefined, "assistant", [{ type: "text", text: "hi" }]),
+      labelEvent("label-1", "assistant-1", "user-1", "start"),
+      messageEvent("delivery-side-branch", "label-1", "assistant", "side delivery"),
+      leafEvent("active-leaf", "delivery-side-branch", "label-1"),
+    ];
+    await seedParentTranscript(storePath, parentSessionId, lines);
 
-  const fork = await withoutHostSql(() =>
-    forkChildTranscript(storePath, parentSessionId, targetStorePath),
-  );
-  expect(fork.sessionFile).toBe("agent:main:child");
-  expect(fork.sessionId).not.toBe(parentSessionId);
-  const forkedEntries = await childEvents(targetStorePath, fork.sessionId);
-  const forkedHeader = forkedEntries[0];
-  expect(forkedHeader).toMatchObject({ type: "session", version: 3, id: fork.sessionId, cwd });
-  expect(
-    parseSqliteSessionFileMarker(
-      typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
-    ),
-  ).toMatchObject({
-    agentId: "main",
-    sessionId: parentSessionId,
-  });
-  expect(forkedEntries.map((entry) => entry.type)).toEqual([
-    "session",
-    "message",
-    "message",
-    "label",
-    "leaf",
-  ]);
-  const forkedLabel = forkedEntries.find((entry) => entry.type === "label");
-  expect(forkedLabel).toMatchObject({ type: "label", targetId: "user-1", label: "start" });
-  expect(forkedEntries.at(-1)).toMatchObject({
-    type: "leaf",
-    targetId: "label-1",
-    appendParentId: "label-1",
-  });
-  expect(JSON.stringify(forkedEntries)).not.toContain("side delivery");
-});
+    const fork = await withoutHostSql(() =>
+      forkChildTranscript(storePath, parentSessionId, targetStorePath),
+    );
+    expect(fork.sessionFile).toBe("agent:main:child");
+    expect(fork.sessionId).not.toBe(parentSessionId);
+    const forkedEntries = await childEvents(targetStorePath, fork.sessionId);
+    const forkedHeader = forkedEntries[0];
+    expect(
+      parseSqliteSessionFileMarker(
+        typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
+      ),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
+    expect(forkedEntries).toMatchObject([
+      { type: "session", version: 3, id: fork.sessionId, cwd },
+      { type: "message", id: "user-1", parentId: null },
+      { type: "message", id: "assistant-1", parentId: "user-1" },
+      { type: "label", targetId: "user-1", label: "start" },
+      { type: "leaf", targetId: "label-1", appendParentId: "label-1" },
+    ]);
+    expect(JSON.stringify(forkedEntries)).not.toContain("side delivery");
+  },
+);
 
 it("keeps opaque append-parent metadata on the active fork branch", async () => {
   const { records, open } = await forkFixture("parent-opaque", [
@@ -257,10 +253,7 @@ it("keeps opaque append-parent metadata on the active fork branch", async () => 
     }),
   ]);
   const forkedRecords = await records();
-  const serialized = JSON.stringify(forkedRecords);
-  expect(serialized).toContain('"id":"active-root"');
-  expect(serialized).toContain('"id":"plugin-metadata"');
-  expect(serialized).not.toContain("side delivery");
+  expect(JSON.stringify(forkedRecords)).not.toContain("side delivery");
   expect(forkedRecords.find((entry) => entry.id === "plugin-metadata")).toMatchObject({
     parentId: "active-root",
   });
@@ -313,49 +306,15 @@ it("keeps an explicit empty visible branch separate from its opaque append paren
   });
 });
 
-it("keeps a reachable branch suffix when an older parent is missing", async () => {
-  const { records } = await forkFixture("parent-missing-ancestor", [
-    messageEvent("reachable-tail", "missing-parent", "assistant", "reachable tail"),
-  ]);
-
-  const serialized = JSON.stringify(await records());
-  expect(serialized).toContain("reachable tail");
-  expect(serialized).not.toContain("missing-parent");
-});
-
 it("keeps visible history when the next append explicitly starts a root branch", async () => {
   const { records, open } = await forkFixture("parent-root-append", [
     messageEvent("visible-root", null, "assistant", "visible history"),
-    leafEvent("root-append-control", "inactive-tail", "visible-root", {
-      appendParentId: null,
-    }),
+    leafEvent("root-append-control", "inactive-tail", "visible-root", { appendParentId: null }),
   ]);
-
   const reopened = await open();
   expect(reopened.buildSessionContext().messages).toHaveLength(1);
   await appendUser(reopened, "new root");
   expect((await records()).at(-1)).toMatchObject({ type: "message", parentId: null });
-});
-
-it("preserves supported current-version linear transcripts", async () => {
-  const { records, open } = await forkFixture("parent-linear", [
-    messageEvent("linear-user", undefined, "user", "hello"),
-    messageEvent("linear-assistant", undefined, "assistant", "hi"),
-    metadata("linear-metadata", "linear-assistant"),
-  ]);
-
-  expect((await records()).slice(1)).toMatchObject([
-    { id: "linear-user", parentId: null },
-    { id: "linear-assistant", parentId: "linear-user" },
-    { id: "linear-metadata", parentId: "linear-assistant" },
-  ]);
-  const reopened = await open();
-  expect(reopened.buildSessionContext().messages).toHaveLength(2);
-  await appendUser(reopened);
-  expect((await records()).at(-1)).toMatchObject({
-    type: "message",
-    parentId: "linear-metadata",
-  });
 });
 
 it("branches the current parent CLI session and preserves writes made during preparation", async () => {
@@ -455,12 +414,7 @@ it.each(["executor", "discovery"] as const)(
     await replaceSessionEntry(parentScope, { sessionId: "typed-parent", updatedAt: 1 });
     await replaceTranscriptEvents(parentTranscriptScope, [
       { type: "session", version: 3, id: "typed-parent", timestamp: "2026-09-15T00:00:00Z" },
-      {
-        type: "message",
-        id: "assistant",
-        parentId: null,
-        message: { role: "assistant", content: "parent context" },
-      },
+      createMessageEvent("assistant", null, { role: "assistant", content: "parent context" }),
     ]);
     const parentEntry = loadSessionEntry(parentScope);
     const parentEvents = await loadTranscriptEvents(parentTranscriptScope);

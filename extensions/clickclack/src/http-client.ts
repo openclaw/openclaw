@@ -283,7 +283,7 @@ export function createClickClackClient(options: {
   }
 
   return {
-    me: async (): Promise<ClickClackUser> => requestObject("user", "/api/me"),
+    me: (): Promise<ClickClackUser> => requestObject("user", "/api/me"),
     setBotCommands: async (
       commands: { command: string; description: string; args_hint?: string }[],
     ): Promise<ClickClackBotCommand[]> =>
@@ -291,7 +291,7 @@ export function createClickClackClient(options: {
         method: "PUT",
         body: JSON.stringify({ commands }),
       }),
-    workspaces: async (): Promise<ClickClackWorkspace[]> =>
+    workspaces: (): Promise<ClickClackWorkspace[]> =>
       requestObject("workspaces", "/api/workspaces"),
     channels: async (workspaceId: string): Promise<ClickClackChannel[]> =>
       requestObject("channels", `/api/workspaces/${encodeURIComponent(workspaceId)}/channels`),
@@ -411,7 +411,7 @@ export function createClickClackClient(options: {
       ),
     message: async (messageId: string): Promise<NonceObjects["message"]> =>
       requestObject("message", `/api/messages/${encodeURIComponent(messageId)}`),
-    findMessageByNonce: async (params: {
+    findMessageByNonce: (params: {
       workspaceId: string;
       nonce: string;
     }): Promise<NonceObjects["message"] | undefined> => findByNonce("message", params),

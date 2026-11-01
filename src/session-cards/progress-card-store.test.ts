@@ -10,10 +10,6 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import {
-  AGENT_PROGRESS_CARD_SCHEMA_SQL,
-  OPENCLAW_AGENT_BOARD_SCHEMA_SQL,
-} from "../state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
   clearSessionProgressCardForReset,
@@ -36,8 +32,8 @@ function measure<T>(db: DatabaseSync, operation: () => T) {
     expect.soft(counter.rowCounts.all).toBeGreaterThan(0);
     expect.soft(counter.textBytes.all).toBeLessThan(256);
     expect
-      .soft(reads.queries.filter((sql) => /^select .* from "session_progress_cards"/iu.test(sql)))
-      .toHaveLength(0);
+      .soft(reads.queries.some((sql) => /^select .* from "session_progress_cards"/iu.test(sql)))
+      .toBe(false);
     return result;
   } finally {
     counter.restore();
@@ -57,6 +53,10 @@ describe("session progress card store", () => {
   const setSteps = (json: string) =>
     db.prepare("UPDATE session_progress_cards SET steps_json = ?").run(json);
   const cardAt = (revision: number) => ({ card: expect.objectContaining({ revision }) });
+  const dropLazyTable = () => {
+    db.exec("DROP TABLE session_progress_cards");
+    admitSqliteSchema(db);
+  };
   const expectStored = (
     revision: number,
     updated_at: number,
@@ -92,41 +92,34 @@ describe("session progress card store", () => {
     }
   });
 
-  it.each([false, true])("replaces, clears, and resets cards (malformed=%s)", (malformed) => {
+  it("replaces, clears, and resets cards without decoding their old payload", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     const markdown = "é\0" + "x".repeat(4096);
     const nextMarkdown = "Second " + markdown;
     const steps = STEPS.map((entry) => ({ ...entry, step: entry.step + "x".repeat(400) }));
-    const setOldSteps = () => setSteps(malformed ? "{" : JSON.stringify(steps));
     write({ markdown, steps });
     expectStored(1, 1000, markdown, JSON.stringify(steps));
-    setOldSteps();
+    setSteps("{");
     clock.mockReturnValue(2000);
-    expect(measure(db, () => write({ markdown: nextMarkdown }))).toEqual({
-      card: {
-        sessionKey: SESSION_KEY,
-        markdown: nextMarkdown,
-        revision: 2,
-        updatedAt: 2000,
-      },
-    });
-    expect(read()).toEqual(expect.objectContaining({ markdown: nextMarkdown, revision: 2 }));
-    expect(read()?.steps).toBeUndefined();
+    const expected = {
+      sessionKey: SESSION_KEY,
+      markdown: nextMarkdown,
+      revision: 2,
+      updatedAt: 2000,
+    };
+    expect(measure(db, () => write({ markdown: nextMarkdown }))).toEqual({ card: expected });
+    expect(read()).toEqual(expected);
     expectStored(2, 2000, nextMarkdown);
-    setOldSteps();
+    setSteps("{");
     clock.mockReturnValue(3000);
     expect(measure(db, () => write({ markdown: "  \n ", steps: [] }))).toEqual({ cleared: true });
     expect(read()).toBeNull();
     expectStored(3, 3000);
     write({ markdown, steps });
-    setOldSteps();
-    const foreign = new DatabaseSync(dbPath);
-    try {
-      foreign
-        .prepare("UPDATE session_progress_cards SET revision = ? WHERE session_key = ?")
-        .run(7, SESSION_KEY);
-    } finally {
-      foreign.close();
+    setSteps("{");
+    {
+      using foreign = new DatabaseSync(dbPath);
+      foreign.prepare("UPDATE session_progress_cards SET revision = 7").run();
     }
     clock.mockReturnValue(4000);
     expect(runSqliteImmediateTransactionSync(db, () => measure(db, reset))).toBe(true);
@@ -141,59 +134,41 @@ describe("session progress card store", () => {
   it("treats a missing lazy table as no card without creating it", () => {
     db.close();
     db = new DatabaseSync(":memory:");
-    db.exec(
-      OPENCLAW_AGENT_SCHEMA_SQL.replace(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "").replace(
-        AGENT_PROGRESS_CARD_SCHEMA_SQL,
-        "",
-      ),
-    );
-
     expect(reset()).toBe(false);
     expect(read()).toBeNull();
     expect(
-      db
-        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-        .get("session_progress_cards"),
+      db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'session_progress_cards'").get(),
     ).toBeUndefined();
   });
 
   it("creates lazy storage once and retains admitted facts across warm writes and reads", () => {
-    db.exec("DROP TABLE session_progress_cards");
-    admitSqliteSchema(db);
+    dropLazyTable();
     expect(facts()?.tables.has("session_progress_cards")).toBe(false);
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
     write({ markdown: "First" });
     expect(exec.mock.calls.filter(([sql]) => /CREATE TABLE/iu.test(sql))).toHaveLength(1);
     const admittedFacts = facts();
     expect(admittedFacts?.tables.has("session_progress_cards")).toBe(true);
-    const sibling = openNodeSqliteDatabase(dbPath, { readOnly: true });
+    using sibling = openNodeSqliteDatabase(dbPath, { readOnly: true });
     const reads = observeSqliteReadSql(StatementSync.prototype);
-    try {
-      admitSqliteSchema(sibling);
-      const siblingFacts = getAdmittedSqliteSchemaFacts(sibling);
-      exec.mockClear();
-      reads.queries.length = 0;
-
-      write({ markdown: "Second" });
-      expect(read()).toMatchObject({ markdown: "Second", revision: 2 });
-      expect(facts()).toBe(admittedFacts);
-      expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
-      write({});
-      write({ markdown: "Next task" });
-      expect(reset()).toBe(true);
-      expect(read()).toBeNull();
-      expect(facts()).toBe(admittedFacts);
-      expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
-      expect(exec.mock.calls.filter(([sql]) => /CREATE/iu.test(sql))).toEqual([]);
-      expect(reads.queries.filter((sql) => /sqlite_schema|sqlite_master/iu.test(sql))).toEqual([]);
-    } finally {
-      sibling.close();
-    }
+    admitSqliteSchema(sibling);
+    const siblingFacts = getAdmittedSqliteSchemaFacts(sibling);
+    exec.mockClear();
+    reads.queries.length = 0;
+    write({ markdown: "Second" });
+    expect(read()).toMatchObject({ markdown: "Second", revision: 2 });
+    write({});
+    write({ markdown: "Next task" });
+    expect(reset()).toBe(true);
+    expect(read()).toBeNull();
+    expect(facts()).toBe(admittedFacts);
+    expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
+    expect(exec.mock.calls.filter(([sql]) => /CREATE/iu.test(sql))).toEqual([]);
+    expect(reads.queries.filter((sql) => /sqlite_schema|sqlite_master/iu.test(sql))).toEqual([]);
   });
 
   it("recreates lazy storage after rolling back its first write", () => {
-    db.exec("DROP TABLE session_progress_cards");
-    admitSqliteSchema(db);
+    dropLazyTable();
     let transactionalFacts: ReturnType<typeof getAdmittedSqliteSchemaFacts>;
     expect(() =>
       runSqliteImmediateTransactionSync(db, () => {
@@ -215,11 +190,9 @@ describe("session progress card store", () => {
     admitSqliteSchema(db);
     write({ markdown: "Before foreign DDL" });
     const admittedFacts = facts();
-    const foreign = openNodeSqliteDatabase(dbPath);
-    try {
+    {
+      using foreign = openNodeSqliteDatabase(dbPath);
       foreign.exec("DROP TABLE session_progress_cards");
-    } finally {
-      foreign.close();
     }
     const reads = observeSqliteReadSql(StatementSync.prototype);
     write({ markdown: "After foreign DDL" });
@@ -230,17 +203,14 @@ describe("session progress card store", () => {
 
   it("deletes the card when its owning session node is deleted", () => {
     write({ markdown: "Owned by the session" });
-
     db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run(SESSION_KEY);
-
     expect(read()).toBeNull();
   });
 
   it("dismisses the card only at its expected revision", () => {
     vi.spyOn(Date, "now").mockReturnValue(1000);
-    const steps = [{ step: "Done", status: "completed" as const }];
+    const steps = STEPS;
     write({ steps });
-
     setSteps("{");
     const malformed = stored();
     expect(() => write({ expectedRevision: 2 })).toThrow(SyntaxError);
@@ -248,26 +218,21 @@ describe("session progress card store", () => {
     setSteps(JSON.stringify(steps));
 
     expect(write({ expectedRevision: 2 })).toEqual(cardAt(1));
-    expect(read()).not.toBeNull();
+    expect(read()).toMatchObject({ steps, revision: 1 });
     expect(write({ expectedRevision: 1 })).toEqual({ cleared: true });
     expect(read()).toBeNull();
-
+    expect(write({ expectedRevision: 2 })).toEqual({ card: null });
+    expect(stored()?.revision).toBe(2);
     expect(write({ steps: [{ step: "New work", status: "in_progress" }] })).toEqual(cardAt(3));
     expect(write({ expectedRevision: 1 })).toEqual(cardAt(3));
   });
 
-  it("dismisses active and note-only cards at the expected revision", () => {
-    write({ steps: STEPS });
-    expect(write({ expectedRevision: 1 })).toEqual({ cleared: true });
-    expect(read()).toBeNull();
-    expect(write({ expectedRevision: 2 })).toEqual({ card: null });
-    expect(db.prepare("SELECT revision FROM session_progress_cards").get()?.revision).toBe(2);
-
+  it("dismisses note-only cards at the expected revision", () => {
     write({ markdown: "Still relevant" });
     const current = read();
-    expect(write({ expectedRevision: 1 })).toEqual({ card: current });
+    expect(write({ expectedRevision: 0 })).toEqual({ card: current });
     expect(read()).toEqual(current);
-    expect(write({ expectedRevision: 3 })).toEqual({ cleared: true });
+    expect(write({ expectedRevision: 1 })).toEqual({ cleared: true });
     expect(read()).toBeNull();
   });
 

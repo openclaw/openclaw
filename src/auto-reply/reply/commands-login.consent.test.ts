@@ -11,6 +11,7 @@ import {
   blockReplyOpts,
   buildLoginParams,
   dispatchLoginCommand,
+  loginResult as successfulLogin,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
@@ -33,16 +34,6 @@ const { getRuntimeConfigWriteApplication } =
 const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
 
 const currentModel = "other/current";
-
-function successfulLogin(profileId = "openai:owner", authRefresh = "refreshed") {
-  const provider = profileId.split(":")[0];
-  return {
-    providerId: provider,
-    methodId: provider === "openrouter" ? "oauth" : "device-code",
-    authRefresh,
-    profiles: [{ profileId, provider, mode: provider === "openrouter" ? "api_key" : "oauth" }],
-  };
-}
 
 async function readConfig(path: string): Promise<OpenClawConfig> {
   return JSON.parse(await fs.readFile(path, "utf8"));
@@ -172,21 +163,11 @@ it.each([
       const methodCommand = loginChoiceCommand(methods.reply, `${provider} device-code`);
       expect(methodCommand).toBe(`/login ${pluginId}/${provider}`);
       expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
-      runModelsAuthLoginFlowMock.mockImplementationOnce(
-        async (opts: ModelsAuthLoginFlowOptions) => {
-          await opts.prompter.note(`Continue with the ${provider} provider.`);
-          return successfulLogin(`${provider}:owner`);
-        },
-      );
-      const completed = await command(methodCommand);
+      runModelsAuthLoginFlowMock.mockResolvedValueOnce(successfulLogin(`${provider}:owner`));
+      await command(methodCommand);
       expect(runModelsAuthLoginFlowMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ ownerPluginId: pluginId, provider, method: "device-code" }),
       );
-      expect(delivery.onBlockReply).toHaveBeenCalledWith({
-        text: `Continue with the ${provider} provider.`,
-      });
-      expect(completed.reply?.text).toBe(`${label} login complete. Try your request again now.`);
-
       const refreshed = await command("/login refresh");
       expect(refreshed.reply?.text).toBe(
         "Sign-in status refreshed. Send /models to see available models.",
@@ -203,11 +184,15 @@ it.each([
 );
 
 it.each(["applied", "restart-pending"] as const)(
-  "waits for registered model-access application and reports %s",
+  "keeps consent after another login and waits for model-access application (%s)",
   async (status) => {
     await withRestrictedLogin("login-access-application", async (state, config) => {
       const command = (body: string) => dispatchLoginCommand(buildConsentParams(body, config));
       const initial = await command("/login openai");
+      runModelsAuthLoginFlowMock.mockResolvedValueOnce(successfulLogin("openrouter:default"));
+      const another = await command("/login openrouter/openrouter-oauth");
+      expect(another.reply?.text).toContain("OpenRouter login complete");
+      expect(runModelsAuthLoginFlowMock).toHaveBeenCalledTimes(2);
       const claimReady = createDeferredCore<RuntimeConfigWriteApplicationClaim>();
       let pendingClaim: RuntimeConfigWriteApplicationClaim | undefined;
       const stop = registerRuntimeConfigWriteListener((event) => {
@@ -237,7 +222,7 @@ it.each(["applied", "restart-pending"] as const)(
             : "Model access was saved, but OpenClaw has not confirmed it is active. Open Settings and select Apply changes, then send /models.",
         );
         expect(result.reply?.presentation).toBeUndefined();
-        expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
+        expect(runModelsAuthLoginFlowMock).toHaveBeenCalledTimes(2);
       } finally {
         pendingClaim?.settle("failed");
         stop();
@@ -308,20 +293,6 @@ it.each(["expired", "changed", "cancelled"] as const)(
     });
   },
 );
-
-it("keeps model access answerable after releasing the login reservation", async () => {
-  await withRestrictedLogin("login-access-lifetime", async (state, config) => {
-    const command = (body: string) => handleLoginCommand(buildConsentParams(body, config), true);
-    const initial = await command("/login codex");
-    const choice = loginChoiceCommand(initial?.reply);
-    runModelsAuthLoginFlowMock.mockResolvedValueOnce(successfulLogin("openrouter:default"));
-    const another = await command("/login openrouter/openrouter-oauth");
-    expect(another?.reply?.text).toContain("OpenRouter login complete");
-    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledTimes(2);
-    await command(choice);
-    await expectPolicy(state.configPath);
-  });
-});
 
 it.each(["show", "keep", "before-read", "preflight", "runtime-preflight"] as const)(
   "finishes login before applying model access (%s)",

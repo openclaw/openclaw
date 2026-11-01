@@ -171,8 +171,8 @@ suite.define(() => {
       await primaryModel.getByRole("button", { name: "Model: GPT-4.1", exact: true }).waitFor();
       await page.locator(".settings-sidebar__back").click();
       await waitForControlUiRoute(page, { routeId: "chat" });
-      const startup = await gateway.waitForRequest("chat.startup");
-      expect(startup.params).toMatchObject({ sessionKey: "agent:main:main" });
+      const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
+      expect(subscription.params).toMatchObject({ key: "agent:main:main" });
       await expect
         .poll(async () => (await page.locator(".sidebar-agent-card__name").textContent())?.trim())
         .toBe("Clawd");

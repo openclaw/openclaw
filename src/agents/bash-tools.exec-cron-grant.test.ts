@@ -26,12 +26,9 @@ import {
   revokeCronStandingGrant,
   resolveOperatorApproval,
 } from "../gateway/operator-approval-store.js";
+import { createExecApprovalPresentation } from "../gateway/operator-approval-store.test-support.js";
 import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { readExecApprovalsSnapshot, updateExecApprovals } from "../infra/exec-approvals-store.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -50,8 +47,9 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as cronGrant from "./bash-tools.exec-cron-grant.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 const commitExecAuthorizationMock = vi.hoisted(() =>
   vi.fn<typeof import("../infra/exec-approvals.js").commitExecAuthorizationLocked>(),
@@ -108,16 +106,6 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: callGatewayToolMock,
   readGatewayCallOptions: () => ({}),
 }));
-
-function captureSecurityEvents() {
-  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
-}
 
 const CRON_STORE_KEY = "/tmp/openclaw-exec-host-cron-store";
 const grantCommand =
@@ -177,6 +165,15 @@ const grantTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 const databaseOptions = () => ({ env: { ...process.env } });
+const replacePolicy = (defaults: { security?: "deny"; ask?: "always" }, mergeDefaults = true) => {
+  const file = readExecApprovalsSnapshot().file;
+  return updateExecApprovals({
+    update: {
+      kind: "replace",
+      file: { ...file, defaults: mergeDefaults ? { ...file.defaults, ...defaults } : defaults },
+    },
+  });
+};
 
 function seedCronJobRow() {
   const database = openOpenClawStateDatabase(databaseOptions());
@@ -201,16 +198,7 @@ async function mintStandingGrant(revision: string, expiresAtMs: number | null): 
     approval: {
       id: "cron-approval-1",
       kind: "exec",
-      presentation: {
-        kind: "exec",
-        commandText: grantCommand,
-        commandPreview: grantCommand,
-        warningText: null,
-        host: "gateway",
-        nodeId: null,
-        agentId: "main",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
+      presentation: createExecApprovalPresentation(grantCommand),
       source: {
         agentId: "main",
         sessionKey: "agent:main:cron:job-1",
@@ -323,7 +311,7 @@ async function runNativeCron(approval: Awaited<ReturnType<typeof runCron>>) {
     processTree: "owned-only",
   });
   try {
-    const run = await runExecProcess({
+    const run = await runExecFixture({
       command: grantCommand,
       execCommand: approval.execCommandOverride ?? grantCommand,
       workdir,
@@ -332,11 +320,6 @@ async function runNativeCron(approval: Awaited<ReturnType<typeof runCron>>) {
         HOME: workdir,
         ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
       },
-      usePty: false,
-      warnings: [],
-      maxOutput: 1000,
-      pendingMaxOutput: 1000,
-      notifyOnExit: false,
       timeoutSec: 10,
       scopeKey,
       startupSignal: controller.signal,
@@ -460,21 +443,9 @@ it.each([
     } else if (intervention === "cancel") {
       controller.abort();
     } else if (intervention === "policy deny" || intervention === "policy ask") {
-      const file = readExecApprovalsSnapshot().file;
-      await updateExecApprovals({
-        update: {
-          kind: "replace",
-          file: {
-            ...file,
-            defaults: {
-              ...file.defaults,
-              ...(intervention === "policy deny"
-                ? { security: "deny" as const }
-                : { ask: "always" as const }),
-            },
-          },
-        },
-      });
+      await replacePolicy(
+        intervention === "policy deny" ? { security: "deny" } : { ask: "always" },
+      );
     } else if (intervention === "fallback") {
       // A proven no-initiation retry revalidates without another consume.
       result.releaseSpawn?.("retry");
@@ -571,22 +542,17 @@ it("refuses policy tightening until a consumed remote launch acknowledges initia
   const result = await runCron();
   await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
   const acknowledgement = createDeferredCore();
-  const deny = () =>
-    updateExecApprovals({
-      update: {
-        kind: "replace",
-        file: { ...readExecApprovalsSnapshot().file, defaults: { security: "deny" } },
-      },
-    });
   try {
     const launch = vi.fn();
     result.initiateSpawn?.(launch, acknowledgement.promise);
     expect(launch).toHaveBeenCalledOnce();
     result.releaseSpawn?.();
-    await expect(deny()).rejects.toThrow("native launch acknowledgement is pending");
+    await expect(replacePolicy({ security: "deny" }, false)).rejects.toThrow(
+      "native launch acknowledgement is pending",
+    );
     acknowledgement.resolve();
     await acknowledgement.promise;
-    await expect(deny()).resolves.not.toBeNull();
+    await expect(replacePolicy({ security: "deny" }, false)).resolves.not.toBeNull();
     expect(await readGrantUseCounts()).toEqual([1]);
   } finally {
     acknowledgement.resolve();

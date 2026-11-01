@@ -40,8 +40,7 @@ deny still applies. Other CLI backends, node-hosted Claude CLI sessions, and
 settle batches do not regain requester tools. Message-tool-only replies keep
 their existing source-bound `message` grant. When that restricted surface needs
 its own Claude CLI session, the requester's next resumed turn receives the
-completion prompt and reply as quoted context when its account may replay saved
-history; see [CLI backends](/gateway/cli-backends#sessions).
+completion prompt and reply as bounded quoted context for that same native session; see [CLI backends](/gateway/cli-backends#sessions).
 
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
 `sessions_send`, and the `conversations_*` tools regardless of

@@ -62,7 +62,7 @@ describe("Codex catalog refresh deadline", () => {
     const owner = createCodexAppServerModelCatalog("codex");
     const result = expect(owner.load(params, pluginConfig)).resolves.toEqual({
       entries: [expect.objectContaining({ id: model.id, nativeRuntime: "codex" })],
-      outcomes: [{ provider: "openai", status: "ready" }],
+      outcomes: [{ provider: "openai", status: "ready", modelAccessPrograms: [] }],
     });
     await advance();
     await result;

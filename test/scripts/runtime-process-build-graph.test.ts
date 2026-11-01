@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
-import { standaloneRuntimeProcessBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
+import {
+  sharedRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildEntries,
+} from "../../scripts/lib/runtime-process-core-build-entries.mts";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const forbiddenInputs = [
@@ -14,6 +17,24 @@ const forbiddenInputs = [
 ];
 
 describe("standalone runtime process build graph", () => {
+  it("keeps small workers out of shared Gateway chunks", () => {
+    const workers = [
+      "infra/update-state-sizes.entry",
+      "config/sessions/disk-budget.worker",
+      "media/attachment-processor.worker",
+      "agents/plugin-model-catalog-read.worker",
+      "agents/code-mode-node.worker",
+    ];
+    expect(
+      Object.keys(
+        sharedRuntimeProcessBuildEntries({
+          ...Object.fromEntries(workers.map((name) => [name, name])),
+          "fixture/shared": "fixture/shared.ts",
+        }),
+      ),
+    ).toEqual(["fixture/shared"]);
+  });
+
   it.each(Object.entries(standaloneRuntimeProcessBuildEntries))(
     "keeps %s out of the Gateway server graph",
     async (name, entry) => {

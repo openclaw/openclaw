@@ -47,7 +47,7 @@ import type { PreparedCliRunContext } from "./types.js";
  * Another writer or lifecycle owns the session history. Local session state, not a provider
  * failure: model fallback must stop instead of replaying the turn on another candidate.
  */
-export class CliHistoryOwnerChangedError extends Error {
+class CliHistoryOwnerChangedError extends Error {
   constructor() {
     super("CLI history owner changed before preparation");
     this.name = "CliHistoryOwnerChangedError";
@@ -71,7 +71,7 @@ function resolvePreparedChildEnv(
         })
       : undefined;
   try {
-    return resolveCliChildEnv(preparedBackend).env;
+    return resolveCliChildEnv(preparedBackend, params).env;
   } finally {
     restoreSkillEnv?.();
   }

@@ -1,4 +1,10 @@
 // Real isolated Gateway subscriptions; fixture preparation stays outside measurement scopes.
+// Mixed workload: --mutation label --list-every 8 --turn-every 10 --mock-port 41568.
+// Prepare the fixture's OpenAI model with applyMockOpenAiModelConfig for that port,
+// a synthetic API key, and the openai plugin enabled. The mock never contacts a provider.
+// --count-checks injects source-only counters: use a separate count pass, never timing gates.
+// Timing/GC runs omit --trace-gc; collect promotion in separate matched traced passes.
+// --startup-timeout-ms extends setup readiness only; fixed warmup and timed work stay unchanged.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -8,7 +14,7 @@ import { registerHooks } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, TextDecoder } from "node:util";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
@@ -29,6 +35,10 @@ const { values } = parseArgs({
     child: { type: "boolean" },
     "owner-suffix": { type: "string" },
     revision: { type: "string" },
+    "trace-gc": { type: "boolean", default: false },
+    "count-checks": { type: "boolean", default: false },
+    "warmup-ms": { type: "string", default: "0" },
+    "startup-timeout-ms": { type: "string", default: "180000" },
     port: { type: "string", default: "41567" },
     clients: { type: "string", default: "8" },
     keys: { type: "string", default: "50" },
@@ -37,12 +47,15 @@ const { values } = parseArgs({
     mutation: { type: "string", default: "category" },
     "interval-ms": { type: "string", default: "20" },
     "list-every": { type: "string", default: "0" },
+    "turn-every": { type: "string", default: "0" },
+    "mock-port": { type: "string" },
     "start-at": { type: "string" },
   },
 });
 const integer = (value: string, label: string, min = 1) =>
   parseStrictIntegerOption({ raw: value, label, fallback: min, min });
 const port = integer(values.port, "--port", 40000);
+const startupTimeout = integer(values["startup-timeout-ms"], "--startup-timeout-ms");
 assert(port <= 65535);
 const channel = "session-pr-subscriptions-bench";
 const benchmarkOwners = [
@@ -51,6 +64,7 @@ const benchmarkOwners = [
   "control-ui-session-pr-subscriptions",
   "session-row-scope",
   "session-row-projection",
+  "session-row-projection-materialize",
   "session-row-projection-revisions",
 ];
 type BenchReply = {
@@ -58,10 +72,97 @@ type BenchReply = {
   scopeCount: number;
   drainMs: number;
   pendingScopes: number;
+  checks?: Record<string, number>;
 };
 
 if (values.child) {
   const ownerLoads = new Set<string>();
+  let active = false;
+  const checks: Record<string, number> = {};
+  const installedChecks = new Set<string>();
+  const checkHooks = [
+    [
+      "control-ui-session-task-prs",
+      "readPublicationRow",
+      /function readPublicationRow\([^]*?\)\s*\{/,
+    ],
+    [
+      "control-ui-session-task-prs",
+      "taskAssertCurrent",
+      /assertCurrent:\s*(?:__name\(\s*)?\(\)\s*=>\s*\{/,
+    ],
+    [
+      "session-row-projection-materialize",
+      "lookupSessionRow",
+      /const\s*\{\s*agentId\s*\}\s*=\s*query;/,
+    ],
+    [
+      "control-ui-session-pr-read",
+      "captureCurrent",
+      /const captureCurrent\s*=\s*(?:__name\(\s*)?\(\)\s*=>\s*\{/,
+    ],
+    [
+      "control-ui-session-pr-read",
+      "assertCurrent",
+      /assertCurrent:\s*(?:__name\(\s*)?\(\)\s*=>\s*\{(?=\s*const\s+current\s*=\s*captureCurrent\(\);)/,
+    ],
+    [
+      "control-ui-session-pr-subscriptions",
+      "currentWatcher",
+      /const currentWatcher\s*=\s*(?:__name\(\s*)?async\s*\([^]*?\)\s*=>\s*\{/,
+    ],
+    [
+      "control-ui-session-pr-subscriptions",
+      "currentKeyState",
+      /const currentKeyState\s*=\s*(?:__name\(\s*)?async\s*(?:\([^]*?\)|cacheKey)\s*=>\s*\{/,
+    ],
+  ] as const;
+  if (values["count-checks"]) {
+    Object.assign(globalThis, {
+      __sessionPrCurrencyProbe: (name: string) => {
+        if (active) {
+          checks[name] = (checks[name] ?? 0) + 1;
+        }
+      },
+    });
+    registerHooks({
+      load(url, context, nextLoad) {
+        const loaded = nextLoad(url, context);
+        const matching = checkHooks.filter(([owner]) => {
+          const suffix = values["owner-suffix"] ? `.${values["owner-suffix"]}` : "";
+          return url === new URL(`../../src/gateway/${owner}${suffix}.ts`, import.meta.url).href;
+        });
+        if (matching.length === 0) {
+          return loaded;
+        }
+        assert(loaded.source, `Missing source for ${url}`);
+        let source =
+          typeof loaded.source === "string"
+            ? loaded.source
+            : new TextDecoder().decode(loaded.source);
+        for (const [, name, pattern] of matching) {
+          const start =
+            name === "lookupSessionRow" ? source.indexOf("function lookupSessionRow(") : 0;
+          assert(start >= 0, `Missing currency owner: ${name}`);
+          const body = source.slice(start);
+          assert.equal(
+            [...body.matchAll(new RegExp(pattern, "g"))].length,
+            1,
+            `Currency hook must match once: ${name}`,
+          );
+          source =
+            source.slice(0, start) +
+            body.replace(
+              pattern,
+              (match) => `${match} globalThis.__sessionPrCurrencyProbe(${JSON.stringify(name)});`,
+            );
+          checks[name] = 0;
+          installedChecks.add(name);
+        }
+        return { ...loaded, source };
+      },
+    });
+  }
   if (values["owner-suffix"]) {
     assert(/^[a-z0-9-]+$/.test(values["owner-suffix"]));
     const owners = new Set(
@@ -95,9 +196,12 @@ if (values.child) {
       return Reflect.apply(target, scope, args);
     },
   });
+  // Restored fixtures have new file identities; use the CLI's credential admission owner.
+  const { prepareStartupClientCredentials } =
+    await import("../../src/commands/startup-client-credentials.ts");
+  await prepareStartupClientCredentials({ env: process.env });
   const { startGatewayServer } = await import("../../src/gateway/server.ts");
   let notifications = 0;
-  let active = false;
   const stop = sessionChanges.subscribeFacts((change) => {
     if (
       active &&
@@ -117,6 +221,9 @@ if (values.child) {
         scopes.clear();
       }
       if (message.action === "arm") {
+        if (values["count-checks"]) {
+          assert.equal(installedChecks.size, checkHooks.length, "All currency hooks must load");
+        }
         AsyncWorkScope.prototype.track = nativeTrack;
         assert.equal(
           scopes.size,
@@ -153,6 +260,9 @@ if (values.child) {
       if (message.action === "start") {
         active = true;
         notifications = 0;
+        for (const name of Object.keys(checks)) {
+          checks[name] = 0;
+        }
       } else if (message.action === "stop") {
         active = false;
       }
@@ -160,6 +270,7 @@ if (values.child) {
         channel,
         action: message.action,
         notifications,
+        ...(values["count-checks"] ? { checks } : {}),
         scopeCount: scopes.size,
         pendingScopes: [...scopes].filter((scope) => scope.hasPendingWork).length,
         drainMs,
@@ -197,6 +308,14 @@ if (values.child) {
   assert(mutation === "category" || mutation === "label", "--mutation must be category or label");
   const interval = integer(values["interval-ms"], "--interval-ms");
   const listEvery = integer(values["list-every"], "--list-every", 0);
+  const turnEvery = integer(values["turn-every"], "--turn-every", 0);
+  const mockPort = values["mock-port"]
+    ? integer(values["mock-port"], "--mock-port", 40000)
+    : undefined;
+  assert(
+    !turnEvery || (mockPort && mockPort <= 65535 && mockPort !== port),
+    "Mixed turns require a distinct --mock-port >= 40000",
+  );
   const env = createGatewayBenchEnv(path.join(root, "home"), path.join(root, "openclaw.json"), {
     startupTrace: false,
     caseEnv: {
@@ -208,6 +327,7 @@ if (values.child) {
   });
   const log = createWriteStream(path.join(output, "gateway.log"));
   let gateway: ChildProcess | undefined;
+  let provider: ChildProcess | undefined;
   const peers: ReturnType<typeof createGatewayWsClient>[] = [];
   let failure: Error | undefined;
   let closing = false;
@@ -241,7 +361,17 @@ if (values.child) {
     assert(gateway);
     const child = gateway;
     return await new Promise<BenchReply>((resolve, reject) => {
-      const timeout = setTimeout(() => finish(new Error(`Benchmark ${action} timed out`)), 180000);
+      const timeoutMs =
+        action === "ready"
+          ? Math.max(
+              startupTimeout,
+              values["start-at"] ? integer(values["start-at"], "--start-at") - Date.now() : 0,
+            )
+          : 180000;
+      const timeout = setTimeout(
+        () => finish(new Error(`Benchmark ${action} timed out`)),
+        timeoutMs,
+      );
       function finish(value: BenchReply | Error) {
         clearTimeout(timeout);
         child.off("message", onMessage);
@@ -261,6 +391,14 @@ if (values.child) {
                 )
               : {
                   notifications: Number(message.notifications ?? 0),
+                  checks: isRecord(message.checks)
+                    ? Object.fromEntries(
+                        Object.entries(message.checks).map(([name, count]) => [
+                          name,
+                          Number(count),
+                        ]),
+                      )
+                    : undefined,
                   scopeCount: Number(message.scopeCount ?? 0),
                   pendingScopes: Number(message.pendingScopes ?? 0),
                   drainMs: Number(message.drainMs ?? 0),
@@ -295,6 +433,9 @@ if (values.child) {
     if (gateway) {
       await stopChild(gateway, { teardownGraceMs: 30000, killGraceMs: 2000 });
     }
+    if (provider) {
+      await stopChild(provider);
+    }
     await new Promise<void>((resolve) => {
       log.end(resolve);
     });
@@ -317,24 +458,101 @@ if (values.child) {
   }
   function familyBytes(profilePath: string) {
     const profile: HeapProfiler.SamplingHeapProfile = JSON.parse(readFileSync(profilePath, "utf8"));
+    const leaves: Record<string, number> = {};
     const visit = (node: HeapProfiler.SamplingHeapProfileNode, owned = false): number => {
       const family =
         owned ||
         /control-ui-session-(?:task-prs|pr-read|pr-subscriptions|pr-prepared-read)/.test(
           node.callFrame.url,
         );
+      if (family && node.selfSize) {
+        const { functionName, url, lineNumber, columnNumber } = node.callFrame;
+        const leaf = `${functionName || "(anonymous)"}@${url.split("/").at(-1)}:${lineNumber + 1}:${columnNumber + 1}`;
+        leaves[leaf] = (leaves[leaf] ?? 0) + node.selfSize;
+      }
       return (
         (family ? node.selfSize : 0) +
         node.children.reduce((sum, child) => sum + visit(child, family), 0)
       );
     };
-    return visit(profile.head);
+    return { bytes: visit(profile.head), leaves };
+  }
+  const turnText = "Synthetic task PR measurement complete.";
+  async function runTurn() {
+    const started = performance.now();
+    const sent = await rpc(peers[0]!, "chat.send", {
+      sessionKey: key(4991),
+      message: "Reply with the synthetic measurement text.",
+      idempotencyKey: `session-pr-bench-${process.pid}-${Date.now()}`,
+    });
+    assert(isRecord(sent.payload) && typeof sent.payload.runId === "string");
+    const done = await rpc(peers[0]!, "agent.wait", {
+      runId: sent.payload.runId,
+      timeoutMs: 60000,
+    });
+    assert(isRecord(done.payload) && done.payload.status === "ok", JSON.stringify(done.payload));
+    return performance.now() - started;
   }
   try {
+    if (turnEvery) {
+      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+      assert.equal(
+        config.models?.providers?.openai?.baseUrl,
+        `http://127.0.0.1:${mockPort}/v1`,
+        "Mixed fixture must target its local mock provider",
+      );
+      const responseControl = path.join(output, "mock-response.json");
+      writeFileSync(responseControl, JSON.stringify({ text: turnText }));
+      provider = spawn(
+        process.execPath,
+        ["--import", "./scripts/tsx.mjs", "scripts/e2e/mock-openai-server.mjs"],
+        {
+          env: {
+            PATH: process.env.PATH,
+            MOCK_PORT: String(mockPort),
+            MOCK_RESPONSE_CONTROL: responseControl,
+            MOCK_REQUEST_LOG: path.join(output, "mock-requests.jsonl"),
+          },
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const child = provider;
+      child.stderr?.pipe(log, { end: false });
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => {
+          clearTimeout(timer);
+          child.off("error", onError);
+          child.off("exit", onExit);
+          child.stdout?.off("data", onData);
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        };
+        const onError = (error: Error) => finish(error);
+        const onExit = (code: number | null) => finish(new Error(`Mock provider exited ${code}`));
+        const onData = (chunk: Buffer) => {
+          if (chunk.toString().includes(`mock-openai listening on ${mockPort}`)) {
+            finish();
+          }
+        };
+        const timer = setTimeout(() => finish(new Error("Mock provider did not listen")), 30000);
+        child.once("error", onError);
+        child.once("exit", onExit);
+        child.stdout?.on("data", onData);
+      });
+      provider.once("exit", (code) => {
+        if (!closing) {
+          failure ??= new Error(`Mock provider exited ${code}`);
+        }
+      });
+    }
     gateway = spawn(
       process.execPath,
       [
-        "--trace-gc-nvp",
+        ...(values["trace-gc"] ? ["--trace-gc-nvp"] : []),
         "--import",
         "./scripts/tsx.mjs",
         fileURLToPath(import.meta.url),
@@ -342,6 +560,7 @@ if (values.child) {
         "--port",
         String(port),
         ...(values["owner-suffix"] ? ["--owner-suffix", values["owner-suffix"]] : []),
+        ...(values["count-checks"] ? ["--count-checks"] : []),
       ],
       {
         env,
@@ -357,7 +576,7 @@ if (values.child) {
       port,
       path: "/readyz",
       startAt: performance.now(),
-      deadlineAt: performance.now() + 180_000,
+      deadlineAt: performance.now() + startupTimeout,
       isDone: () => gateway?.exitCode != null || gateway?.signalCode != null,
     });
     assert.equal(readiness.status, 200, "Gateway sidecars did not become ready");
@@ -441,12 +660,20 @@ if (values.child) {
       await rpc(peers[0]!, "sessions.patch", { key: key(4991), [mutation]: `warmup-${index % 2}` });
     }
     const warmupSettlement = await command("settle");
+    if (turnEvery) {
+      await runTurn();
+      await command("settle");
+    }
+    await delay(integer(values["warmup-ms"], "--warmup-ms", 0));
     if (values["start-at"]) {
       const startAt = integer(values["start-at"], "--start-at");
       assert(Date.now() < startAt, "Gateway setup missed the paired start time");
       await delay(startAt - Date.now());
     }
     const subscribeLatency: number[] = [];
+    if (values["count-checks"]) {
+      await command("start");
+    }
     for (let index = 0; index < subscribes; index++) {
       subscribeLatency.push(
         (
@@ -459,6 +686,7 @@ if (values.child) {
       );
     }
     const preMeasurementSettlement = await command("settle");
+    const subscriptionChecks = values["count-checks"] ? (await command("stop")).checks : undefined;
     for (const peer of peers) {
       await rpc(peer, "sessions.describe", { key: keys[0] });
     }
@@ -481,6 +709,7 @@ if (values.child) {
       await delay(notifyAt - Date.now());
     }
     const notifyLatency: number[] = [];
+    const turnLatency: number[] = [];
     const listLatency: number[] = [];
     const notifySettlementLatency: number[] = [];
     const schedulingDelay: number[] = [];
@@ -516,12 +745,15 @@ if (values.child) {
             assert(page.payload.sessions.length > 0, "Sidebar selection returned no rows");
             listLatency.push(page.elapsedMs);
           }
+          if (turnEvery && index % turnEvery === 0) {
+            turnLatency.push(await runTurn());
+          }
           finalSettlement = await command("settle");
           notifySettlementLatency.push(performance.now() - started);
         }
       },
     );
-    const { notifications } = await command("stop");
+    const { notifications, checks } = await command("stop");
     assert(notifications >= operations, "The stored-row notification path was not exercised");
     const parentSelections = (snapshot: typeof allocation.sessionRowSelections.before) =>
       snapshot?.selections.reduce(
@@ -533,11 +765,31 @@ if (values.child) {
       "Subscription setup did not exercise parent selection",
     );
     await delay(100);
-    const promotion = readGatewayGcTrace(path.join(output, "gateway.log"), profilePath);
+    const promotion = values["trace-gc"]
+      ? readGatewayGcTrace(path.join(output, "gateway.log"), profilePath)
+      : null;
     const family = familyBytes(profilePath);
     // A response on each transport also consumes all earlier frames sent after settlement.
     for (const peer of peers) {
       await rpc(peer, "sessions.describe", { key: keys[0] });
+    }
+    let mockHealth: unknown;
+    if (turnEvery) {
+      mockHealth = await (await fetch(`http://127.0.0.1:${mockPort}/health`)).json();
+      assert(
+        isRecord(mockHealth) &&
+          isRecord(mockHealth.requests) &&
+          isRecord(mockHealth.requests.ingress),
+      );
+      assert(
+        Number(mockHealth.requests.ingress.responses) >= turnLatency.length + 1,
+        "Every turn must reach the mock provider",
+      );
+      const history = await rpc(peers[0]!, "chat.history", { sessionKey: key(4991), limit: 10 });
+      assert(
+        JSON.stringify(history.payload).includes(turnText),
+        "Mock response must appear in chat history",
+      );
     }
     const finalState = snapshotState();
     const finalSnapshotHash = snapshotHash(finalState);
@@ -559,6 +811,15 @@ if (values.child) {
       preMeasurementSettlement,
       finalSettlement,
       revision: values.revision ?? null,
+      traceGc: values["trace-gc"],
+      countChecks: values["count-checks"],
+      subscriptionChecks,
+      checks,
+      turnEvery,
+      turnLatency: turnLatency.length ? summarize(turnLatency) : null,
+      mockHealth,
+      warmupMs: Number(values["warmup-ms"]),
+      startupTimeoutMs: startupTimeout,
       testedOwners: Object.fromEntries(
         benchmarkOwners.map((name) => {
           const suffix = values["owner-suffix"] ? `.${values["owner-suffix"]}` : "";
@@ -590,12 +851,13 @@ if (values.child) {
       snapshotsAfterMeasurement: frames.length,
       allocation,
       promotion,
-      familyAllocatedBytes: family,
-      familyShare: family / allocation.sampledAllocatedBytes,
+      familyAllocatedBytes: family.bytes,
+      familyLeafAllocatedBytes: family.leaves,
+      familyShare: family.bytes / allocation.sampledAllocatedBytes,
       allocatedBytesPerNotification: allocation.sampledAllocatedBytes / notifications,
       allocatedBytesPerNotificationPerTab:
         allocation.sampledAllocatedBytes / notifications / clients,
-      familyBytesPerNotificationPerTab: family / notifications / clients,
+      familyBytesPerNotificationPerTab: family.bytes / notifications / clients,
     };
     writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
     console.log(JSON.stringify(result));

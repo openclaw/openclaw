@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isOffsetInProtectedRanges,
@@ -7,11 +8,14 @@ import {
 import { skipLineIndentation, skipWhitespace, utf8ByteLengthWithinLimit } from "./grammar.js";
 import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js";
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
-import { createProtectionScanState, resolveProtectionFastPath } from "./protection-fast-path.js";
+import {
+  advanceProtectionScanState,
+  createProtectionScanState,
+  resolveProtectionFastPath,
+  type ProtectionScanState,
+} from "./protection-fast-path.js";
 import { consumeRemovedLineEnd, MAX_PAYLOAD_BYTES } from "./stream-normalizer-suppression.js";
 
-// Delimiters can change Markdown ownership; call prefixes also need a grammar check below.
-const SCRUB_REUSE_SUFFIX_RE = /[\t\r`~[{<]/u;
 // Bounded per stream: event snapshots and scrubbed snapshots are separate anchor families.
 const MAX_SCRUB_REUSES = 2;
 
@@ -396,6 +400,13 @@ export function findPotentialCallStart(
       continue;
     }
     const start = skipLineIndentation(text, index);
+    const first = text[start];
+    // Brackets, XML and Harmony channels are the only openings. An empty tail
+    // still needs the scanner: indentation may precede a split marker.
+    if (first !== undefined && !"[<caf".includes(first)) {
+      index = start + 1;
+      continue;
+    }
     if (isProtected?.(start)) {
       index += 1;
       continue;
@@ -412,6 +423,18 @@ export function findPotentialCallStart(
   return null;
 }
 
+export function orderByContentIndex(
+  events: readonly unknown[],
+  message: Record<string, unknown>,
+): unknown[] {
+  const contentLength = Array.isArray(message.content) ? message.content.length : 0;
+  const order = (event: unknown) => {
+    const index = asNonNegativeInteger(asOptionalObjectRecord(event)?.contentIndex);
+    return index !== undefined && index < contentLength ? index : contentLength;
+  };
+  return events.toSorted((left, right) => order(left) - order(right));
+}
+
 export function nextAtLineStart(previous: boolean, text: string): boolean {
   if (!text) {
     return previous;
@@ -425,14 +448,14 @@ export function createForcedScrubSnapshot(options: {
   resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   protectedRangesFenceCompatible?: boolean;
 }) {
-  // Reuse completed removal ranges while appended text preserves grammar and code ownership.
-  // Ambiguous Markdown and unfinished removal boundaries keep the canonical full scrub.
-  type ScrubReuse = {
+  // Settled prefix ranges cannot change ownership. Only newly appended candidates need a
+  // verdict; carry fence state so literal examples do not reparse the growing snapshot.
+  const scrubReuses: {
     parts: StandalonePlainTextToolCallCandidate["parts"];
+    protectionScan: ProtectionScanState | undefined;
     ranges: ScannedCallSequence[];
     text: string;
-  };
-  const scrubReuses: ScrubReuse[] = [];
+  }[] = [];
 
   // Check the same line, content-block, and post-call boundaries as the canonical scan.
   const scrubScanIsSettled = (
@@ -509,58 +532,6 @@ export function createForcedScrubSnapshot(options: {
     });
   };
 
-  const reuseScrub = (
-    candidate: StandalonePlainTextToolCallCandidate,
-    record: Record<string, unknown>,
-    preserveEmptyTextBlocks: boolean,
-  ): ScrubProjection | undefined => {
-    for (const [index, reuse] of scrubReuses.entries()) {
-      const text = candidate.text;
-      if (text.length <= reuse.text.length || !text.startsWith(reuse.text)) {
-        continue;
-      }
-      const suffix = text.slice(reuse.text.length);
-      if (
-        SCRUB_REUSE_SUFFIX_RE.test(suffix) ||
-        findPotentialCallStart(suffix, nextAtLineStart(true, reuse.text), options.matcher) !== null
-      ) {
-        continue;
-      }
-      if (!partsContinueCandidate(candidate.parts, reuse.parts, suffix.length)) {
-        continue;
-      }
-      const ranges = reuse.ranges;
-      scrubReuses.splice(index, 1);
-      scrubReuses.unshift({ ...reuse, parts: candidate.parts, ranges, text });
-      return {
-        ...projectRangesOntoMessage(record, candidate, ranges, preserveEmptyTextBlocks),
-        ranges,
-      };
-    }
-    return undefined;
-  };
-
-  const rememberScrubReuse = (
-    candidate: StandalonePlainTextToolCallCandidate,
-    projection: ScrubProjection,
-  ): void => {
-    if (!scrubScanIsSettled(candidate, projection.ranges)) {
-      return;
-    }
-    const existing = scrubReuses.findIndex((reuse) => reuse.text === candidate.text);
-    if (existing !== -1) {
-      scrubReuses.splice(existing, 1);
-    }
-    scrubReuses.unshift({
-      parts: candidate.parts,
-      ranges: projection.ranges,
-      text: candidate.text,
-    });
-    if (scrubReuses.length > MAX_SCRUB_REUSES) {
-      scrubReuses.length = MAX_SCRUB_REUSES;
-    }
-  };
-
   const forcedScrubSnapshot = (
     value: unknown,
     preserveEmptyTextBlocks: boolean,
@@ -568,9 +539,50 @@ export function createForcedScrubSnapshot(options: {
     const candidate = extractStandaloneCandidate(value);
     const record = asOptionalObjectRecord(value);
     if (candidate && record) {
-      const reused = reuseScrub(candidate, record, preserveEmptyTextBlocks);
-      if (reused) {
-        return reused;
+      for (const [index, reuse] of scrubReuses.entries()) {
+        const text = candidate.text;
+        if (text.length <= reuse.text.length || !text.startsWith(reuse.text)) {
+          continue;
+        }
+        const suffix = text.slice(reuse.text.length);
+        let protectedAt = reuse.protectionScan
+          ? resolveProtectionFastPath(reuse.protectionScan, suffix)
+          : undefined;
+        if (!protectedAt && reuse.protectionScan) {
+          // An unfinished final line must not discard proven fences on earlier lines.
+          // Candidates in that tail still fall through to canonical scrubbing.
+          const tailStart = suffix.lastIndexOf("\n") + 1;
+          const completed = resolveProtectionFastPath(
+            reuse.protectionScan,
+            suffix.slice(0, tailStart),
+          );
+          if (completed) {
+            protectedAt = (offset) => offset < tailStart && completed(offset);
+          }
+        }
+        if (
+          findPotentialCallStart(
+            suffix,
+            nextAtLineStart(true, reuse.text),
+            options.matcher,
+            protectedAt,
+          ) !== null
+        ) {
+          continue;
+        }
+        if (!partsContinueCandidate(candidate.parts, reuse.parts, suffix.length)) {
+          continue;
+        }
+        const ranges = reuse.ranges;
+        if (reuse.protectionScan) {
+          advanceProtectionScanState(reuse.protectionScan, suffix);
+        }
+        scrubReuses.splice(index, 1);
+        scrubReuses.unshift({ ...reuse, parts: candidate.parts, ranges, text });
+        return {
+          ...projectRangesOntoMessage(record, candidate, ranges, preserveEmptyTextBlocks),
+          ranges,
+        };
       }
     }
     const projection = projectScrubbedPlainTextToolCallMessage({
@@ -580,8 +592,26 @@ export function createForcedScrubSnapshot(options: {
       preserveEmptyTextBlocks,
       resolveProtectedRanges: options.resolveProtectedRanges,
     });
-    if (projection && candidate) {
-      rememberScrubReuse(candidate, projection);
+    if (projection && candidate && scrubScanIsSettled(candidate, projection.ranges)) {
+      const existing = scrubReuses.findIndex((reuse) => reuse.text === candidate.text);
+      if (existing !== -1) {
+        scrubReuses.splice(existing, 1);
+      }
+      const protectionScan = options.resolveProtectedRanges
+        ? createProtectionScanState()
+        : undefined;
+      if (protectionScan) {
+        advanceProtectionScanState(protectionScan, candidate.text);
+      }
+      scrubReuses.unshift({
+        parts: candidate.parts,
+        protectionScan,
+        ranges: projection.ranges,
+        text: candidate.text,
+      });
+      if (scrubReuses.length > MAX_SCRUB_REUSES) {
+        scrubReuses.length = MAX_SCRUB_REUSES;
+      }
     }
     return projection;
   };

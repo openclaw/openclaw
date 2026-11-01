@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
@@ -43,6 +44,22 @@ export async function createDoctorMaintenanceState(options: {
   let resourcesParent: OpenClawDatabaseMaintenanceScope | undefined;
   let inspections: ReturnType<typeof createSqliteReadOnlyWorkerScope> | undefined;
   let owner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
+  // Post-repair work runs outside the checks callback. Its policy reads must
+  // retain the repair scope's cached handles until that scope has drained.
+  const runOwnerCheck = (check: () => void) =>
+    resources ? resources.run(check) : owner!.run(check);
+  const setOwner = (next: typeof owner) => {
+    owner = next;
+    params.lendPolicyCustody?.(
+      next && {
+        // A check nested in an owner check already holds its storage lease.
+        assertCurrent: (policy) =>
+          getStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(selectedEnv))
+            ? policy()
+            : runOwnerCheck(() => next.assertCurrent(policy)),
+      },
+    );
+  };
   const legacy = resolvePendingLegacyStateDirMigrationPaths({ env });
   let selectedEnv = legacy
     ? {
@@ -142,11 +159,15 @@ export async function createDoctorMaintenanceState(options: {
       captureAdmitted = false;
     }
   };
-  const enterResources = async (acquired: NonNullable<typeof owner>) => {
+  const enterResources = async (
+    acquired: NonNullable<typeof owner>,
+    assertAdmission?: () => void,
+  ) => {
     // Transfer can retire the source owner before caller revalidation runs.
-    owner = acquired;
+    setOwner(acquired);
     try {
       acquired.assertCurrent(options.assertCurrent);
+      assertAdmission?.();
       resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
@@ -170,7 +191,7 @@ export async function createDoctorMaintenanceState(options: {
       });
     } catch (error) {
       await acquired.release();
-      owner = undefined;
+      setOwner(undefined);
       throw error;
     }
     if (capture && !captureAdmitted) {
@@ -179,19 +200,12 @@ export async function createDoctorMaintenanceState(options: {
     }
   };
   const assertOwnerCurrent = (databasePath?: string) => {
-    const assertCurrent = () => {
-      owner!.assertCurrent(options.assertCurrent);
+    runOwnerCheck(() => {
+      owner!.assertCurrent(resources ? undefined : options.assertCurrent);
       if (databasePath !== undefined) {
         owner!.assertDatabaseAccess(databasePath);
       }
-    };
-    // Post-repair work runs outside the checks callback. Its policy reads must
-    // retain the repair scope's cached handles until that scope has drained.
-    if (resources) {
-      resources.run(assertCurrent);
-    } else {
-      owner!.run(assertCurrent);
-    }
+    });
   };
   const state = {
     get env() {
@@ -216,7 +230,8 @@ export async function createDoctorMaintenanceState(options: {
         ),
       );
     },
-    async acquire() {
+    async acquire(assertAdmission?: () => void) {
+      assertAdmission?.();
       if (resources) {
         return;
       }
@@ -231,18 +246,21 @@ export async function createDoctorMaintenanceState(options: {
         {
           ...params,
           assertCurrent: options.assertCurrent,
+          assertAdmission,
           deadlineMs: options.deadline(),
           signal: options.signal,
         },
       );
-      await enterResources(acquired);
+      await enterResources(acquired, assertAdmission);
     },
-    async prepareRepair() {
+    async prepareRepair(assertAdmission?: () => void) {
+      assertAdmission?.();
       const beforeStateMutation = params.beforeStateMutation;
       if (beforeStateMutation) {
         await resources!.run(() =>
           beforeStateMutation({ env: selectedEnv, signal: options.signal }),
         );
+        assertAdmission?.();
         resources!.assertAdmission();
       }
       // An idle captured WAL must retain its commit header until native migration
@@ -274,14 +292,15 @@ export async function createDoctorMaintenanceState(options: {
       await settleCapture();
       // In-tree locks cannot survive a path rename. Service stop custody remains held.
       await owner!.release();
-      owner = undefined;
+      setOwner(undefined);
       options.assertCurrent?.();
+      assertAdmission?.();
       const migration = prepareLegacyStateDirMigration({ env });
       if (migration && !migration.result.migrated) {
         throw new Error(migration.result.warnings.join("\n"));
       }
       selectedEnv = env;
-      await state.acquire();
+      await state.acquire(assertAdmission);
       if (migration) {
         const { loadDotEnv } = await import("../infra/dotenv.js");
         loadDotEnv();
@@ -438,7 +457,7 @@ export async function createDoctorMaintenanceState(options: {
       }
       try {
         await owner?.release();
-        owner = undefined;
+        setOwner(undefined);
       } catch (error) {
         failures.push(error);
       }

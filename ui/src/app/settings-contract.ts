@@ -4,6 +4,7 @@ import {
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import type {
   SidebarSessionActivePanels,
   SidebarSessionLayouts,
@@ -145,8 +146,6 @@ export type UiSettings = {
   chatShowTaskProgress?: boolean;
   // Browser-local presentation preference; false preserves active-card auto-expand.
   chatCollapseTaskProgress?: boolean;
-  // Browser-local Details dismissals, keyed by viewer, agent and session.
-  detailsDismissedProcesses?: Record<string, string[]>;
   chatSendShortcut?: ChatSendShortcut;
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
   catalogOpenTarget?: CatalogOpenTarget;
@@ -167,6 +166,7 @@ export type UiSettings = {
   sidebarCollapsedAgentIds?: string[];
   sidebarRecentlyCreatedAgentId?: string;
   sidebarEntries: string[]; // Ordered personal navigation references
+  personalSessionGroups?: PersonalSessionGroup[]; // Personal labels and references, not shared groups
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
   chatBubbleDisabledSessionKeys?: string[]; // Explicit per-session opt-outs, retained when the lab is off
@@ -182,6 +182,7 @@ export type UiSettings = {
   // opting out on one browser must not lower the bar on the operator's others,
   // so this stays out of the synced ui.prefs set in server-prefs-state.ts.
   sessionDeleteConfirm?: boolean;
+  chatModelChangeConfirm?: boolean;
   // Device-local opt-in: route eligible external links into the Gateway browser panel.
   openLinksInControlUiBrowser?: boolean;
   // Browser-local opt-in; absence preserves native panels and plugin readers.

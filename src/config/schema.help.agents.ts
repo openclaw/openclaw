@@ -14,7 +14,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.enabled":
     "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
   "plugins.allow":
-    "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
+    "Optional allowlist of plugin IDs; a non-empty list restricts loading, except for the selected memory plugin (including the default memory-core selection), equal-ID context-engine plugins, and explicitly enabled bundled chat channels. Differently named context-engine owners must be independently enabled or allowlisted and included in any non-empty allowlist. Plugin-owned tools outside the allowlist remain unavailable. Use plugins.deny or plugins.entries.<id>.enabled: false to block a plugin regardless of slot selection.",
   "plugins.deny":
     "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
   "plugins.load":
@@ -24,7 +24,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":
-    'Select the active memory plugin by id, or "none" to disable memory plugins.',
+    'Select the active memory plugin by id (default: memory-core), or "none" to disable memory plugins. The selected plugin can load even when plugins.allow omits it; plugins.deny and explicit per-plugin disable still take precedence.',
   "plugins.slots.contextEngine":
     "Selects the registered context engine ID. Plugins with different plugin and engine IDs declare contextEngineIds in their manifest so OpenClaw can load the owner.",
   "plugins.entries":
@@ -73,13 +73,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.embeddedAgent.cyberFailover":
-    "Automatic Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime.",
+    "Automatic same-model Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime, subject to existing access and policy checks.",
   "agents.defaults.embeddedAgent.cyberFailover.mode":
     'Enable automatic escalation ("auto", default) or keep provider refusals terminal ("off").',
-  "agents.defaults.embeddedAgent.cyberFailover.model":
-    "Provider/model target used for automatic cyber-policy escalation.",
   "agents.defaults.embeddedAgent.cyberFailover.cooloffMs":
-    "How long an unavailable escalation target is skipped for the current session.",
+    "How long unavailable Daybreak access for the active model is skipped for the current session.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model, alias, or { primary, fallbacks }) for short internal tasks such as generated titles and progress narration. Utility fallbacks use the same retry, alias resolution, and model-selection policy as configured model fallbacks, independently of model.fallbacks. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.defaults.utilityModel.primary": "Primary utility model (provider/model or alias).",
@@ -179,11 +177,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
-    "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
+    "Pre-compaction memory flush settings that run an agentic memory write with the active session model and its normal fallback chain before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
     "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
-  "agents.defaults.compaction.memoryFlush.model":
-    "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":

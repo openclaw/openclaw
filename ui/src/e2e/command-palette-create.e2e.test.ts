@@ -174,36 +174,35 @@ suite.define(() => {
           expect(await remember.isVisible()).toBe(true);
           const workspaceButton = popup.locator(".palette-session-settings__workspace");
           const search = popup.getByRole("searchbox", { name: "Search", exact: true });
+          const searchToggle = popup.locator(".header-search__toggle");
           await workspaceButton.click();
-          await search.waitFor({ state: "visible" });
+          await searchToggle.waitFor({ state: "visible" });
           await expectPaletteProjectGrouping(popup);
           expect.soft(await remember.count()).toBe(0);
-          expect
-            .soft(await search.evaluate((element) => getComputedStyle(element).outlineStyle))
-            .toBe("none");
           // Pointer entry keeps focus inside the nested view without summoning a
-          // text caret (or a touch keyboard). Tab still reaches its search field.
+          // text caret (or a touch keyboard). Tab still reaches its search control.
           await page.keyboard.press("Tab");
           expect
-            .soft(await search.evaluate((element) => document.activeElement === element))
+            .soft(await searchToggle.evaluate((element) => document.activeElement === element))
             .toBe(true);
-          await search.press("Escape");
+          await page.keyboard.press("Escape");
           expect(await remember.isVisible()).toBe(true);
           expect(
             await workspaceButton.evaluate((element) => document.activeElement === element),
           ).toBe(true);
           await workspaceButton.press("Enter");
+          await searchToggle.waitFor({ state: "visible" });
+          expect(await searchToggle.evaluate((element) => document.activeElement === element)).toBe(
+            true,
+          );
+          await page.keyboard.type("no-such-workspace");
           await search.waitFor({ state: "visible" });
           expect(await search.evaluate((element) => document.activeElement === element)).toBe(true);
-          expect(await search.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
-            "solid",
-          );
-          await search.fill("no-such-workspace");
           expect(await popup.locator("[data-machine]").count()).toBe(0);
           await popup.getByRole("button", { name: "Back", exact: true }).click();
           expect(await remember.isVisible()).toBe(true);
           await workspaceButton.press("Enter");
-          expect(await search.inputValue()).toBe("");
+          expect(await search.count()).toBe(0);
           await popup.locator('[data-machine="local"][data-project=""]').click();
           expect(await remember.isVisible()).toBe(true);
         },
@@ -226,6 +225,7 @@ suite.define(() => {
             scenario({
               "sessions.create": {
                 key: sessionKey,
+                entry: { sessionId: "session:" + sessionKey },
                 ...(destination === "local"
                   ? { runStarted: true, runId: "palette-local-run" }
                   : {}),
@@ -236,7 +236,7 @@ suite.define(() => {
                 sessionId: "session:" + sessionKey,
                 placement: { state: "active", generation: 1 },
               },
-              "sessions.send": { runId: "palette-device-run", status: "started" },
+              "chat.send": { runId: "palette-device-run", status: "started" },
             }),
           );
           const { composer, url, palette, input } = await openFromForeground(
@@ -301,9 +301,11 @@ suite.define(() => {
             await gateway.waitForRequest("environments.list");
             const workspaceChoice = settings.locator(".palette-session-settings__workspace");
             await workspaceChoice.click();
+            await settings.locator(".header-search__toggle").click();
             const search = settings.getByRole("searchbox");
             await search.fill("Palette runner");
             await search.press("Escape");
+            await page.keyboard.press("Escape");
             await workspaceChoice.waitFor({ state: "visible" });
             expect(await input.isVisible()).toBe(true);
             await workspaceChoice.press("Enter");
@@ -357,13 +359,17 @@ suite.define(() => {
               agentId: "reviewer",
               deviceId: "palette-runner",
             });
-            expect((await gateway.waitForRequest("sessions.send")).params).toMatchObject({
-              key: sessionKey,
+            expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+              sessionKey,
+              sessionId: "session:" + sessionKey,
+              expectedLeafEntryId: null,
               message: submittedPrompt,
             });
           }
           expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-          expect(await gateway.getRequests("chat.send")).toEqual([]);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(
+            destination === "device" ? 1 : 0,
+          );
           await page
             .locator(".app-toast")
             .getByRole("button", { name: "Open session", exact: true })

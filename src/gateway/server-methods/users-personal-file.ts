@@ -130,11 +130,15 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         ...(operatorAuthority ? [operatorAuthority.scopes] : []),
         ...(policy ? [policy.scopes] : []),
       ].every((allowedScopes) =>
-        roleScopesAllow({ role: "operator", requestedScopes: ["operator.read"], allowedScopes }),
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.sessions.read"],
+          allowedScopes,
+        }),
       )
     ) {
       throw new PersonalFileAccessError(
-        "Personal instructions require current operator.read permission.",
+        "Personal instructions require current operator.sessions.read permission.",
       );
     }
     if (policy && policy.agents !== "*" && !policy.agents.includes(agentId)) {

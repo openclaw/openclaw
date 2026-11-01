@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
+import { writeFixtureJson as writeJson } from "./loader-fixture-builders.test-support.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -15,10 +16,6 @@ afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 const entry = "dist/control-ui/index.js";
 const memoryViews = (...panels: string[]) => panels.map((panel) => ({ section: "memory", panel }));
-
-function writeJson(dir: string, file: string, value: unknown) {
-  fs.writeFileSync(path.join(dir, file), JSON.stringify(value));
-}
 
 function fixture(controlUi: unknown, uiCapabilities?: unknown, channels?: string[]) {
   const plugin = writePlugin({ id: "native-ui", registration: "" });

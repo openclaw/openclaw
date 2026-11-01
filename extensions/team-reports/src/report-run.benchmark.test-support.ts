@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
-import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -11,6 +10,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
+import { installReportFixtureTransport } from "./report-fixture-transport.test-support.js";
 import {
   fixtureChannels,
   fixtureDay,
@@ -20,19 +20,10 @@ import { TeamReportsRunner } from "./run-worker.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./store.js";
 
-globalThis.fetch = async () => {
-  throw new Error("Benchmark attempted a real network request");
-};
-const fixtureHttp = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    return specifier === "openclaw/plugin-sdk/ssrf-runtime"
-      ? {
-          url: new URL("./report-run.benchmark-fixtures.test-support.ts", import.meta.url).href,
-          shortCircuit: true,
-        }
-      : nextResolve(specifier, context);
-  },
-});
+const fixtureHttp = installReportFixtureTransport(
+  "./report-run.benchmark-fixtures.test-support.ts",
+  "Benchmark attempted a real network request",
+);
 const { generateReportPeriods } = await import("./run.js");
 
 const directory = await mkdtemp(path.join(os.tmpdir(), "team-reports-benchmark-"));
@@ -105,9 +96,7 @@ try {
         throw new Error("Benchmark must not invoke a model");
       },
     },
-    runtime: {
-      logger,
-    },
+    runtime: { logger },
     onRoster: () => {},
   };
   const statuses = runner

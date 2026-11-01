@@ -39,6 +39,8 @@ export type CommandQueueEnqueueOptions = {
     sessionKey?: string;
     runId?: string;
     requesterSessionKey?: string;
+    /** The outer model chain owns this candidate's FailoverError diagnostics. */
+    modelFallbackCandidate?: boolean;
   }>;
   /** Owner-resolved capacity, installed atomically with this enqueue. */
   maxConcurrent?: number;

@@ -1,6 +1,6 @@
 // Guards which configured transport routes may replace a catalog model's native route.
 import { describe, expect, it } from "vitest";
-import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
@@ -46,3 +46,49 @@ describe("configured model proxy routing", () => {
     expect(resolveRoute("https://proxy.example.com")?.baseUrl).toBe("https://proxy.example.com");
   });
 });
+
+it.each(["provider", "model"] as const)(
+  "honors an explicit %s GenerateContent override over Flash's catalog route",
+  (scope) => {
+    const model: ProviderRuntimeModel = {
+      ...catalogModel,
+      provider: "google",
+      id: "gemini-3.8-flash",
+      name: "Gemini Flash",
+      api: "google-interactions",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    };
+    const resolved = applyConfiguredProviderOverrides({
+      provider: "google",
+      modelId: model.id,
+      discoveredModel: model,
+      providerConfig: {
+        baseUrl: model.baseUrl,
+        ...(scope === "provider" ? { api: "google-generative-ai" as const } : {}),
+        models:
+          scope === "model"
+            ? [
+                {
+                  id: model.id,
+                  name: model.name,
+                  api: "google-generative-ai" as const,
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1,
+                  maxTokens: 1,
+                },
+              ]
+            : [],
+      },
+      manifestAlias: { provider: "google" },
+      providerMetadataOwners,
+      runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: [] }),
+    });
+    expect(resolved).toMatchObject({
+      id: model.id,
+      api: "google-generative-ai",
+      baseUrl: model.baseUrl,
+    });
+  },
+);

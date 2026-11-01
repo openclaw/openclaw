@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   createRetainedOperation,
   mapRetainedOperation,
@@ -471,6 +471,49 @@ export function sealRetainedSnapshotTempDirectory(
       retireSqliteDatabaseAdmissionForPath(admission.location);
     }
   }
+}
+
+export function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
+  return createSqliteLifecycleAggregateError(
+    errors,
+    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
+    errors[0],
+  );
+}
+
+/** Failed copy attempts discard their files without retiring the caller's directory token. */
+export function discardPreparedCopyPayload(directory: string, error: unknown): void {
+  try {
+    for (const name of ["first", "database.sqlite", "database.sqlite.partial"]) {
+      for (const suffix of name === "first" ? [""] : ["", "-wal", "-shm", "-journal"]) {
+        const location = path.join(directory, `${name}${suffix}`);
+        retireSqliteDatabaseAdmissionForPath(location);
+        fs.rmSync(location, { force: true });
+      }
+    }
+  } catch (cleanupError) {
+    throw preparationCleanupError([error, cleanupError], "SQLite snapshot preparation");
+  }
+}
+
+export async function cleanupFailedSnapshotPreparation(
+  directory: string,
+  error: unknown,
+  operation: string,
+  callerOwnsDirectory: boolean,
+): Promise<never> {
+  if (callerOwnsDirectory) {
+    discardPreparedCopyPayload(directory, error);
+  } else {
+    const errors: unknown[] = [error];
+    const removed = await removeTempDirectoryAsync(directory, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed) {
+      throw preparationCleanupError(errors, operation);
+    }
+  }
+  throw error;
 }
 
 export function publishPreparedCopy(

@@ -309,6 +309,10 @@ The daemon uses the same per-host relay key and stays alive while an extension
 or CDP client is connected. After both disconnect, it exits following ten
 minutes of inactivity, checked every 30 seconds. Closing Chrome alone does not
 stop it while a CDP client remains connected. A later reconnect can wake it again.
+The daemon also exits, even with connected clients, when an app or package
+update replaces or removes the installation it was started from. Attached CDP
+clients must reconnect. The extension's reconnect starts a daemon from the
+current installation, usually within a minute.
 
 The standalone daemon defaults to **v2-only authentication**, independently of
 the Gateway relay's legacy default. Only an explicit

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { serialize } from "node:v8";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import type {
   NativeWorkerResourceModule,
@@ -492,12 +493,7 @@ export async function createBrokerNativeResourceServer(options: {
         }),
       );
       await serverClosed;
-      const errors = outcomes.flatMap((outcome) =>
-        outcome.status === "rejected" ? [outcome.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Spawn broker native resource cleanup failed");
-      }
+      throwSettledAggregate(outcomes, "Spawn broker native resource cleanup failed");
       resources.clear();
     });
     disconnect();

@@ -166,7 +166,7 @@ async function resolveModelAuth(
   ctx: ExtensionContext,
   model: NonNullable<ExtensionContext["model"]>,
 ): Promise<
-  { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
+  { ok: true; apiKey?: string; headers?: typeof model.headers } | { ok: false; reason: string }
 > {
   let requestAuth: Awaited<ReturnType<ExtensionContext["modelRegistry"]["getApiKeyAndHeaders"]>>;
   try {
@@ -200,8 +200,8 @@ async function resolveModelAuth(
 function buildCompactionSummaryHeaders(params: {
   model: NonNullable<ExtensionContext["model"]>;
   messages: AgentMessage[];
-  headers?: Record<string, string>;
-}): Record<string, string> | undefined {
+  headers?: NonNullable<ExtensionContext["model"]>["headers"];
+}): typeof params.headers {
   if (params.model.provider !== "github-copilot") {
     return params.headers;
   }

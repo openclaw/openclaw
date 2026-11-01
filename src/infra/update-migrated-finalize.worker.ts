@@ -10,12 +10,15 @@ import {
 import {
   readUpdateDoctorInput,
   readUpdatePostCoreInput,
+  readUpdatePluginCohortSettlementInput,
+  readUpdatePluginCohortCommitInput,
   type DecodedUpdateDoctorInput,
   type DecodedUpdatePostCoreInput,
 } from "../cli/update-cli/update-command-migrated-input.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
+  UpdatePluginCohortSettlementResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
 import { writePostCoreUpdateFailureFile } from "../cli/update-cli/update-command-post-core.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
@@ -27,6 +30,7 @@ import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-comman
 import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { withPluginCohortConfigCapture } from "../config/plugin-cohort-recovery.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
@@ -35,11 +39,14 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { installDatabaseProcessRole } from "./database-engine/admission-scope.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
@@ -47,6 +54,10 @@ import {
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import {
+  commitReadyUpdatePluginCohort,
+  settleDelegatedUpdatePluginCohort,
+} from "./update-plugin-cohort-worker.js";
 import {
   POST_CORE_EXECUTOR_CAPABILITY,
   POST_CORE_MUTATION_PROTOCOL,
@@ -68,7 +79,16 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
 import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
+let pluginCohortSettlementResult: UpdatePluginCohortSettlementResult | undefined;
+
 async function finalizeMigratedUpdate(): Promise<void> {
+  // This executable bypasses CLI bootstrap but owns the same one-shot database work.
+  installDatabaseProcessRole("cli-oneshot");
+  const settlePluginCohort = process.argv[2] === "--settle-plugin-cohort";
+  const commitPluginCohort = process.argv[2] === "--commit-plugin-cohort";
+  if (settlePluginCohort || commitPluginCohort) {
+    routeLogsToStderr();
+  }
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
@@ -84,6 +104,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
         mutationProtocol: POST_CORE_MUTATION_PROTOCOL,
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
+        doctorRetirementOnly: true,
+        pluginCohortSettlement: true,
         gatewayRestartCompletion: true,
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -95,11 +117,32 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // bypasses that bootstrap, so install the same kill-on-close owner before input.
   // POSIX callers own the detached process group and join its kernel extinction.
   await withCliProcessScope(retainCliProcessJobUntilExit);
+  await preparePostgresPoolForUpdate(
+    process.argv[2] === "--doctor" ? "openclaw doctor --fix" : "openclaw update repair",
+  );
   const chunks: Buffer[] = [];
+  let inputBytes = 0;
   for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    inputBytes += buffer.byteLength;
+    if ((settlePluginCohort || commitPluginCohort) && inputBytes > 1024 * 1024) {
+      throw new Error("Plugin cohort settlement input exceeds its storage limit.");
+    }
+    chunks.push(buffer);
   }
   const text = Buffer.concat(chunks).toString("utf8");
+  if (commitPluginCohort) {
+    pluginCohortSettlementResult = await commitReadyUpdatePluginCohort(
+      readUpdatePluginCohortCommitInput(JSON.parse(text)),
+    );
+    return;
+  }
+  if (settlePluginCohort) {
+    pluginCohortSettlementResult = await settleDelegatedUpdatePluginCohort(
+      readUpdatePluginCohortSettlementInput(JSON.parse(text)),
+    );
+    return;
+  }
   if (process.argv[2] === "--post-core") {
     return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
   }
@@ -281,6 +324,7 @@ async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<
 }
 
 async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void> {
+  const remaining = createDoctorServiceInspectionBudget(input.serviceInspectionDeadlineAtMs);
   const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
   if (!resultPath || !input.executor) {
     throw new Error("Update Doctor requires its delegated executor and result path.");
@@ -328,45 +372,62 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      remaining();
       await stopSupervisedPredecessorGateway(input, {
         root: input.root,
         assertCurrent,
+        serviceInspectionBudget: remaining,
         warn: (message) => process.stderr.write(`${message}\n`),
       });
       assertCurrent();
-      await runDoctorHealthFlow(
+      const doctorBudget = remaining();
+      await withPluginCohortConfigCapture(
         {
-          ...defaultRuntime,
-          exit: (code) => {
-            process.exitCode = code;
-          },
+          runId: input.runId,
+          installKey: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
+          env: process.env,
+          assertCurrent: fence.assertCurrent,
         },
-        {
-          repair: input.repair,
-          fullIntegrityCheck: input.fullIntegrityCheck,
-          nonInteractive: true,
-          ...(input.yes !== undefined ? { yes: input.yes } : {}),
-          ...(input.workspaceSuggestions !== undefined
-            ? { workspaceSuggestions: input.workspaceSuggestions }
-            : {}),
-        },
-        {
-          inputHash: input.configInputHash,
-          assertCurrent,
-          commandAuthority,
-          originalRecoveryCapture: {
-            runId: input.runId,
-            installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
-            ref: input.originalRecoveryCapture,
-          },
-          ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
-          ...(input.databasePluginOwners
-            ? { databasePluginOwners: input.databasePluginOwners }
-            : {}),
-          ...(input.postCoreSchemaRepair === true
-            ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
-            : {}),
-        },
+        () =>
+          runDoctorHealthFlow(
+            {
+              ...defaultRuntime,
+              exit: (code) => {
+                process.exitCode = code;
+              },
+            },
+            {
+              repair: input.repair,
+              fullIntegrityCheck: input.fullIntegrityCheck,
+              nonInteractive: true,
+              ...(input.yes !== undefined ? { yes: input.yes } : {}),
+              ...(input.workspaceSuggestions !== undefined
+                ? { workspaceSuggestions: input.workspaceSuggestions }
+                : {}),
+            },
+            {
+              inputHash: input.configInputHash,
+              retirementOnly: input.retirementOnly,
+              assertCurrent,
+              commandAuthority,
+              originalRecoveryCapture: {
+                runId: input.runId,
+                installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
+                ref: input.originalRecoveryCapture,
+              },
+              ...(input.databaseGenerations
+                ? { databaseGenerations: input.databaseGenerations }
+                : {}),
+              ...(input.databasePluginOwners
+                ? { databasePluginOwners: input.databasePluginOwners }
+                : {}),
+              serviceInspectionDeadlineAtMs:
+                doctorBudget === undefined ? undefined : Date.now() + doctorBudget,
+              ...(input.postCoreSchemaRepair === true
+                ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
+                : {}),
+            },
+          ),
       );
     },
   );
@@ -539,6 +600,7 @@ async function finalizeInput(
 
 void (async () => {
   const errors: unknown[] = [];
+  let databaseOwnersClosed = true;
   for (const finalize of [
     finalizeMigratedUpdate,
     finalizeActiveDebugProxyCaptures,
@@ -549,9 +611,26 @@ void (async () => {
       await finalize();
     } catch (error) {
       errors.push(error);
+      if (
+        finalize === closeOpenClawStateDatabaseAsync ||
+        finalize === closeDefaultRetainedNativeWorkerSource
+      ) {
+        databaseOwnersClosed = false;
+      }
+    }
+  }
+  // A rejected drain can retain live SQL work that still needs these services.
+  if (databaseOwnersClosed) {
+    try {
+      await closePostgresPool();
+    } catch (error) {
+      errors.push(error);
     }
   }
   throwSqliteLifecycleErrors(errors, "Update finalization and resource cleanup failed.");
+  if (pluginCohortSettlementResult) {
+    process.stdout.write(JSON.stringify(pluginCohortSettlementResult));
+  }
 })().catch((error: unknown) => {
   process.stderr.write(`${formatUpdateFinalizationError(error)}\n`);
   process.exitCode = 1;

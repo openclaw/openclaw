@@ -195,7 +195,7 @@ suite.define(() => {
         await expect.poll(readOverrides).toEqual(siblings);
         await expect.poll(() => item.isDisabled()).toBe(true);
         expect(await item.getAttribute("aria-checked")).toBe("false");
-        expect(await tooltipTitleText(item)).toContain("tools.web.search.enabled");
+        await expect.poll(() => tooltipTitleText(item)).toContain("tools.web.search.enabled");
         await item.evaluate((node) =>
           node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
         );
@@ -206,7 +206,7 @@ suite.define(() => {
         ]);
 
         const newUrl = new URL("new", suite.server.baseUrl);
-        newUrl.hash = fragment;
+        // The first connection consumed the handoff; reload with the paired device credentials.
         expect((await page.goto(newUrl.toString()))?.status()).toBe(200);
         await waitForControlUiGatewayReady(page);
         const draftItem = await openMenu(page, ".new-session-page__composer");

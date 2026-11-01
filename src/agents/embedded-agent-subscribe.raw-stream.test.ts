@@ -35,17 +35,14 @@ describe("appendRawStream", () => {
   });
 
   it("snapshots the factory result before appending exact JSONL", async ({ signal }) => {
-    const append = vi.spyOn(fsSafe, "appendRegularFile");
+    using append = vi.spyOn(fsSafe, "appendRegularFile");
     const payload = { event: "test", ts: 1 };
-    try {
-      appendRawStream(() => payload, undefined);
-      payload.ts = 2;
-      // The real append owns both the write and handle close; keep its completion promise.
-      await withinTest(append.mock.results[0]!.value, signal);
-      expect(fs.readFileSync(target, "utf8")).toBe('{"event":"test","ts":1}\n');
-    } finally {
-      append.mockRestore();
-    }
+
+    appendRawStream(() => payload, undefined);
+    payload.ts = 2;
+    // The real append owns both the write and handle close; keep its completion promise.
+    await withinTest(append.mock.results[0]!.value, signal);
+    expect(fs.readFileSync(target, "utf8")).toBe('{"event":"test","ts":1}\n');
   });
 
   it("does not evaluate Incognito stream content or create a log file", () => {

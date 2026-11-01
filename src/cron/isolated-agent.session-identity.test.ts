@@ -4,14 +4,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it as baseIt, vi } from "vitest";
 import type { RunEmbeddedAgentInternalParams as AgentRequest } from "../agents/embedded-agent-runner/run/internal-params.js";
-import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { SessionManager } from "../agents/sessions/index.js";
-import * as thinking from "../auto-reply/thinking.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
+import { admitScheduledOccurrence } from "./execution-context-admission.js";
+import {
+  readScheduledMemoryParent,
+  readScheduledToolTargets,
+} from "./execution-context-registry.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import * as f from "./isolated-agent.test-harness.js";
 import {
@@ -74,10 +77,11 @@ function runSessionTurn(
   job: CronStoredJob,
   sessionKey = "cron:job-1",
   agentId?: string,
+  occurrence = TEST_SCHEDULED_OCCURRENCE,
 ) {
   setRuntimeConfigSnapshot(cfg);
   return runCronIsolatedAgentTurn({
-    occurrence: TEST_SCHEDULED_OCCURRENCE,
+    occurrence,
     deliveryAttemptFence: null,
     cfg,
     deps: makeDeps(),
@@ -91,9 +95,6 @@ function runSessionTurn(
 
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
-    vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
-    vi.spyOn(thinking, "isThinkingLevelSupported").mockReturnValue(true);
-    h.runEmbeddedAgentMock.mockClear();
     h.mockRunCronFallbackPassthrough();
   });
 
@@ -133,13 +134,11 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     async (source, { home }) => {
       await useRealCronSessionState();
       await prepareProfiles();
-      const storePath = await f.writeSessionStore(home, {
-        delivery: { kind: "internal" },
-      });
+      const storePath = await f.writeSessionStore(home, {});
       const profile = ensureProfileForEmail("cron-creator@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const createdActor = { type: "human" as const, source, id: profile.id };
-      const job = sessionJob({ createdActor }, "persist this turn");
+      const job = sessionJob({ createdActor });
       const guest = {
         sessions: { others: "none" as const },
         agents: "*" as const,
@@ -214,6 +213,69 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
+  it("runs a linked current job as a child of its conversation", async ({ home }) => {
+    const parentKey = "agent:main:dashboard:creator";
+    const parentWorkspace = path.join(home, "creator-workspace");
+    await fs.mkdir(parentWorkspace, { recursive: true });
+    const parentRow = {
+      sessionId: "creator-session",
+      lifecycleRevision: "rev-1",
+      updatedAt: Date.now() - 1_000,
+      spawnedWorkspaceDir: parentWorkspace,
+      spawnedCwd: parentWorkspace,
+      systemSent: true,
+    };
+    const storePath = await f.writeSessionStoreEntries(home, { [parentKey]: parentRow });
+    const cfg = f.makeCfg(home, storePath);
+    const job: CronStoredJob = {
+      ...(normalizeCronJobCreate(sessionJob({ sessionTarget: "current" }), {
+        sessionContext: { sessionKey: parentKey },
+      }) as CronJob),
+      sourceConversation: {
+        sessionKey: parentKey,
+        sessionId: "creator-session",
+        lifecycleRevision: "rev-1",
+      },
+    };
+    const occurrence = await admitScheduledOccurrence({
+      cfg,
+      job,
+      agentId: "main",
+      trigger: "cron",
+    });
+    let seen: Record<string, unknown> | undefined;
+    h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+      const admitted = await input.preparedRunAdmission!.admit("gateway", input.runId);
+      seen = {
+        sessionKey: input.sessionKey,
+        workspaceDir: input.workspaceDir,
+        board: readScheduledToolTargets(admitted)?.boardSessionKey,
+        placement: readScheduledToolTargets(admitted)?.placement,
+        memory: readScheduledMemoryParent(admitted.operationalRunInstance)?.sessionKey,
+      };
+      return embeddedResult(input.sessionId);
+    });
+
+    let res;
+    try {
+      res = await runSessionTurn(cfg, job, parentKey, undefined, occurrence);
+    } finally {
+      occurrence.release();
+    }
+
+    expect(res.status, res.error).toBe("ok");
+    // The child runs under its own run key, so it never joins a live parent turn,
+    // and takes the parent's board, memory and workspace.
+    expect(seen).toEqual({
+      sessionKey: expect.stringMatching(new RegExp(`^agent:main:cron:${job.id}:run:`)),
+      workspaceDir: parentWorkspace,
+      board: parentKey,
+      placement: "child",
+      memory: parentKey,
+    });
+    await expect(readCronSessionEntry(storePath, parentKey)).resolves.toMatchObject(parentRow);
+  });
+
   it("uses lightweight bootstrap context for command-style cron payloads", async ({ home }) => {
     await runCronTurn(home, {
       jobPayload: {
@@ -228,16 +290,8 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   it("starts a fresh session id for each cron run", async ({ home }) => {
     await useRealCronSessionState();
     const storePath = await f.writeSessionStore(home, { delivery: { kind: "internal" } });
-    const deps = makeDeps();
-    const runPingTurn = () =>
-      runCronTurn(home, {
-        deps,
-        jobPayload: { kind: "agentTurn", message: "ping" },
-        storePath,
-      });
-
-    const first = (await runPingTurn()).res;
-    const second = (await runPingTurn()).res;
+    const first = (await runCronTurn(home, { storePath })).res;
+    const second = (await runCronTurn(home, { storePath })).res;
 
     expect([typeof first.sessionId, typeof second.sessionId]).toEqual(["string", "string"]);
     expect(second.sessionId).not.toBe(first.sessionId);

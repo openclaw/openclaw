@@ -486,9 +486,7 @@ export function formatMemoryDreamingDay(epochMs: number, timezone?: string): str
     const year = values.get("year");
     const month = values.get("month");
     const day = values.get("day");
-    if (year && month && day) {
-      return `${year}-${month}-${day}`;
-    }
+    return `${year}-${month}-${day}`;
   } catch {
     // Fall back to host-local day for invalid or unsupported timezones.
   }

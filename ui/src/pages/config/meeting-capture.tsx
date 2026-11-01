@@ -7,6 +7,7 @@ import { TRANSCRIPT_SOURCE_LOCATOR_FIELDS } from "../../../../src/plugins/manife
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsNavRow,
@@ -267,24 +268,18 @@ export function MeetingCaptureSettings(props: SettingsProps) {
             <SettingsRow
               title={t("meetingCapture.fields.providerId")}
               control={
-                <select
-                  class="settings-select"
+                <SettingsSelect
                   name="providerId"
                   aria-label={t("meetingCapture.fields.providerId")}
                   required
                   disabled={disabled()}
                   value={editedProviderId()}
                   onChange={(event) => selectProvider(event.currentTarget.value)}
-                >
-                  <option value="">{t("meetingCapture.chooseProvider")}</option>
-                  <For each={options()} keyed={(option) => option.id}>
-                    {(option) => (
-                      <option value={option().id} selected={option().id === editedProviderId()}>
-                        {option().label}
-                      </option>
-                    )}
-                  </For>
-                </select>
+                  options={[
+                    { value: "", label: t("meetingCapture.chooseProvider") },
+                    ...options().map((option) => ({ value: option.id, label: option.label })),
+                  ]}
+                />
               }
             />
             {editedProviderId() && !supportsAutoStartSetup(selectedProvider()) ? (

@@ -37,6 +37,8 @@ export type GatewayAssistantInjection = {
   label?: string;
   idempotencyKey?: string;
   humanMentions?: readonly HumanMention[];
+  /** Keep host-authored text as written instead of parsing model delivery directives. */
+  literal?: true;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 };
 
@@ -132,6 +134,9 @@ export async function injectGatewayAssistantMessage(
           label: params.label,
           idempotencyKey: params.idempotencyKey,
           humanMentions: params.humanMentions,
+          ...(params.literal ? { literal: true as const } : {}),
+          // Authority can end while the write waits for its target or queue.
+          ...(sessionMutationCommitGuard ? { assertCurrent: sessionMutationCommitGuard } : {}),
           onMessageCommitted: params.onMessageCommitted,
           sessionId,
           storePath,

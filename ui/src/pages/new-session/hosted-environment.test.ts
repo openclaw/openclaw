@@ -1,18 +1,20 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
 import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
 import {
   hostedRuntime as runtime,
   mountPlacement as renderPlace,
-  nativeRuntime,
   placementDevice,
 } from "./placement.test-support.ts";
+import { replaceBrowserPreference } from "./preferences.ts";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
 const model: ModelCatalogEntry = {
@@ -26,9 +28,13 @@ const model: ModelCatalogEntry = {
 const agent = { id: "main", model: { primary: modelRef } };
 const preferred = { model: modelRef, agentRuntime: "agentsapi" };
 const managed = managedModelControls();
+beforeEach(() => {
+  replaceBrowserPreference("ws://gateway.example", "main", {});
+});
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();
+  replaceBrowserPreference("ws://gateway.example", "main", {});
 });
 function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});
@@ -152,13 +158,7 @@ it("retains the explicit API-key account through hosted selection and rejects a 
 });
 it("keeps terminal placement when a hosted draft changes to a same-agent catalog target", async () => {
   const folder = "/local/project";
-  const data: NewSessionRouteData = {
-    agentId: "main",
-    requestedAgentId: "main",
-    catalogId: "",
-    catalogLabel: "",
-    startTerminal: false,
-  };
+  const data: NewSessionRouteData = createNewSessionRouteData();
   const fixture = hostedRepository(data);
   const { state, request } = fixture;
   request.mockResolvedValue({

@@ -1,18 +1,12 @@
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
 } from "../state/agent-database-admission.js";
 import { handleGatewayRequest } from "./server-methods.js";
-
-function moduleNotFoundError(filePath: string): Error {
-  return Object.assign(new Error(`Cannot find module '${filePath}'`), {
-    code: "ERR_MODULE_NOT_FOUND",
-    url: pathToFileURL(filePath).href,
-  });
-}
+import { moduleNotFoundError } from "./stale-install.test-support.js";
 
 async function dispatchThrowingHandler(error: Error, respond = vi.fn()) {
   await handleGatewayRequest({

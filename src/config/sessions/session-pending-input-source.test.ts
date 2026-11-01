@@ -69,6 +69,13 @@ it.each(["pending", "committed"] as const)(
   "rejects malformed or oversized %s source bytes without changing storage",
   async (source) => {
     const receipt = await stage("invalid-source", source === "committed");
+    expect(
+      await readSessionSubmittedInput(scope(), "invalid-source:user", { includeSource: true }),
+    ).toEqual({
+      message: receipt.message,
+      source: source === "committed" ? "transcript" : "pending",
+      ...(source === "committed" ? { messageSeq: 1 } : {}),
+    });
     const db = database().db;
     const invalidMessages = [
       "{",
@@ -117,6 +124,7 @@ it.each([
     db.prepare("SELECT * FROM session_transcript_index_state WHERE session_id = ?").get(sessionId);
   const before = readIndex();
   await readOnly(async () => {
+    expect(await readSessionSubmittedInput(scope(), "new-input:user")).toBeUndefined();
     await expect(readSessionSubmittedInput(scope(), "stale-source:user")).rejects.toBeInstanceOf(
       SessionTranscriptProjectionUnavailableError,
     );

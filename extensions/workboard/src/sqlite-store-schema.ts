@@ -19,7 +19,7 @@ import {
   getAdmittedSqliteSchemaFacts,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { WORKBOARD_POSTGRES_SCHEMA_SQL } from "./workboard-postgres-schema.js";
+import { workboardEngineSchema } from "./store-engine-schema.js";
 import { SCHEMA_VERSION, WORKBOARD_SCHEMA_SQL } from "./workboard-schema.js";
 export type WorkboardSqlConnection = EngineConnection;
 
@@ -122,12 +122,7 @@ export function createWorkboardDatabase(
     selected = withEngineStoreAdmission(() =>
       openEngineStore({
         anchor: db,
-        schema: {
-          id: "workboard",
-          version: SCHEMA_VERSION,
-          sqlite: WORKBOARD_SCHEMA_SQL,
-          postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
-        },
+        schema: workboardEngineSchema,
         input: postgresInput,
         inspectSqlite: () => {
           admitSqliteSchema(db);

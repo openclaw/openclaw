@@ -6,7 +6,7 @@ import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { zstdCompressSync } from "node:zlib";
 import { Client, type QueryResultRow } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   memoryTextSearchSchema,
   memoryStandingIntentSearchSchema,
@@ -14,13 +14,21 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
+import { readSessionTranscriptHistoryEventPage } from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import { resolveVisibleHistoryEventCount } from "../../config/sessions/session-accessor.sqlite-history-projection.js";
 import { readSessionTranscriptHistoryEventPageFromProjection } from "../../config/sessions/session-accessor.sqlite-history-query.js";
 import { readCurrentProjectionSnapshot } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import { resolveSqliteTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSessionColdArchivePath } from "../../config/sessions/session-cold-storage-codec.js";
-import { prepareTranscriptPayload } from "../../config/sessions/transcript-payload.js";
+import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import {
+  prepareColdTranscriptPayload,
+  prepareTranscriptPayload,
+} from "../../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { MemorySearchManager } from "../../memory-host-sdk/host/types.js";
+import * as memoryRuntime from "../../plugins/memory-runtime.js";
 import {
   capturePostgresBackup,
   preparePostgresRestore,
@@ -114,7 +122,40 @@ describe.skipIf(!connection)("agent database port", () => {
       async (state) => {
         await state.writeConfig({
           database: { engine: "sqlite", postgres: { connection: connection! } },
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
         });
+        fs.mkdirSync(state.workspaceDir, { recursive: true });
+        fs.writeFileSync(path.join(state.workspaceDir, "MEMORY.md"), "Synthetic port memory.\n");
+        // Keep custody, the memory write, worker transport and statistics real;
+        // the embedding/plugin service is a fixed external fixture.
+        const memory = vi
+          .spyOn(memoryRuntime, "getActiveMemorySearchManagerCore")
+          .mockImplementationOnce(async () => {
+            const anchor = readBackupEngine(agentPath);
+            if (anchor.engine !== "postgres") {
+              throw new Error("Memory rebuild must use the published PostgreSQL anchor");
+            }
+            const manager: MemorySearchManager = {
+              search: async () => [],
+              readFile: async ({ relPath }) => ({ status: "not_found", path: relPath, text: "" }),
+              status: () => ({
+                backend: "builtin",
+                provider: "fixture",
+                dirty: false,
+                files: 1,
+                chunks: 1,
+              }),
+              sync: async () => {
+                await client.query(`INSERT INTO "${anchor.namespace}".memory_index_chunks
+                (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+                VALUES ('fixture', 'MEMORY.md', 'memory', 1, 1, 'fixture', 'fixture', 'synthetic', '[]', 1)`);
+              },
+              probeEmbeddingAvailability: async () => ({ ok: true }),
+              probeVectorAvailability: async () => true,
+              close: async () => {},
+            };
+            return { manager, searchRuntimeRegistered: true };
+          });
         const descriptor = await agentPortProvider.loadDescriptor();
         const agentPath = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
         fs.mkdirSync(path.dirname(agentPath), { recursive: true });
@@ -184,6 +225,8 @@ describe.skipIf(!connection)("agent database port", () => {
             phase: "complete",
             engine: "postgres",
             stores: [agentPath],
+            plannerStatistics: [{ path: agentPath, result: { status: "analyzed" } }],
+            memoryRebuilds: [{ status: "rebuilt", plannerStatistics: { status: "analyzed" } }],
           });
           if (!("manifest" in result)) {
             throw new Error("Expected a completed, verified database port");
@@ -194,14 +237,45 @@ describe.skipIf(!connection)("agent database port", () => {
           expect(manifest).toMatchObject({ state: "complete", outcome: "ported" });
           expect(manifest.targets[0]?.verification).toMatchObject({ ownerAdmitted: true });
           expect(manifest.targets[0]?.verification?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+          const intended = manifest.targets[0]!.intended;
+          if (intended.engine !== "postgres") {
+            throw new Error("Expected a PostgreSQL destination");
+          }
+          expect(
+            await rows(
+              `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = $1 AND c.relname = 'memory_index_chunks'`,
+              [intended.namespace],
+            ),
+          ).toEqual([{ reltuples: 1 }]);
           const config = JSON.parse(fs.readFileSync(state.configPath, "utf8")) as OpenClawConfig;
-          withDatabaseEngineSelection(
+          expect(
+            await rows(`SELECT * FROM "${intended.namespace}".session_transcript_index_state`),
+          ).toEqual([]);
+          await withDatabaseEngineSelection(
             {
               effectiveEngines: resolveDatabaseFamilyEngines(config),
               postgres: { connection: connection!, schemaPrefix: "test" },
             },
-            () =>
+            async () => {
+              const scope = {
+                agentId: "main",
+                env: state.env,
+                sessionId: "lazy-session",
+                sessionKey: "agent:main:main",
+                storePath: agentPath,
+              };
               withEngineStoreAdmission(() => {
+                expect(() =>
+                  readSessionTranscriptHistoryEventPage(scope, { offset: 0, maxMessages: 10 }),
+                ).toThrow(SessionTranscriptProjectionUnavailableError);
+              });
+              await waitForSessionTranscriptIndexReconcile({
+                agentId: "main",
+                env: state.env,
+                path: agentPath,
+              });
+              return withEngineStoreAdmission(() => {
                 using anchor = openNodeSqliteDatabase(agentPath);
                 const db = openAgentEngineStore(anchor, "main", agentPath, true);
                 try {
@@ -232,9 +306,11 @@ describe.skipIf(!connection)("agent database port", () => {
                 } finally {
                   db.close();
                 }
-              }),
+              });
+            },
           );
         } finally {
+          memory.mockRestore();
           const directory = state.statePath("recovery", "database-port");
           if (fs.existsSync(directory)) {
             const ownedNamespaces = new Set<string>();
@@ -457,7 +533,7 @@ describe.skipIf(!connection)("agent database port", () => {
     const cold = zstdCompressSync(
       Buffer.from(
         jsonLines(
-          { kind: "header", version: 1, sessionId: "session", generation: "old-generation" },
+          { kind: "header", version: 1, sessionId: "cold", generation: "old-generation" },
           { kind: "event", row: { seq: 0, event_json: archivedEvent, created_at: 0 } },
         ),
       ),
@@ -467,15 +543,39 @@ describe.skipIf(!connection)("agent database port", () => {
     const coldPath = resolveSessionColdArchivePath(anchorPath, coldName);
     fs.mkdirSync(path.dirname(coldPath), { recursive: true });
     fs.writeFileSync(coldPath, cold);
+    source.exec(`INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+      VALUES ('cold', 'agent:main:main', 1, 1);`);
+    const coldPayload = prepareColdTranscriptPayload(source, archivedEvent);
+    expect(coldPayload.event_json).toBeNull();
+    source
+      .prepare(`INSERT INTO transcript_events
+      (session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, navigation_type, message_role, created_at)
+      VALUES ('cold', 0, NULL, NULL, ?, ?, ?, ?, 0)`)
+      .run(
+        coldPayload.event_utf8_bytes,
+        coldPayload.navigation_json,
+        coldPayload.navigation_type,
+        coldPayload.message_role,
+      );
+    source.exec(`INSERT INTO transcript_event_identities
+      (session_id, event_id, seq, event_type, created_at) VALUES ('cold', 'archived', 0, 'message', 0);
+      INSERT INTO session_transcript_active_events
+      (session_id, active_position, event_seq, message_position, context_eligible)
+      VALUES ('cold', 0, 0, 0, 1);
+      INSERT INTO session_transcript_index_state
+      (session_id, indexed_seq, leaf_event_id, needs_rebuild, active_event_count, active_message_count, updated_at)
+      VALUES ('cold', 0, 'archived', 0, 1, 1, 17);`);
     source
       .prepare(`INSERT INTO session_transcript_cold_archives
       (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes, archive_bytes, last_seq, archived_at, storage)
-      VALUES ('session', 'old-generation', ?, ?, 1, ?, ?, 0, 1, 'file')`)
+      VALUES ('cold', 'old-generation', ?, ?, 1, ?, ?, 0, 1, 'file')`)
       .run(coldName, coldHash, Buffer.byteLength(archivedEvent), cold.byteLength);
     const sourceBytes = fs.readFileSync(sourcePath);
     const copied = await port(sqlite(source), pg(namespace), descriptor, storeId);
     expect(
-      await rows(`SELECT event_json, event_zstd FROM "${namespace}".transcript_events`),
+      await rows(
+        `SELECT event_json, event_zstd FROM "${namespace}".transcript_events WHERE session_id = 'session'`,
+      ),
     ).toEqual([{ event_json: event, event_zstd: null }]);
     const portedTrajectories = await client.query<TrajectoryPayloadRecord>(
       `SELECT event_json, event_payload, event_codec,
@@ -508,7 +608,7 @@ describe.skipIf(!connection)("agent database port", () => {
     ).toEqual([{ message_id: "message" }]);
     expect(
       await rows(
-        `SELECT event_id, message_idempotency_key FROM "${namespace}".transcript_event_identities`,
+        `SELECT event_id, message_idempotency_key FROM "${namespace}".transcript_event_identities WHERE session_id = 'session'`,
       ),
     ).toEqual([{ event_id: "message", message_idempotency_key: "idempotent" }]);
     expect(
@@ -571,13 +671,33 @@ describe.skipIf(!connection)("agent database port", () => {
     );
     {
       using roundtrip = openNodeSqliteDatabase(path.join(directory, "roundtrip.sqlite"));
-      expect(await port(pg(namespace), sqlite(roundtrip), descriptor, storeId)).toEqual(copied);
+      const returned = await port(pg(namespace), sqlite(roundtrip), descriptor, storeId);
+      expect(returned.tables).toEqual({
+        ...copied.tables,
+        memory_index_chunks: { rows: 1, sha256: expect.any(String) },
+      });
+      expect(returned.allocations).toEqual({
+        ...copied.allocations,
+        "memory_index_chunks.chunk_rowid": { value: "1", called: true },
+      });
       expect(
-        roundtrip.prepare("SELECT event_json, event_zstd FROM transcript_events").get(),
+        roundtrip
+          .prepare(
+            "SELECT event_json, event_zstd FROM transcript_events WHERE session_id = 'session'",
+          )
+          .get(),
       ).toEqual({
         event_json: event,
         event_zstd: null,
       });
+      for (const table of [
+        "transcript_events",
+        "session_transcript_active_events",
+        "session_transcript_index_state",
+      ]) {
+        const query = `SELECT * FROM ${table} WHERE session_id = 'cold'`;
+        expect(roundtrip.prepare(query).all()).toEqual(source.prepare(query).all());
+      }
       expect(
         roundtrip
           .prepare(`SELECT event_json, event_payload, event_codec, event_utf8_bytes
@@ -591,7 +711,7 @@ describe.skipIf(!connection)("agent database port", () => {
         { session_id: "forgotten-session" },
       ]);
       expect(roundtrip.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
-        count: 0,
+        count: 1,
       });
       expect(
         roundtrip
@@ -689,7 +809,11 @@ describe.skipIf(!connection)("agent database port", () => {
           readOnly: true,
         },
       );
-      expect(updateExport.prepare("SELECT event_json FROM transcript_events").get()).toEqual({
+      expect(
+        updateExport
+          .prepare("SELECT event_json FROM transcript_events WHERE session_id = 'session'")
+          .get(),
+      ).toEqual({
         event_json: event,
       });
     }
@@ -749,8 +873,8 @@ describe.skipIf(!connection)("agent database port", () => {
       ).toEqual([{ session_id: "forgotten-session" }]);
       expect(
         await rows(`SELECT count(*) AS count FROM "${restored.namespace}".memory_index_chunks`),
-      ).toEqual([{ count: "0" }]);
-      // Memory indexes are omitted by the port and rebuilt by their current admitted owner.
+      ).toEqual([{ count: "1" }]);
+      // Search accelerators are rebuilt by the owner; canonical chunk vectors survive the port.
       expect(
         await rows(
           `SELECT to_regclass('"${restored.namespace}".memory_index_chunks_vec') AS projection`,

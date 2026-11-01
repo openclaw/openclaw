@@ -402,6 +402,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
                   assertCurrent();
                   return runEmbeddedAgent({
                     ...options,
+                    ...(options.authProfileId ? { authProfileIdSource: "user" as const } : {}),
                     preparedRunAdmission,
                     runId,
                     sessionId: runId,

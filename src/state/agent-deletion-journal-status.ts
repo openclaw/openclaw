@@ -3,6 +3,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
+  prepareSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
@@ -75,7 +76,7 @@ export function updateAgentDeletionDiscovery(
 function statusKey(agentId: string): SqliteDatabaseAdmissionKey<AgentDeletionJournalStatus | null> {
   return {
     name: `agent.deletion-status:${normalizeAgentId(agentId)}`,
-    schemaDependent: true,
+    // Journal writers own this row fact; unrelated first-use DDL cannot revoke an agent.
     read: (value) =>
       value === "absent" || value === "pending" || value === "complete" ? value : undefined,
   };
@@ -113,6 +114,14 @@ export function getOrLoadAgentDeletionJournalStatus(
   load: () => AgentDeletionJournalStatus | undefined,
 ): AgentDeletionJournalStatus | undefined {
   return getOrLoadSqliteDatabaseAdmissionForPath(statePath, statusKey(agentId), load) ?? undefined;
+}
+
+/** Keep the prepared key; the admission owner checks the live fact's revision on every effect. */
+export function prepareAgentDeletionJournalStatus(statePath: string, agentId: string) {
+  const key = statusKey(agentId);
+  const readCommitted = prepareSqliteDatabaseAdmissionForPath(statePath, key);
+  return (database?: EngineConnection): AgentDeletionJournalStatus | undefined =>
+    (database ? getSqliteDatabaseAdmission(database, key) : readCommitted()) ?? undefined;
 }
 
 const pendingLoads = resolveGlobalSingleton(

@@ -47,9 +47,6 @@ function guardCatalogListOperation(
       return step;
     },
     close() {
-      if (closed) {
-        return;
-      }
       closed = true;
       const closing = operation;
       operation = undefined;

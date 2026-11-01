@@ -527,11 +527,14 @@ describe("ModelProvidersPage agent scope", () => {
     expect(modal.textContent).toContain("Remove OpenAI");
     expect(requestCount(request, "models.authLogout")).toBe(0);
     modal.querySelector<HTMLButtonElement>("button.danger")!.click();
-    await waitForSolid(() => expect(toast.textContent).toContain("Authentication refresh failed."));
     // The saved API-key profile is a provider-wide sign-out; nothing goes through config.
-    expect(request.mock.calls.filter(([method]) => method === "models.authLogout")).toEqual([
-      ["models.authLogout", { provider: "openai", agentId: "main" }],
-    ]);
+    await waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "models.authLogout")).toEqual([
+        ["models.authLogout", { provider: "openai", agentId: "main" }],
+      ]),
+    );
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(toast.textContent).toContain("Authentication refresh failed."));
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
@@ -565,6 +568,82 @@ describe("ModelProvidersPage agent scope", () => {
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
   });
+
+  it.each([
+    ["another provider fails", "ready", undefined],
+    ["the added provider fails", "unavailable", "More models could not be discovered."],
+  ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
+    const { context, runtimeConfig, request } = createHarness("main");
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) =>
+      method === "models.list"
+        ? {
+            models: [],
+            refreshFailed: true,
+            providerOutcomes: [
+              { provider: "anthropic", status: ownStatus },
+              { provider: "ollama", status: "unavailable" },
+            ],
+          }
+        : originalRequest(method),
+    );
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await openApiKeyProvider(page, "anthropic");
+    page.view.props.onAddProviderKeyChange("new-provider-key");
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!.click();
+    await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+    await drainPageUpdates(page);
+
+    expect(page.view.props.messages.add).toEqual({
+      kind: "success",
+      text: "Provider anthropic added.",
+      ...(warning ? { warning } : {}),
+    });
+  });
+
+  it.each([
+    ["hides every model", [false, false], true],
+    ["allows one model", [false, true], false],
+  ] as const)(
+    "provider-add feedback names the model policy when it %s",
+    async (_case, allowed, warns) => {
+      const { context, runtimeConfig, request } = createHarness("main");
+      const originalRequest = request.getMockImplementation()!;
+      request.mockImplementation(async (method: string, params?: { view?: string }) =>
+        method === "models.list" && params?.view === "all"
+          ? {
+              models: allowed.map((manualSelectionAllowed, index) => ({
+                provider: "anthropic",
+                id: `claude-${index}`,
+                name: `Claude ${index}`,
+                manualSelectionAllowed,
+              })),
+            }
+          : originalRequest(method),
+      );
+      const page = appendPage(context);
+      await waitForProviders(page);
+      await openApiKeyProvider(page, "anthropic");
+      page.view.props.onAddProviderKeyChange("new-provider-key");
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!.click();
+      await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+      await drainPageUpdates(page);
+
+      expect(request).toHaveBeenCalledWith(
+        "models.list",
+        expect.objectContaining({ view: "all", provider: "anthropic" }),
+      );
+      expect(page.view.props.addProviderOpen).toBe(warns);
+      expect(page.view.props.messages.add?.warning).toBe(
+        warns
+          ? 'Model policy hides all anthropic models, so they do not show in the model picker. Add "anthropic/*" to agents.entries.main.modelPolicy.allow if this agent sets its own policy, otherwise to agents.defaults.modelPolicy.allow.'
+          : undefined,
+      );
+    },
+  );
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
     const { settingsAgentSelection, context, notifySelection, runtimeConfig } =

@@ -304,8 +304,9 @@ export function updatePairedDeviceInTransaction<T>(
   return runDevicePairingStoreMutation(undefined, ({ db }) => {
     const normalizedDeviceId = deviceId.trim();
     const device = loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId);
-    // Kernels may mutate their borrowed row while building the patch.
-    const stored = device ? toPairedRow(device) : undefined;
+    const paired = transactionPairedRecords(db);
+    // Kernels may mutate their cloned row; only the untouched owner row backs the receipt.
+    const stored = paired?.[normalizedDeviceId];
     const result = update(device);
     const patch = result.patch;
     if (!patch || Object.keys(patch).length === 0) {
@@ -334,9 +335,8 @@ export function updatePairedDeviceInTransaction<T>(
         .set(columns)
         .where("device_id", "=", normalizedDeviceId),
     );
-    const paired = transactionPairedRecords(db);
     if (paired && stored) {
-      paired[normalizedDeviceId] = fromPairedRow({ ...stored, ...columns });
+      paired[normalizedDeviceId] = fromPairedRow({ ...toPairedRow(stored), ...columns });
     }
     return { mutated: true, pairedChanged: true, value: result.value };
   });

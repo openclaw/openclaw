@@ -4,15 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { normalizeManifestChannelCommandDefaults } from "../../plugins/manifest-setup-normalizers.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-
-type ChannelCommandDefaults = Pick<
-  NonNullable<ChannelPlugin["commands"]>,
-  "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
->;
 
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
 
@@ -33,21 +28,6 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
   return record[key];
 }
 
-export function normalizeChannelCommandDefaults(
-  value: ChannelCommandDefaults | undefined,
-): ChannelCommandDefaults | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const defaults: ChannelCommandDefaults = {};
-  for (const key of ["nativeCommandsAutoEnabled", "nativeSkillsAutoEnabled"] as const) {
-    if (typeof value[key] === "boolean") {
-      defaults[key] = value[key];
-    }
-  }
-  return Object.keys(defaults).length > 0 ? defaults : undefined;
-}
-
 /**
  * Resolves command defaults from enabled installed plugin metadata without loading plugins.
  */
@@ -59,7 +39,7 @@ export function resolveReadOnlyChannelCommandDefaults(
     workspaceDir?: string;
     config: OpenClawConfig;
   },
-): ChannelCommandDefaults | undefined {
+) {
   const normalizedChannelId = normalizeOptionalString(channelId) ?? "";
   if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
     return undefined;
@@ -98,7 +78,9 @@ export function resolveReadOnlyChannelCommandDefaults(
       record.channelCatalogMeta?.id === normalizedChannelId
         ? record.channelCatalogMeta.commands
         : undefined;
-    const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
+    const commands = normalizeManifestChannelCommandDefaults(
+      channelConfig?.commands ?? catalogCommands,
+    );
     if (commands) {
       return commands;
     }

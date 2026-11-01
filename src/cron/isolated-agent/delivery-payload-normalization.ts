@@ -104,15 +104,23 @@ export function normalizeDirectCronDeliveryPayloads(params: {
 export function appendCronRunInspectionLink(
   payloads: ReplyPayload[],
   inspectionUrl: string | undefined,
+  channel: string,
 ): ReplyPayload[] {
   const index = payloads.findLastIndex((payload) => payload.text?.trim());
   if (!inspectionUrl || index < 0) {
     return payloads;
   }
   const payload = payloads[index]!;
+  // These channels render Markdown links natively without replacing the reply
+  // with a card or competing with its existing interactive controls. Encode
+  // Markdown URL delimiters so configured origins/base paths stay one link.
+  const link =
+    channel === "telegram" || channel === "discord"
+      ? `[Inspect run](${inspectionUrl.replace(/[()]/g, (char) => (char === "(" ? "%28" : "%29"))})`
+      : `Inspect: ${inspectionUrl}`;
   const linked = copyReplyPayloadMetadata(payload, {
     ...payload,
-    text: `${payload.text}\nInspect: ${inspectionUrl}`,
+    text: `${payload.text}\n${link}`,
   });
   return payloads.map((entry, at) => (at === index ? linked : entry));
 }

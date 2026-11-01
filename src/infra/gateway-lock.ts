@@ -19,6 +19,7 @@ import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permi
 import { acquireWithWait } from "./acquire-with-wait.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   assertDatabasePortRecoveryAllowed,
   assertDatabasePortStartupAllowed,
@@ -34,6 +35,7 @@ import {
   GatewayLockNamespaceError,
   type GatewayLockRole,
   type LockPayload,
+  LockPayloadSchema,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
@@ -451,6 +453,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     role,
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     ...(role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
     ...(typeof opts.port === "number" &&
     Number.isInteger(opts.port) &&
@@ -604,10 +607,10 @@ export async function acquireGatewayLock(
     assertStateOwnerCurrent(opts.assertCurrent);
     // Shipped Gateways discover this PID sidecar before starting. Synchronous
     // schema work retains the same fs-safe owner through its final reference.
-    const shouldReclaim = (previous: LockPayload | null) =>
+    const shouldReclaim = ({ payload: previous }: { payload: unknown }) =>
       shouldReclaimGatewayLock({
         lockPath: paths.stateLockPath,
-        payload: previous,
+        payload: LockPayloadSchema.safeParse(previous).data ?? null,
         platform: opts.platform ?? process.platform,
       });
     if (!borrowedOwner) {
@@ -619,10 +622,8 @@ export async function acquireGatewayLock(
           staleRecovery: "remove-if-unchanged",
           reentrantOwner: payload.ownerId,
           payload: () => (role === "gateway" ? payload : { ...payload, role: "agent-embedded" }),
-          parsePayload: parseGatewayLockPayload,
-          shouldReclaim: ({ payload: previous }) => shouldReclaim(previous as LockPayload | null),
-          shouldRemoveStaleLock: ({ payload: previous }) =>
-            shouldReclaim(previous as LockPayload | null),
+          shouldReclaim,
+          shouldRemoveStaleLock: shouldReclaim,
         }),
       );
     }

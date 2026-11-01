@@ -128,10 +128,13 @@ export type SessionDeleteTarget = SessionDeleteOptions & {
   key: string;
 };
 
-export type SessionDeleteOutcome = Pick<SessionsDeleteResult, "deleted" | "worktreePreserved">;
+export type SessionDeleteOutcome = Pick<SessionsDeleteResult, "deleted" | "worktreePreserved"> & {
+  queued?: true;
+};
 
 export type SessionDeleteBatchResult = {
   deleted: string[];
+  queued?: string[];
   errors: { target: SessionDeleteTarget; error: unknown }[];
   preservedWorktrees: PreservedSessionWorktree[];
 };

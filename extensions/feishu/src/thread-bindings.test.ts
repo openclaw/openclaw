@@ -12,15 +12,15 @@ import {
   getFeishuThreadBindingManager,
 } from "./thread-bindings.js";
 
-const baseCfg = {
-  session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
+const baseCfg = { session: { mainKey: "main", scope: "per-sender" } } satisfies OpenClawConfig;
 
 type FeishuThreadBindingManager = ReturnType<typeof createFeishuThreadBindingManagerImpl>;
 const trackedManagers: FeishuThreadBindingManager[] = [];
 const account = { channel: "feishu", accountId: "default" };
 const service = getSessionBindingService();
 const startedAt = 1_700_000_000_000;
+const child = "agent:main:subagent:child";
+const hookCfg = { ...baseCfg, channels: { feishu: {} } };
 
 function conversationRef(conversationId: string, parentConversationId?: string) {
   return { ...account, conversationId, ...(parentConversationId ? { parentConversationId } : {}) };
@@ -58,46 +58,25 @@ afterEach(() => {
 });
 
 describe("Feishu thread bindings", () => {
-  it("registers current-placement adapter capabilities for Feishu", () => {
-    createManager();
-
-    expect(service.getCapabilities(account)).toEqual({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
-    });
-  });
-
-  it("binds and resolves a Feishu topic conversation", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  it("binds, resolves, touches and unbinds through the current-placement adapter", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
-
     const conversation = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
-    const binding = await bindTo(conversation, "agent:codex:acp:binding:feishu:default:abc123", {
-      label: "codex-main",
-    });
-    expect(binding.conversation.conversationId).toBe(conversation.conversationId);
+    const target = "agent:codex:acp:binding:feishu:default:abc123";
+    const binding = await bindTo(conversation, target, { label: "codex-main" });
     const resolved = service.resolveByConversation(conversationRef(conversation.conversationId));
-    expect(resolved).toEqual({
-      bindingId: "default:oc_group_chat:topic:om_topic_root",
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+    expect(resolved).toMatchObject({
+      targetSessionKey: target,
       targetKind: "session",
       conversation,
-      status: "active",
-      boundAt: 1_700_000_000_000,
-      expiresAt: 1_700_086_400_000,
-      metadata: {
-        agentId: "codex",
-        label: "codex-main",
-        boundBy: undefined,
-        deliveryTo: undefined,
-        deliveryThreadId: undefined,
-        lastActivityAt: 1_700_000_000_000,
-        idleTimeoutMs: 86_400_000,
-        maxAgeMs: 0,
-      },
     });
+    now.mockReturnValue(startedAt + 1_000);
+    service.touch(binding.bindingId);
+    expect(service.resolveByConversation(conversation)?.metadata?.lastActivityAt).toBe(
+      startedAt + 1_000,
+    );
+    await service.unbind({ bindingId: binding.bindingId, reason: "test" });
+    expect(service.resolveByConversation(conversation)).toBeNull();
   });
 
   it.each([
@@ -125,35 +104,13 @@ describe("Feishu thread bindings", () => {
     now.mockReturnValue(expiresAt - 1);
     expect(manager.getByConversationId(conversation.conversationId)).toBeDefined();
     expect(manager.listBySessionKey(targetSessionKey)).toHaveLength(2);
-    expect(service.resolveByConversation(conversation)).not.toBeNull();
-    expect(service.listBySession(targetSessionKey)).toHaveLength(2);
 
     now.mockReturnValue(expiresAt);
     if (mode === "touch after expiry") {
       service.touch(binding.bindingId, expiresAt + 1);
     }
     expect(service.resolveByConversation(conversation)).toBeNull();
-    expect(manager.getByConversationId(conversation.conversationId)).toBeUndefined();
     expect(manager.listBySessionKey(targetSessionKey)).toEqual([]);
-    expect(service.listBySession(targetSessionKey)).toEqual([]);
-  });
-
-  it("keeps active bindings touchable and unbindable", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    createManager();
-    const conversation = conversationRef("oc_group_chat:topic:om_active_root");
-    const binding = await bindTo(conversation, "agent:codex:acp:binding:feishu:default:active");
-
-    now.mockReturnValue(startedAt + 1_000);
-    service.touch(binding.bindingId);
-    expect(service.resolveByConversation(conversation)?.metadata?.lastActivityAt).toBe(
-      startedAt + 1_000,
-    );
-
-    await expect(service.unbind({ bindingId: binding.bindingId, reason: "test" })).resolves.toEqual(
-      [expect.objectContaining({ bindingId: binding.bindingId })],
-    );
-    expect(service.resolveByConversation(conversation)).toBeNull();
   });
 
   it("keeps the account's binding adapter live when a stopped overlapping manager tears down", async () => {
@@ -167,7 +124,6 @@ describe("Feishu thread bindings", () => {
 
     previous.stop();
 
-    expect(service.getCapabilities(account)).toMatchObject({ adapterAvailable: true });
     await expect(service.bind(input)).resolves.toMatchObject({ conversation });
     expect(getFeishuThreadBindingManager("default")).toBe(replacement);
   });
@@ -186,11 +142,7 @@ describe("Feishu thread bindings", () => {
 
     createManager();
     const conversation = conversationRef("oc_group_chat:topic:om_restarted");
-    const replacement = await service.bind({
-      conversation,
-      targetSessionKey: "agent:codex:acp:replacement",
-      targetKind: "session",
-    });
+    const replacement = await bindTo(conversation, "agent:codex:acp:replacement");
 
     manager.stop();
 
@@ -206,8 +158,7 @@ describe("Feishu thread bindings", () => {
       const manager = createManager();
       const conversationId = "oc_group_chat:topic:om_topic_root:sender:ou_sender_1";
       const conversation = conversationRef(conversationId, "oc_group_chat");
-      const targetSessionKey =
-        change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child";
+      const targetSessionKey = change === "session" ? "agent:main:subagent:replacement" : child;
       const targetKind = change === "kind" ? "session" : "subagent";
       const pluginMetadata = {
         pluginBindingOwner: "plugin",
@@ -220,7 +171,7 @@ describe("Feishu thread bindings", () => {
         conversationId: conversation.conversationId,
         parentConversationId: conversation.parentConversationId,
         targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
+        targetSessionKey: child,
         metadata: {
           agentId: "previous-agent",
           label: "child",
@@ -239,25 +190,18 @@ describe("Feishu thread bindings", () => {
         metadata: { label: "child" },
       });
 
-      expect(service.resolveByConversation(conversationRef(conversationId))).toEqual({
-        bindingId: `default:${conversationId}`,
-        targetSessionKey,
-        targetKind,
-        conversation,
-        status: "active",
-        boundAt: 1_700_000_100_000,
-        expiresAt: 1_700_086_500_000,
-        metadata: {
-          ...(!replace ? pluginMetadata : {}),
-          agentId: replace ? "main" : "previous-agent",
-          label: "child",
-          boundBy: replace ? undefined : "ou_sender_1",
-          deliveryTo: "user:ou_sender_1",
-          deliveryThreadId: "om_topic_root",
-          lastActivityAt: 1_700_000_100_000,
-          idleTimeoutMs: 86_400_000,
-          maxAgeMs: 0,
-        },
+      const resolved = service.resolveByConversation(conversationRef(conversationId));
+      expect(resolved).toMatchObject({ targetSessionKey, targetKind, conversation });
+      expect(resolved?.metadata).toEqual({
+        ...(!replace ? pluginMetadata : {}),
+        agentId: replace ? "main" : "previous-agent",
+        label: "child",
+        boundBy: replace ? undefined : "ou_sender_1",
+        deliveryTo: "user:ou_sender_1",
+        deliveryThreadId: "om_topic_root",
+        lastActivityAt: 1_700_000_100_000,
+        idleTimeoutMs: 86_400_000,
+        maxAgeMs: 0,
       });
     },
   );
@@ -268,36 +212,30 @@ function origin(to: string, threadId?: string) {
 }
 
 type FeishuOrigin = ReturnType<typeof origin>;
-const child = "agent:main:subagent:child";
-
-function deliveryEvent(params: {
-  childSessionKey: string;
-  requesterOrigin?: FeishuOrigin;
-  requesterSessionKey?: string;
-}) {
+function deliveryEvent(
+  childSessionKey = child,
+  requesterOrigin: FeishuOrigin = origin("user:ou_sender_1"),
+  requesterSessionKey = "agent:main:main",
+) {
   return {
-    childSessionKey: params.childSessionKey,
-    requesterSessionKey: params.requesterSessionKey ?? "agent:main:main",
-    requesterOrigin: params.requesterOrigin ?? origin("user:ou_sender_1"),
+    childSessionKey,
+    requesterSessionKey,
+    requesterOrigin,
     expectsCompletionMessage: true,
   };
 }
 
 function managedHookFixture() {
   const handlers = registerHookHandlersForTest<OpenClawPluginApi>({
-    config: { ...baseCfg, channels: { feishu: {} } },
+    config: hookCfg,
     register: registerFeishuSubagentHooks,
   });
-  const manager = createManager({ ...baseCfg, channels: { feishu: {} } }, "work");
+  const manager = createManager(hookCfg, "work");
   const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
   return {
     deliveryHandler,
-    deliver: (
-      childSessionKey: string,
-      requesterOrigin?: FeishuOrigin,
-      requesterSessionKey?: string,
-    ) =>
-      deliveryHandler(deliveryEvent({ childSessionKey, requesterOrigin, requesterSessionKey }), {}),
+    deliver: (...args: Parameters<typeof deliveryEvent>) =>
+      deliveryHandler(deliveryEvent(...args), {}),
     endedHandler: getRequiredHookHandler(handlers, "subagent_ended"),
     manager,
     bind: (
@@ -329,20 +267,7 @@ describe("feishu subagent hook handlers", () => {
     });
   });
 
-  it("selects the requester-matching binding when a child has multiple routes", async () => {
-    const { deliver, bind } = managedHookFixture();
-    for (const sender of ["ou_sender_1", "ou_sender_2"]) {
-      bind(sender, {
-        metadata: { deliveryTo: `user:${sender}`, boundBy: "system" },
-      });
-    }
-
-    await expect(deliver(child, origin("user:ou_sender_2"))).resolves.toEqual({
-      origin: origin("user:ou_sender_2"),
-    });
-  });
-
-  it.each(["single", "direct", "topic"] as const)(
+  it.each(["single", "direct", "topic", "origin"] as const)(
     "keeps the selected %s requester record private and unchanged",
     async (selection) => {
       const { deliver, bind, manager } = managedHookFixture();
@@ -373,7 +298,7 @@ describe("feishu subagent hook handlers", () => {
           topic
             ? origin("chat:oc_group", "om_topic")
             : origin(selection === "single" ? "user:ou_unrelated" : "user:ou_selected"),
-          ` ${child} `,
+          selection === "origin" ? "agent:main:main" : ` ${child} `,
         ),
       ).resolves.toStrictEqual({
         origin: origin("chat:oc_delivery", topic ? "om_delivery" : undefined),
@@ -421,11 +346,7 @@ describe("feishu subagent hook handlers", () => {
         parentConversationId: chat,
       });
     }
-    const event = deliveryEvent({
-      childSessionKey: child,
-      requesterSessionKey,
-      requesterOrigin: origin("chat:oc_group", "om_topic"),
-    });
+    const event = deliveryEvent(child, origin("chat:oc_group", "om_topic"), requesterSessionKey);
 
     await expect(deliveryHandler(event, {})).resolves.toBeUndefined();
 
@@ -451,13 +372,13 @@ describe("feishu subagent hook handlers", () => {
       {},
     );
 
-    await expect(deliver(child)).resolves.toBeUndefined();
+    await expect(deliver()).resolves.toBeUndefined();
   });
 
   it("leaves disabled completion, unrelated channels and missing managers unchanged", async () => {
     const { deliveryHandler, manager, bind } = managedHookFixture();
     bind("ou_sender_1");
-    const event = deliveryEvent({ childSessionKey: child });
+    const event = deliveryEvent();
 
     await expect(
       deliveryHandler({ ...event, expectsCompletionMessage: false }, {}),

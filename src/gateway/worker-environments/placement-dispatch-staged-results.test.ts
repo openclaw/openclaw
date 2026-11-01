@@ -17,7 +17,7 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
-import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
+import { makeClaimInput, WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -106,12 +106,9 @@ describe("worker placement result recovery", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = await placementStore.claimTurn({
-      ...REQUEST,
-      claimId: "staged-claim",
-      runId: "staged-run",
-      owner: placementTurnOwner(active),
-    });
+    const claim = await placementStore.claimTurn(
+      makeClaimInput(active, "staged-claim", "staged-run"),
+    );
     return { active, claim };
   }
 
@@ -469,15 +466,11 @@ describe("worker placement result recovery", () => {
       expect(restartedHarness.log).not.toContain("placement:failed");
       if (preserved) {
         expect(restartedHarness.environments.destroy).not.toHaveBeenCalled();
-        if (sameGatewayInstance) {
-          expect(restartedHarness.environments.stopTunnel).not.toHaveBeenCalled();
-        } else {
-          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledOnce();
-          expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
-            active.environmentId,
-            active.activeOwnerEpoch,
-          );
-        }
+        expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledOnce();
+        expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledWith(
+          active.environmentId,
+          active.activeOwnerEpoch,
+        );
         expect(restartedHarness.placements.current()).toMatchObject({
           environmentId: active.environmentId,
           activeOwnerEpoch: active.activeOwnerEpoch,
@@ -505,16 +498,7 @@ describe("worker placement result recovery", () => {
       const claimId = preservesNode
         ? "remote-exec-restart-node-turn"
         : `reclaim-remote-exec-restart-${placementState}`;
-      const claimInput = {
-        ...REQUEST,
-        claimId,
-        runId: claimId,
-        owner: {
-          kind: "local" as const,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-      };
+      const claimInput = makeClaimInput(active, claimId);
       const drain = async () => {
         expect(
           await placementStore.startDrain({

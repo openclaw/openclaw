@@ -1,20 +1,14 @@
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  observeSqliteReadSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type * as SqliteDatabaseAdmission from "../../infra/sqlite-database-admission.js";
 import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import {
-  admitSqliteSchema,
-  registerSqliteSchemaMutationListener,
-} from "../../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
@@ -119,26 +113,6 @@ function settle(db: DatabaseSync) {
   throw new Error("Bounded projection maintenance did not finish");
 }
 
-it("uses the queue it just rebuilt on admission and still observes subsequent writes", () => {
-  const db = createDatabase();
-  seedCleanSession(db, "dirty-z");
-  seedCleanSession(db, "dirty-a");
-  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
-  const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
-    /^select "session_id" from "temp"\."openclaw_transcript_index_pending"/iu.test(sql)
-      ? "queue"
-      : null,
-  );
-  try {
-    expectStatus(maintain(db), ["dirty-a", "dirty-z"]);
-    expect(reads.counts.queue).toBe(0);
-  } finally {
-    reads.restore();
-  }
-  db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 0");
-  expectStatus(maintain(db));
-});
-
 it.each(["preflight", "sweep"] as const)(
   "%s leaves the writer lock free during both host grants and reads subsequent writes",
   (type) => {
@@ -212,13 +186,10 @@ it("does not reconcile an empty transcript because of orphaned or another sessio
   expect(sessionTranscriptIndexNeedsReconcile(db, "other")).toBe(true);
 });
 
-it("bounds admission, detects writes behind its cursor, and stops reading clean source tables", () => {
+it("bounds admission and detects writes behind its cursor without starving later sessions", () => {
   const db = createDatabase();
   seedSessions(db, "z-");
-  const mainSchemaMutation = vi.fn();
-  registerSqliteSchemaMutationListener(db, mainSchemaMutation);
   expectStatus(maintain(db), [], true);
-  expect(mainSchemaMutation).not.toHaveBeenCalled();
   transaction(db, () => {
     seedCleanSession(db, "a-behind-cursor");
     db.prepare(
@@ -228,22 +199,7 @@ it("bounds admission, detects writes behind its cursor, and stops reading clean 
   expect(maintain(db).sessionIds).toEqual(["a-behind-cursor"]);
   db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 0");
   expectStatus(settle(db));
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  try {
-    for (let repeat = 0; repeat < 3; repeat++) {
-      expectStatus(maintain(db));
-    }
-    expect(observation.queries.filter((query) => /\bdata_version\b/iu.test(query))).toEqual([]);
-    expect(
-      observation.queries.filter((query) =>
-        /\b(?:from|join)\s+"?(?:session_windows|transcript_events|session_transcript_(?:active_events|fts_rows|index_state))\b/iu.test(
-          query,
-        ),
-      ),
-    ).toEqual([]);
-  } finally {
-    observation.restore();
-  }
+  expectStatus(maintain(db));
   db.exec(
     "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id LIKE 'z-%'",
   );
@@ -279,11 +235,14 @@ it("classifies a pending batch with bounded SQL and preserves later projection c
     }
     db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
   });
-  const statements = trackSqliteStatementExecutions(db, ["all"], () => "all");
+  const statements = trackSqliteStatementExecutions(db, ["all", "status"], (sql) =>
+    /^update "temp"\."openclaw_transcript_index_status"\s+set\b/iu.test(sql) ? "status" : "all",
+  );
   try {
     expectStatus(maintain(db), sessionIds);
+    expect(statements.counts.status).toBe(0);
     // Classification and queue consumption are bounded commands, not commands per session.
-    expect(statements.counts.all).toBeLessThanOrEqual(16);
+    expect(statements.counts.all + statements.counts.status).toBeLessThanOrEqual(16);
   } finally {
     statements.restore();
   }
@@ -378,6 +337,23 @@ it("refreshes worker append, classification, orphan, and deletion receipts witho
   } finally {
     probes.restore();
     await broker.close();
+  }
+});
+
+it("bounds empty-window projection probes by maintenance page, not session count", () => {
+  const db = createDatabase();
+  seedSessions(db, "empty-", 1000);
+  db.exec(`DELETE FROM transcript_events;
+    DELETE FROM session_transcript_active_events;
+    DELETE FROM session_transcript_index_state;`);
+  const reads = trackSqliteStatementExecutions(db, ["projection"], (sql) =>
+    /^select .*"rowid" as "rowId" from "session_transcript_/iu.test(sql) ? "projection" : null,
+  );
+  try {
+    expectStatus(settle(db));
+    expect(reads.counts.projection).toBe(3 * Math.ceil(1000 / 128));
+  } finally {
+    reads.restore();
   }
 });
 

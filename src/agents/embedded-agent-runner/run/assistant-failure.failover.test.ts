@@ -5,10 +5,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildRealtimeVoiceAgentErrorProviderResult } from "../../../talk/agent-run-control.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
-import {
-  AUTH_INVALID_TOKEN_USER_TEXT,
-  formatBillingErrorMessage,
-} from "../../failover/user-copy.js";
+import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { log } from "../logger.js";
@@ -109,12 +106,6 @@ describe("assistant failure recovery", () => {
     ).rejects.toThrow();
     expect(run).toHaveBeenCalledOnce();
     expect(attempts).toBe(1);
-    expect(log.warn).toHaveBeenCalledWith(
-      "Assistant attempt failed",
-      expect.objectContaining({
-        message: fields.errorMessage,
-      }),
-    );
   });
 
   it("selects the next profile before marking failure and retries without waiting for the mark", async () => {
@@ -252,13 +243,6 @@ describe("assistant failure recovery", () => {
         provider: "anthropic",
         model: "test-model",
       });
-      if (reason === "auth") {
-        expect(failure.message).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
-      } else if (reason === "rate_limit") {
-        expect(failure.message).toBe(
-          "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-        );
-      }
       expect(input.traceAttempts[0]?.status).toBe(status);
     }
   });

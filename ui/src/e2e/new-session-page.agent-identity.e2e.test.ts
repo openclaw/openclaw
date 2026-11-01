@@ -12,6 +12,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const longName = "Deployment Safety and Release Verification Agent";
 
 const agentsList = {
   agents: [
@@ -29,7 +30,7 @@ const agentIdentities = {
     [
       ["main", "🎬", "Pacino", "workspace"],
       ["research", "A", "Assistant", "default"],
-      ["release", "R", "Deployment Safety and Release Verification Agent", "agent"],
+      ["release", "R", longName, "agent"],
     ] as const
   ).map(([agentId, avatar, name, nameSource]) => ({
     match: { agentId },
@@ -112,7 +113,12 @@ suite.define(() => {
   it.each(["dark", "light"] as const)(
     "uses resolved identity in the New Session hero and picker in %s mode",
     async (theme) => {
-      const { page, gateway, picker } = await identityPage();
+      const page = await openPage(CONTEXT);
+      const gateway = await installMockGateway(page, {
+        defaultAgentId: "main",
+        methodResponses: { "agent.identity.get": agentIdentities, "agents.list": agentsList },
+      });
+      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await setTheme(page, theme);
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await gateway.waitForRequest("agent.identity.get");
@@ -128,8 +134,9 @@ suite.define(() => {
         .toBe("56px");
       await picker.locator(".agent-select__label").waitFor();
       await page.waitForLoadState("networkidle");
-      const identityRequests = await gateway.getRequests("agent.identity.get");
-      expect(identityRequests).toMatchObject([{ params: { agentId: "main" } }]);
+      expect(await gateway.getRequests("agent.identity.get")).toMatchObject([
+        { params: { agentId: "main" } },
+      ]);
       await picker.locator(".agent-select__trigger").click();
       await pollLocatorText(hero).toBe("Pacino");
       await pollLocatorText(picker.locator(".agent-select__label")).toBe("Pacino");
@@ -145,7 +152,6 @@ suite.define(() => {
         exact: true,
       });
       await pollLocatorText(unnamedAgent).toContain("research");
-      const longName = "Deployment Safety and Release Verification Agent";
       const longNameAgent = picker.getByRole("menuitemradio", { name: longName, exact: true });
       await pollLocatorText(longNameAgent).toContain(longName);
       await longNameAgent.hover();

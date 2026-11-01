@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
@@ -10,15 +10,16 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { buildProviderToolCompatFamilyHooks } from "../../../plugin-sdk/provider-tools.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent, type AgentEvent } from "../../runtime/index.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
@@ -37,6 +38,7 @@ import {
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
+const gemini = buildProviderToolCompatFamilyHooks("gemini");
 
 type AttemptOptions = Parameters<typeof createContextEngineAttemptRunner>[0];
 type ToolOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
@@ -141,12 +143,9 @@ describe("runEmbeddedAttempt tool boundaries", () => {
                   model: model.id,
                   stopReason: first ? "toolUse" : "stop",
                 });
-                const stream = createAssistantMessageEventStream();
-                queueMicrotask(() => {
-                  stream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
-                  stream.end();
+                return createQueuedAssistantStream((push) => {
+                  push({ type: "done", reason: first ? "toolUse" : "stop", message });
                 });
-                return stream;
               },
             });
             agent.subscribe((event) => {
@@ -198,7 +197,10 @@ describe("runEmbeddedAttempt tool boundaries", () => {
       }
       const abortController = new AbortController();
       let catalogRef: ToolSearchCatalogRef | undefined;
-      const logDiagnostics = vi.fn(() => {
+      const normalize = (toolList: AgentTool[]) =>
+        gemini.normalizeToolSchemas({ tools: toolList, provider: "google" });
+      const logDiagnostics = vi.fn((toolList: AgentTool[]) => {
+        expect(gemini.inspectToolSchemas({ tools: toolList, provider: "google" })).toEqual([]);
         const options = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
           | ToolOptions
           | undefined;
@@ -222,12 +224,7 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         runId,
         abortSignal: abortController.signal,
         config: { tools },
-        runtimePlan: {
-          tools: {
-            normalize: (normalizedTools: unknown[]) => normalizedTools,
-            logDiagnostics,
-          },
-        } as never,
+        runtimePlan: { tools: { normalize, logDiagnostics } } as never,
         sessionKey: "agent:main:telegram:direct:123",
       });
 
@@ -244,7 +241,7 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         unsubscribe();
       }
       expect(cleanup).toHaveBeenCalledExactlyOnceWith(
-        timeout ? "timeout" : cancel ? "cancel" : "completion",
+        timeout ? "timeout" : cancel ? "cancel" : "error",
       );
       if (timeout) {
         expect(events.map(({ event }) => event)).toContainEqual(
@@ -256,7 +253,6 @@ describe("runEmbeddedAttempt tool boundaries", () => {
         );
       }
       expect(logDiagnostics).toHaveBeenCalledOnce();
-      expect(catalogRef).toBeDefined();
       expect(catalogRef?.current).toBeUndefined();
     },
   );

@@ -47,7 +47,7 @@ describe("canonical model-reference migration", () => {
     "preserves execution-only runtime selections in agents.%s",
     (scope) => {
       const agent = {
-        model: "openai/current-model",
+        model: selection("openai/current-model", "claude-cli/primary-fallback"),
         heartbeat: { model: "claude-cli/heartbeat-only", every: "2h" },
         subagents: { model: selection("google-gemini-cli/subagent", "claude-cli/fallback") },
       };
@@ -61,11 +61,15 @@ describe("canonical model-reference migration", () => {
       const result = normalizeRefs(config, []);
       const migrated = scope === "defaults" ? result.agents?.defaults : result.agents?.list?.[0];
 
+      expect(migrated?.model).toEqual(
+        selection("openai/current-model", "anthropic/primary-fallback"),
+      );
       expect(migrated?.heartbeat).toEqual({ model: "anthropic/heartbeat-only", every: "2h" });
       expect(migrated?.subagents?.model).toEqual(
         selection("google/subagent", "anthropic/fallback"),
       );
       expect(migrated?.models).toEqual({
+        "anthropic/primary-fallback": { agentRuntime: { id: "claude-cli" } },
         "anthropic/heartbeat-only": { agentRuntime: { id: "claude-cli" } },
         "google/subagent": { agentRuntime: { id: "google-gemini-cli" } },
         "anthropic/fallback": { agentRuntime: { id: "claude-cli" } },
@@ -108,22 +112,6 @@ describe("canonical model-reference migration", () => {
       expect(result.config?.agents?.defaults?.model).toBe("google/gemini-3.1-pro-preview");
     },
   );
-
-  it("migrates mixed runtime fallbacks and preserves each runtime separately", () => {
-    const config = defaults({
-      model: selection("openai/current", "claude-cli/a", "google-gemini-cli/b"),
-    });
-    const result = normalizeRefs(config, []);
-
-    expect(result.agents?.defaults?.model).toEqual(
-      selection("openai/current", "anthropic/a", "google/b"),
-    );
-    expect(result.agents?.defaults?.models).toEqual({
-      "anthropic/a": { agentRuntime: { id: "claude-cli" } },
-      "google/b": { agentRuntime: { id: "google-gemini-cli" } },
-    });
-    expect(config.agents?.defaults?.models).toBeUndefined();
-  });
 
   it("uses the same migration for image, video, and music model slots", () => {
     const config = defaults({ mediaModels: mediaModels("google-gemini-cli") });
@@ -169,15 +157,10 @@ describe("canonical model-reference migration", () => {
       models: { "claude-cli/claude-opus-4-7": {}, "claude-cli/claude-sonnet-4-6": {} },
     });
     const seeded = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
-    expect(seeded.next).toMatchObject({
-      agents: {
-        defaults: {
-          modelPolicy: {
-            allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"],
-          },
-        },
-      },
-    });
+    expect(seeded.next).toHaveProperty("agents.defaults.modelPolicy.allow", [
+      "claude-cli/claude-opus-4-7",
+      "claude-cli/claude-sonnet-4-6",
+    ]);
 
     const res = normalizeCompatibilityConfigValues(seeded.next);
     expect(res.config.agents?.defaults?.models).toEqual({

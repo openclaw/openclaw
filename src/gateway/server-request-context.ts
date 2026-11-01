@@ -87,7 +87,6 @@ type GatewayRequestContextRuntime = Pick<
   | "broadcastVoiceWakeChanged"
   | "broadcastVoiceWakeRoutingChanged"
   | "unavailableGatewayMethods"
-  | "inputRecovery"
 > &
   Pick<
     GatewayCoreRuntime,
@@ -192,7 +191,7 @@ function canDeliverApprovals(
   if (gatewayClient.invalidated) {
     return false;
   }
-  const scopes = Array.isArray(gatewayClient.connect.scopes) ? gatewayClient.connect.scopes : [];
+  const scopes = gatewayClient.connect.scopes ?? [];
   const hasApprovalScope =
     scopes.includes("operator.admin") || scopes.includes("operator.approvals");
   if (!hasApprovalScope) {
@@ -281,13 +280,7 @@ export function createGatewayRequestContext(
     getRuntimeConfig,
     ...(agentDatabaseStartup
       ? {
-          agentDatabaseStartup: {
-            get hasPendingAgents() {
-              return agentDatabaseStartup.hasPendingAgents;
-            },
-            waitForAgentPreparation:
-              agentDatabaseStartup.waitForAgentPreparation.bind(agentDatabaseStartup),
-          },
+          agentDatabaseStartup: agentDatabaseStartup.observation,
         }
       : {}),
     resolveSessionRequestTargets: (request) =>
@@ -571,7 +564,6 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeChanged: runtime.broadcastVoiceWakeChanged,
     broadcastVoiceWakeRoutingChanged: runtime.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: runtime.unavailableGatewayMethods,
-    inputRecovery: runtime.inputRecovery,
   };
   return bindSessionRowProjection(context, runtime.getSessionRowProjection);
 }

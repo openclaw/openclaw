@@ -9,10 +9,11 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { resolveAttachmentKind, selectAttachments } from "./attachments.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
+import { selectAttachments } from "./attachments.select.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
-import { extractFileContext, type LocalPathSelfServeUpgrade } from "./file-context.js";
+import { extractFileContext } from "./file-context.js";
 import { resolveFileExtractionLimits } from "./file-extraction-limits.js";
 import {
   applyAttachmentMarkerBudget,
@@ -44,31 +45,6 @@ const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
 const SELF_SERVE_CONTEXT_FIELDS = ["Body", "BodyForAgent", "agentText"] as const;
-
-function enableLocalPathSelfServe(
-  upgrades: LocalPathSelfServeUpgrade[],
-  contexts: MsgContext[],
-  stagedPaths?: ReadonlyMap<number, string>,
-): void {
-  for (const context of contexts) {
-    for (const upgrade of upgrades) {
-      const stagedPath = stagedPaths?.get(upgrade.attachmentIndex);
-      if (stagedPaths && !stagedPath) {
-        continue;
-      }
-      const selfServe = upgrade.render(stagedPath);
-      if (!selfServe) {
-        continue;
-      }
-      for (const field of SELF_SERVE_CONTEXT_FIELDS) {
-        const value = context[field];
-        if (typeof value === "string") {
-          context[field] = value.replace(upgrade.fallback, selfServe);
-        }
-      }
-    }
-  }
-}
 
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
@@ -324,12 +300,27 @@ export async function applyMediaUnderstanding(params: {
             enableLocalPathSelfServe: (
               contexts: MsgContext[],
               stagedPaths?: ReadonlyMap<number, string>,
-            ) =>
-              enableLocalPathSelfServe(
-                fileContext.localPathSelfServeUpgrades,
-                contexts,
-                stagedPaths,
-              ),
+            ) => {
+              const upgrades = fileContext.localPathSelfServeUpgrades;
+              for (const context of contexts) {
+                for (const upgrade of upgrades) {
+                  const stagedPath = stagedPaths?.get(upgrade.attachmentIndex);
+                  if (stagedPaths && !stagedPath) {
+                    continue;
+                  }
+                  const selfServe = upgrade.render(stagedPath);
+                  if (!selfServe) {
+                    continue;
+                  }
+                  for (const field of SELF_SERVE_CONTEXT_FIELDS) {
+                    const value = context[field];
+                    if (typeof value === "string") {
+                      context[field] = value.replace(upgrade.fallback, selfServe);
+                    }
+                  }
+                }
+              }
+            },
           }
         : {}),
     };

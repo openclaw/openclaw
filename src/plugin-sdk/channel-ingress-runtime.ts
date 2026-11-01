@@ -161,7 +161,7 @@ type StandardRawEventIngressOptions<TRaw, TMetadata, TInspection> = Omit<
   classifyAdmissionError: (error: unknown) => string | undefined;
 };
 
-/** Version-1 raw events, 500 ms polling, eight deliveries, and standard retention. */
+/** Version-1 raw events, direct admission wakeups, eight deliveries, and standard retention. */
 export function createStandardRawEventIngressMonitor<
   TRaw,
   TMetadata,

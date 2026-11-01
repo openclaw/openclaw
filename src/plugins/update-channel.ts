@@ -86,12 +86,7 @@ export async function syncPluginsForUpdateChannel(params: {
 }): Promise<PluginChannelSyncResult> {
   return await withPluginLifecycleLease(
     { env: params.env, assertCurrent: params.beforePersistentEffect },
-    (lease) =>
-      withPluginInstallTransactions(
-        params,
-        () => lease.assertOwned(),
-        syncPluginsForUpdateChannelWithLease,
-      ),
+    (lease) => withPluginInstallTransactions(params, lease, syncPluginsForUpdateChannelWithLease),
   );
 }
 

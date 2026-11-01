@@ -4,6 +4,7 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
@@ -24,6 +25,7 @@ import {
 import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
 import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
@@ -69,6 +71,7 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
     ownerHost: previous.host,
+    machineIdentity: previous.machineIdentity,
   });
   if (namespace === "dead") {
     return previous;
@@ -228,6 +231,7 @@ export function acquireGatewayOwnerLease(params: {
     pid: process.pid,
     host: hostname(),
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     // Retry the native self lookup with its full Windows budget before publication.
     startedAt:
       getFileLockProcessStartTime(process.pid, env) ??
@@ -344,6 +348,8 @@ export function acquireGatewayOwnerLease(params: {
             ...payload,
             owner: { ...processOwner, startedAt },
             listeningAt: Date.now(),
+            // Listening follows startup admission. Peers trust this live owner of the exact file.
+            stateDatabaseProvenance: readAgentDatabaseLeaseProvenance(databasePath),
           }),
         );
         if (!updated) {

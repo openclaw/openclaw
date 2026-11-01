@@ -2,7 +2,6 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import {
   ErrorCodes,
-  errorShape,
   validateSessionsCatalogArchiveParams,
   validateSessionsCatalogContinueParams,
   validateSessionsCatalogImportParams,
@@ -84,7 +83,7 @@ function registrationOrRespond(catalogId: string, respond: RespondFn) {
 
 function respondCatalogError(error: unknown, respond: RespondFn): void {
   const details = catalogError(error);
-  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, details.message, { details }));
+  respondError(respond, ErrorCodes.INVALID_REQUEST, details.message, { details });
 }
 
 async function authorizeSessionCatalogThread(
@@ -121,10 +120,10 @@ async function authorizeSessionCatalogThread(
   if (sourceVisibility) {
     return { agentId, allowProcessHomeFallback: allowHomeFallback, sourceVisibility };
   }
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.FORBIDDEN, "session catalog thread is not visible to this caller"),
+  respondError(
+    respond,
+    ErrorCodes.FORBIDDEN,
+    "session catalog thread is not visible to this caller",
   );
   return null;
 }

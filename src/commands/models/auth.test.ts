@@ -1,7 +1,8 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import type {
   ProviderAuthProfile,
   ProviderAuthResult,
@@ -9,6 +10,7 @@ import type {
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { registerModelsAuthAuthorityTests } from "./auth-authority.test-support.js";
 
 type AuthRunCall = { signal?: AbortSignal };
@@ -42,9 +44,17 @@ const mocks = vi.hoisted(() => ({
   promoteAuthProfileInOrder: vi.fn(),
   tryImportProviderCredential: vi.fn(),
   callGateway: vi.fn(),
+  hasMultipleSessionSharingIdentities: vi.fn(),
+  prepareUserProfileCatalog: vi.fn(),
+  releaseUserProfileCatalog: vi.fn(),
   isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
+}));
+
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  prepareUserProfileCatalog: mocks.prepareUserProfileCatalog,
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
@@ -167,6 +177,7 @@ const {
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
   runModelsAuthLoginFlowCore,
+  runModelsAuthLoginFlowForGateway,
 } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
@@ -216,12 +227,6 @@ function createProvider(
 
 function useProvider(id: string, label: string, auth?: ProviderPlugin["auth"]) {
   mocks.resolvePluginProvidersCore.mockReturnValue([createProvider(id, label, auth)]);
-}
-
-function expectNoCalls(...callbacks: unknown[]) {
-  for (const callback of callbacks) {
-    expect(callback).not.toHaveBeenCalled();
-  }
 }
 
 function createOpenAISetupProvider(
@@ -285,6 +290,11 @@ beforeEach(() => {
   restoreStdin = overrideStdin("isTTY", { enumerable: true, get: () => true });
   currentConfig = {};
   lastUpdatedConfig = null;
+  mocks.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(true);
+  mocks.prepareUserProfileCatalog.mockReset().mockImplementation(async () => ({
+    hasMultipleSessionSharingIdentities: mocks.hasMultipleSessionSharingIdentities,
+    release: mocks.releaseUserProfileCatalog,
+  }));
   mocks.clackCancel.mockReset();
   mocks.clackConfirm.mockReset();
   mocks.clackPassword.mockReset();
@@ -315,13 +325,7 @@ beforeEach(() => {
   mocks.isRemoteEnvironment.mockReturnValue(false);
   mocks.isCliProvider.mockReturnValue(false);
   mocks.resolvePluginSetupProviderCore.mockReturnValue(undefined);
-  mocks.resolvePluginSetupRegistry.mockReturnValue({
-    providers: [],
-    cliBackends: [],
-    configMigrations: [],
-    autoEnableProbes: [],
-    diagnostics: [],
-  });
+  mocks.resolvePluginSetupRegistry.mockReturnValue(createEmptyPluginSetupRegistry());
   mocks.loadValidConfigSnapshotOrThrow.mockImplementation(async () => ({
     sourceConfig: structuredClone(currentConfig),
     runtimeConfig: structuredClone(currentConfig),
@@ -571,7 +575,7 @@ it("retains the imported profile and model-access choice after direct refresh fa
   });
 });
 
-it("identifies a config failure after credentials are saved and preserves its cause", async () => {
+it("refreshes saved credentials when the settings write fails and preserves its cause", async () => {
   const cause = new Error("config write failed");
   runProviderAuth.mockResolvedValueOnce({
     profiles: [tokenProfile("openai:saved")],
@@ -587,7 +591,25 @@ it("identifies a config failure after credentials are saved and preserves its ca
     cause,
   });
   expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledOnce();
-  expect(mocks.callGateway).not.toHaveBeenCalled();
+  expectRefresh();
+});
+
+it("keeps the settings failure when a hosted refresh ends with a cancelled login", async () => {
+  const controller = new AbortController();
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [tokenProfile("openai:saved")],
+    configPatch: { logging: { level: "debug" } },
+  });
+  mocks.updateConfig.mockRejectedValueOnce(new Error("config write failed"));
+  const refreshAfterLogin = vi.fn(async () => {
+    controller.abort(new Error("Login cancelled."));
+    throw new Error("Auth publication failed.");
+  });
+
+  await expect(loginFlow({ refreshAfterLogin, signal: controller.signal })).rejects.toBeInstanceOf(
+    ProviderAuthConfigApplyError,
+  );
+  expect(refreshAfterLogin).toHaveBeenCalledOnce();
 });
 
 it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
@@ -677,6 +699,83 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
   expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
   expectCoderStore(runProviderAuth);
   expectRefresh("coder");
+});
+
+describe("CLI scope note", () => {
+  const signInNotes = async (run: () => Promise<unknown>) => {
+    const { note } = usePrompter();
+    await run();
+    return note.mock.calls.filter((call: unknown[]) => call[1] === "Provider sign-in");
+  };
+  const gatewayLogin = (isRemote: boolean) =>
+    runModelsAuthLoginFlowForGateway({
+      provider: "openai",
+      runtime,
+      prompter: mocks.createClackPrompter(),
+      isRemote,
+    });
+  const role = {
+    sessions: { others: "view" as const },
+    agents: "*" as const,
+    scopes: ["operator.read" as const],
+  };
+
+  it("is omitted when local state and config show one person", async () => {
+    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(false);
+    currentConfig = {
+      agents: { entries: { main: {}, coder: {} } },
+      gateway: { tailscale: { mode: "serve" } },
+    };
+
+    const login = () => loginCommand({ provider: "openai", agent: "coder" });
+    await expect(signInNotes(login)).resolves.toEqual([]);
+    expect(runProviderAuth).toHaveBeenCalledOnce();
+    expect(mocks.releaseUserProfileCatalog).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, OpenClawConfig]>([
+    ["a remote Gateway", { gateway: { mode: "remote" } }],
+    ["trusted-proxy auth", { gateway: { auth: { mode: "trusted-proxy" } } }],
+    ["per-person roles", { gateway: { roles: { default: "m", definitions: { m: role } } } }],
+    ["identity scopes", { gateway: { auth: { identityScopes: { a: ["operator.read"] } } } }],
+  ])("stays for %s before a second person joins", async (_name, config) => {
+    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(false);
+    currentConfig = config;
+
+    await expect(signInNotes(loginCommand)).resolves.toHaveLength(1);
+  });
+
+  it("stays when two people have profiles", async () => {
+    await expect(signInNotes(loginCommand)).resolves.toHaveLength(1);
+  });
+
+  it("stays when profile state cannot be read", async () => {
+    mocks.prepareUserProfileCatalog.mockRejectedValue(new Error("database is locked"));
+
+    await expect(signInNotes(loginCommand)).resolves.toHaveLength(1);
+    expect(runProviderAuth).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [false, 0],
+    [true, 1],
+  ])("follows profiles on the local Gateway (multiple=%s)", async (multiple, count) => {
+    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(multiple);
+
+    await expect(signInNotes(() => gatewayLogin(false))).resolves.toHaveLength(count);
+  });
+
+  it("stays off for remote clients of a Gateway-hosted login", async () => {
+    await expect(signInNotes(() => gatewayLogin(true))).resolves.toEqual([]);
+    expect(mocks.prepareUserProfileCatalog).not.toHaveBeenCalled();
+  });
+
+  it("keeps chat logins independent of profile state", async () => {
+    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(false);
+
+    await expect(signInNotes(() => loginFlow())).resolves.toHaveLength(1);
+    expect(mocks.prepareUserProfileCatalog).not.toHaveBeenCalled();
+  });
 });
 
 it("refreshes saved credentials before presenting provider notes", async () => {

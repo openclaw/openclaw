@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
-import { findLegacyConfigRuleIssues } from "../../../config/legacy.js";
+import { findLegacyConfigRuleIssues } from "../../../config/legacy.shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {

@@ -2,18 +2,19 @@
 
 import { createComponent, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext } from "../../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageGroup, MessageGroupContent } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { createCanvasPreview } from "./chat-message.test-support.ts";
 
@@ -22,7 +23,7 @@ function createEmbedHarness(container: HTMLElement, surface: "persisted" | "stre
     text: string;
     options: Pick<
       Parameters<typeof GroupedMessage>[0]["options"],
-      "allowExternalEmbedUrls" | "embedSandboxMode" | "sessionKey"
+      "allowExternalEmbedUrls" | "embedSandboxMode" | "sessionKey" | "mediaReadAllowed"
     >;
   };
   const Content = (props: Props) =>
@@ -68,15 +69,33 @@ function createEmbedHarness(container: HTMLElement, surface: "persisted" | "stre
 
 describe("assistant message embed policy", () => {
   it.each(["persisted", "streaming"] as const)(
+    "holds saved %s embeds until live resource admission",
+    async (surface) => {
+      const host = document.body.appendChild(document.createElement("div"));
+      const preview = createEmbedHarness(host, surface);
+      onTestFinished(() => {
+        preview.unmount();
+        host.remove();
+      });
+      const url = "https://widget.example.test/saved";
+      const text = `[embed url="${url}" title="Saved widget" /]\nSaved conversation text.`;
+      for (const mediaReadAllowed of [false, true, false]) {
+        preview.render(text, { allowExternalEmbedUrls: true, mediaReadAllowed });
+        await vi.dynamicImportSettled();
+        await waitForSolid(() => {
+          expect(host.querySelector("iframe")?.getAttribute("src") ?? null).toBe(
+            mediaReadAllowed ? url : null,
+          );
+          expect(host.textContent).toContain("Saved conversation text.");
+        });
+      }
+    },
+  );
+
+  it.each(["persisted", "streaming"] as const)(
     "preserves YouTube playback on refresh and revokes it on policy, source, and session changes in %s messages",
     async (surface) => {
-      vi.stubGlobal(
-        "ResizeObserver",
-        class {
-          observe() {}
-          disconnect() {}
-        },
-      );
+      stubTargetRetainingObserver("ResizeObserver");
       const host = document.createElement("div");
       document.body.append(host);
       const preview = createEmbedHarness(host, surface);

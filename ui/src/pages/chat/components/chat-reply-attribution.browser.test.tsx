@@ -6,6 +6,7 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import "../../../styles/base.css";
+import "../../../styles/components.css";
 import "../../../styles/chat/startup-layout.css";
 import "../../../styles/chat/message-layout.css";
 import "../../../styles/chat/grouped.css";
@@ -202,7 +203,8 @@ describe.each([1440, 360])("reply attribution (%d px)", (width) => {
     { name: "Casey Morgan 👩🏽‍💻", source: true, fits: true },
     { name: "ليلى منصور", source: true, fits: true },
     { name: "Casey Morgan", source: false, fits: true },
-    { name: "A very long participant name ".repeat(40), source: true, fits: false },
+    { name: "A very long participant name ".repeat(40), source: true, fits: width < 768 },
+    { name: "Averylongparticipantname".repeat(40), source: true, fits: false },
   ])("keeps the label and name $name on one line", async ({ name, source, fits }) => {
     const result = await draw(name, source);
     expectSingleLine(result.row);
@@ -216,9 +218,12 @@ describe.each([1440, 360])("reply attribution (%d px)", (width) => {
 it("updates a mounted reply across the mobile breakpoint without losing navigation", async () => {
   await page.viewport(1440, 800);
   const onOpenReply = vi.fn();
-  await draw("Casey Morgan", true, onOpenReply);
+  const { name } = await draw("Casey Morgan", true, onOpenReply);
+  expect(name.title).toBe("Casey Morgan");
   for (const width of [390, 360, 1440]) {
     await page.viewport(width, 800);
+    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- textContent includes the visually hidden surname.
+    expect(name.innerText.trim()).toBe(width < 768 ? "Casey" : "Casey Morgan");
     const target = page.getByRole("button", { name: "Replying to Casey Morgan", exact: true });
     await target.click();
     expect(onOpenReply).toHaveBeenLastCalledWith("prompt");

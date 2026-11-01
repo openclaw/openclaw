@@ -16,7 +16,6 @@ import {
   type ActiveVisitorInvitation,
   visitorIdentityKeys,
   type VisitorGrant,
-  type VisitorIdentity,
   type VisitorInvitationContext,
   type VisitorOnboardingCompareAndSet,
   type VisitorOnboardingUpdate,
@@ -113,39 +112,37 @@ export class VisitorAccessService {
   }
 
   /** The first current grant among target keys, optionally with an exact grantId. */
-  private findActiveGrant(keys: readonly string[], grantId?: string): LiveVisitorGrant | undefined {
+  private findActiveGrant(keys: Iterable<string>, grantId?: string): LiveVisitorGrant | undefined {
     this.assertOpen();
     if (!this.ready) {
       throw new VisitorAccessError("Visitor access is starting; retry shortly.");
     }
     const now = Date.now();
-    return keys
-      .map((key) => this.grants.get(key))
-      .find(
-        (entry): entry is LiveVisitorGrant =>
-          entry !== undefined &&
-          grantIdSchema.safeParse(entry.grant.grantId).success &&
-          (grantId === undefined || entry.grant.grantId === grantId) &&
-          !entry.controller.signal.aborted &&
-          (entry.grant.expiresAt === null || entry.grant.expiresAt > now),
-      );
+    for (const key of keys) {
+      const entry = this.grants.get(key);
+      if (
+        entry !== undefined &&
+        (grantId === undefined || entry.grant.grantId === grantId) &&
+        grantIdSchema.safeParse(entry.grant.grantId).success &&
+        !entry.controller.signal.aborted &&
+        (entry.grant.expiresAt === null || entry.grant.expiresAt > now)
+      ) {
+        return entry;
+      }
+    }
+    return undefined;
   }
 
   /** Plugin-internal onboarding API; see README "Onboarding record". */
-  findActiveInvitation(identity: VisitorIdentity): ActiveVisitorInvitation | undefined {
-    const state = this.findActiveGrant(visitorIdentityKeys(identity));
-    return (
-      state && {
-        ...structuredClone(state.grant),
-        grantId: grantIdSchema.parse(state.grant.grantId),
-      }
-    );
+  findActiveInvitation(grantId: string): ActiveVisitorInvitation | undefined {
+    const state = this.findActiveGrant(this.grants.keys(), grantId);
+    return state && { ...structuredClone(state.grant), grantId };
   }
 
   /** Plugin-internal onboarding API; see README "Onboarding record". */
   compareAndSetOnboarding(params: VisitorOnboardingCompareAndSet) {
     return this.serialize(async (): Promise<VisitorOnboardingUpdate> => {
-      const state = this.findActiveGrant([...this.grants.keys()], params.grantId);
+      const state = this.findActiveGrant(this.grants.keys(), params.grantId);
       if (!state) {
         return { applied: false, reason: "inactive" };
       }
@@ -416,6 +413,10 @@ export class VisitorAccessService {
         (previous.expiresAt === null || previous.expiresAt > Date.now());
       const grantId = continuous ? grantIdSchema.parse(previous.grantId) : randomUUID();
       grant.grantId = grantId;
+      if (!continuous) {
+        // Welcome setup belongs to one grant; a new invitation after an ended one starts over.
+        grant.onboarding = { state: "pending", updatedAt: now };
+      }
       await this.registerGrant(
         grant,
         continuous
@@ -616,8 +617,18 @@ export class VisitorAccessService {
         const gatewayAccess = access.describe(target);
         const githubLogin = access.githubLogin(target);
         const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
+        // Grants recorded before onboarding metadata have no welcome progress until first sign-in.
+        const welcome = grant.onboarding && {
+          state: grant.onboarding.state,
+          ...(grant.onboarding.welcomeSessionKey
+            ? { sessionKey: grant.onboarding.welcomeSessionKey }
+            : {}),
+        };
+        const welcomeText = welcome
+          ? ` | welcome ${welcome.state}${welcome.sessionKey ? ` ${welcome.sessionKey}` : ""}`
+          : "";
         return {
-          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
+          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state}${welcomeText} | ${gatewayAccess}`,
           grant: {
             ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
             ...(grant.grantId ? { grantId: grant.grantId } : {}),
@@ -626,6 +637,7 @@ export class VisitorAccessService {
             invitedAt: new Date(grant.createdAt).toISOString(),
             expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
             state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
+            ...(welcome ? { welcome } : {}),
             gatewayAccess,
           },
         };

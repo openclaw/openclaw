@@ -6,8 +6,9 @@ import {
   WorkerWorkspaceGitHistorySchema,
   type WorkerWorkspaceGitHistory,
 } from "../gateway/worker-environments/workspace-result-inventory.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { runExec } from "../process/exec.js";
-import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-transfer-protocol.js";
 import {
   runWorkspaceCommand,
   TRANSFER_TIMEOUT_MS,
@@ -116,9 +117,10 @@ export async function prepareNodeWorkerGitResult(params: {
               workspaceDir: params.workspaceDir,
               homeDir: params.manifestHome,
               argv: [
-                "node",
-                "-e",
-                NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeProcessEntrypointUrl("nodeWorkspaceGitHistory"),
+                ),
                 params.workspaceDir,
                 params.baseCommit,
                 params.packPath,

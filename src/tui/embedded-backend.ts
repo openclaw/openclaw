@@ -15,11 +15,8 @@ import {
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentId,
-  resolveSessionAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentVerboseDefault, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { claimPendingEmbeddedAgentQuestionAnswer } from "../agents/embedded-agent-runner/runs.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
@@ -205,7 +202,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     this.sessionProjection = (async () => {
       const config = await captureRuntimeConfigAsyncReader()();
       const { runSessionStartupMigration } =
-        await import("../config/sessions/startup-migration.js");
+        await import("../config/sessions/startup-migration-runtime.js");
       await runSessionStartupMigration({
         cfg: config,
         env: process.env,
@@ -533,7 +530,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             lifecycleRevision: entry.lifecycleRevision,
           })
         : undefined;
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const verboseLevel = entry?.verboseLevel ?? resolveAgentVerboseDefault(cfg, sessionAgentId);
     if (sessionInfo) {
       sessionInfo.thinkingLevel = thinkingLevel;
       sessionInfo.verboseLevel = verboseLevel;

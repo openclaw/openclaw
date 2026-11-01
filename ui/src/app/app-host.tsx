@@ -122,7 +122,6 @@ export class ShellOwner
   private lastNativeNavState: NativeNavState | undefined;
   didConsiderNativeRouteRestore = false;
   pendingNativeNewSession = false;
-  readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);
   private readonly shellGateway = new ShellGatewayOwner(this);
@@ -255,6 +254,10 @@ export class ShellOwner
         const next = selectShellRouteState(runtime.router.getState());
         if (!equalShellRouteState(this.routeState, next)) {
           this.shellNavigation.updateRouteState(next);
+        } else if (this.routeState.sessionUrlPending !== next.sessionUrlPending) {
+          // URL eligibility can settle without a route change. Do not replay recovery.
+          this.routeState = next;
+          this.shellNavigation.synchronizeSessionUrl();
         }
       };
       this.cleanups.push(runtime.router.subscribe(updateRoute));
@@ -274,26 +277,19 @@ export class ShellOwner
         ),
       );
       let active = true;
-      let disconnectFavicon: (() => void) | undefined;
       const startedAt = Date.now();
-      const favicon = createIdleImport(
-        () => import("./control-ui-favicon-status.runtime.ts"),
-        ({ connectControlUiFavicon }) => {
+      const idle = createIdleImport(
+        () => import("./app-shell-idle.runtime.ts"),
+        ({ connectShellIdle }) => {
           if (active) {
-            disconnectFavicon = connectControlUiFavicon(
-              this.element,
-              context,
-              () => this.queryRenderedElements("openclaw-chat-pane"),
-              startedAt,
-            );
+            this.cleanups.push(connectShellIdle(this, context, startedAt));
           }
         },
       );
-      favicon.schedule();
+      idle.schedule();
       this.cleanups.push(() => {
         active = false;
-        favicon.dispose();
-        disconnectFavicon?.();
+        idle.dispose();
       });
       if (this.pendingNativeNewSession) {
         this.pendingNativeNewSession = false;
@@ -335,7 +331,7 @@ export class ShellOwner
     }
     this.shellLayout.dispose();
     this.shellChrome.disconnect();
-    syncControlUiSystemChrome(false, false);
+    syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
     this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
@@ -377,10 +373,6 @@ export class ShellOwner
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.shellGateway.reset();
-    for (const timer of this.settingsPreloadTimers.values()) {
-      globalThis.clearTimeout(timer);
-    }
-    this.settingsPreloadTimers.clear();
   }
 
   private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(
@@ -500,12 +492,17 @@ export class ShellOwner
     }
     this.syncDocumentTitle();
     // Theme and breakpoint owners sync their changes; route/runtime changes
-    // can change whether the committed shell uses the chat background.
-    syncControlUiSystemChrome(
-      false,
-      this.shellElement?.isConnected === true &&
-        this.shellElement.classList.contains("shell--chat"),
-    );
+    // can change whether the committed shell exposes its content canvas (the
+    // mounted session workbench covers it with the --bg chat surface) and
+    // whether the mobile drawer's backdrop dims it.
+    const shell = this.shellElement?.isConnected === true ? this.shellElement.classList : undefined;
+    syncControlUiSystemChrome(false, {
+      contentCanvas:
+        shell?.contains("shell--chat") === true &&
+        this.contentElement?.classList.contains("content--workbench") !== true,
+      navScrim:
+        shell?.contains("shell--mobile-nav") === true && shell.contains("shell--nav-drawer-open"),
+    });
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();
@@ -568,62 +565,57 @@ declare module "@solidjs/web" {
 export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   return (
     <Show when={props.runtime} keyed>
-      {(runtime) => renderShellRuntime(runtime, props)}
-    </Show>
-  );
-}
-
-function renderShellRuntime(
-  runtime: ApplicationRuntime,
-  props: OpenClawShellProps,
-): SolidJSX.Element {
-  const element = document.createElement("openclaw-app-shell");
-  const initialShellOptions = untrack(() => ({
-    readiness: props.getReadiness?.(),
-    onboarding: props.onboarding,
-  }));
-  const owner = new ShellOwner(
-    element,
-    runtime,
-    initialShellOptions.readiness,
-    initialShellOptions.onboarding,
-  );
-  const view = <ApplicationShell host={owner} />;
-  onSettled(() => {
-    const initialOnShell = props.onShell;
-    owner.connect();
-    const unmountPresentation = owner.mountPresentation();
-    initialOnShell?.(owner);
-    return () => {
-      // A disconnect preserves reload intent; a replacement context retires it first.
-      if (props.runtime.context !== runtime.context) {
-        owner.replaceRuntime(props.runtime);
-      }
-      unmountPresentation();
-      owner.disconnect();
-      initialOnShell?.(undefined);
-    };
-  });
-  return (
-    <openclaw-app-shell
-      onOpenclaw-route-element={owner.renderedShellElements.register}
-      ref={(host) => {
-        owner.element = host;
-        // The optional observer reads committed owner facts without rendering the shell again.
-        Object.defineProperties(host, {
-          readiness: {
-            get: () => owner.readiness,
-            set: (value: ControlUiReadiness | undefined) => {
-              owner.readiness = value;
-            },
-          },
-          updateComplete: { get: () => owner.updateComplete },
-          navigationSidebar: { get: () => owner.navigationSidebar },
-          activeSessionKey: { get: () => owner.activeSessionKey },
+      {(runtime): SolidJSX.Element => {
+        const element = document.createElement("openclaw-app-shell");
+        const initialShellOptions = untrack(() => ({
+          readiness: props.getReadiness?.(),
+          onboarding: props.onboarding,
+        }));
+        const owner = new ShellOwner(
+          element,
+          runtime,
+          initialShellOptions.readiness,
+          initialShellOptions.onboarding,
+        );
+        const view = <ApplicationShell host={owner} />;
+        onSettled(() => {
+          const initialOnShell = props.onShell;
+          owner.connect();
+          const unmountPresentation = owner.mountPresentation();
+          initialOnShell?.(owner);
+          return () => {
+            // A disconnect preserves reload intent; a replacement context retires it first.
+            if (props.runtime.context !== runtime.context) {
+              owner.replaceRuntime(props.runtime);
+            }
+            unmountPresentation();
+            owner.disconnect();
+            initialOnShell?.(undefined);
+          };
         });
+        return (
+          <openclaw-app-shell
+            onOpenclaw-route-element={owner.renderedShellElements.register}
+            ref={(host) => {
+              owner.element = host;
+              // The optional observer reads committed owner facts without rendering the shell again.
+              Object.defineProperties(host, {
+                readiness: {
+                  get: () => owner.readiness,
+                  set: (value: ControlUiReadiness | undefined) => {
+                    owner.readiness = value;
+                  },
+                },
+                updateComplete: { get: () => owner.updateComplete },
+                navigationSidebar: { get: () => owner.navigationSidebar },
+                activeSessionKey: { get: () => owner.activeSessionKey },
+              });
+            }}
+          >
+            {view}
+          </openclaw-app-shell>
+        );
       }}
-    >
-      {view}
-    </openclaw-app-shell>
+    </Show>
   );
 }

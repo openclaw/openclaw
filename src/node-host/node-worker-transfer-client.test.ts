@@ -37,7 +37,7 @@ import { listen } from "./node-worker-transfer-client.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture(name: string) {
-  const root = tempDirs.make(`node-worker-transfer-${name}-`);
+  const root = tempDirs.make(`node-worker-transfer-${name}-`, process.cwd());
   return { root, ...transferFixture(root, `environment-${name}`) };
 }
 

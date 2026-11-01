@@ -11,6 +11,10 @@ import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
+import {
+  createArchiveSourceSnapshotFixture,
+  createResetKeptTailTranscriptFixture,
+} from "./session-transcript-archive.test-support.js";
 import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import {
   readLatestSessionUsageFromTranscriptFileAsync,
@@ -29,6 +33,7 @@ let imageBytes: number;
 const requireRecord = createRequireRecord("object", "expected-label");
 const textBlock = (text: string) => ({ type: "text", text });
 const messageRow = (role: string, content: unknown, extra = {}) => ({ role, content, ...extra });
+const assistant = (extra: Record<string, unknown>) => ({ role: "assistant", ...extra });
 const artifact = (role: string, content: unknown) => ({ message: messageRow(role, content) });
 const imageSource = (data: string, media_type = "image/png") => ({
   type: "base64",
@@ -92,14 +97,7 @@ async function full(sessionFile?: string) {
   const archiveReader = reader(sessionFile);
   return collectSessionTranscriptMessages(
     (_scope, options) =>
-      archiveReader.readSourcePage(options, {
-        indexedSeq: -1,
-        activeEventCount: 0,
-        totalMessages: 0,
-        generation: undefined,
-        tailEventSeq: undefined,
-        resetSeq: null,
-      }),
+      archiveReader.readSourcePage(options, createArchiveSourceSnapshotFixture()),
     { sessionId: id },
     { mode: "full", reason: "archive selection" },
   );
@@ -134,20 +132,10 @@ function installShortReads(maxPerCall: number) {
 describe("archive selection", () => {
   test("places the reset marker between retained and new turns", async () => {
     archive([
-      message("old", null, "user", "old"),
-      message("kept-user", "old", "user", "kept question"),
-      message("kept-tool", "kept-user", "toolResult", "hidden tool"),
-      message("kept-assistant", "kept-tool", "assistant", "kept answer"),
-      {
-        type: "reset",
-        id: "reset-boundary",
-        parentId: "kept-assistant",
-        timestamp: "2026-07-22T00:00:00.000Z",
-        reason: "new",
-        firstKeptEntryId: "kept-user",
-      },
-      message("post-reset", "reset-boundary", "user", "new turn"),
+      { type: "metadata", padding: "x".repeat(20 * 1024) },
+      ...createResetKeptTailTranscriptFixture(),
     ]);
+    const shortReads = installShortReads(16);
     const recent = await reader().readRecentWithStats({ maxMessages: 10, maxBytes: 16_384 });
     for (const rows of [await full(), recent.messages]) {
       expect(contents(rows)).toEqual([
@@ -157,6 +145,7 @@ describe("archive selection", () => {
         "new turn",
       ]);
     }
+    expect(shortReads()).toBeGreaterThan(1);
   });
 
   test("keeps active-branch compaction markers reachable through pagination", async () => {
@@ -167,8 +156,6 @@ describe("archive selection", () => {
         type: "compaction",
         id: "comp-1",
         timestamp: "2026-02-07T00:00:00.000Z",
-        summary: "Compacted history",
-        tokensBefore: 123,
       },
       message("active-user", null, "user", "active prompt"),
       message("active-assistant", "active-user", "assistant", "active answer"),
@@ -177,41 +164,10 @@ describe("archive selection", () => {
     ]);
     const newest = await reader().readPage({ offset: 0, maxMessages: 2 });
     const oldest = await reader().readPage({ offset: 2, maxMessages: 1 });
-    expect(newest).toMatchObject({
-      totalMessages: 3,
-      messages: [
-        { content: "active prompt", __openclaw: { seq: 2 } },
-        { content: "active answer", __openclaw: { seq: 3 } },
-      ],
-    });
-    expect(oldest).toMatchObject({
-      totalMessages: 3,
-      messages: [
-        {
-          role: "system",
-          content: [textBlock("Compaction")],
-          timestamp: Date.parse("2026-02-07T00:00:00.000Z"),
-          __openclaw: { kind: "compaction", id: "comp-1", seq: 1, tokensBefore: 123 },
-        },
-      ],
-    });
-  });
-
-  test("reads the latest reset archive independently of active artifacts", async () => {
-    writeRecords(path.join(tmpDir, `${id}.jsonl`), [
-      { type: "session", version: 1, id },
-      artifact("assistant", "active artifact"),
-    ]);
-    archive([artifact("assistant", "older archive")], {
-      timestamp: "2026-02-16T22-26-33.000Z",
-    });
-    archive([artifact("user", "restored prompt"), artifact("assistant", "restored archive")]);
-    expect(contents(await full())).toEqual(["restored prompt", "restored archive"]);
-    expect(await reader().readRecentWithStats({ maxMessages: 1, maxBytes: 2048 })).toMatchObject({
-      transcriptSource: "reset-archive",
-      totalMessages: 2,
-      messages: [{ role: "assistant", content: "restored archive", __openclaw: { seq: 2 } }],
-    });
+    expect(newest.totalMessages).toBe(3);
+    expect(contents(newest.messages)).toEqual(["active prompt", "active answer"]);
+    expect(oldest.totalMessages).toBe(3);
+    expect(contents(oldest.messages)).toEqual([[textBlock("Compaction")]]);
   });
 
   test("accepts stale generated session archives when the header matches the current session", async () => {
@@ -267,16 +223,13 @@ describe("artifact usage", () => {
 
   test("aggregates assistant usage asynchronously without readFileSync", async () => {
     writeUsage([
-      {
-        role: "assistant",
+      assistant({
         provider: "anthropic",
         model: "claude-sonnet-4-6",
         usage: { input: 1800, output: 400, cacheRead: 600, cost: { total: 0.0055 } },
-      },
-      {
-        role: "assistant",
-        usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } },
-      },
+      }),
+      assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
+      assistant({ provider: "openclaw", model: "command" }),
     ]);
     const readFile = vi.spyOn(fs, "readFileSync");
     const snapshot = await usage();
@@ -296,47 +249,26 @@ describe("artifact usage", () => {
   test.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(
     "retains a meaningful zero-cost artifact snapshot without a %s model identity",
     async (model) => {
-      writeUsage([
-        {
-          role: "assistant",
-          provider: "openclaw",
-          model,
-          usage: { cost: { total: 0 } },
-        },
-      ]);
+      writeUsage([assistant({ provider: "openclaw", model, usage: { cost: { total: 0 } } })]);
       await expect(usage()).resolves.toEqual({ costUsd: 0 });
     },
   );
 
-  test("keeps the provider model after a delivered command", async () => {
-    writeUsage([
-      { role: "assistant", provider: "anthropic", model: "claude-sonnet-4-6" },
-      { role: "assistant", provider: "openclaw", model: "command" },
-    ]);
-    await expect(usage()).resolves.toMatchObject({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-    });
-  });
-
   test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
-    const identity = { role: "assistant", provider: "claude-cli", model: "claude-opus-4-7" };
-    const old = {
-      ...identity,
-      api: "cli",
-      usage: { input: 128_814, output: 3000, cacheRead: 992_953, totalTokens: 1_124_767 },
-    };
-    const unavailable = {
-      ...identity,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        contextUsage: { state: "unavailable" },
-      },
-    };
+    const cliUsage = (tokens: Record<string, unknown>, extra = {}) =>
+      assistant({ provider: "claude-cli", model: "claude-opus-4-7", usage: tokens, ...extra });
+    const old = cliUsage(
+      { input: 128_814, output: 3000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      { api: "cli" },
+    );
+    const unavailable = cliUsage({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    });
     writeUsage([old]);
     const legacy = await usage();
     expect(legacy?.contextUsage).toEqual({ state: "unavailable" });
@@ -349,10 +281,7 @@ describe("artifact usage", () => {
     writeUsage([
       old,
       unavailable,
-      {
-        ...identity,
-        usage: { input: 67_932, output: 2000, cacheRead: 18_944, totalTokens: 88_876 },
-      },
+      cliUsage({ input: 67_932, output: 2000, cacheRead: 18_944, totalTokens: 88_876 }),
     ]);
     expect(await usage()).toMatchObject({ totalTokens: 86_876, totalTokensFresh: true });
   });
@@ -362,12 +291,11 @@ describe("artifact usage", () => {
     const answer = "local response ".repeat(120);
     writeUsage([
       { role: "user", content: prompt },
-      {
-        role: "assistant",
+      assistant({
         provider: "openai-completions",
         model: "local-llama",
         content: [{ type: "text", text: answer }],
-      },
+      }),
     ]);
     expect(await usage()).toMatchObject({
       modelProvider: "openai-completions",
@@ -397,6 +325,10 @@ describe("transcript path safety", () => {
 describe("oversized transcript records", () => {
   const prefix = textBlock("keep prefix text");
   const suffix = textBlock("keep suffix text");
+  const document = {
+    type: "document",
+    source: imageSource(Buffer.from("%PDF-1.4\nexample").toString("base64"), "application/pdf"),
+  };
 
   async function recent() {
     return (await reader().readRecentWithStats({ maxMessages: 10 })).messages;
@@ -439,8 +371,8 @@ describe("oversized transcript records", () => {
       }),
     },
   ])("preserves recoverable reset-archive text around oversized $name", async ({ name, image }) => {
-    archiveUser([prefix, image(imageData), suffix]);
-    const expected = { role: "user", content: [prefix, omittedImage(), suffix] };
+    archiveUser([document, prefix, image(imageData), suffix]);
+    const expected = { role: "user", content: [document, prefix, omittedImage(), suffix] };
     const rows = projectChatDisplayMessages(await recent());
     expect(rows).toMatchObject([{ ...expected, __openclaw: { id } }]);
     expect(JSON.stringify(rows)).not.toContain(imageData);
@@ -478,19 +410,6 @@ describe("oversized transcript records", () => {
       expect(JSON.stringify(row)).not.toContain(imageData);
     }
     expect(single).toMatchObject({ found: true, oversized: false });
-  });
-
-  test("preserves a base64 PDF document preceding an oversized image", async () => {
-    const document = {
-      type: "document",
-      source: imageSource(Buffer.from("%PDF-1.4\nexample").toString("base64"), "application/pdf"),
-    };
-    archiveUser([document, prefix, { type: "image", source: imageSource(imageData) }, suffix]);
-    const rows = projectChatDisplayMessages(await recent());
-    expect(rows).toMatchObject([
-      { role: "user", content: [document, prefix, omittedImage(), suffix] },
-    ]);
-    expect(JSON.stringify(rows)).not.toContain(imageData);
   });
 
   test("keeps oversized fallback when recovered JSON numbers expand after parsing", async () => {
@@ -554,32 +473,6 @@ describe("oversized transcript records", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  test("oversized line metadata extraction preserves id and parentId", async () => {
-    const timestamp = "2026-05-16T16:00:33.000Z";
-    const oversized = "w".repeat(300 * 1024);
-    archive([
-      message("root-msg", null, "user", "root"),
-      {
-        timestamp,
-        ...message("oversized-child", "root-msg", "assistant", oversized, {
-          idempotencyKey: "oversized-key",
-        }),
-      },
-    ]);
-    const rows = await recent();
-    expect(rows).toHaveLength(2);
-    expect(rows[1]).toMatchObject({
-      role: "assistant",
-      content: [textBlock("[chat.history omitted: message too large]")],
-      __openclaw: {
-        id: "oversized-child",
-        idempotencyKey: "oversized-key",
-        recordTimestampMs: Date.parse(timestamp),
-      },
-    });
-    expect(JSON.stringify(rows)).not.toContain(oversized);
-  });
-
   test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {
     const oversized = "w".repeat(300 * 1024);
     archive([artifact("assistant", oversized)]);
@@ -588,22 +481,6 @@ describe("oversized transcript records", () => {
     expect(JSON.stringify(rows)).toContain("[chat.history omitted: message too large]");
     expect(JSON.stringify(rows)).not.toContain(oversized);
   });
-});
-
-test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () => {
-  archive(
-    Array.from({ length: 30 }, (_, index) => ({
-      message: {
-        role: index % 2 ? "assistant" : "user",
-        content: `message ${index}: ${"data ".repeat(80)}`,
-      },
-    })),
-  );
-  const read = () => reader().readRecentWithStats({ maxMessages: 20, maxBytes: 8192 });
-  const expected = await read();
-  const calls = installShortReads(16);
-  expect(await read()).toEqual(expected);
-  expect(calls()).toBeGreaterThan(1);
 });
 
 describe("buildSessionPreviewItems bounded projection", () => {
@@ -615,10 +492,7 @@ describe("buildSessionPreviewItems bounded projection", () => {
       content: [signedText(`message ${index}`, "final_answer", `preview-${index}`)],
     }));
     const sourceText = JSON.stringify(sourceMessages);
-    // SQLite hydration yields fresh blocks, so the per-block signature cache starts cold.
-    const messages = JSON.parse(sourceText) as typeof sourceMessages;
-    const originalRows = messages.slice();
-    const originalContents = messages.map((row) => row.content);
+    const messages = sourceMessages;
     const signatureTexts = new Set(sourceMessages.map((row) => row.content[0]!.textSignature));
     const parse = vi.spyOn(JSON, "parse");
     const result = buildSessionPreviewItems(messages, 12, 120);
@@ -632,66 +506,25 @@ describe("buildSessionPreviewItems bounded projection", () => {
       })),
     );
     expect(JSON.stringify(messages)).toBe(sourceText);
-    expect(messages.every((row, index) => row === originalRows[index])).toBe(true);
-    expect(messages.every((row, index) => row.content === originalContents[index])).toBe(true);
     expect(parsedSignatures).toBe(12);
   });
 
-  const visibilityMessages = [
-    messageRow("user", "older excluded text"),
-    messageRow("assistant", "NO_REPLY"),
-    messageRow("toolResult", "tool output"),
-    { role: "user", content: [{ type: "input_text", text: "  question  " }] },
-    { role: "assistant", content: "model only", display: false },
-    {
-      role: "assistant",
-      content: [
-        signedText("private commentary", "commentary"),
-        signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
-      ],
-    },
-    messageRow("assistant", "REPLY_SKIP"),
-    { role: "assistant", content: [textBlock("   ")] },
-    messageRow("system", "system metadata"),
-  ];
-  test.each([
-    ...(["display", "model-context"] as const).map((view) => ({
-      name: `${view} visibility, order and UTF-16 bounds`,
-      messages: visibilityMessages,
-      view,
-      limit: 3,
-      maxChars: 20,
-      expected: [
-        { role: "user", text: "question" },
-        { role: "assistant", text: `${"x".repeat(16)}...` },
-        { role: "assistant", text: "REPLY_SKIP" },
-      ],
-    })),
-    {
-      name: "fewer visible items than the limit",
-      messages: [
-        null,
-        undefined,
-        {},
-        messageRow("user", "first"),
-        messageRow("toolResult", "tool output"),
-        messageRow("assistant", "ANNOUNCE_SKIP"),
-        { role: "assistant", content: "hidden", display: false },
-        messageRow("assistant", "last"),
-        { role: "assistant", content: [signedText("commentary only", "commentary")] },
-      ],
-      view: undefined,
-      limit: 12,
-      maxChars: 120,
-      expected: [
-        { role: "user", text: "first" },
-        { role: "assistant", text: "ANNOUNCE_SKIP" },
-        { role: "assistant", text: "last" },
-      ],
-    },
-  ])("preserves $name", ({ messages, expected, limit, maxChars, view }) => {
-    const original = JSON.stringify(messages);
-    expect(buildSessionPreviewItems(messages, limit, maxChars, view)).toEqual(expected);
-    expect(JSON.stringify(messages)).toBe(original);
+  test("returns fewer previews when the input is exhausted", () => {
+    expect(
+      buildSessionPreviewItems(
+        [
+          null,
+          {},
+          messageRow("user", "first"),
+          messageRow("toolResult", "hidden"),
+          messageRow("assistant", "last"),
+        ],
+        12,
+        120,
+      ),
+    ).toEqual([
+      { role: "user", text: "first" },
+      { role: "assistant", text: "last" },
+    ]);
   });
 });

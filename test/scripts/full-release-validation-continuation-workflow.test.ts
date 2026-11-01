@@ -8,10 +8,16 @@ import { parse } from "yaml";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8")) as {
+const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+const workflow = parse(source) as {
   jobs: Record<
     string,
-    { if?: string; env?: Record<string, string>; steps: Array<Record<string, unknown>> }
+    {
+      if?: string;
+      env?: Record<string, string>;
+      needs?: string[];
+      steps: Array<Record<string, unknown>>;
+    }
   >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
@@ -165,6 +171,128 @@ describe("full release same-parent recovery workflow", () => {
     }
     expect(workloadDispatches).toBeGreaterThan(0);
     expect(artifactDispatches).toBeGreaterThan(0);
+    expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
+    expect(workflow.jobs.release_execution_plan?.needs).toEqual(
+      expect.arrayContaining([
+        "prepare_npm_package",
+        "qualify_npm_package",
+        "prepare_plugin_npm",
+        "prepare_docker_release",
+      ]),
+    );
+    for (const jobName of ["release_decision", "diagnostic_drain"]) {
+      expect(workflow.jobs[jobName]?.needs).toEqual(
+        expect.arrayContaining([
+          "prepare_npm_package",
+          "qualify_npm_package",
+          "prepare_plugin_npm",
+          "prepare_docker_release",
+        ]),
+      );
+    }
+    expect(workflow.jobs.summary?.env).toMatchObject({
+      NPM_PREPARATION_RESULT: "${{ needs.prepare_npm_package.result }}",
+      NPM_QUALIFICATION_RESULT: "${{ needs.qualify_npm_package.result }}",
+      PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
+      DOCKER_PREPARATION_RESULT: "${{ needs.prepare_docker_release.result }}",
+    });
+    expect(source).not.toContain("continuationSource");
+    expect(source).not.toContain("continuation_plan_json");
+  });
+
+  it("routes compact reuse revalidation through the admitted verifier and exact target", () => {
+    expect(step("evidence_reuse", "Find reusable validation evidence").env).toMatchObject({
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}",
+      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
+    });
+    expect(step("summary", "Write release validation manifest").env).toMatchObject({
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}",
+      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
+    });
+  });
+
+  it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
+    const cache = step("release_execution_plan", "Cache immutable release execution plan");
+    const restore = step(
+      "release_execution_plan",
+      "Restore immutable release execution plan artifact",
+    );
+    const inputsRestore = step(
+      "release_execution_plan",
+      "Restore immutable release execution plan inputs",
+    );
+    const inputsUpload = step(
+      "release_execution_plan",
+      "Upload immutable release execution plan inputs",
+    );
+    const upload = step("release_execution_plan", "Upload immutable release execution plan");
+    expect(cache).toMatchObject({
+      id: "plan_cache",
+      "continue-on-error": true,
+      with: {
+        key: "full-release-execution-plan-v2-${{ github.run_id }}",
+        path: "full-release-execution-plan",
+      },
+    });
+    expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
+    expect(restore).toMatchObject({
+      id: "plan_restore",
+      "continue-on-error": true,
+      if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
+      with: {
+        "github-token": "${{ github.token }}",
+        name: "full-release-execution-plan-${{ github.run_id }}",
+        path: "${{ github.workspace }}/full-release-execution-plan",
+        "run-id": "${{ github.run_id }}",
+      },
+    });
+    expect(inputsRestore).toMatchObject({
+      id: "plan_inputs_restore",
+      if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        path: "${{ github.workspace }}/full-release-execution-plan-inputs",
+        "run-id": "${{ github.run_id }}",
+      },
+    });
+    expect(inputsUpload).toMatchObject({
+      id: "plan_inputs_upload",
+      if: "${{ github.run_attempt == 1 && steps.plan_inputs.outcome == 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        overwrite: false,
+      },
+    });
+    expect(upload).toMatchObject({
+      if: "${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}",
+      with: {
+        name: "full-release-execution-plan-${{ github.run_id }}",
+        overwrite: false,
+      },
+    });
+    const earlyRestore = step("resolve_target", "Restore immutable plan for publication admission");
+    expect(earlyRestore.with).toEqual(cache.with);
+    expect(earlyRestore.uses).toContain("actions/cache/restore@");
+    expect(earlyRestore.if).toBe("github.run_attempt != 1");
+    const restoredUpload = step(
+      "resolve_target",
+      "Upload restored immutable release execution plan",
+    );
+    expect(restoredUpload.if).toBe(
+      "${{ github.run_attempt != 1 && steps.publication_plan_cache.outputs.cache-hit == 'true' }}",
+    );
+    expect(restoredUpload.with).toEqual(upload.with);
+    expect(step("resolve_target", "Upload immutable publication admission").if).toBeUndefined();
+    const resolver = workflow.jobs.resolve_target;
+    if (!resolver) {
+      throw new Error("missing resolve_target job");
+    }
+    const steps = resolver.steps;
+    expect(
+      steps.indexOf(step("resolve_target", "Restore immutable plan for publication admission")),
+    ).toBeLessThan(steps.indexOf(step("resolve_target", "Admit publication source")));
   });
 
   it("keeps immutable plan artifacts parent-bound and non-overwriting", () => {
@@ -183,10 +311,6 @@ describe("full release same-parent recovery workflow", () => {
         expect(options["run-id"]).toBe("${{ github.run_id }}");
       }
     }
-    const steps = workflow.jobs.resolve_target!.steps;
-    expect(
-      steps.indexOf(step("resolve_target", "Restore immutable plan for publication admission")),
-    ).toBeLessThan(steps.indexOf(step("resolve_target", "Admit publication source")));
   });
 
   it("waits for installation quota before candidate dispatch", () => {

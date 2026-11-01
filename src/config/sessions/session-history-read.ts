@@ -72,7 +72,7 @@ function prepareTranscriptInstanceEntries(
   return { get: (sessionKey) => readRow(sessionKey)?.entry };
 }
 
-export function listTranscriptInstancesFromDatabase(params: {
+function listTranscriptInstancesFromDatabase(params: {
   currentEntries?: Pick<ReadonlyMap<string, SessionEntry>, "get">;
   database: Pick<OpenClawAgentDatabase, "agentId" | "db">;
   options: SessionTranscriptInstanceListOptions;
@@ -112,7 +112,9 @@ export function listTranscriptInstancesFromDatabase(params: {
   }
   const rows = executeSqliteQuerySync(
     params.database.db,
-    query.orderBy("transcript_updated_at", "desc").orderBy("session_id", "asc"),
+    query
+      .orderBy("transcript_updated_at", (order) => order.desc().nullsLast())
+      .orderBy("session_id", "asc"),
   ).rows;
   const currentEntries =
     params.currentEntries ??

@@ -303,7 +303,13 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
         quoteDepth > 0
           ? `${"> ".repeat(quoteDepth)}${rendered.replaceAll("\n", `\n${"> ".repeat(quoteDepth)}`)}`
           : rendered;
-      if (hasTrailingQuotedText && !quoted.endsWith("\n")) {
+      // In a list item the next item follows a code block directly, and a closing fence with
+      // text after it does not close the block.
+      const followedByText =
+        codeStyle === "code_block" &&
+        span.end < parsed.text.length &&
+        parsed.text[span.end] !== "\n";
+      if ((hasTrailingQuotedText || followedByText) && !quoted.endsWith("\n")) {
         quoted += "\n";
       }
       const index = codeRegions.push(quoted) - 1;

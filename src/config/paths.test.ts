@@ -1,7 +1,6 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
@@ -15,7 +14,6 @@ import {
   pinRuntimePaths,
   resolveNativeServiceProfileConflict,
   resolveDefaultConfigCandidates,
-  resolveCanonicalConfigPath,
   resolveConfigPathCandidate,
   resolveGatewayPort,
   resolveIncludeRoots,
@@ -43,8 +41,6 @@ function profileEnv(home: string, profile = "work"): NodeJS.ProcessEnv {
   };
 }
 
-const port = (value: string, fallback = 19003) =>
-  resolveGatewayPort({ gateway: { port: fallback } }, { OPENCLAW_GATEWAY_PORT: value });
 const withHome = (run: (home: string) => Promise<void>) =>
   withTestDir({ prefix: "config-paths-" }, run);
 async function writeConfig(home: string, directory = ".openclaw", filename = "openclaw.json") {
@@ -90,13 +86,7 @@ describe("default install identity", () => {
       },
       false,
     ]),
-    ...["undefined", "null", "  undefined  "].map(
-      (literal): [NodeJS.ProcessEnv, boolean, boolean] => [
-        { HOME: accountHome, OPENCLAW_HOME: literal },
-        true,
-        true,
-      ],
-    ),
+    [{ HOME: accountHome, OPENCLAW_HOME: "  undefined  " }, true, true],
     [profileEnv(accountHome, "work\\..\\escape"), false],
   ])("classifies installation %j as default=%s", (env, expected, scanExpected) => {
     expect(installIdentity(env)).toBe(expected);
@@ -111,35 +101,21 @@ describe("default install identity", () => {
       await fs.mkdir(stateDir);
       await writeConfig(home, ".clawdbot", "clawdbot.json");
       const env = { HOME: home };
-      expect(resolveConfigPathCandidate(env, () => home)).toBe(
-        path.join(stateDir, "openclaw.json"),
-      );
+      const configPath = path.join(stateDir, "openclaw.json");
+      expect(resolveConfigPathCandidate(env, () => home)).toBe(configPath);
+      expect(resolveDefaultConfigCandidates(env, () => home)).toEqual([configPath]);
       expect(isDefaultInstallIdentity(env, () => home)).toBe(true);
     });
   });
 
-  it("accepts the canonical paths a named profile projects", async () => {
-    await withHome(async (home) => {
-      const defaultStateDir = await writeConfig(home);
-      const env = profileEnv(home);
-
-      expect(installIdentity(env, home)).toBe(true);
-      expect(allowsProcessHomeSessionScan(env, () => home)).toBe(false);
-      delete env.OPENCLAW_CONFIG_PATH;
-      expect(installIdentity(env, home)).toBe(true);
-
-      await writeConfig(home, ".openclaw-work");
-      expect(installIdentity(env, home)).toBe(true);
-      expect(
-        installIdentity({ ...env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw-other") }, home),
-      ).toBe(false);
-      expect(
-        installIdentity(
-          { HOME: home, OPENCLAW_PROFILE: "default", OPENCLAW_STATE_DIR: defaultStateDir },
-          home,
-        ),
-      ).toBe(true);
-    });
+  it.each([
+    [profileEnv(accountHome), true, false],
+    [{ ...profileEnv(accountHome), OPENCLAW_CONFIG_PATH: undefined }, true, false],
+    [{ ...profileEnv(accountHome), OPENCLAW_STATE_DIR: "/other" }, false, false],
+    [profileEnv(accountHome, "default"), true, true],
+  ] as const)("classifies profile paths and session scan %j", (env, identity, scan) => {
+    expect(installIdentity(env)).toBe(identity);
+    expect(allowsProcessHomeSessionScan(env, () => accountHome)).toBe(scan);
   });
 
   it.each<[NodeJS.Platform, string, string]>([
@@ -150,17 +126,16 @@ describe("default install identity", () => {
     expect(isDefaultInstallIdentity(env, () => accountHome, platform)).toBe(false);
   });
 
-  it("rejects macOS profile node because its LaunchAgent label is reserved", () => {
-    const env = { OPENCLAW_PROFILE: "node" };
-    expect(resolveNativeServiceProfileConflict(env, "darwin")).toBe("node");
-    expect(resolveNativeServiceProfileConflict(env, "linux")).toBeNull();
-  });
-
-  it("rejects mixed-case native service profiles on case-insensitive platforms", () => {
-    const env = { OPENCLAW_PROFILE: "Main" };
-    expect(resolveNativeServiceProfileConflict(env, "darwin")).toBe("Main");
-    expect(resolveNativeServiceProfileConflict(env, "win32")).toBe("Main");
-    expect(resolveNativeServiceProfileConflict(env, "linux")).toBeNull();
+  it.each<[string, NodeJS.Platform, string | null]>([
+    ["node", "darwin", "node"],
+    ["node", "linux", null],
+    ["Main", "darwin", "Main"],
+    ["Main", "win32", "Main"],
+    ["Main", "linux", null],
+  ])("checks reserved profile %s on %s", (profile, platform, expected) => {
+    expect(resolveNativeServiceProfileConflict({ OPENCLAW_PROFILE: profile }, platform)).toBe(
+      expected,
+    );
   });
 });
 
@@ -173,32 +148,24 @@ it.each([
   expect(resolveLegacyOAuthPath(env)).toBe(path.join(expected, "oauth.json"));
 });
 
-describe("gateway port resolution", () => {
-  it("prefers numeric env values over config", () => {
-    expect(
-      resolveGatewayPort(
-        { gateway: { port: 19002 } },
-        { OPENCLAW_GATEWAY_PORT: "19001", OPENCLAW_PROFILE: "work" },
-      ),
-    ).toBe(19001);
-    expect(resolveGatewayPort({ gateway: { port: 19002 } }, { OPENCLAW_PROFILE: "work" })).toBe(
-      19002,
-    );
-  });
-
-  it("derives the byte-exact profile port for p2380", () => {
-    expect(resolveGatewayPort({}, { OPENCLAW_PROFILE: "p2380" })).toBe(55636);
-  });
-
-  it.each(["65536", "127.0.0.1:65536", "[::1]:65536", "::1"])(
-    "falls back to config for invalid env port %s",
-    (value) => {
-      expect(port(value)).toBe(19003);
-    },
-  );
-  it.each(["2001:db8::1", "127.0.0.1:not-a-port"])("uses the default for %s", (value) => {
-    expect(resolveGatewayPort({}, { OPENCLAW_GATEWAY_PORT: value })).toBe(DEFAULT_GATEWAY_PORT);
-  });
+it.each<[string | undefined, number | undefined, string | undefined, number]>([
+  ["19001", 19002, "work", 19001],
+  [undefined, 19002, "work", 19002],
+  [undefined, undefined, "p2380", 55636],
+  ...["65536", "127.0.0.1:65536", "[::1]:65536", "::1"].map(
+    (value): [string, number, undefined, number] => [value, 19003, undefined, 19003],
+  ),
+  ["127.0.0.1:not-a-port", undefined, undefined, DEFAULT_GATEWAY_PORT],
+])("resolves env port %s, config %s, profile %s", (value, port, profile, expected) => {
+  expect(
+    resolveGatewayPort(
+      { gateway: { port } },
+      {
+        OPENCLAW_GATEWAY_PORT: value,
+        OPENCLAW_PROFILE: profile,
+      },
+    ),
+  ).toBe(expected);
 });
 
 describe("state + config path candidates", () => {
@@ -267,26 +234,6 @@ describe("state + config path candidates", () => {
         OPENCLAW_STATE_DIR: originalStateDir,
         OPENCLAW_TEST_FAST: "1",
       });
-    }
-  });
-
-  it("orders default config candidates in a stable order", () => {
-    expect(resolveDefaultConfigCandidates({}, () => accountHome)).toEqual([
-      path.join(path.resolve(accountHome), ".openclaw", "openclaw.json"),
-    ]);
-  });
-
-  it("resolves explicit canonical config selection without filesystem discovery", () => {
-    const home = path.resolve("config-selection-home");
-    const configPath = path.join(home, "selected.json");
-    const exists = vi.spyOn(fsSync, "existsSync").mockReturnValue(false);
-    try {
-      expect(resolveCanonicalConfigPath({ HOME: home, OPENCLAW_CONFIG_PATH: configPath })).toBe(
-        configPath,
-      );
-      expect(exists).not.toHaveBeenCalled();
-    } finally {
-      exists.mockRestore();
     }
   });
 });

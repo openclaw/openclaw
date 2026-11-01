@@ -114,15 +114,13 @@ export function assignTabAliases(
   return tabs.map((tab) => assignTabAlias({ profileState, tab }));
 }
 
-type TargetIdResolution =
-  | { ok: true; targetId: string }
-  | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };
-
 /** Resolves exact tab references first, then unique raw target-id prefixes. */
 export function resolveTargetIdFromTabs(
   input: string,
   tabs: Array<{ targetId: string; suggestedTargetId?: string; tabId?: string; label?: string }>,
-): TargetIdResolution {
+):
+  | { ok: true; targetId: string }
+  | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] } {
   const needle = input.trim();
   if (!needle) {
     return { ok: false, reason: "not_found" };

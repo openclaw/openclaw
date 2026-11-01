@@ -2,7 +2,11 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
@@ -139,7 +143,7 @@ export function registerDnsCli(program: Command) {
       const tableWidth = getTerminalTableWidth();
       defaultRuntime.log(theme.heading("DNS setup"));
       defaultRuntime.log(
-        renderTable({
+        renderTerminalSafeTable({
           width: tableWidth,
           columns: [
             { key: "Key", header: "Key", minWidth: 18 },
@@ -168,10 +172,14 @@ export function registerDnsCli(program: Command) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(
-        theme.muted(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`),
+        theme.muted(
+          terminalText`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
+        ),
       );
       defaultRuntime.log(
-        theme.muted(`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`),
+        theme.muted(
+          terminalText`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`,
+        ),
       );
 
       if (!opts.apply) {

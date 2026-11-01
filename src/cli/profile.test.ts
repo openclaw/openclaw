@@ -17,12 +17,20 @@ function selectProfile(env: NodeJS.ProcessEnv, profile = "work") {
   applyCliProfileEnv({ profile, env, homedir: () => "/home/peter" });
 }
 
-function expectServiceSelectors(env: NodeJS.ProcessEnv, selectors: (string | undefined)[]) {
-  expect([
-    env.OPENCLAW_LAUNCHD_LABEL,
-    env.OPENCLAW_SYSTEMD_UNIT,
-    env.OPENCLAW_WINDOWS_TASK_NAME,
-  ]).toEqual(selectors);
+const selectorKeys = [
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+];
+const gatewaySelectors = ["ai.openclaw.main", "openclaw-gateway-main", "OpenClaw Gateway (main)"];
+const nodeSelectors = ["ai.openclaw.node", "openclaw-node.service", "OpenClaw Node"];
+
+function serviceEnv(selectors: string[], kind?: string, port?: string) {
+  return inheritedEnv("main", {
+    ...Object.fromEntries(selectorKeys.map((key, i) => [key, selectors[i]])),
+    ...(kind ? { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: kind } : {}),
+    ...(port ? { OPENCLAW_GATEWAY_PORT: port } : {}),
+  });
 }
 
 describe("parseCliProfileArgs", () => {
@@ -79,48 +87,31 @@ describe("applyCliProfileEnv", () => {
     expect(env).toEqual(expected);
   });
 
-  it("replaces the complete service selector bundle: named service to dev", () => {
-    const env = inheritedEnv("main", {
-      OPENCLAW_GATEWAY_PORT: "18789",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.main",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-main.service",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (main)",
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "gateway",
-    });
-    selectProfile(env, "dev");
-    expect(env).toMatchObject({
-      OPENCLAW_PROFILE: "dev",
-      OPENCLAW_STATE_DIR: "/home/peter/.openclaw-dev",
-      OPENCLAW_GATEWAY_PORT: "19001",
-    });
-    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-    expectServiceSelectors(env, [undefined, undefined, undefined]);
-  });
-
-  it("preserves node service selectors when selecting a CLI profile", () => {
-    const env = inheritedEnv("main", {
-      OPENCLAW_GATEWAY_PORT: "19999",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-node.service",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "node",
-    });
-
-    selectProfile(env);
-    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19999");
-    expectServiceSelectors(env, ["ai.openclaw.node", "openclaw-node.service", "OpenClaw Node"]);
-  });
-
-  it("drops inherited canonical service identities when switching profiles", () => {
-    const env = inheritedEnv("main", {
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.main",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-main",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (main)",
-    });
-    selectProfile(env);
-    expectServiceSelectors(env, [undefined, undefined, undefined]);
+  it.each([
+    ["gateway", "dev", "19001", undefined],
+    ["node", "work", "19999", nodeSelectors],
+    [undefined, "work", undefined, undefined],
+  ] as const)("isolates profiles from %s service selectors", (kind, profile, port, selectors) => {
+    const env = serviceEnv(
+      kind === "node" ? nodeSelectors : gatewaySelectors,
+      kind,
+      kind === "node" ? "19999" : kind === "gateway" ? "18789" : undefined,
+    );
+    if (kind === "gateway") {
+      env.OPENCLAW_SYSTEMD_UNIT += ".service";
+    }
+    selectProfile(env, profile);
+    expect(selectorKeys.map((key) => env[key])).toEqual(
+      selectors ?? [undefined, undefined, undefined],
+    );
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe(port);
+    if (kind === "gateway") {
+      expect(env).toMatchObject({
+        OPENCLAW_PROFILE: "dev",
+        OPENCLAW_STATE_DIR: "/home/peter/.openclaw-dev",
+      });
+      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    }
   });
 });
 

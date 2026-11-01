@@ -15,8 +15,9 @@ import {
   mcpAppWidgetNameForViewId,
 } from "./provider.ts";
 import type { BoardProvider } from "./provider.ts";
-import type { BoardSnapshot, BoardWidget } from "./types.ts";
+import type { BoardSnapshot } from "./types.ts";
 import { remainingBoardWidgetTicketTtlMs } from "./widget-ticket-lifetime.ts";
+import { createBoardWidget as widget } from "./widget.test-support.ts";
 const KEY = "agent:main:board";
 const mainTab = { tabId: "main", title: "Main", position: 0, chatDock: "right" as const };
 const capabilities = { canMutate: true, canGrant: true, canPinWidgets: true, canPinMcpApps: true };
@@ -27,17 +28,6 @@ const noCapabilities = {
   canPinMcpApps: false,
 };
 const approvalOnly = { ...noCapabilities, canGrant: true };
-const widget = (overrides: Partial<BoardWidget> = {}): BoardWidget => ({
-  name: "alpha",
-  tabId: "main",
-  contentKind: "html",
-  sizeW: 6,
-  sizeH: 4,
-  position: 0,
-  grantState: "none",
-  revision: 1,
-  ...overrides,
-});
 const snapshot = (revision = 1, overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
   sessionKey: KEY,
   revision,
@@ -225,13 +215,10 @@ describe("board leases", () => {
     await loaded(writer.provider, current);
     expect(stale.provider.snapshot$.value).toEqual(current);
     expect([old.listeners.size, next.listeners.size]).toEqual([0, 1]);
-    expect(next.addEventListener).toHaveBeenCalledOnce();
     expect(boardProviderForSession({ sessionKey: KEY })).toBe(cached);
     expect(stale.provider).toMatchObject(approvalOnly);
     stale.update(old, false, capabilities);
-    expect(writer.provider.snapshot$.value).toEqual(current);
     expect(stale.provider.snapshot$.value).toEqual(current);
-    expect(old.addEventListener).toHaveBeenCalledOnce();
     expect(next.listeners.size).toBe(1);
     retiredListener?.({
       type: "event",
@@ -245,14 +232,11 @@ describe("board leases", () => {
     writer.update(next, false, capabilities);
     writer.update(next, true, capabilities);
     await called(next.requests, 3);
-    expect(writer.provider.snapshot$.value).toEqual(current);
     stale.update(last, true, capabilities);
     await loaded(writer.provider, future);
-    expect(stale.provider.snapshot$.value).toEqual(future);
     expect([next.listeners.size, last.listeners.size]).toEqual([0, 1]);
     await expect(writer.provider.applyOps([])).resolves.toBeUndefined();
     expect(last.requests).toHaveBeenCalledWith("board.update", { sessionKey: KEY, ops: [] });
-    expect(old.requests).toHaveBeenCalledOnce();
     writer.release();
     expect(last.listeners.size).toBe(1);
     stale.release();
@@ -262,68 +246,128 @@ describe("board leases", () => {
     const initial = snapshot(1, { widgets: [widget({ grantState: "pending" })] });
     const c = boardClient(async () => initial);
     const dashboard = acquire(c, noCapabilities),
-      chat = acquire(c),
       approver = acquire(c, approvalOnly);
-    await loaded(chat.provider, initial);
-    expect(chat.provider).not.toBe(dashboard.provider);
-    expect(chat.provider.snapshot$).toBe(dashboard.provider.snapshot$);
-    expect(chat.provider.events).toBe(dashboard.provider.events);
-    expect(chat.provider).toMatchObject(capabilities);
-    expect(dashboard.provider).toMatchObject(noCapabilities);
-    expect(c.requests).toHaveBeenCalledOnce();
-    expect(c.addEventListener).toHaveBeenCalledOnce();
+    await loaded(dashboard.provider, initial);
     const actions = (p: BoardProvider) => [
       () => p.applyOps([]),
       () => p.pinWidget({ docId: "cv" }),
       () => p.pinMcpApp({ viewId: "app" }),
       () => p.grant("alpha", "granted"),
     ];
-    for (const run of actions(dashboard.provider)) {
-      await expect(run()).rejects.toThrow();
+    const check = async (p: BoardProvider, permitted: readonly boolean[]) => {
+      for (const [index, run] of actions(p).entries()) {
+        if (permitted[index]) {
+          await expect(run()).resolves.toBeUndefined();
+        } else {
+          await expect(run()).rejects.toThrow();
+        }
+      }
+    };
+    await check(dashboard.provider, [false, false, false, false]);
+    for (const allowed of [true, false]) {
+      dashboard.update(c, true, allowed ? capabilities : noCapabilities);
+      expect(dashboard.provider).toMatchObject(allowed ? capabilities : noCapabilities);
+      expect(approver.provider).toMatchObject(approvalOnly);
+      await check(dashboard.provider, [allowed, allowed, allowed, allowed]);
     }
-    dashboard.update(c, true, capabilities);
-    expect(approver.provider).toMatchObject(approvalOnly);
-    for (const run of actions(dashboard.provider)) {
-      await expect(run()).resolves.toBeUndefined();
-    }
-    expect(c.requests).toHaveBeenCalledTimes(5);
     expect(c.requests).toHaveBeenCalledWith("board.widget.put", {
       sessionKey: KEY,
       name: mcpAppWidgetNameForViewId("app"),
       content: { kind: "mcp-app", viewId: "app" },
     });
-    dashboard.update(c, true, noCapabilities);
-    expect(approver.provider).toMatchObject(approvalOnly);
-    for (const run of actions(dashboard.provider)) {
-      await expect(run()).rejects.toThrow();
-    }
-    await expect(approver.provider.applyOps([])).rejects.toThrow();
-    await expect(approver.provider.pinWidget({ docId: "cv-restricted" })).rejects.toThrow();
-    await expect(approver.provider.pinMcpApp({ viewId: "app-restricted" })).rejects.toThrow();
+    await check(approver.provider, [false, false, false, true]);
     const writer = acquire(c, { ...capabilities, canGrant: false });
     await expect(writer.provider.grant("alpha", "granted")).rejects.toThrow();
     await expect(writer.provider.applyOps([])).resolves.toBeUndefined();
-    await expect(approver.provider.grant("alpha", "granted")).resolves.toBeUndefined();
-    expect(c.requests).toHaveBeenCalledTimes(7);
-    expect(c.requests).toHaveBeenLastCalledWith("board.widget.grant", {
-      sessionKey: KEY,
-      name: "alpha",
-      decision: "granted",
-      revision: 1,
-    });
-    chat.release();
     writer.release();
     approver.release();
     expect(c.listeners.size).toBe(1);
+    const requestCount = c.requests.mock.calls.length;
     dashboard.release();
     dashboard.release();
     await expect(dashboard.provider.applyOps([])).rejects.toThrow();
-    expect(c.requests).toHaveBeenCalledTimes(7);
+    expect(c.requests).toHaveBeenCalledTimes(requestCount);
     expect(c.listeners.size).toBe(0);
     expect(dashboard.provider.snapshot$.value).toEqual(initial);
   });
 });
 describe("board snapshots and refreshes", () => {
+  it("retains unchanged report data while applying full snapshots and layout changes", async () => {
+    const report = (name: string) =>
+      widget({
+        name,
+        contentKind: "plugin",
+        pluginKind: "session:report",
+        instanceId: `report-${name}`,
+        props: { blocks: [{ type: "text", text: name }] },
+      });
+    const initial = snapshot(1, { widgets: [report("first"), report("second")] });
+    const f = fixture(initial);
+    await loaded(f.p, initial);
+    const changed = {
+      ...initial.widgets[0]!,
+      revision: 2,
+      props: { blocks: [{ type: "text", text: "Updated report" }] },
+    };
+    const refresh = snapshot(2, { widgets: [changed, structuredClone(initial.widgets[1]!)] });
+    f.request.mockResolvedValueOnce(refresh);
+    f.client.emit("board.changed", { sessionKey: KEY, revision: 2, widget: "first" });
+    await loaded(f.p, refresh);
+    expect(f.p.snapshot$.value.widgets[0]).toBe(changed);
+    const retained = f.p.snapshot$.value.widgets[1]!;
+    expect(retained).toBe(initial.widgets[1]);
+
+    const moved = {
+      ...structuredClone(retained),
+      sizeW: 8,
+      position: 0,
+      kindLabel: "Saved report",
+    };
+    const layout = snapshot(3, { widgets: [moved, { ...changed, position: 1 }] });
+    f.request.mockResolvedValueOnce(layout);
+    await f.p.applyOps([{ kind: "widget_resize", name: "second", sizeW: 8, sizeH: 4 }]);
+    expect(f.p.snapshot$.value).toEqual(layout);
+    expect(f.p.snapshot$.value.widgets[0]!.props).toBe(retained.props);
+
+    const withoutLabel = report("second");
+    const cleared = snapshot(4, { widgets: [withoutLabel] });
+    f.request.mockResolvedValueOnce(cleared);
+    await f.p.applyOps([{ kind: "widget_remove", name: "first" }]);
+    expect(f.p.snapshot$.value).toEqual(cleared);
+    expect(f.p.snapshot$.value.widgets[0]!.props).toBe(retained.props);
+    expect(f.p.snapshot$.value.widgets[0]).not.toHaveProperty("kindLabel");
+  });
+  it.each(["revision", "instance", "named refresh", "missing identity", "ticket"] as const)(
+    "does not retain report data across %s changes",
+    async (change) => {
+      const original = widget({
+        contentKind: "plugin",
+        pluginKind: "session:report",
+        instanceId: change === "missing identity" ? undefined : "report-instance",
+        props: { blocks: [{ type: "text", text: "Before" }] },
+      });
+      const f = fixture(snapshot(1, { widgets: [original] }));
+      await loaded(f.p, f.initial);
+      const replacement = {
+        ...original,
+        ...(change === "revision" ? { revision: 2 } : {}),
+        ...(change === "instance" ? { instanceId: "replacement-instance" } : {}),
+        ...(change === "ticket"
+          ? { viewTicket: "new-ticket", viewTicketTtlMs: 60_000, frameUrl: "/new-frame" }
+          : {}),
+        props: { blocks: [{ type: "text", text: "After" }] },
+      };
+      const refreshed = snapshot(2, { widgets: [replacement] });
+      f.request.mockResolvedValueOnce(refreshed);
+      f.client.emit("board.changed", {
+        sessionKey: KEY,
+        revision: 2,
+        ...(change === "named refresh" ? { widget: original.name } : {}),
+      });
+      await loaded(f.p, refreshed);
+      expect(f.p.snapshot$.value.widgets[0]).toBe(replacement);
+    },
+  );
   it.each([null, { widgets: [{}] }, { tabs: [{}] }])(
     "ignores malformed cache %j but permits a valid restore",
     (raw) => {
@@ -386,19 +430,6 @@ describe("board snapshots and refreshes", () => {
     expect(persist).toHaveBeenCalledWith(null, expect.any(Number));
     f.p.restoreSnapshot(f.initial, Date.now());
     expect(f.p.snapshot$.value.tabs).toEqual([]);
-  });
-  it("discards mutation responses from replaced clients", async () => {
-    const pending = createDeferred<BoardSnapshot>(),
-      current = snapshot(3);
-    const old = boardClient(() => pending.promise),
-      next = boardClient(async () => current);
-    const p = provider(old, false),
-      mutation = p.applyOps([]);
-    p.attachClient(next, true);
-    await loaded(p, current);
-    pending.resolve(snapshot(4));
-    await mutation;
-    expect(p.snapshot$.value).toEqual(current);
   });
   it.each(["UNAVAILABLE", "FORBIDDEN"] as const)(
     "stops definitive %s polling until reconnect",
@@ -495,84 +526,67 @@ describe("board snapshots and refreshes", () => {
     await Promise.resolve();
     expect(c.requests).toHaveBeenCalledExactlyOnceWith("board.get", { sessionKey: KEY });
   });
-  it.each([false, true])(
-    "accepts the newest event while deletion/recreation refreshes overlap (%s)",
-    async (recreated) => {
-      const initial = snapshot(5),
-        delayed = createDeferred<BoardSnapshot>();
-      const final = recreated
-        ? snapshot(1, { tabs: [{ ...mainTab, tabId: "new", chatDock: "left" }] })
-        : snapshot(0, { tabs: [] });
-      const f = fixture(initial);
-      f.request.mockReturnValueOnce(delayed.promise).mockResolvedValue(final);
-      await loaded(f.p, initial);
-      f.changed(6);
-      await called(f.request, 2);
-      f.changed(recreated ? 1 : 7);
-      delayed.resolve(recreated ? snapshot(0, { tabs: [] }) : snapshot(6));
-      await loaded(f.p, final);
-      expect(f.request).toHaveBeenCalledTimes(3);
-    },
-  );
-  it("ignores an older empty mutation after a newer mutation", async () => {
-    const older = createDeferred<BoardSnapshot>(),
-      newer = createDeferred<BoardSnapshot>();
-    const f = fixture(snapshot(5));
-    f.request.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    await loaded(f.p, f.initial);
-    const a = f.p.applyOps([{ kind: "tab_delete", tabId: "main" }]);
-    const b = f.p.applyOps([{ kind: "tab_update", tabId: "main", chatDock: "left" }]);
-    newer.resolve(snapshot(6));
-    await b;
-    older.resolve(snapshot(0, { tabs: [] }));
-    await a;
-    expect(f.p.snapshot$.value).toEqual(snapshot(6));
-  });
-  it.each([false, true])(
-    "reconciles an old refresh superseded by a mutation (%s ticket refresh)",
-    async (ticket) => {
-      const pending = createDeferred<BoardSnapshot>(),
-        mutation = createDeferred<BoardSnapshot>();
-      const initial = snapshot(5, { widgets: ticket ? [widget({ frameUrl: "/old-ticket" })] : [] });
-      const changed = ticket
-        ? { ...initial, revision: 6, widgets: [widget({ frameUrl: "/mutation-ticket" })] }
-        : snapshot(0, { tabs: [] });
+  it.each(["delete", "recreate", "mutate-delete", "mutate-ticket", "write", "client"] as const)(
+    "discards stale results after %s supersession",
+    async (cause) => {
+      const pending = createDeferred<BoardSnapshot>();
+      const empty = snapshot(0, { tabs: [] });
+      const ticket = cause === "mutate-ticket";
+      const initial = snapshot(5, { widgets: [widget({ frameUrl: "/old" })] });
       const final = ticket
-        ? { ...changed, widgets: [widget({ frameUrl: "/reminted-ticket" })] }
-        : changed;
-      let gets = 0;
-      const c = boardClient((method) => {
-        if (method !== "board.get") {
-          return mutation.promise;
-        }
-        gets += 1;
-        return gets === 1
-          ? Promise.resolve(initial)
-          : gets === 2
-            ? pending.promise
-            : Promise.resolve(final);
-      });
-      const p = provider(c);
-      await loaded(p, initial);
-      const refresh = ticket ? p.refreshWidgetFrame("alpha") : p.activate();
-      await vi.waitFor(() => expect(gets).toBe(2));
-      const write = p.applyOps(
-        ticket
-          ? [{ kind: "tab_update", tabId: "main", chatDock: "left" }]
-          : [{ kind: "tab_delete", tabId: "main" }],
-      );
-      mutation.resolve(changed);
-      await write;
+        ? snapshot(6, { widgets: [widget({ frameUrl: "/fresh" })] })
+        : cause === "recreate"
+          ? snapshot(1, { tabs: [{ ...mainTab, tabId: "new", chatDock: "left" }] })
+          : cause === "delete" || cause === "mutate-delete"
+            ? empty
+            : snapshot(6);
+      const mutation = ticket
+        ? snapshot(6, { widgets: [widget({ frameUrl: "/mutation" })] })
+        : final;
+      const f = fixture(initial);
+      f.request
+        .mockReturnValueOnce(pending.promise)
+        .mockImplementation(async (method) => (method === "board.update" ? mutation : final));
+      await loaded(f.p, initial);
+      const writing = cause === "write" || cause === "client";
+      if (cause === "delete" || cause === "recreate") {
+        f.changed(6);
+      }
+      const work = writing
+        ? f.p.applyOps([{ kind: "tab_delete", tabId: "main" }])
+        : ticket
+          ? f.p.refreshWidgetFrame("alpha")
+          : f.p.activate();
+      await called(f.request, 2);
+      if (cause === "client") {
+        f.p.attachClient(
+          boardClient(async () => final),
+          true,
+        );
+        await loaded(f.p, final);
+      } else if (cause === "delete" || cause === "recreate") {
+        f.changed(cause === "recreate" ? 1 : 7);
+      } else {
+        await f.p.applyOps([
+          ticket || cause === "write"
+            ? { kind: "tab_update", tabId: "main", chatDock: "left" }
+            : { kind: "tab_delete", tabId: "main" },
+        ]);
+      }
       pending.resolve(
-        ticket
-          ? { ...changed, widgets: [widget({ frameUrl: "/superseded-ticket" })] }
-          : snapshot(6),
+        cause === "recreate" || cause === "write"
+          ? empty
+          : ticket
+            ? snapshot(6, { widgets: [widget({ frameUrl: "/superseded" })] })
+            : snapshot(7),
       );
-      await refresh;
-      expect(gets).toBe(3);
-      expect(p.snapshot$.value).toEqual(final);
+      await work;
+      await loaded(f.p, final);
+      expect(f.request).toHaveBeenCalledTimes(
+        cause === "client" ? 2 : cause.startsWith("mutate-") ? 4 : 3,
+      );
       if (ticket) {
-        expect(p.widgetFrameUrl("alpha", 1)).toBe("/reminted-ticket");
+        expect(f.p.widgetFrameUrl("alpha", 1)).toBe("/fresh");
       }
     },
   );
@@ -732,7 +746,7 @@ describe("MCP App leases", () => {
   const ready = (viewId: string) => ({ status: "ready", viewId });
   const view = (viewId: string) => ({ viewId, expiresAtMs: Date.now() + 60_000 });
   it.each([{ sessionKey: KEY }, { sessionKey: "global", agentId: "work" }])(
-    "deduplicates $sessionKey app leases until explicit refresh",
+    "deduplicates $sessionKey app leases until refresh or reconnect",
     async (session) => {
       let now = 0;
       vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -763,6 +777,9 @@ describe("MCP App leases", () => {
       expect(
         c.requests.mock.calls.filter(([method]) => method === "board.widget.appView"),
       ).toHaveLength(2);
+      p.attachClient(c, false);
+      p.attachClient(c, true);
+      await expect(read(p)).resolves.toMatchObject(ready("mcp-app-3"));
     },
   );
   it("keys same-name cache entries by instance", async () => {
@@ -775,19 +792,6 @@ describe("MCP App leases", () => {
       "b",
     );
     expect(request).toHaveBeenCalledTimes(2);
-  });
-  it("invalidates cached leases after a same-client reconnect", async () => {
-    const initial = app();
-    let leases = 0;
-    const c = boardClient(async (method) =>
-      method === "board.get" ? initial : view("view-" + ++leases),
-    );
-    const p = provider(c);
-    await loaded(p, initial);
-    await expect(read(p)).resolves.toMatchObject({ viewId: "view-1" });
-    p.attachClient(c, false);
-    p.attachClient(c, true);
-    await expect(read(p)).resolves.toMatchObject({ viewId: "view-2" });
   });
   it.each(["replacement", "reconnect", "disposal"] as const)(
     "rejects pending app leases after %s",

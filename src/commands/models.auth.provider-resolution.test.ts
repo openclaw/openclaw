@@ -9,6 +9,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import * as migrationRuntime from "../plugins/migration-provider-runtime.js";
@@ -24,6 +25,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { tryImportProviderCredential } from "./models/auth-credential-import.js";
 import { resolveRequestedLoginProviderOrThrow, runModelsAuthLoginFlowCore } from "./models/auth.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 function makeProvider(params: { id: string; label?: string; aliases?: string[] }): ProviderPlugin {
   return { ...params, label: params.label ?? params.id, auth: [] };
@@ -242,14 +244,11 @@ it.each([
     const unrelated = { type: "token" as const, provider: "other-proof", token: "fixture-other" };
     const pluginDir = path.join(state.workspaceDir, ".openclaw", "extensions", provider);
     await fs.mkdir(pluginDir, { recursive: true, mode: 0o755 });
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: provider,
-        providers: [provider],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
-    );
+    await writeFixtureJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: provider,
+      providers: [provider],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    });
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `module.exports = {
@@ -305,15 +304,11 @@ it.each([
           }
         };`,
     );
-    const originalModel = {
-      id: "original",
+    const originalModel = createTestModelDefinition("original", {
       name: "Original",
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 4096,
       maxTokens: 1024,
-    };
+    });
     const modelConnection = {
       baseUrl: "https://fixture.invalid",
       api: "openai-completions" as const,

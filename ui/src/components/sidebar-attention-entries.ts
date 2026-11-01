@@ -51,7 +51,7 @@ export type SidebarInboxEntry =
       id: string;
       sessionKey: string;
       agentId?: string;
-      unconfirmed: boolean;
+      held: boolean;
       command: boolean;
     })
   | (SidebarInboxEntryBase<"system"> & { type: "update" });

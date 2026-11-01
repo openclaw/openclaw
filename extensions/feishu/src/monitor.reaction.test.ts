@@ -341,7 +341,7 @@ describe("Feishu inbound debounce regressions", () => {
     ]);
   });
 
-  it("releases pending text before a bare abort trigger instead of debouncing it", async () => {
+  it("dispatches a bare abort trigger without flushing pending text", async () => {
     setDedupPassThroughMocks();
     const dispatcher = await setupDebounceMonitor();
     await enqueueText(dispatcher, { messageId: "om_1", text: "first" });
@@ -350,10 +350,13 @@ describe("Feishu inbound debounce regressions", () => {
     await Promise.resolve();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(0);
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchedMessage().event.message.message_id).toBe("om_stop");
+    expect(JSON.parse(dispatchedMessage().event.message.content)).toEqual({ text: "stop" });
+    await vi.advanceTimersByTimeAsync(25);
     expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(dispatchedMessage().event.message.content)).toEqual({ text: "first" });
-    expect(dispatchedMessage(1).event.message.message_id).toBe("om_stop");
-    expect(JSON.parse(dispatchedMessage(1).event.message.content)).toEqual({ text: "stop" });
+    expect(dispatchedMessage(1).event.message.message_id).toBe("om_1");
+    expect(JSON.parse(dispatchedMessage(1).event.message.content)).toEqual({ text: "first" });
   });
 
   it("preserves only the bot mention across separate messages ending without mentions", async () => {
@@ -400,7 +403,7 @@ describe("Feishu inbound debounce regressions", () => {
     const { dispatched, parsed } = parsedDispatch();
     expect(dispatched.message.message_id).toBe("om_literal_last");
     expect(parsed.content).toBe(
-      '<at user_id="ou_alice">Alice @_user_10</at> first\n<at user_id="ou_bob">Bob</at> <at user_id="ou_carol">Carol</at>thanks',
+      '<at user_id="ou_bot">Bot</at> <at user_id="ou_alice">Alice @_user_10</at> first\n<at user_id="ou_bot">Bot</at> <at user_id="ou_bob">Bob</at> <at user_id="ou_carol">Carol</at>thanks',
     );
     expect(parsed.mentionedBot).toBe(true);
     expect(parsed.mentionTargets?.map((target) => target.openId)).toEqual(["ou_bob", "ou_carol"]);

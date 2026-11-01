@@ -48,7 +48,13 @@ function extractTranscriptUsageSnapshot(
   const api =
     source === "artifact" && typeof record.api === "string" ? record.api.trim() : record.api;
   const legacyCliUsage = api === "cli" && usageRaw && usageRaw.contextUsage === undefined;
-  const totalTokens = legacyCliUsage ? undefined : deriveSessionTotalTokens({ usage });
+  // Canonical context measurements include zero independently of response billing.
+  // Legacy artifacts still need their existing completeness evidence.
+  const totalTokens = legacyCliUsage
+    ? undefined
+    : source === "sqlite" && usage?.contextUsage?.state === "available"
+      ? usage.contextUsage.promptTokens
+      : deriveSessionTotalTokens({ usage });
   const modelProvider = typeof record.provider === "string" ? record.provider.trim() : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : undefined;
   const costUsd =

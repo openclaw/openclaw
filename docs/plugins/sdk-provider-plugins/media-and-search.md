@@ -112,6 +112,14 @@ merging a nested value such as voice settings.
     unavailable response as incomplete usage. The shared remote factory reports
     OpenAI-style usage; vector return values and existing plugins stay unchanged.
 
+    Memory search applies an explicit `memory.search.queryInstruction` or
+    `memory.search.inputFormat.query` before calling `embed` and sets the
+    `queryInstructionApplied` call option. Explicit `inputFormat.document` sets
+    `documentFormatApplied` on document calls and asynchronous batch options.
+    Preserve supplied text and skip the corresponding provider-owned template
+    when its flag is set, including when the configured prefix is empty.
+    Without the corresponding flag, retain existing formatting behavior.
+
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
     both creation options and cold index identity checks. Keep it configuration-only:
@@ -252,6 +260,8 @@ merging a nested value such as voice settings.
     `overflowUrl` provides delivery only when the body exceeds that cap; malformed
     media and transport errors still fail. The caller owns response cleanup.
     `downloadGeneratedVideoAsset` also owns fetching, deadlines, and cleanup.
+    Its optional `dispatcherPolicy` preserves configured result transport while
+    keeping strict target checks. Do not pass task headers or private-network trust.
 
   </Tab>
   <Tab title="Web fetch and search">

@@ -56,7 +56,13 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
+const extraExcludedFileSuffixes = [
+  ".test-support.ts",
+  ".test-helpers.ts",
+  ".d.ts",
+  ".d.mts",
+  ".d.cts",
+];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");

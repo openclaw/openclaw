@@ -331,14 +331,22 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: 
   }));
   const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
     batch.map((unit) => {
-      fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
+      const outputDir = resolve(repoRoot, unit.outDir);
+      fs.mkdirSync(outputDir, { recursive: true });
       if (unit.id !== "plugin-sdk") {
+        const modulesDir = resolve(repoRoot, unit.rootDir, "node_modules");
+        const dependencyLink = resolve(outputDir, "node_modules");
+        // Copied generated trees must not retain another checkout's dependency scope.
+        if (
+          fs.lstatSync(dependencyLink, { throwIfNoEntry: false })?.isSymbolicLink() &&
+          resolve(outputDir, fs.readlinkSync(dependencyLink)) !== modulesDir
+        ) {
+          fs.unlinkSync(dependencyLink);
+        }
         // Relocated declarations still resolve third-party types through their package owner.
-        ensureRepoNodeModulesLink(resolve(repoRoot, unit.rootDir, "node_modules"), {
-          cwd: resolve(repoRoot, unit.outDir),
-        });
+        ensureRepoNodeModulesLink(modulesDir, { cwd: outputDir });
       }
-      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
+      return { ...unit, outputRoot: fs.realpathSync.native(outputDir) };
     }),
   );
   const prepareBatch = async (batch: (typeof batches)[number]) => {

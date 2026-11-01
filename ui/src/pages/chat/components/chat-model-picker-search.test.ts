@@ -2,11 +2,8 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import { expect, it } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import {
-  createChatModelSearch,
-  updateModelSearch,
-  type ChatModelSearchCatalog,
-} from "./chat-model-picker-search.ts";
+import { createChatModelSearchView, updateModelSearch } from "./chat-model-picker-search-view.ts";
+import { createChatModelSearch, type ChatModelSearchCatalog } from "./chat-model-picker-search.ts";
 
 it("only invalidates model row metadata when the ranked result changes", () => {
   const catalog: ChatModelSearchCatalog = {
@@ -31,7 +28,7 @@ it("only invalidates model row metadata when the ranked result changes", () => {
     const input = document.createElement("input");
     details.append(input);
     search.detailsRef(details);
-    const view = search.createView(source, () => {});
+    const view = createChatModelSearchView(search, source, () => {});
     let reads = 0;
     for (const row of catalog.rows) {
       createEffect(
@@ -84,6 +81,61 @@ it("only invalidates model row metadata when the ranked result changes", () => {
     });
     expect(fixture.view.row("model-0").hidden).toBe(true);
     expect(fixture.reads() - initialReads).toBe(1_000);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+it("moves the highlight without waking unrelated model and account rows", () => {
+  const keys = ["model:first", "model:second", "account:personal"];
+  const reads = [0, 0, 0];
+  const fixture = createRoot((dispose) => {
+    const search = createChatModelSearch();
+    const view = createChatModelSearchView(
+      search,
+      () => ({
+        providers: [],
+        lists: ["models"],
+        rows: keys.map((key) => ({
+          key,
+          name: key,
+          providerLabel: "example",
+          reference: key,
+          disabled: false,
+          selected: false,
+          hasShortcut: true,
+        })),
+      }),
+      () => {},
+    );
+    keys.forEach((key, index) => {
+      createEffect(
+        () => {
+          reads[index]!++;
+          return search.isHighlighted(key);
+        },
+        () => {},
+      );
+    });
+    return { dispose, view };
+  });
+  try {
+    flush();
+    reads.fill(0);
+    fixture.view.highlight(keys[1]);
+    flush();
+    expect(reads).toEqual([1, 1, 0]);
+    expect(keys.map(fixture.view.isHighlighted)).toEqual([false, true, false]);
+
+    fixture.view.highlight(keys[2]);
+    flush();
+    expect(reads).toEqual([1, 2, 1]);
+    expect(keys.map(fixture.view.isHighlighted)).toEqual([false, false, true]);
+
+    fixture.view.highlight(undefined);
+    flush();
+    expect(reads).toEqual([1, 2, 2]);
+    expect(keys.map(fixture.view.isHighlighted)).toEqual([false, false, false]);
   } finally {
     fixture.dispose();
   }

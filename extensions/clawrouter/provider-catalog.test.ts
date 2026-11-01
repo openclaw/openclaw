@@ -331,7 +331,16 @@ describe("ClawRouter provider catalog", () => {
       expect(await buildClawRouterProviderConfig(params)).toEqual(first);
       expect(fetchGuard).toHaveBeenCalledOnce();
 
-      await buildClawRouterProviderConfig({ ...params, discoveryApiKey: "catalog-key-b" });
+      fetchGuard.mockResolvedValueOnce({
+        response: Response.json({ providers: [] }),
+        finalUrl: "https://clawrouter.example/v1/catalog",
+        release: async () => undefined,
+      });
+      const otherScope = await buildClawRouterProviderConfig({
+        ...params,
+        discoveryApiKey: "catalog-key-b",
+      });
+      expect(otherScope.models).toEqual([]);
       await buildClawRouterProviderConfig({ ...params, baseUrl: "https://other.example" });
       expect(fetchGuard).toHaveBeenCalledTimes(3);
       const headers = fetchGuard.mock.calls[1]?.[0].init?.headers;
