@@ -5,6 +5,7 @@ const builtinManager = vi.hoisted(() => ({}));
 const memoryIndexGet = vi.hoisted(() => vi.fn(async () => builtinManager));
 const closeMemoryIndexManagersForAgent = vi.hoisted(() => vi.fn(async () => {}));
 
+// mock-isolation: keep index/database workers isolated while testing acquisition errors and cleanup routing.
 vi.mock("../../manager-runtime.js", () => ({
   MemoryIndexManager: { get: memoryIndexGet },
   closeMemoryIndexManagersForAgent,

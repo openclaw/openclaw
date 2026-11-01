@@ -74,8 +74,8 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 Pinned main `60c2748f4927`: obsolete Memory Core search-manager fixtures removed.
 Five fake-manager methods and the unused close-all mock/export/reset are retired;
 the successful acquisition identity, both declarations/cases and every assertion
-remain. Production and protected database-worker discovery are unchanged; nine
-fewer test lines. Complete selected test, owner, runtime barrels/close APIs, lazy
+remain. Production and protected database-worker discovery are unchanged; eight
+fewer test lines, plus one obsolete mock-export allowance removed. Complete selected test, owner, runtime barrels/close APIs, lazy
 loading and relevant fixture/deletion history inspected; source/guide parity verified.
 Untouched baseline and candidate pass both cases/one suite. Temporary throwing
 getters/close-all mock plus an independent afterEach counter prove zero accesses,
@@ -84,7 +84,10 @@ Actual missing-error-code and bypassed-normalization faults each fail one intend
 retained case while the other passes; all owner hashes restored afterward.
 All three scoped removal scans pass; both test bodies are byte-preserved.
 Focused type-aware extension lint, scoped types, format, ledger MDX and diff
-checks pass. Fresh review and final-head proof remain pending.
+checks pass. Fresh review found a changed mock-factory fingerprint; the native
+guard reproduced it. An adjacent annotation preserves intentional index/database
+isolation and the obsolete allowance is pruned without a replacement. Guard and
+focused tests pass; fresh review and final-head proof remain pending.
 
 ## Completed source review
 
