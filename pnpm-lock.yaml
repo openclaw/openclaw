@@ -2510,8 +2510,8 @@ importers:
   extensions/tokenjuice:
     dependencies:
       tokenjuice:
-        specifier: 0.9.0
-        version: 0.9.0
+        specifier: 0.10.0
+        version: 0.10.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -10421,8 +10421,8 @@ packages:
     resolution: {integrity: sha512-dRXchy+C0IgK8WPC6xvCHFRIWYUbqqdEIKPaKo/AcTUNzwLTK6AH7RjdLWsEZcAN/TBdtfUw3PYEgPr5VPr6ww==}
     engines: {node: '>=14.16'}
 
-  tokenjuice@0.9.0:
-    resolution: {integrity: sha512-nyyhsfdXIcSqEXSgquiKe/3nVEW1WCyCI+6hj9mNaSn78Tw1DoJe9wj/sXL9W+wtqGPgFSChpXKE7AfW7XtvFg==}
+  tokenjuice@0.10.0:
+    resolution: {integrity: sha512-xDd+oSPvGAY1trZLQLE7AP9nUgZPVuJruHu+vLQXTLcrzpjDMzp+XQ6unTg4F0zBM0rO243RZ7MDgCyzTd1HKw==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -18742,7 +18742,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       ieee754: 1.2.1
 
-  tokenjuice@0.9.0: {}
+  tokenjuice@0.10.0: {}
 
   totalist@3.0.1: {}
 
