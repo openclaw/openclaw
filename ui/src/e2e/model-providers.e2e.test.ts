@@ -413,7 +413,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         };
       });
       expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
-      expect(headerMetrics.refreshHeight).toBe(28);
+      expect(headerMetrics.refreshHeight).toBe(32);
 
       await page.setViewportSize({ width: 390, height: 844 });
       const mobileMetrics = await providerSection.evaluate((section) => {
