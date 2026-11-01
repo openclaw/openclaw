@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveModelPricing, resolveModelPricingContext } from "../model-catalog/pricing.js";
 import {
@@ -35,7 +36,10 @@ afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
 
 it("carries published task facts through HTTP, SQLite and prepared role selection", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
-  const route = { api: "openai-completions", baseUrl: "https://worker-catalog.invalid/v1" };
+  const route: Pick<ModelProviderConfig, "api" | "baseUrl"> = {
+    api: "openai-completions",
+    baseUrl: "https://worker-catalog.invalid/v1",
+  };
   const nativeBaseUrl = "https://native-worker-catalog.invalid/v1";
   const manifestFile = path.join(fixture.root, "plugin/openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
