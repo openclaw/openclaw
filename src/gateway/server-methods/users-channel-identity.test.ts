@@ -2,6 +2,8 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { UsersChannelIdentityResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import * as bundledChannels from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin } from "../../channels/plugins/registry.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -13,7 +15,10 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { listCanonicalUserChannelIdentities } from "../../state/user-channel-identity-operations.js";
+import {
+  changeCanonicalUserChannelIdentity,
+  listCanonicalUserChannelIdentities,
+} from "../../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -156,6 +161,49 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   resetGatewayWorkAdmission();
   vi.unstubAllEnvs();
+});
+
+it("reports and disconnects saved identities without loading an unconfigured channel", async () => {
+  setActivePluginRegistry(createTestRegistry([]));
+  const load = vi.spyOn(bundledChannels, "getBundledChannelPlugin").mockImplementation(() => {
+    throw new Error("Unconfigured channel runtime must remain unloaded");
+  });
+  onTestFinished(() => load.mockRestore());
+  const status = () => rpc(alice, { action: "status", channelId: "discord" });
+  expect((await status()).slice(0, 2)).toEqual([true, { status: "ready", accounts: [] }]);
+  await changeCanonicalUserChannelIdentity("link", owner(alice), {
+    channelId: "discord",
+    accountId: "default",
+    senderId: "123456789012345678",
+  });
+  expect((await status()).slice(0, 2)).toEqual([
+    true,
+    {
+      status: "ready",
+      accounts: [{ accountId: "default", available: false, senderIds: ["123456789012345678"] }],
+    },
+  ]);
+  expect(
+    (await rpc(alice, { action: "disconnect", channelId: "discord", accountId: "default" }))[0],
+  ).toBe(true);
+  expect(await listCanonicalUserChannelIdentities(owner(alice))).toEqual([]);
+  expect(load).not.toHaveBeenCalled();
+});
+
+it("allows a configured bundled adapter to link before its channel runtime is registered", async () => {
+  const plugin = getLoadedChannelPlugin("discord")!;
+  setActivePluginRegistry(createTestRegistry([]));
+  config = { channels: { discord: {} } };
+  setRuntimeConfigSnapshot(config);
+  const load = vi.spyOn(bundledChannels, "getBundledChannelPlugin").mockReturnValue(plugin);
+  onTestFinished(() => load.mockRestore());
+  expect((await rpc(alice, { action: "status", channelId: "discord" }))[1]).toMatchObject({
+    accounts: [{ accountId: "default", available: true }],
+  });
+  const flow = await start();
+  expect(callback(flow, cookie)).toBe(200);
+  expect((await terminal(flow)).status).toBe("linked");
+  expect(await listCanonicalUserChannelIdentities(owner(alice))).toHaveLength(1);
 });
 
 it("links through the real Discord adapter, rejects replay and conflicts, and disconnects through the canonical store", async () => {

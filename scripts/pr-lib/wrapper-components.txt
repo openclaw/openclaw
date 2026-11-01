@@ -893,6 +893,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/desktop-endpoint.ts
 src/gateway/worker-environments/environment-recipe.ts
 src/gateway/worker-environments/local-workspace-fingerprints.ts
 src/gateway/worker-environments/placement-authority-owner.ts
@@ -909,13 +910,17 @@ src/gateway/worker-environments/placement-workspace-result-owner.ts
 src/gateway/worker-environments/placement-workspace-result-store.ts
 src/gateway/worker-environments/placement-workspace-result.ts
 src/gateway/worker-environments/preparation-identity.schema.ts
+src/gateway/worker-environments/prepared-environment-store.ts
+src/gateway/worker-environments/session-attachment-store.ts
 src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/state.ts
 src/gateway/worker-environments/store-commit-authority.ts
 src/gateway/worker-environments/store-errors.ts
 src/gateway/worker-environments/store-native-publication.ts
 src/gateway/worker-environments/store-projection.ts
+src/gateway/worker-environments/store-row-codec.ts
 src/gateway/worker-environments/store-validation.ts
+src/gateway/worker-environments/store-write.ts
 src/gateway/worker-environments/workspace-accepted-publication.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
 src/gateway/worker-environments/workspace-git-input.ts
@@ -1812,8 +1817,10 @@ src/process/spawn-broker/child-completion.ts
 src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
+src/process/spawn-broker/commands.ts
 src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-protocol.ts
+src/process/spawn-broker/file-output.ts
 src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
@@ -1825,6 +1832,7 @@ src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-broker/resource-socket.ts
 src/process/spawn-diagnostics.ts
+src/process/spawn-to-file.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
 src/process/supervisor/darwin-process-command.ts
@@ -2126,6 +2134,7 @@ src/state/openclaw-state-db-schema-v31-workspace-manifests.ts
 src/state/openclaw-state-db-schema-v35-workspace-cas.ts
 src/state/openclaw-state-db-schema-v36-template-names.ts
 src/state/openclaw-state-db-schema-v37-resource-receipts.ts
+src/state/openclaw-state-db-schema-v38-repository-disk.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2215,6 +2224,9 @@ src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
 src/state/session-metadata-unavailable-error.ts
+src/state/session-repository-workspaces.authority.ts
+src/state/session-repository-workspaces.kernel.ts
+src/state/session-repository-workspaces.receipts.ts
 src/state/session-watch-cursor-provenance.ts
 src/state/sqlite-table-layout-migration.ts
 src/state/worker-operation-registry.ts
@@ -2828,6 +2840,7 @@ src/plugins/cli-callback-binding.ts
 src/plugins/inline-view.ts
 src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
+src/plugins/worker-resource-receipt.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
 src/shared/state-lease-loss.ts
@@ -2849,6 +2862,7 @@ src/canvas/wrap.ts
 src/plugin-sdk/widget-html.ts
 src/shared/html-escape.ts
 src/shared/widget-media.ts
+src/shared/worker-desktop-descriptor.ts
 src/gateway/worker-environments/local-workspace-cas.ts
 src/gateway/worker-environments/local-workspace-cas.kernel.ts
 src/gateway/worker-environments/local-workspace-gc.ts

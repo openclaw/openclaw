@@ -353,6 +353,33 @@ blocking operation. For example, Linux libuv blocks the sampling signal on the
 calling thread around `fork()`, including allocator fork hooks. The synchronous
 task labels remain available during such sampling gaps.
 
+On Linux, the recorder also watches a shared main-thread heartbeat from a worker.
+After one second without a heartbeat it asynchronously reads the main thread's
+`/proc/self/task/<pid>` state, wait channel, syscall number, kernel stack (when
+permitted), I/O counters, and scheduler counters. It takes at most three snapshots,
+one second apart, while the stall is still ongoing. The `kernel` field on the
+same profile line contains only snapshots inside the reported stall interval.
+No syscall arguments, memory addresses, or user data are recorded. Unsupported
+platforms do not start this observer; no configuration is needed.
+
+`state=D` with `folio_wait` or `filemap_fault` in `wchan`/`stack` points to page
+or file-backed waits; `compact_zone` or `try_to_compact_pages` points to compaction.
+Writeback/fsync symbols and the architecture-specific `syscall` number distinguish
+write waits; futex symbols identify a lock or `Atomics.wait`. `state=R` means
+runnable, including currently running: compare `sched` (CPU runtime and run-queue
+wait, in nanoseconds) across snapshots before concluding scheduling starvation.
+These observations narrow the cause; they do not prove why a page or lock was needed.
+
+Snapshot `at` is milliseconds from the stall start. Counter arrays follow procfs
+order: `io` is rchar, wchar, syscr, syscw, read_bytes, write_bytes,
+cancelled_write_bytes; `ctxt` is voluntary/nonvoluntary switches from process
+status; `rssKb` is VmRSS. `psi` contains system-wide I/O, memory, and CPU pressure,
+each as some/full cumulative microseconds. Permission errors appear as `?EACCES`
+or `?EPERM`; unavailable counter arrays are empty. Snapshots are best-effort,
+non-atomic reads: delayed observer scheduling or I/O may miss a stall entirely.
+Counter and stack fields may be omitted to keep kernel evidence within 1,400 bytes
+and the complete profile within 2 KiB; state, wait channel, and syscall remain.
+
 ## Uptime monitoring
 
 External uptime monitoring services should use the dedicated `/health` endpoint, not `/v1/chat/completions`.

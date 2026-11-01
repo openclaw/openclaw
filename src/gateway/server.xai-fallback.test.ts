@@ -254,13 +254,14 @@ it(
                 baseUrl,
                 apiKey: "test",
                 api: "openai-responses",
-                models: [buildOpenAiResponsesTestModel(primaryModel, 16_000, 256)],
+                // The fixture's full prompt/tool surface estimates 18k tokens.
+                models: [buildOpenAiResponsesTestModel(primaryModel, 128_000, 256)],
               },
               openai: {
                 baseUrl,
                 apiKey: "test",
                 api: "openai-responses",
-                models: [buildOpenAiResponsesTestModel(fallbackModel, 16_000, 256)],
+                models: [buildOpenAiResponsesTestModel(fallbackModel, 128_000, 256)],
               },
             },
           },

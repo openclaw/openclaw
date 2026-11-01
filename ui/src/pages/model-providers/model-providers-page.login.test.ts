@@ -617,7 +617,7 @@ describe("Models provider login", () => {
             {
               id: "plugin/alpha-key",
               brandId: "alpha",
-              groupLabel: "Alpha",
+              groupLabel: "A\u0308lpha",
               label: "Account key",
               kind: "secret",
               featured: false,
@@ -635,8 +635,8 @@ describe("Models provider login", () => {
     expect(page.querySelector("[data-models-login-discover]")).not.toBeNull();
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
 
-    await searchProviders(page, "  EXAMPLE  ");
-    expect(providerChoices(page)).toEqual(["example"]);
+    await searchProviders(page, "  ÄLPHA  ");
+    expect(providerChoices(page)).toEqual(["alpha"]);
     await searchProviders(page, "browser sign-in");
     expect(providerChoices(page)).toEqual(["example"]);
     await searchProviders(page, "your Example account key");

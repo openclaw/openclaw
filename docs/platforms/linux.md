@@ -683,7 +683,9 @@ arguments, and cleanup ownership do not select the cgroup. Descendants inherit
 their command's placement.
 
 On Node, the Gateway's existing spawn broker launches supported child commands
-and PTY helpers without forking the Gateway's large address space. Durable-process
+and PTY helpers without forking the Gateway's large address space. Workspace
+inventory and Git pack transfers write output files in the broker, including
+bounded output, and remain Gateway-internal work. Durable-process
 observation and cron command watchers retain that broker across detached timers
 and queues. This changes the launch process, not execution intent: durable
 `systemctl` helpers remain Gateway work, while durable commands themselves remain

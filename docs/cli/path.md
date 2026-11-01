@@ -186,9 +186,13 @@ Reserved characters (`?`, `&`, `%`) outside quoted, predicate, or union
 segments are rejected. Control characters (U+0000-U+001F, U+007F) are
 rejected anywhere, including the `session` query value.
 
-`formatOcPath(parseOcPath(path)) === path` is guaranteed for normalized paths.
+`formatOcPath(parseOcPath(path)) === path` is guaranteed for canonical paths.
 Other query parameters are ignored except for the first non-empty
 `session=` value.
+
+File names, literal keys, and session values preserve their Unicode code points;
+canonically equivalent spellings remain distinct. Markdown section and item
+addresses still use their existing slug rules.
 
 Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
 field), at most 64 dotted sub-segments per slot, and at most 256 nested
@@ -209,6 +213,8 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
+For JSONL, `**` can span both the physical line and nested value keys:
+`oc://session.jsonl/**/event` finds nested `event` values inside each line.
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as
@@ -248,6 +254,10 @@ depending on the per-kind AST shape.
   `parse-error`.
   Leaf replacement through object-valued mapping keys, such as YAML 1.1
   timestamp keys, is refused with `unresolved` and leaves the file unchanged.
+
+`--value-json` is refused for Markdown and YAML without changing the file.
+Pass a plain `<value>` without that flag to use their existing string/scalar
+write behavior.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`

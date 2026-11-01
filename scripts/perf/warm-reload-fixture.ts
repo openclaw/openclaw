@@ -16,13 +16,19 @@ export type WarmReloadFixtureOptions = {
   port: number;
   uiRoot?: string;
   sessions?: number;
+  transcriptLatePaint?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
   >;
 };
 
-function transcript(session: number, now: number, imageBlocks: readonly unknown[]) {
+function transcript(
+  session: number,
+  now: number,
+  imageBlocks: readonly unknown[],
+  longMarkdown = false,
+) {
   const events: unknown[] = [];
   let parentId: string | null = null;
   let sequence = 0;
@@ -133,6 +139,13 @@ function transcript(session: number, now: number, imageBlocks: readonly unknown[
               "This is synthetic reload-proof data. The checks below exercise tall rows, tables, code, and retained layout while live authority reconnects.",
               table,
               code,
+              ...(longMarkdown
+                ? Array.from(
+                    { length: 24 },
+                    (_, index) =>
+                      `- **Verification ${index + 1}** retains the complete synthetic result.\n  - The nested item links to [fixture evidence](https://example.invalid/verification/${index + 1}) and preserves its layout on reload.`,
+                  )
+                : []),
               "[Related fixture session](/chat/main/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)",
             ].join("\n\n"),
           },
@@ -165,6 +178,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     throw new Error("Warm-reload Gateway port must be between 19600 and 19699");
   }
   const sessions = options.sessions ?? 3000;
+  const groups = Array.from({ length: 97 }, (_, index) => `Fixture category ${index + 1}`);
   if (!Number.isSafeInteger(sessions) || sessions < 2000) {
     throw new Error("Warm-reload fixture requires at least 2000 sessions");
   }
@@ -176,7 +190,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
   }
   const now = Date.now();
   const sessionKeys = [
-    "agent:main:24800000-0000-4000-8000-000000000001",
+    options.transcriptLatePaint
+      ? "agent:main:dashboard:24800000-0000-4000-8000-000000000001"
+      : "agent:main:24800000-0000-4000-8000-000000000001",
     "agent:main:dashboard:24800001-0000-4000-8000-000000000001",
   ];
   const baseOptions = parseTeamShapeOptions([
@@ -375,7 +391,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
-              archivedAt: undefined,
+              archivedAt: options.transcriptLatePaint ? now - 1000 : undefined,
               pinnedAt: now - index,
               updatedAt: now - index,
               lastActivityAt: now - index,
@@ -406,7 +422,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               sessionKey: target.key,
               sessionId: target.id,
             },
-            transcript(index, now, imageBlocks),
+            transcript(index, now, imageBlocks, options.transcriptLatePaint),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
             expectedSessionId: target.id,
@@ -433,6 +449,15 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         agentDb.runOpenClawAgentWriteTransaction((owner) => {
           for (let index = offset; index < Math.min(offset + 100, inventory.length); index++) {
             const [key, entry] = inventory[index]!;
+            if (options.transcriptLatePaint) {
+              const current = entries.readExactSessionEntryRow(owner, key)!;
+              entries.writeSessionEntry(
+                owner,
+                key,
+                { ...current.entry, category: groups[index % groups.length] },
+                { canonicalPreviousEntry: current.entry, canonicalPreviousRow: current.row },
+              );
+            }
             if (index % 10 === 0 && !targetKeys.has(key)) {
               continue;
             }
@@ -469,6 +494,28 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       admission: options.admission ? "signed-in" : "token",
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
+      ...(options.transcriptLatePaint
+        ? {
+            transcriptLatePaint: {
+              archivedTargets: true,
+              groups,
+              sectionOrder: [
+                "work",
+                "groups",
+                "ungrouped",
+                "catalog:fixture-a",
+                "catalog:fixture-b",
+                ...groups.map((name) => `category:${name}`),
+              ],
+              collapsedSections: groups.slice(0, 5).map((name) => `category:${name}`),
+              ownerFilter: "involving-me",
+              grouping: "category",
+              sort: "created",
+              emptyGroups: "always",
+              preview: false,
+            },
+          }
+        : {}),
     };
     writeFileSync(
       path.join(stateDir, "warm-reload-fixture.json"),
@@ -482,15 +529,25 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       chatPath: buildControlUiSessionPath({
         namespace: "chat",
         sessionKey: targets[0]!.key,
-        exactKey: true,
+        ...(options.transcriptLatePaint
+          ? { displayName: targets[0]!.label, shortIdLength: 32 }
+          : { exactKey: true }),
       })!,
       dashboardPath: buildControlUiSessionPath({
         namespace: "dashboard",
         sessionKey: targets[1]!.key,
-        exactKey: true,
+        ...(options.transcriptLatePaint
+          ? { displayName: targets[1]!.label, shortIdLength: 32 }
+          : { exactKey: true }),
       })!,
       fixtureSummary,
       async prepareGateway(request: RequestGateway) {
+        if (fixtureSummary.transcriptLatePaint) {
+          await request("sessions.groups.put", {
+            names: groups,
+            sectionOrder: fixtureSummary.transcriptLatePaint.sectionOrder,
+          });
+        }
         await request("board.widget.put", {
           sessionKey: targets[1]!.key,
           name: "warm-reload-verification",
