@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -52,29 +52,8 @@ export function ChatRunFailureNotice(props: {
       setPlacement(panelPlacement(anchor, panel.overlay.surface));
     }
   };
-  createEffect(
-    () => (open() ? line()?.closest(".chat-thread") : undefined),
-    (thread) => {
-      if (!thread) {
-        return undefined;
-      }
-      // Anchored to the line, the panel must not follow it over the composer or header.
-      const follow = () => {
-        const { top, bottom } = line()!.getBoundingClientRect();
-        const bounds = thread.getBoundingClientRect();
-        if (bottom <= bounds.top || top >= bounds.bottom) {
-          panel?.hide();
-        } else {
-          place();
-        }
-      };
-      const stops = [
-        listen(thread, "scroll", follow, { passive: true }),
-        listen(window, "resize", place),
-      ];
-      return () => stops.forEach((stop) => stop());
-    },
-  );
+  let stopFollowing: (() => void) | undefined;
+  onSettled(() => () => stopFollowing?.());
   return (
     <openclaw-chat-run-failure-notice style={{ display: "contents" }}>
       <div class="chat-run-failure" role="status" data-placement={placement()} ref={setLine}>
@@ -106,8 +85,29 @@ export function ChatRunFailureNotice(props: {
             panel = handle;
           }}
           onOpenChange={(next) => {
+            stopFollowing?.();
+            stopFollowing = undefined;
             if (next) {
               place();
+              const initialAnchor = line();
+              const thread = initialAnchor?.closest(".chat-thread");
+              if (initialAnchor && thread) {
+                // The accepted overlay lifetime owns following its transcript anchor.
+                const follow = () => {
+                  const { top, bottom } = initialAnchor.getBoundingClientRect();
+                  const bounds = thread.getBoundingClientRect();
+                  if (bottom <= bounds.top || top >= bounds.bottom) {
+                    panel?.hide();
+                  } else {
+                    place();
+                  }
+                };
+                const stops = [
+                  listen(thread, "scroll", follow, { passive: true }),
+                  listen(window, "resize", place),
+                ];
+                stopFollowing = () => stops.forEach((stop) => stop());
+              }
             }
             setOpen(next);
           }}
