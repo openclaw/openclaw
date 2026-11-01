@@ -4,7 +4,6 @@ import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-met
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { projectChatWorkContextForDisplay } from "../chat/work-context.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
-export { stripEnvelope } from "../shared/chat-envelope.js";
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
   // Sender labels can be explicit fields or embedded in text/envelope content.

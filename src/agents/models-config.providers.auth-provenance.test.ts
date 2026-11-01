@@ -12,7 +12,9 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
@@ -78,6 +80,7 @@ describe("models-config provider auth provenance", () => {
     requestedProvider: string,
     refSource: "store" | "env",
   ) {
+    prepareSharedAuthStoreOwnershipForNative();
     const { resolveImplicitProviders } = await import("./models-config.providers.implicit.js");
     const { planOpenClawModelsJson } = await import("./models-config.plan.js");
     const { clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
@@ -447,22 +450,19 @@ describe("models-config provider auth provenance", () => {
         refresh: "must-not-refresh",
         expires: 1,
       };
-      const resolveProfile = vi.spyOn(
+      using resolveProfile = vi.spyOn(
         await import("./auth-profiles/oauth.js"),
         "resolveApiKeyForProfile",
       );
-      try {
-        await fixture.discover();
-        await fixture.plan(configWithKey(configRef));
-        expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
-        expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
-          "unrelated:oauth",
-        );
-        expect(fixture.errors).toEqual([]);
-        expect(fixture.outcomes).toEqual([]);
-      } finally {
-        resolveProfile.mockRestore();
-      }
+
+      await fixture.discover();
+      await fixture.plan(configWithKey(configRef));
+      expect(fixture.authorization).toEqual(["Bearer ambient-key", "Bearer ambient-key"]);
+      expect(resolveProfile.mock.calls.map(([params]) => params.profileId)).not.toContain(
+        "unrelated:oauth",
+      );
+      expect(fixture.errors).toEqual([]);
+      expect(fixture.outcomes).toEqual([]);
     });
   });
 
@@ -536,11 +536,184 @@ describe("models-config provider auth provenance", () => {
   const configRef = { source: "store", provider: "default", id: "CONFIG_KEY" } as const;
   const configWithKey = (
     apiKey: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["apiKey"],
-  ): OpenClawConfig => ({
-    models: {
-      providers: { openai: { baseUrl: "https://catalog.example.test/v1", apiKey, models: [] } },
+  ): OpenClawConfig => configFor("openai", "https://catalog.example.test/v1", { apiKey });
+
+  describe.each(["resolveProviderApiKey", "resolveProviderAuth"] as const)(
+    "%s configured profile references",
+    (callback) => {
+      it("uses the pinned credential instead of the first ordered profile", async () => {
+        await withDiscoveryFixture("api_key", callback, async (fixture) => {
+          fixture.store.profiles = {
+            "openai:other": createApiKeyCredential("openai", "other-profile-key"),
+            [fixture.profileId]: createApiKeyCredential("openai", "pinned-profile-key"),
+          };
+          fixture.store.order = { openai: ["openai:other", fixture.profileId] };
+
+          await fixture.discover(configWithKey(fixture.profileId));
+
+          expect(fixture.authorization).toEqual(["Bearer pinned-profile-key"]);
+          expect(fixture.authResults).toEqual([
+            expect.objectContaining({
+              profileId: fixture.profileId,
+              discoveryApiKey: "pinned-profile-key",
+            }),
+          ]);
+          expect(fixture.errors).toEqual([]);
+        });
+      });
+
+      it.each([
+        {
+          name: "another provider",
+          credential: createApiKeyCredential("anthropic", "wrong-provider-key"),
+        },
+        {
+          name: "OAuth",
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access: "wrong-oauth-key",
+            refresh: "unused-refresh",
+            expires: 4_102_444_800_000,
+          },
+        },
+        {
+          name: "an empty key",
+          credential: createApiKeyCredential("openai", ""),
+        },
+        {
+          name: "an expired token",
+          credential: { type: "token", provider: "openai", token: "expired-key", expires: 1 },
+        },
+        {
+          name: "an inactive setup replacement",
+          credential: {
+            ...createApiKeyCredential("openai", "inactive-replacement-key"),
+            setup: { replacement: true, modelRef: "openai/proof-model", configJson: "{}" },
+          },
+        },
+      ] satisfies Array<{ name: string; credential: AuthProfileCredential }>)(
+        "fails closed when the pinned profile contains $name",
+        async ({ credential }) => {
+          await withDiscoveryFixture("api_key", callback, async (fixture) => {
+            fixture.store.profiles = {
+              "openai:other": createApiKeyCredential("openai", "must-not-fall-back"),
+              [fixture.profileId]: credential,
+            };
+            fixture.store.order = { openai: ["openai:other", fixture.profileId] };
+
+            await fixture.discover(configWithKey(fixture.profileId));
+
+            expect(fixture.authorization).toEqual([]);
+            expect(fixture.errors).toHaveLength(1);
+            expect(fixture.errors[0]).toBeInstanceOf(Error);
+            expect(fixture.authResults).toEqual([]);
+          });
+        },
+      );
+
+      it.each([
+        { provider: "anthropic", mode: "api_key" },
+        { provider: "openai", mode: "oauth" },
+      ] as const)("rejects an incompatible configured profile %j", async (profileConfig) => {
+        await withDiscoveryFixture("api_key", callback, async (fixture) => {
+          fixture.store.profiles[fixture.profileId] = createApiKeyCredential(
+            "openai",
+            "must-not-use-incompatible-key",
+          );
+          await fixture.discover({
+            ...configWithKey(fixture.profileId),
+            auth: { profiles: { [fixture.profileId]: profileConfig } },
+          });
+
+          expect(fixture.authorization).toEqual([]);
+          expect(fixture.errors).toHaveLength(1);
+          expect(fixture.authResults).toEqual([]);
+        });
+      });
+
+      it("keeps an unknown profile-shaped literal as the actual request key", async () => {
+        await withDiscoveryFixture("api_key", callback, async (fixture) => {
+          fixture.store.profiles = {};
+
+          await fixture.discover(configWithKey("openai:not-a-stored-profile"));
+
+          expect(fixture.authorization).toEqual(["Bearer openai:not-a-stored-profile"]);
+          expect(fixture.errors).toEqual([]);
+        });
+      });
+
+      it("keeps materialized SecretRef bytes opaque even when profile-shaped", async () => {
+        await withDiscoveryFixture("api_key", callback, async (fixture) => {
+          const value = "anthropic:stored";
+          fixture.store.profiles = {
+            [value]: createApiKeyCredential("anthropic", "must-not-use-profile-key"),
+          };
+
+          await fixture.plan(configWithKey(configRef), configWithKey(value));
+
+          expect(fixture.authorization).toEqual([`Bearer ${value}`]);
+          expect(fixture.authResults).toEqual([
+            expect.objectContaining({ apiKey: NON_ENV_SECRETREF_MARKER, discoveryApiKey: value }),
+          ]);
+          expect(fixture.errors).toEqual([]);
+        });
+      });
     },
+  );
+
+  it("discovers with the configured API key instead of another saved or ambient account", async () => {
+    await withDiscoveryFixture("api_key", "resolveProviderAuth", async (fixture) => {
+      fixture.env.OPENAI_API_KEY = "unselected-ambient-key";
+      fixture.store.profiles[fixture.profileId] = createApiKeyCredential(
+        "openai",
+        "unselected-profile-key",
+      );
+      const cfg = configWithKey("selected-config-key");
+      cfg.models!.providers!.openai!.auth = "api-key";
+      await fixture.discover(cfg);
+      expect(fixture.authorization).toEqual(["Bearer selected-config-key"]);
+      expect(fixture.authResults).toEqual([
+        expect.objectContaining({ discoveryApiKey: "selected-config-key", mode: "api_key" }),
+      ]);
+      expect(fixture.authResults[0]).not.toHaveProperty("profileId");
+      expect(fixture.errors).toEqual([]);
+    });
   });
+
+  it("does not switch profiles when the configured full-auth profile is excluded", () => {
+    const profileId = "openai:pinned";
+    const auth = createProviderAuthResolver(
+      {},
+      createAuthProfileStoreFixture({
+        [profileId]: createApiKeyCredential("openai", "pinned-profile-key"),
+        "openai:other": createApiKeyCredential("openai", "must-not-fall-back"),
+      }),
+      configWithKey(profileId),
+    );
+
+    expect(auth("openai", { excludeProfileIds: [profileId] })).toEqual({
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    });
+  });
+
+  it("keeps ambient API-key precedence over a configured profile reference", async () => {
+    await withDiscoveryFixture("api_key", "resolveProviderApiKey", async (fixture) => {
+      fixture.env.OPENAI_API_KEY = "ambient-key";
+      fixture.store.profiles[fixture.profileId] = createApiKeyCredential(
+        "openai",
+        "unselected-profile-key",
+      );
+
+      await fixture.discover(configWithKey(fixture.profileId));
+
+      expect(fixture.authorization).toEqual(["Bearer ambient-key"]);
+      expect(fixture.errors).toEqual([]);
+    });
+  });
+
   it("keeps marker-shaped prepared config Ref bytes opaque through resolveProviderAuth", async () => {
     const value = "secretref-managed";
     await withDiscoveryFixture(
@@ -761,19 +934,11 @@ describe("models-config catalog runtime headers", () => {
 
   it("keeps unresolved catalog headers fail-closed", async () => {
     const { normalizeResolvedSecretInputString } = await import("../config/types.secrets.js");
-    const config = {
-      models: {
-        providers: {
-          "catalog-fixture": {
-            baseUrl: "https://catalog.example/v1",
-            headers: {
-              "X-Catalog-Token": ref("CATALOG_TOP_TOKEN"),
-            },
-            models: [],
-          },
-        },
+    const config = configFor("catalog-fixture", "https://catalog.example/v1", {
+      headers: {
+        "X-Catalog-Token": ref("CATALOG_TOP_TOKEN"),
       },
-    } satisfies OpenClawConfig;
+    });
     discovery.providers = [
       {
         id: "catalog-fixture",

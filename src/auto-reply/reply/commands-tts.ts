@@ -2,33 +2,28 @@
 import crypto from "node:crypto";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import {
-  getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsPersona,
-  getTtsProvider,
+  getTtsProviderAsync,
   isSummarizationEnabled,
   isTtsEnabled,
-  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
   listTtsPersonas,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
+  resolveTtsPrefsPathAsync,
   setLastTtsAttempt,
-  setSummarizationEnabled,
-  setTtsEnabled,
-  setTtsMaxLength,
-  setTtsPersona,
-  setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
-import { isSilentReplyPayloadText } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
   commandReply as stopWithText,
@@ -82,6 +77,21 @@ function ttsUsage(): CommandHandlerResult {
       `/tts latest\n` +
       `/tts audio Hello, this is a test!`,
   );
+}
+
+async function updateTtsPreference(
+  update: () => Promise<void>,
+  reply: string,
+): Promise<CommandHandlerResult> {
+  try {
+    await update();
+    return stopWithText(reply);
+  } catch (error) {
+    log.warn(`TTS preference update failed: ${formatErrorMessage(error)}`);
+    return stopWithText(
+      "⚠️ Couldn't update TTS preferences. Repair the preference file or its permissions, then try again.",
+    );
+  }
 }
 
 async function buildTtsAudioReply(params: {
@@ -185,7 +195,7 @@ async function handleTtsLatestAction(
     }),
   });
   const latestText = latest?.text.trim();
-  if (!latestText || isSilentReplyPayloadText(latestText)) {
+  if (!latestText) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");
   }
   const hash = crypto.createHash("sha256").update(latestText).digest("hex");
@@ -218,15 +228,15 @@ async function handleTtsLatestAction(
   return stopWithText(audio.reply);
 }
 
-function handleTtsStatusAction(
+async function handleTtsStatusAction(
   params: TtsCommandParams,
   config: ReturnType<typeof resolveTtsConfig>,
   prefsPath: string,
-): CommandHandlerResult {
+): Promise<CommandHandlerResult> {
   const enabled = isTtsEnabled(config, prefsPath);
-  const provider = getTtsProvider(config, prefsPath);
+  const provider = await getTtsProviderAsync(config, prefsPath);
   const persona = getTtsPersona(config, prefsPath);
-  const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
+  const hasKey = await isTtsProviderConfiguredAsync(config, provider, params.cfg);
   const maxLength = getTtsMaxLength(prefsPath);
   const summarize = isSummarizationEnabled(prefsPath);
   const last = getLastTtsAttempt();
@@ -290,7 +300,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       channelId: params.command.channel,
       accountId,
     });
-    const prefsPath = resolveTtsPrefsPath(config);
+    const prefsPath = await resolveTtsPrefsPathAsync(config);
     const { action, args } = parsed;
 
     if (action === "help") {
@@ -299,8 +309,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
 
     if (action === "on" || action === "off") {
       const enabled = action === "on";
-      setTtsEnabled(prefsPath, enabled);
-      return stopWithText(enabled ? "🔊 TTS enabled." : "🔇 TTS disabled.");
+      return updateTtsPreference(
+        () => updateTtsPrefsAsync(prefsPath, { auto: enabled ? "always" : "off" }),
+        enabled ? "🔊 TTS enabled." : "🔇 TTS disabled.",
+      );
     }
 
     if (action === "chat") {
@@ -332,30 +344,19 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
     }
 
     if (action === "provider") {
-      const currentProvider = getTtsProvider(config, prefsPath);
+      const currentProvider = await getTtsProviderAsync(config, prefsPath);
       if (!args) {
         const providers = listSpeechProviders(params.cfg);
+        const providerStates = await Promise.all(
+          providers.map(
+            async (provider) =>
+              `${provider.label}: ${(await isTtsProviderConfiguredAsync(config, provider, params.cfg)) ? "✅" : "❌"}`,
+          ),
+        );
         return stopWithText(
           `🎙️ TTS provider\n` +
             `Primary: ${currentProvider}\n` +
-            providers
-              .map(
-                (provider) =>
-                  `${provider.label}: ${
-                    provider.isConfigured({
-                      cfg: params.cfg,
-                      providerConfig: getResolvedSpeechProviderConfig(
-                        config,
-                        provider.id,
-                        params.cfg,
-                      ),
-                      timeoutMs: config.timeoutMs,
-                    })
-                      ? "✅"
-                      : "❌"
-                  }`,
-              )
-              .join("\n") +
+            providerStates.join("\n") +
             `\nUsage: /tts provider <id>`,
         );
       }
@@ -367,8 +368,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       }
 
       const nextProvider = resolvedProvider.id;
-      setTtsProvider(prefsPath, nextProvider);
-      return stopWithText(`✅ TTS provider set to ${nextProvider}.`);
+      return updateTtsPreference(
+        () => updateTtsPrefsAsync(prefsPath, { provider: nextProvider }),
+        `✅ TTS provider set to ${nextProvider}.`,
+      );
     }
 
     if (action === "persona") {
@@ -394,8 +397,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
 
       const requested = args.toLowerCase();
       if (requested === "off" || requested === "none" || requested === "default") {
-        setTtsPersona(prefsPath, null);
-        return stopWithText("✅ TTS persona disabled.");
+        return updateTtsPreference(
+          () => updateTtsPrefsAsync(prefsPath, { persona: null }),
+          "✅ TTS persona disabled.",
+        );
       }
       const persona = personas.find((entry) => entry.id === requested);
       if (!persona) {
@@ -404,8 +409,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
             `Use /tts persona to list configured personas.`,
         );
       }
-      setTtsPersona(prefsPath, persona.id);
-      return stopWithText(`✅ TTS persona set to ${persona.id}.`);
+      return updateTtsPreference(
+        () => updateTtsPrefsAsync(prefsPath, { persona: persona.id }),
+        `✅ TTS persona set to ${persona.id}.`,
+      );
     }
 
     if (action === "limit") {
@@ -423,8 +430,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       if (!Number.isSafeInteger(next) || next < 100 || next > 4096) {
         return stopWithText("❌ Limit must be between 100 and 4096 characters.");
       }
-      setTtsMaxLength(prefsPath, next);
-      return stopWithText(`✅ TTS limit set to ${next} characters.`);
+      return updateTtsPreference(
+        () => updateTtsPrefsAsync(prefsPath, { maxLength: next }),
+        `✅ TTS limit set to ${next} characters.`,
+      );
     }
 
     if (action === "summary") {
@@ -443,8 +452,8 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       if (requested !== "on" && requested !== "off") {
         return ttsUsage();
       }
-      setSummarizationEnabled(prefsPath, requested === "on");
-      return stopWithText(
+      return updateTtsPreference(
+        () => updateTtsPrefsAsync(prefsPath, { summarize: requested === "on" }),
         requested === "on" ? "✅ TTS auto-summary enabled." : "❌ TTS auto-summary disabled.",
       );
     }

@@ -32,9 +32,9 @@ export function shouldAllowProviderOwnedThinkingReplay(params: {
 
 /**
  * Bedrock Converse still requires strict role alternation, so only the direct
- * Messages API keeps consecutive user turns separate under append-only replay.
+ * Messages API keeps consecutive turns separate under append-only replay.
  */
-export function shouldMergeConsecutiveUserTurns(
+export function shouldMergeConsecutiveTurns(
   policy: Pick<TranscriptPolicy, "appendOnlyRuntimeContext">,
   modelApi?: string | null,
 ): boolean {
@@ -88,7 +88,8 @@ function collectFutureToolResults(
       continue;
     }
     const role = (candidate as { role?: unknown }).role;
-    if (role === "assistant") {
+    // Text-only assistant interruptions do not own the following tool results.
+    if (candidate.role === "assistant" && extractToolCallsFromAssistant(candidate).length > 0) {
       break;
     }
     const content = (candidate as { content?: unknown }).content;
@@ -309,29 +310,21 @@ export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMes
   validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
 
 /**
- * Repair Anthropic tool-use/result pairing; user-turn merging stays optional
+ * Repair Anthropic tool-use/result pairing; turn merging stays optional
  * because prefix-bound signed replay must preserve the original turn bytes.
  */
 export function validateAnthropicTurns(
   messages: AgentMessage[],
-  options: { mergeConsecutiveUserTurns?: boolean } = {},
+  options: { mergeConsecutiveTurns?: boolean } = {},
 ): AgentMessage[] {
-  // Merge first so an injected assistant turn cannot hide the tool result that
-  // resolves the preceding signed tool call. Stripping first would destroy the
-  // active Anthropic tool-use turn before the adjacent turns can be repaired.
+  // Direct Messages accepts consecutive roles; merging rewrites signed prefix bytes.
+  if (options.mergeConsecutiveTurns === false) {
+    return stripDanglingAnthropicToolUses(messages);
+  }
   const mergedAssistant = validateTurnsWithConsecutiveMerge({
     messages,
     role: "assistant",
     merge: mergeConsecutiveAssistantTurns,
   });
-  const stripped = stripDanglingAnthropicToolUses(mergedAssistant);
-
-  // Merging user turns re-renders them as one multi-block message whose later
-  // blocks never carry their own timestamp stamp, so the bytes differ from the
-  // active turn that produced the following thinking signature. Prefix-bound
-  // replay keeps consecutive user turns separate; the Messages API accepts them.
-  if (options.mergeConsecutiveUserTurns === false) {
-    return stripped;
-  }
-  return mergeConsecutiveUserMessages(stripped);
+  return mergeConsecutiveUserMessages(stripDanglingAnthropicToolUses(mergedAssistant));
 }

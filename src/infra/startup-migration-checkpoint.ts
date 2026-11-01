@@ -1,7 +1,6 @@
 // Serializes Doctor repair and current-state startup writes in shared state.
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import type { DatabaseSync } from "node:sqlite";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
@@ -20,11 +19,13 @@ import {
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { VERSION } from "../version.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -52,7 +53,7 @@ export const STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS = 60_000;
 export type StartupMigrationLease = {
   /** Publication guards may already hold the SQLite writer, so this check must stay read-only. */
   assertOwned: () => void;
-  assertOwnedInTransaction: (database: DatabaseSync, params?: { nowMs?: number }) => void;
+  assertOwnedInTransaction: (database: EngineConnection, params?: { nowMs?: number }) => void;
   heartbeat: (params?: { nowMs?: number }) => void;
   release: () => void;
   readonly owner: string;
@@ -60,13 +61,12 @@ export type StartupMigrationLease = {
 
 type StartupMigrationLeaseParams = {
   env?: NodeJS.ProcessEnv;
-  nowMs?: number;
   owner?: string;
   /** Process id that owns the startup migration work. */
   ownerPid?: number;
 };
 
-type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"> & {
+type StartupMigrationLeaseWaitParams = StartupMigrationLeaseParams & {
   timeoutMs?: number;
   pollIntervalMs?: number;
   now?: () => number;
@@ -75,10 +75,11 @@ type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"
 };
 
 class StartupMigrationLeaseConflictError extends Error {}
+export class StartupMigrationLeaseLostError extends Error {}
 
 function writeStartupMigrationCheckpointDatabase<T>(
   env: NodeJS.ProcessEnv,
-  callback: (db: DatabaseSync) => T,
+  callback: (db: EngineConnection) => T,
 ): T {
   const databasePath = resolveOpenClawStateSqlitePath(env);
   return withOpenClawStateStartupMigrationCheckpointDatabase(
@@ -100,7 +101,7 @@ function writeStartupMigrationCheckpointDatabase<T>(
 
 function assertStartupMigrationLeaseOwned(expiresAt: number | undefined): void {
   if (expiresAt === undefined) {
-    throw new Error(
+    throw new StartupMigrationLeaseLostError(
       "OpenClaw startup migration lease was lost before startup migrations completed; retry so migrations can run under a fresh lease.",
     );
   }
@@ -157,13 +158,13 @@ function acquireStartupMigrationLease(
   return withOpenClawStateStartupMigrationCheckpointDatabase(
     (connection) => {
       // Integrity verification may outlast a lease; start its lifetime at the actual claim.
-      const admitted = { ...params, env, nowMs: now(), owner };
-      const nowMs = admitted.nowMs ?? Date.now();
-      const ownerPid = admitted.ownerPid ?? process.pid;
+      const nowMs = now();
+      const ownerPid = params.ownerPid ?? process.pid;
       const leaseOwner: StateLeaseProcessOwner = {
         pid: ownerPid,
         host: hostname(),
         startedAt: getFileLockProcessStartTime(ownerPid),
+        processNamespace: readGatewayLockProcessNamespace(),
       };
       const expiresAt = nowMs + STARTUP_MIGRATION_LEASE_TTL_MS;
       const identity = { ...STARTUP_MIGRATION_LEASE, owner };
@@ -271,7 +272,7 @@ export function acquireStartupMigrationLeaseWithWait(
 
 /** Unfinished owner work cannot retain an earlier successful aggregate checkpoint. */
 export function invalidateSuccessfulMigrationCheckpointsInTransaction(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): void {
   executeSqliteQuerySync(
     database,

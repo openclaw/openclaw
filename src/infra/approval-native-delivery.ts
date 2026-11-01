@@ -1,6 +1,6 @@
-// Native delivery contract for approval prompts and responses.
 import type {
   ChannelApprovalNativeAdapter,
+  ChannelApprovalNativeAdapterAsync,
   ChannelApprovalNativeSurface,
   ChannelApprovalNativeTarget,
 } from "../channels/plugins/approval-native.types.js";
@@ -32,7 +32,7 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   accountId?: string | null;
   approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
-  adapter?: ChannelApprovalNativeAdapter | null;
+  adapter?: ChannelApprovalNativeAdapter | ChannelApprovalNativeAdapterAsync | null;
 }): Promise<ChannelApprovalNativeDeliveryPlan> {
   const adapter = params.adapter;
   const emptyPlan: ChannelApprovalNativeDeliveryPlan = {
@@ -50,7 +50,7 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     approvalKind: params.approvalKind,
     request: params.request,
   });
-  const capabilities = adapter.describeDeliveryCapabilities(deliveryContext());
+  const capabilities = await adapter.describeDeliveryCapabilities(deliveryContext());
   if (!capabilities.enabled) {
     return emptyPlan;
   }

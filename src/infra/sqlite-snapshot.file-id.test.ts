@@ -141,7 +141,7 @@ it.each([
           })
         : publishVerifiedSqliteFile({
             sourcePath,
-            sourceIdentity: await fs.lstat(sourcePath),
+            sourceIdentity: await fs.lstat(sourcePath, { bigint: true }),
             targetPath,
             expectedContent: content,
             beforePublish: async () => {
@@ -238,15 +238,16 @@ it.each([
         if (mode === "publication") {
           const lstat = fsSync.lstatSync;
           vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-            if (args[1]?.bigint || String(args[0]) !== targetPath) {
+            if (String(args[0]) !== targetPath) {
               return lstat(...args);
             }
-            const stat =
-              args[1]?.throwIfNoEntry === false
-                ? lstat(args[0], { throwIfNoEntry: false })
-                : lstat(args[0]);
+            const stat = lstat(...args);
             if (stat) {
-              stat.ctimeMs += ++observations * 1_000;
+              const drift = ++observations * 1_000;
+              stat.ctimeMs =
+                typeof stat.ctimeMs === "bigint"
+                  ? stat.ctimeMs + BigInt(drift)
+                  : stat.ctimeMs + drift;
               stat.birthtimeMs = stat.ctimeMs;
             }
             return stat;

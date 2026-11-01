@@ -1,11 +1,21 @@
 import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { Model } from "../llm/types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ProviderServingContextLimits } from "./model-serving-context.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
 import type {
+  PreparedAccountCatalogAccess,
+  PreparedModelCatalogAuth,
+  PreparedModelRuntimeAuth,
+  PreparedModelRuntimeAuthScope,
+} from "./prepared-model-runtime-auth.js";
+import type {
   PreparedConfiguredRuntimeModel,
+  PreparedModelCatalogInventory,
+  PreparedModelCatalogRefreshOptions,
+  PreparedNativeModelSelection,
   PreparedRuntimeCapabilityModel,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
@@ -35,10 +45,11 @@ export type PreparedModelRuntimeCatalogFacts = {
   templateModelRegistry: ModelRegistry;
   modelCatalog: ModelCatalogSnapshot;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-  inlineProviderModels: readonly InlineModelEntry[];
 };
 
 export type PreparedModelRuntimeCatalogSource = Readonly<{
+  providerExpiries?: Map<string, number>;
+  servingLimits?: ProviderServingContextLimits;
   modelsJsonContents: string | null;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
   providerOutcomes?: readonly ProviderCatalogOutcome[];
@@ -51,8 +62,32 @@ export type PreparedModelRuntimeCatalogAccessParams = {
   catalogFacts: PreparedModelRuntimeCatalogFacts;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   isCurrent: () => boolean;
-  isPublished?: () => boolean;
   retirementSignal: AbortSignal;
   inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
     Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
 };
+
+export type PreparedModelCatalogCandidate = {
+  inventory: PreparedModelCatalogInventory | undefined;
+  configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"];
+  nativeCatalogAcquired: boolean;
+};
+
+export type PreparedModelRuntimeCatalogAccess = Readonly<{
+  initialAuth: PreparedModelCatalogAuth;
+  readUsage: (store: AuthProfileStore) => AuthProfileStore;
+  accountCatalog?: PreparedAccountCatalogAccess;
+  isCurrent: () => boolean;
+  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
+  readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
+  recheckNativeLogin: (options?: { force?: boolean }) => void | Promise<void>;
+  refreshExpiredModelCatalog: () => void;
+  readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
+  loadFullModelCatalog: (
+    options?: PreparedModelCatalogRefreshOptions,
+  ) => Promise<ModelCatalogSnapshot>;
+  loadNativeModelCatalog: (
+    selection?: PreparedNativeModelSelection,
+  ) => Promise<ModelCatalogSnapshot>;
+  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
+}>;

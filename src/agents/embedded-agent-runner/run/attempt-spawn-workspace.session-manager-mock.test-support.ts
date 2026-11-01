@@ -2,6 +2,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Mock } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
@@ -12,6 +13,7 @@ export type SessionManagerMocks = {
   getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
+  hasLoadedTranscriptTail: () => boolean;
   getEntry: UnknownMock;
   getEntries: UnknownMock;
   getBranch: UnknownMock;
@@ -30,7 +32,7 @@ export type SessionManagerMocks = {
   flushPendingToolResultsAsync: UnknownMock;
   clearPendingToolResults: UnknownMock;
   reloadPersistedTranscriptAsync: UnknownMock;
-  clearNextUserMessagePersistenceSuppression: UnknownMock;
+  setNextUserMessagePersistence: UnknownMock;
   removeTrailingEntriesAsync: UnknownMock;
 };
 
@@ -83,8 +85,12 @@ export function resetSessionManagerMocks(
   sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   sessionManager.branchAsync.mockReset();
   sessionManager.resetLeafAsync.mockReset();
-  sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
+  sessionManager.setNextUserMessagePersistence.mockReset();
   sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages });
+  // Orphan repair reads the model window; it follows per-test buildSessionContext overrides.
+  Object.assign(sessionManager, {
+    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+  });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();
   sessionManager.appendCustomEntryAsync.mockReset();
@@ -93,4 +99,9 @@ export function resetSessionManagerMocks(
   sessionManager.appendLabelChangeAsync.mockReset();
   sessionManager.flushPendingPersistence.mockReset();
   sessionManager.reloadPersistedTranscriptAsync.mockReset();
+  // The fake has no persistence target, so like the real manager its initial model
+  // context falls back to buildSessionContext(), keeping repair fixtures authoritative.
+  Object.assign(sessionManager, {
+    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+  });
 }

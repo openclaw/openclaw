@@ -133,15 +133,6 @@ export async function readImmutableService(
   return { command, properties, target };
 }
 
-export async function verifyImmutableService(
-  service: ImmutableInstallDescriptor["service"],
-  root: string,
-  generationPath: string,
-  runtimePath: string,
-): Promise<void> {
-  await readImmutableService(service, root, generationPath, runtimePath);
-}
-
 export type ImmutableServiceObservation = {
   phase: "running" | "stopped" | "starting";
   definitionDigest: string;
@@ -356,7 +347,7 @@ export async function controlImmutableService(
   params: ImmutableServiceAction,
 ) {
   const { descriptor, expected } = params;
-  if (descriptor.version !== 2 || descriptor.activationEnabled !== true) {
+  if (descriptor.version === 1 || descriptor.activationEnabled !== true) {
     throw new Error("Immutable service activation requires explicitly enabled adoption.");
   }
   await withGatewayServiceOperationLock(expected.state.env, async (assertNative) => {

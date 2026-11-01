@@ -1,6 +1,7 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
@@ -29,7 +30,6 @@ import type {
   OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
-import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type MessageActionGateway = Omit<
@@ -39,7 +39,6 @@ export type MessageActionGateway = Omit<
   resolveAgentRuntimeIdentityToken?: (
     context?: OutboundGatewayRequestContext,
   ) => Promise<string | undefined>;
-  terminalSourceReplyReceiptOwner?: "caller";
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -78,6 +77,8 @@ export type MessageActionInput = Pick<
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   workspaceDir?: string;
+  /** @internal Captured creation readiness; never persisted or sent to channel adapters. */
+  workspaceReadiness?: AgentWorkspaceReadiness;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**
@@ -91,15 +92,13 @@ export type MessageActionInput = Pick<
   workspaceMediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   sessionKey?: string;
-  /** @internal Durable session key for source-reply transcript and receipt state. */
+  /** @internal Durable session key for source-reply transcript mirrors. */
   sourceReplySessionKey?: string;
   agentId?: string;
-  /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
-  suppressTranscriptMirror?: boolean;
-  /** @internal Explicit durable transcript destination owned by the caller. */
-  transcriptMirror?: OutboundMirror;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
+  /** @internal The delegating client records destination history for this send. */
+  callerRecordsDestinationHistory?: boolean;
   /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
   forceCoreDelivery?: boolean;
   /** @internal Fail before platform I/O unless the core delivery queue persisted the intent. */
@@ -148,6 +147,8 @@ export type MessageActionResult =
       channel: ChannelId;
       action: "send";
       to: string;
+      /** Account selected by the message routing owner, not the original tool arguments. */
+      accountId?: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
       normalization?: MessageActionNormalization;

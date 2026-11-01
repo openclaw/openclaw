@@ -35,7 +35,11 @@ vi.mock("../cli/gateway-rpc.js", async (importOriginal) => {
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
+  return {
+    ...actual,
+    ...createTestConfigReadMocks(configMocks, "getRuntimeConfig"),
+  };
 });
 
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
@@ -66,6 +70,26 @@ async function pushReadyRepository(): Promise<string> {
 }
 
 describe("scheduled backups", () => {
+  it("escapes terminal controls in the acknowledgement while preserving scheduled argv", async () => {
+    gatewayRpc.call.mockResolvedValue({ created: true, job: { id: "backup-job" } });
+    const runtime = createTestRuntime();
+    const repository = "/tmp/café\u001b[31m\nforged\tend\rrow\u0007";
+    await backupEnableCommand(runtime, { repository, every: "6h" });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Scheduled Git backups enabled: every 6h to /tmp/café\\nforged\\tend\\rrow",
+    );
+    expect(gatewayRpc.call).toHaveBeenCalledWith(
+      "cron.add",
+      expect.anything(),
+      expect.objectContaining({
+        payload: {
+          kind: "command",
+          argv: ["openclaw", "backup", "git", "create", "--repository", repository, "--all"],
+        },
+      }),
+    );
+  });
+
   beforeEach(() => {
     gatewayRpc.call.mockReset();
     gatewayRpc.isImplicitLocalTarget.mockReset().mockResolvedValue(true);
@@ -359,7 +383,6 @@ describe("scheduled backups", () => {
         cronEnabled: false,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: runJob,
         runCommandJob: runJob,
       });

@@ -1,13 +1,21 @@
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseOutputItem,
   ResponseOutputMessage,
-  ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost } from "../model-utils.js";
+import {
+  extendResponsesMessageText,
+  renderResponsesMessageText,
+  responsesTextSignature,
+  withResponsesTextSources,
+  type ResponsesMessageText,
+} from "../providers/openai-responses-message-text.js";
 import { resolveResponsesMessageSnapshotCollapse } from "../providers/openai-responses-stream-compat.js";
 import {
+  applyResponsesCacheWritePricing,
   mapResponsesTerminalUsage,
   readResponsesReasoningTokens,
   resolveResponsesTerminalStopReason,
@@ -34,7 +42,7 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
-import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
+import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
 import type { ResponsesStreamOptions } from "./openai-responses-stream-types-internal.js";
 import {
@@ -47,23 +55,11 @@ export type TextBlockReference = {
   block: TextContent;
   index: number;
   phase: TextSignatureV1["phase"] | undefined;
+  rendered: ResponsesMessageText;
 };
 export type ResponsesThinkingBlock = ThinkingContent & {
   [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
-
-type TerminalOutput = AssistantMessage & {
-  usage: Usage & { reasoningTokens?: number };
-};
-type TerminalOptions = Pick<
-  ResponsesStreamOptions,
-  | "serviceTier"
-  | "onServiceTier"
-  | "resolveServiceTier"
-  | "applyServiceTierPricing"
-  | "reasoningReplayMetadata"
-  | "resolveResponseModel"
->;
 
 function splitToolCallId(id: string): [string, string | undefined] {
   const separator = id.indexOf("|");
@@ -111,10 +107,21 @@ export function resolveCompletedResponsesToolCall(
 }
 
 export function createResponsesTerminalController(params: {
-  output: TerminalOutput;
+  output: AssistantMessage & {
+    usage: Usage & { reasoningTokens?: number };
+  };
   stream: ResponsesEventSink;
   model: Model;
-  options?: TerminalOptions;
+  options?: Pick<
+    ResponsesStreamOptions,
+    | "serviceTier"
+    | "promptCacheTtl"
+    | "onServiceTier"
+    | "resolveServiceTier"
+    | "applyServiceTierPricing"
+    | "reasoningReplayMetadata"
+    | "resolveResponseModel"
+  >;
   outputs: ResponsesOutputTracker;
   toolCalls: Pick<
     ReturnType<typeof createResponsesToolCallTracker<ResponsesToolCallState & { block: ToolCall }>>,
@@ -125,6 +132,22 @@ export function createResponsesTerminalController(params: {
 }) {
   const { output, stream, model, options } = params;
   const blocks = output.content;
+  const pendingReasoning = new Set<number>();
+  const completedText = new Map<number, ResponsesMessageText>();
+  const recordCompletedText = (index: number, text: ResponsesMessageText) => {
+    completedText.set(index, text);
+  };
+  const deferredToolCompletions: Extract<AssistantMessageEvent, { type: "toolcall_end" }>[] = [];
+  const recordPendingReasoning = (contentIndex: number) => {
+    pendingReasoning.add(contentIndex);
+  };
+  const releaseDeferredToolCompletions = () => {
+    for (const event of deferredToolCompletions) {
+      stream.push(event);
+    }
+    deferredToolCompletions.length = 0;
+    pendingReasoning.clear();
+  };
   let rejectedToolCallId: string | undefined;
   const recordIncompleteToolCall = (
     event: { output_index?: unknown },
@@ -134,40 +157,36 @@ export function createResponsesTerminalController(params: {
     rejectedToolCallId =
       streamed?.block.id ?? (item.call_id ? resolveResponsesToolCallId(item) : undefined);
   };
-  const backfillReasoning = (items: ResponseOutputItem[]) => {
+  const settleReasoning = (items: ResponseOutputItem[]) => {
     for (const [outputIndex, item] of items.entries()) {
-      if (item.type !== "reasoning" || !item.encrypted_content) {
+      if (item.type !== "reasoning") {
         continue;
       }
       const tracked = params.outputs.get(item, outputIndex);
       const block = tracked && blocks[tracked.contentIndex];
-      if (block?.type !== "thinking" || !block.thinkingSignature) {
+      if (block?.type !== "thinking") {
         continue;
       }
-      const stored = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-      if (!stored.encrypted_content) {
-        block.thinkingSignature = JSON.stringify({
-          ...stored,
-          encrypted_content: item.encrypted_content,
-        });
-      }
-      if (options?.reasoningReplayMetadata) {
+      // Continuation retains this terminal item, whose ciphertext can differ from item.done.
+      block.thinkingSignature = JSON.stringify(
+        normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+      );
+      if (item.encrypted_content && options?.reasoningReplayMetadata) {
         Object.assign(block, {
           [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]: options.reasoningReplayMetadata,
         });
       }
     }
   };
-  const appendText = (item: ResponseOutputMessage, initialIndex?: number): number | undefined => {
+  const appendText = (
+    item: ResponseOutputMessage,
+    initialIndex: number | undefined,
+    initialRender: ResponsesMessageText,
+    preserveSignature = false,
+  ): number | undefined => {
+    let rendered = initialRender;
     let contentIndex = initialIndex;
-    const text = (Array.isArray(item.content) ? item.content : [])
-      .map((part) => {
-        const content = part as { type: string; text?: string; refusal?: string };
-        return content.type === "output_text" || content.type === "text"
-          ? (content.text ?? "")
-          : (content.refusal ?? "");
-      })
-      .join("");
+    let text = rendered.text;
     const block = contentIndex === undefined ? undefined : blocks[contentIndex];
     const started = block?.type === "text" ? block : undefined;
     if (!text && !started) {
@@ -177,8 +196,10 @@ export function createResponsesTerminalController(params: {
     if (started && contentIndex !== undefined) {
       const previousText = started.text;
       started.text = text;
-      started.textSignature = encodeTextSignatureV1(item.id, phase);
-      params.setLastTextBlock({ block: started, index: contentIndex, phase });
+      started.textSignature = preserveSignature
+        ? withResponsesTextSources(started.textSignature, rendered)
+        : responsesTextSignature(item.id, phase, rendered);
+      params.setLastTextBlock({ block: started, index: contentIndex, phase, rendered });
       if (text.startsWith(previousText)) {
         const delta = text.slice(previousText.length);
         if (delta) {
@@ -188,26 +209,30 @@ export function createResponsesTerminalController(params: {
     } else {
       const previous = params.getLastTextBlock();
       const collapse = resolveResponsesMessageSnapshotCollapse({
-        prior: previous && { text: previous.block.text, phase: previous.phase },
-        nextText: text,
+        prior: previous && { text: previous.rendered.prose, phase: previous.phase },
+        nextText: rendered.prose,
         nextPhase: phase,
       });
       if (collapse.kind === "extend" && previous) {
-        previous.block.text = collapse.text;
-        previous.block.textSignature = encodeTextSignatureV1(item.id, phase);
+        rendered = extendResponsesMessageText(rendered, previous.rendered);
+        text = rendered.text;
+        previous.rendered = rendered;
+        previous.block.text = text;
+        previous.block.textSignature = responsesTextSignature(item.id, phase, rendered);
         contentIndex = previous.index;
       } else {
         const newBlock: TextContent = {
           type: "text",
           text,
-          textSignature: encodeTextSignatureV1(item.id, phase),
+          textSignature: responsesTextSignature(item.id, phase, rendered),
         };
         blocks.push(newBlock);
         contentIndex = blocks.length - 1;
-        params.setLastTextBlock({ block: newBlock, index: contentIndex, phase });
+        params.setLastTextBlock({ block: newBlock, index: contentIndex, phase, rendered });
         stream.push({ type: "text_start", contentIndex, partial: output });
       }
     }
+    recordCompletedText(contentIndex, rendered);
     stream.push({ type: "text_end", contentIndex, content: text, partial: output });
     return contentIndex;
   };
@@ -220,7 +245,7 @@ export function createResponsesTerminalController(params: {
     // Complete the same public block with authoritative identities and arguments;
     // scratch JSON must never survive into transcript replay.
     const completed = { id: resolveResponsesToolCallId(item, started?.block.id), ...validated };
-    const toolCall: ToolCall & { partialJson?: string } = started
+    const toolCall: ToolCall = started
       ? Object.assign(started.block, completed)
       : { type: "toolCall", ...completed };
     delete toolCall.partialJson;
@@ -230,7 +255,22 @@ export function createResponsesTerminalController(params: {
       stream.push({ type: "toolcall_start", contentIndex, partial: output });
     }
     params.outputs.set(item, contentIndex, outputIndex, true);
-    stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+    const completion: Extract<AssistantMessageEvent, { type: "toolcall_end" }> = {
+      type: "toolcall_end",
+      contentIndex,
+      toolCall,
+      partial: output,
+    };
+    if (toolCall.async) {
+      for (const index of pendingReasoning) {
+        if (index < contentIndex) {
+          // Persistence freezes async prefixes; wait for the terminal reasoning snapshot.
+          deferredToolCompletions.push(completion);
+          return;
+        }
+      }
+    }
+    stream.push(completion);
   };
   const recoverTerminalOutput = (
     items: ResponseOutputItem[],
@@ -263,11 +303,42 @@ export function createResponsesTerminalController(params: {
       if (item.type === "message") {
         const tracked = params.outputs.get(item, terminalIndex);
         if (tracked?.completed) {
+          const block = blocks[tracked.contentIndex];
+          const previous = completedText.get(tracked.contentIndex);
+          if (block?.type === "text" && previous && tracked.completedProse !== undefined) {
+            const incoming = renderResponsesMessageText(item.content ?? []);
+            if (!incoming.prose.startsWith(tracked.completedProse)) {
+              continue;
+            }
+            // Earlier cumulative items may add sources without replacing the newest
+            // item's prose or replay identity in their shared public block.
+            const rendered = extendResponsesMessageText(
+              {
+                prose: previous.prose.startsWith(incoming.prose) ? previous.prose : incoming.prose,
+                citations: incoming.citations,
+              },
+              previous,
+            );
+            if (rendered.text !== block.text) {
+              const cursor = params.getLastTextBlock();
+              appendText(
+                item,
+                tracked.contentIndex,
+                rendered,
+                tracked.completedProse !== previous.prose,
+              );
+              if (cursor?.index !== tracked.contentIndex) {
+                // Enriching earlier output must not reopen its sequential collapse boundary.
+                params.setLastTextBlock(cursor);
+              }
+            }
+          }
           continue;
         }
-        const appendedIndex = appendText(item, tracked?.contentIndex);
+        const rendered = renderResponsesMessageText(item.content ?? []);
+        const appendedIndex = appendText(item, tracked?.contentIndex, rendered);
         if (appendedIndex !== undefined) {
-          params.outputs.set(item, appendedIndex, terminalIndex, true);
+          params.outputs.set(item, appendedIndex, terminalIndex, true, rendered.prose);
         }
       } else {
         params.setLastTextBlock(null);
@@ -311,7 +382,19 @@ export function createResponsesTerminalController(params: {
     >["response"],
     responseId = response.id,
   ) => {
-    options?.onServiceTier?.(response.service_tier);
+    options?.onServiceTier?.(response.service_tier, response);
+    // The provider may omit access-program reporting. Never fill it from the request.
+    const cyber = asOptionalRecord(asOptionalRecord(response)?.access_programs)?.cyber;
+    if (
+      cyber === null ||
+      cyber === "standard" ||
+      cyber === "daybreak_blue" ||
+      cyber === "daybreak_red"
+    ) {
+      output.responseAccessProgram = cyber;
+    } else {
+      delete output.responseAccessProgram;
+    }
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined
@@ -322,10 +405,14 @@ export function createResponsesTerminalController(params: {
       output.usage = {
         ...usage,
         ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+        usageReport: { state: "available" },
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       };
+    } else {
+      output.usage.usageReport = { state: "unavailable" };
     }
     calculateCost(model, output.usage);
+    applyResponsesCacheWritePricing(output.usage, response.usage, options?.promptCacheTtl);
     if (options?.applyServiceTierPricing) {
       const tier = options.resolveServiceTier
         ? options.resolveServiceTier(response.service_tier, options.serviceTier)
@@ -339,9 +426,9 @@ export function createResponsesTerminalController(params: {
       { type: "response.completed" | "response.incomplete" }
     >["response"] & { end_turn?: unknown },
     terminalEventType: "response.completed" | "response.incomplete",
-    hasRejectedToolCall: boolean,
+    rejectedToolCall: { error: unknown } | undefined,
   ) => {
-    backfillReasoning(response.output ?? []);
+    settleReasoning(response.output ?? []);
     finalizeTerminalFacts(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
@@ -350,7 +437,9 @@ export function createResponsesTerminalController(params: {
       hasToolCall: blocks.some((block) => block.type === "toolCall"),
     });
     output.stopReason = terminal.stopReason;
-    output.errorMessage = terminal.errorMessage;
+    if (terminal.errorMessage !== undefined) {
+      output.errorMessage = terminal.errorMessage;
+    }
     if (terminalEventType === "response.completed" && typeof response.end_turn === "boolean") {
       output.endTurn = response.end_turn;
     }
@@ -360,7 +449,7 @@ export function createResponsesTerminalController(params: {
     );
     const incompleteToolCallId =
       rejectedToolCallId ??
-      (terminalEventType === "response.incomplete" && !hasRejectedToolCall
+      (terminalEventType === "response.incomplete" && !rejectedToolCall
         ? params.toolCalls.values()[0]?.block.id
         : undefined) ??
       (incompleteCall?.type === "function_call" && incompleteCall.call_id
@@ -394,14 +483,18 @@ export function createResponsesTerminalController(params: {
               : "invalid",
       },
     });
-    if (
-      !hasRejectedToolCall &&
-      terminalEventType === "response.incomplete" &&
-      params.toolCalls.hasActive()
-    ) {
-      throw output.errorMessage
-        ? new Error(output.errorMessage)
-        : new IncompleteToolCallError("Responses stream completed with unresolved tool calls");
+    const failure =
+      rejectedToolCall ??
+      (terminalEventType === "response.incomplete" && params.toolCalls.hasActive()
+        ? {
+            error: new IncompleteToolCallError(
+              "Responses stream completed with unresolved tool calls",
+            ),
+          }
+        : undefined);
+    if (failure) {
+      const error = output.errorMessage ? new Error(output.errorMessage) : failure.error;
+      throw error;
     }
   };
   return {
@@ -409,6 +502,9 @@ export function createResponsesTerminalController(params: {
     finalizeFailedResponse: finalizeTerminalFacts,
     recordIncompleteToolCall,
     recoverTerminalOutput,
+    recordCompletedText,
     emitToolCallCompletion,
+    recordPendingReasoning,
+    releaseDeferredToolCompletions,
   };
 }

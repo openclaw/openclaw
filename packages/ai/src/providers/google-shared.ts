@@ -7,6 +7,10 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
+import {
+  isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
+} from "../internal/google-model-family.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -20,7 +24,6 @@ import type {
   Context,
   Model,
   SimpleStreamOptions,
-  ThinkingBudgets,
   ThinkingLevel as AgentThinkingLevel,
   StreamOptions,
 } from "../types.js";
@@ -33,21 +36,18 @@ import {
   convertGoogleTools,
 } from "./google-messages.js";
 import { consumeGoogleGenerateContentStream } from "./google-stream.js";
+import { adjustMaxTokensForThinking } from "./simple-options.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex" | "google-interactions";
-
-type GoogleThinkingLevel = `${ThinkingLevel}`;
-
-type GoogleToolChoice = "auto" | "none" | "any";
 
 type GoogleThinkingOptions = {
   enabled: boolean;
   budgetTokens?: number;
-  level?: GoogleThinkingLevel;
+  level?: `${ThinkingLevel}`;
 };
 
 export type GoogleProviderOptions = StreamOptions & {
-  toolChoice?: GoogleToolChoice;
+  toolChoice?: "auto" | "none" | "any";
   thinking?: GoogleThinkingOptions;
 };
 
@@ -60,27 +60,6 @@ export type GoogleGenerateContentClient = {
 };
 
 type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
-
-function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Context): Content[] {
-  return projectGoogleMessages({
-    model,
-    messages: transformMessages(context.messages, model, (id) =>
-      requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
-    ),
-    replay: "signed-parts",
-    requiresToolCallSignature:
-      model.provider !== "google-gemini-cli" &&
-      (isGemini3ProModel(model) || isGemini3FlashModel(model)),
-  });
-}
-
-function mapToolChoice(choice: string): FunctionCallingConfigMode {
-  return choice === "none"
-    ? FunctionCallingConfigMode.NONE
-    : choice === "any"
-      ? FunctionCallingConfigMode.ANY
-      : FunctionCallingConfigMode.AUTO;
-}
 
 export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>(params: {
   stream: AssistantMessageEventStream;
@@ -127,11 +106,19 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   context: Context,
   options: GoogleProviderOptions = {},
 ): Omit<GenerateContentParameters, "contents"> & { contents: Content[] } {
-  const contents = convertMessages(model, context);
+  const contents: Content[] = projectGoogleMessages({
+    model,
+    messages: transformMessages(context.messages, model, (id) =>
+      requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
+    ),
+    replay: "signed-parts",
+    requiresToolCallSignature:
+      model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
+  });
 
   const config: GenerateContentConfig = {
     ...(options.temperature !== undefined && { temperature: options.temperature }),
-    ...(options.maxTokens !== undefined && { maxOutputTokens: options.maxTokens }),
+    ...buildGoogleGenerationConfig(model, options.thinking, options.maxTokens),
     ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
     ...(context.systemPrompt && {
       systemInstruction: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
@@ -140,28 +127,19 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   };
 
   if (context.tools && context.tools.length > 0 && options.toolChoice) {
+    const choice = options.toolChoice;
     config.toolConfig = {
       functionCallingConfig: {
-        mode: mapToolChoice(options.toolChoice),
+        mode:
+          choice === "none"
+            ? FunctionCallingConfigMode.NONE
+            : choice === "any"
+              ? FunctionCallingConfigMode.ANY
+              : FunctionCallingConfigMode.AUTO,
       },
     };
   } else {
     config.toolConfig = undefined;
-  }
-
-  if (options.thinking?.enabled && model.reasoning) {
-    const thinkingConfig: ThinkingConfig = { includeThoughts: true };
-    if (options.thinking.level !== undefined) {
-      thinkingConfig.thinkingLevel = ThinkingLevel[options.thinking.level];
-    } else if (options.thinking.budgetTokens !== undefined) {
-      thinkingConfig.thinkingBudget = options.thinking.budgetTokens;
-    }
-    config.thinkingConfig = thinkingConfig;
-  } else if (model.reasoning && options.thinking && !options.thinking.enabled) {
-    const disabledThinkingConfig = getDisabledGoogleThinkingConfig(model);
-    if (Object.keys(disabledThinkingConfig).length > 0) {
-      config.thinkingConfig = disabledThinkingConfig;
-    }
   }
 
   if (options.signal) {
@@ -178,16 +156,93 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   };
 }
 
+/** Shared wire policy for the Gemini API and Vertex, with or without the Google SDK. */
+export function buildGoogleGenerationConfig(
+  model: Pick<Model, "id" | "reasoning" | "maxTokens">,
+  thinking: GoogleThinkingOptions | undefined,
+  maxTokens: number | undefined,
+): Pick<GenerateContentConfig, "maxOutputTokens" | "thinkingConfig"> {
+  let thinkingConfig: ThinkingConfig | undefined;
+  if (model.reasoning && thinking) {
+    if (thinking.enabled) {
+      thinkingConfig = { includeThoughts: true };
+      if (thinking.level !== undefined) {
+        const effort = {
+          MINIMAL: "minimal",
+          LOW: "low",
+          MEDIUM: "medium",
+          HIGH: "high",
+          THINKING_LEVEL_UNSPECIFIED: undefined,
+        } as const;
+        const level = effort[thinking.level];
+        thinkingConfig.thinkingLevel = level
+          ? getGoogleThinkingLevel(level, model)
+          : ThinkingLevel.THINKING_LEVEL_UNSPECIFIED;
+      } else if (thinking.budgetTokens !== undefined) {
+        if (isGoogleGemini3ThinkingLevelModel(model.id) && thinking.budgetTokens >= 0) {
+          const budget = thinking.budgetTokens;
+          thinkingConfig.thinkingLevel = getGoogleThinkingLevel(
+            budget === 0 ? "minimal" : budget <= 2048 ? "low" : budget <= 8192 ? "medium" : "high",
+            model,
+          );
+        } else {
+          thinkingConfig.thinkingBudget = thinking.budgetTokens;
+        }
+      }
+    } else {
+      thinkingConfig = getDisabledGoogleThinkingConfig(model);
+    }
+    if (model.id.toLowerCase().includes("gemini-2.5-pro") && thinkingConfig.thinkingBudget === 0) {
+      delete thinkingConfig.thinkingBudget;
+    }
+  }
+
+  let maxOutputTokens = maxTokens;
+  if (maxTokens !== undefined && model.reasoning) {
+    // Pro cannot disable thinking. Bound its hidden work instead of letting a
+    // dynamic budget consume a tiny visible-answer allowance.
+    if (model.id.toLowerCase().includes("gemini-2.5-pro") && thinking?.enabled === false) {
+      thinkingConfig = { thinkingBudget: 128 };
+    } else if (
+      model.id.toLowerCase().includes("gemini-2.5-pro") &&
+      thinking?.budgetTokens === 0 &&
+      thinkingConfig
+    ) {
+      thinkingConfig.thinkingBudget = 128;
+    }
+    const budget = thinkingConfig?.thinkingBudget;
+    if (thinkingConfig && budget !== undefined && budget >= 0) {
+      const adjusted = adjustMaxTokensForThinking(maxTokens, model.maxTokens, "low", {
+        low: budget,
+      });
+      maxOutputTokens = adjusted.maxTokens;
+      thinkingConfig.thinkingBudget = adjusted.thinkingBudget;
+    }
+  }
+  return {
+    ...(maxOutputTokens !== undefined && { maxOutputTokens }),
+    ...(thinkingConfig && Object.keys(thinkingConfig).length > 0 && { thinkingConfig }),
+  };
+}
+
 function isAdaptiveGoogleReasoningLevel(value: unknown): value is "adaptive" {
   return value === "adaptive";
 }
 
-export function buildGoogleSimpleThinking<T extends GoogleApiType>(
-  model: Model<T>,
+function buildGoogleThinking(
+  model: Model,
   options: SimpleStreamOptions | undefined,
+  interactions: boolean,
 ): GoogleThinkingOptions {
+  const disabled = (): GoogleThinkingOptions => {
+    const level =
+      interactions && model.reasoning
+        ? getDisabledGoogleThinkingConfig(model).thinkingLevel
+        : undefined;
+    return { enabled: false, ...(level ? { level } : {}) };
+  };
   if (!options?.reasoning || options.reasoning === "off") {
-    return { enabled: false };
+    return disabled();
   }
   if (isAdaptiveGoogleReasoningLevel(options.reasoning)) {
     if (!model.reasoning) {
@@ -196,73 +251,67 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
     if (isGemma4Model(model)) {
       return { enabled: true, level: ThinkingLevel.HIGH };
     }
-    return isGemini3ProModel(model) || isGemini3FlashModel(model)
+    return isGoogleGemini3ThinkingLevelModel(model.id)
       ? { enabled: true }
       : { enabled: true, budgetTokens: -1 };
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
   if (clampedReasoning === "off") {
-    return { enabled: false };
+    return disabled();
   }
   const effort = (
     clampedReasoning === "max" ? "high" : clampedReasoning
   ) as ClampedGoogleThinkingLevel;
 
-  if (isGemini3ProModel(model) || isGemini3FlashModel(model) || isGemma4Model(model)) {
+  if (interactions || isGoogleGemini3ThinkingLevelModel(model.id) || isGemma4Model(model)) {
     return {
       enabled: true,
       level: getGoogleThinkingLevel(effort, model),
     };
   }
 
-  return {
-    enabled: true,
-    budgetTokens: getGoogleBudget(model, effort, options.thinkingBudgets),
-  };
+  const customBudgets = options.thinkingBudgets;
+  let budgetTokens: number | undefined;
+  if (customBudgets?.[effort] !== undefined) {
+    budgetTokens = customBudgets[effort];
+  } else {
+    const isPro = model.id.includes("2.5-pro");
+    if (isPro || model.id.includes("2.5-flash")) {
+      const budgets: Record<ClampedGoogleThinkingLevel, number> = {
+        minimal: !isPro && model.id.includes("2.5-flash-lite") ? 512 : 128,
+        low: 2048,
+        medium: 8192,
+        high: isPro ? 32768 : 24576,
+      };
+      budgetTokens = budgets[effort];
+    }
+  }
+  return { enabled: true, budgetTokens };
+}
+
+export function buildGoogleSimpleThinking(
+  model: Model,
+  options: SimpleStreamOptions | undefined,
+): GoogleThinkingOptions {
+  return buildGoogleThinking(model, options, false);
 }
 
 export function buildGoogleInteractionsSimpleThinking<T extends GoogleApiType>(
   model: Model<T>,
   options: SimpleStreamOptions | undefined,
 ): GoogleThinkingOptions {
-  const thinking = buildGoogleSimpleThinking(model, options);
-  if (!thinking.enabled) {
-    if (!model.reasoning) {
-      return thinking;
-    }
-    const disabled = getDisabledGoogleThinkingConfig(model);
-    return {
-      enabled: false,
-      ...(disabled.thinkingLevel ? { level: disabled.thinkingLevel } : {}),
-    };
-  }
-  if (
-    thinking.level !== undefined ||
-    !options?.reasoning ||
-    isAdaptiveGoogleReasoningLevel(options.reasoning)
-  ) {
-    return thinking;
-  }
-
-  const clampedReasoning = clampThinkingLevel(model, options.reasoning);
-  if (clampedReasoning === "off") {
-    return { enabled: false };
-  }
-  if (clampedReasoning === "xhigh" || clampedReasoning === "max") {
-    return { enabled: true, level: getGoogleThinkingLevel("high", model) };
-  }
-  return { enabled: true, level: getGoogleThinkingLevel(clampedReasoning, model) };
+  return buildGoogleThinking(model, options, true);
 }
 
-function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T>): ThinkingConfig {
+function getDisabledGoogleThinkingConfig(model: Pick<Model, "id">): ThinkingConfig {
   // Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
-  // do not support full thinking-off either. For Gemini 3 models, use the lowest supported
+  // do not support full thinking-off either. For Gemini 3 and 4, use the lowest supported
   // thinkingLevel without includeThoughts so hidden thinking remains invisible to OpenClaw.
-  if (isGemini3ProModel(model)) {
+  if (isGoogleGemini3ProModel(model.id)) {
     return { thinkingLevel: ThinkingLevel.LOW };
   }
-  if (isGemini3FlashModel(model)) {
+  if (isGoogleGemini3ThinkingLevelModel(model.id)) {
     return {
       thinkingLevel: googleFlashSupportsMinimalThinking(model.id)
         ? ThinkingLevel.MINIMAL
@@ -278,24 +327,16 @@ function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(model: Model<T
 }
 
 /** @internal Directly tested provider implementation detail. */
-function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemma4Model(model: Pick<Model, "id">): boolean {
   return /gemma-?4/.test(model.id.toLowerCase());
 }
 
-function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-(?:3(?:\.\d+)?-pro|pro-latest)/.test(model.id.toLowerCase());
-}
-
-function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
-  return /gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)/.test(model.id.toLowerCase());
-}
-
-function getGoogleThinkingLevel<T extends GoogleApiType>(
+function getGoogleThinkingLevel(
   effort: ClampedGoogleThinkingLevel,
-  model: Model<T>,
+  model: Pick<Model, "id">,
 ): ThinkingLevel {
   const lowEffort = effort === "minimal" || effort === "low";
-  if (isGemini3ProModel(model)) {
+  if (isGoogleGemini3ProModel(model.id)) {
     return lowEffort ? ThinkingLevel.LOW : ThinkingLevel.HIGH;
   }
   if (isGemma4Model(model)) {
@@ -303,9 +344,9 @@ function getGoogleThinkingLevel<T extends GoogleApiType>(
   }
   switch (effort) {
     case "minimal":
-      return isGemini3FlashModel(model) && !googleFlashSupportsMinimalThinking(model.id)
-        ? ThinkingLevel.LOW
-        : ThinkingLevel.MINIMAL;
+      return googleFlashSupportsMinimalThinking(model.id)
+        ? ThinkingLevel.MINIMAL
+        : ThinkingLevel.LOW;
     case "low":
       return ThinkingLevel.LOW;
     case "medium":
@@ -314,27 +355,4 @@ function getGoogleThinkingLevel<T extends GoogleApiType>(
       return ThinkingLevel.HIGH;
   }
   return ThinkingLevel.HIGH;
-}
-
-function getGoogleBudget<T extends GoogleApiType>(
-  model: Model<T>,
-  effort: ClampedGoogleThinkingLevel,
-  customBudgets?: ThinkingBudgets,
-): number {
-  if (customBudgets?.[effort] !== undefined) {
-    return customBudgets[effort];
-  }
-
-  const isPro = model.id.includes("2.5-pro");
-  if (isPro || model.id.includes("2.5-flash")) {
-    const budgets: Record<ClampedGoogleThinkingLevel, number> = {
-      minimal: !isPro && model.id.includes("2.5-flash-lite") ? 512 : 128,
-      low: 2048,
-      medium: 8192,
-      high: isPro ? 32768 : 24576,
-    };
-    return budgets[effort];
-  }
-
-  return -1;
 }

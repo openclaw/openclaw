@@ -31,7 +31,7 @@ final class ServeCommandTests: XCTestCase {
             }
             continuation.finish()
         }
-        try await ServeCommand.consumeTranscripts(stream, config: config, logger: Logger(level: .error))
+        try await ServeCommand.consumeTranscripts(stream, config: config)
 
         XCTAssertEqual(try String(contentsOf: output, encoding: .utf8), "run me\n")
     }

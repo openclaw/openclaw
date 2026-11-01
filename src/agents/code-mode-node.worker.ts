@@ -2,18 +2,16 @@ import { setImmediate } from "node:timers/promises";
 import { types } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import { createContext, Script, type Context } from "node:vm";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeGcSamples } from "../infra/gc-observer.js";
+import { publishWorkerGcStorm } from "../infra/worker-memory.js";
 import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import type {
-  CodeModeExecutorStartInput,
-  CodeModeExecutorResumeInput,
-} from "./code-mode-executor-types.js";
+import { CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import {
   boundCodeModeError,
-  captureCodeModeOutput,
   captureCodeModeValue,
   EMPTY_CODE_MODE_OUTPUT,
+  type CodeModeOutputSource,
 } from "./code-mode-json.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
 import {
@@ -22,25 +20,26 @@ import {
   USER_SOURCE_FILE,
   type SourceLocation,
 } from "./code-mode-source-location.js";
-import { prepareSource } from "./code-mode-source.js";
-import type {
-  CodeModeConfig,
-  CodeModeWorkerContinuation,
-  CodeModeWorkerThreadResult,
-  PendingBridgeRequest,
-  SettledBridgeRequest,
+import { CODE_MODE_MODULE_ACCESS_ERROR, prepareSource } from "./code-mode-source.js";
+import {
+  CODE_MODE_BRIDGE_METHODS,
+  type CodeModeConfig,
+  type CodeModeFailurePhase,
+  type CodeModeNodeInput,
+  type CodeModeWorkerContinuation,
+  type CodeModeWorkerThreadResult,
+  type PendingBridgeRequest,
+  type SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 
-type NodeInput = (CodeModeExecutorStartInput | CodeModeExecutorResumeInput) & {
-  progress: SharedArrayBuffer;
-  inlineHost: boolean;
-};
+type NodeInput = CodeModeNodeInput;
 type NodeResult = CodeModeWorkerThreadResult<undefined>;
 
 type GuestOutcome = { ok: boolean; json: string };
 type NodeCell = {
   context: Context;
+  gcAttribution: NodeInput["gcAttribution"];
   config: CodeModeConfig;
   location: SourceLocation;
   pendingRequests: PendingBridgeRequest[];
@@ -48,6 +47,7 @@ type NodeCell = {
   replies?: SettledBridgeRequest[];
   replyIndex: number;
   rejections: Map<Promise<unknown>, unknown>;
+  moduleImportRejected?: boolean;
   outcome?: GuestOutcome;
   admissionError?: string;
   networkContentObserved?: true;
@@ -60,31 +60,98 @@ let cell: NodeCell | undefined;
 process.on("unhandledRejection", (reason, promise) => cell?.rejections.set(promise, reason));
 process.on("rejectionHandled", (promise) => cell?.rejections.delete(promise));
 
-const bridgeMethods = new Set<string>([
-  "search",
-  "describe",
-  "callValue",
-  "resultSave",
-  "resultLoad",
-  "resultDelete",
-  "nodes",
-  "yield",
-  "namespace",
-  "agentSpawn",
-  "agentWait",
-  "skillsList",
-  "skillsSearch",
-  "skillsRead",
-  "sleep",
-  "swarmNote",
-]);
+// Pressure belongs to the isolate, including time between checkpoints and idle GC.
+let gcStartedAt = performance.now();
+let majorCollections = 0;
+let stormStartedAt = gcStartedAt;
+let stormCollections = 0;
+let consecutiveStormWindows = 0;
+let lastStormWarningAt = -Infinity;
+let cellCount = 0;
+let workerId: string | undefined;
+observeGcSamples((samples) => {
+  for (const sample of samples) {
+    if (sample.kind === "mark_sweep_compact") {
+      majorCollections++;
+      stormCollections++;
+    }
+  }
+  const now = performance.now();
+  const stormIntervalMs = now - stormStartedAt;
+  if (stormIntervalMs >= 10_000) {
+    const storming = stormCollections > stormIntervalMs / 100;
+    consecutiveStormWindows = storming ? Math.min(2, consecutiveStormWindows + 1) : 0;
+    if (consecutiveStormWindows === 2 && workerId) {
+      publishWorkerGcStorm({ retireWorkerId: workerId });
+    }
+    if (storming && now - lastStormWarningAt >= 60_000) {
+      const { heapUsed, heapTotal, external, arrayBuffers } = process.memoryUsage();
+      publishWorkerGcStorm({
+        workerId,
+        ...cell?.gcAttribution,
+        cellCount,
+        activeCellCount: cell ? 1 : 0,
+        bridgeMethods: [...new Set(cell?.pendingRequests.map((request) => request.method) ?? [])],
+        majorCollections: stormCollections,
+        intervalMs: stormIntervalMs,
+        heapUsed,
+        heapTotal,
+        external,
+        arrayBuffers,
+        heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
+      });
+      lastStormWarningAt = now;
+    }
+    stormStartedAt = now;
+    stormCollections = 0;
+  }
+  const elapsedMs = now - gcStartedAt;
+  if (elapsedMs < 1_000) {
+    return;
+  }
+  // Frequent majors can thrash even with a modest GC time share. Sample heap only
+  // after sustained collection; the host deadline still interrupts synchronous loops.
+  if (majorCollections >= elapsedMs / 50) {
+    const heap = getHeapStatistics();
+    if (heap.used_heap_size >= heap.heap_size_limit * 0.85) {
+      // A fatal worker error also retires a parked or warm isolate. Never let the
+      // guest catch this and continue allocating; the host maps the native cause.
+      throw Object.assign(
+        new Error(
+          "Code Mode worker stopped after sustained garbage collection near its JavaScript heap limit",
+        ),
+        {
+          code: "ERR_CODE_MODE_GC_THRASH",
+        },
+      );
+    }
+  }
+  gcStartedAt = now;
+  majorCollections = 0;
+});
+
+const bridgeMethods = new Set<string>(CODE_MODE_BRIDGE_METHODS);
 
 function isBridgeMethod(method: string): method is PendingBridgeRequest["method"] {
   return bridgeMethods.has(method);
 }
 
+function rejectModuleImport(): never {
+  if (cell) {
+    cell.moduleImportRejected = true;
+  }
+  throw new Error(CODE_MODE_MODULE_ACCESS_ERROR);
+}
+
+function compileController(source: string): Script {
+  return new Script(source, {
+    filename: "openclaw-code-mode:controller.js",
+    importModuleDynamically: rejectModuleImport,
+  });
+}
+
 // Compile trusted control scripts once per worker; each cell still owns a fresh context.
-const initializeScript = new Script(
+const initializeScript = compileController(
   String.raw`
     (() => {
       // Keep native encoding prototypes private when this worker is reused.
@@ -116,69 +183,42 @@ const initializeScript = new Script(
 
     Object.assign(globalThis, JSON.parse(__openclawNodeInit));
     delete globalThis.__openclawNodeInit;
+    globalThis.__openclawMaxPendingToolCalls = __openclawNodeMaxPending;
+    delete globalThis.__openclawNodeMaxPending;
     ${CODE_MODE_CONTROLLER_SOURCE}
 
     (() => {
       const finish = globalThis.__openclawNodeFinish;
       delete globalThis.__openclawNodeFinish;
-      const stringify = JSON.stringify;
-      const string = String;
-      const encodeError = (error) => {
-        const bridgeCode = __openclawBridgeFailureCode(error) ?? null;
-        const diagnostic = (read, fallback) => {
-          try { return read(); } catch { return fallback; }
-        };
-        // Guest error properties may throw; recorded bridge identity must still reach finish.
-        const stack = diagnostic(() => error?.stack, "");
-        // Provenance records contain primitives and never inherit guest toJSON hooks.
-        return stringify({
-          __proto__: null,
-          bridgeCode,
-          name: diagnostic(() => string(error?.name ?? "Error"), "Error"),
-          message: diagnostic(() => string(error?.message ?? error), "Error"),
-          stack: typeof stack === "string" ? stack : "",
-        });
-      };
       Object.defineProperties(globalThis, {
-        __openclawNodeEncodeError: { value: encodeError },
         __openclawNodeObserveResult: { value: (result) => {
-          result.then(value => finish(true, value), error => finish(false, encodeError(error)));
+          result.then(value => finish(true, value), error => finish(false, __openclawEncodeError(error)));
         }},
       });
     })();
   `,
-  { filename: "openclaw-code-mode:controller.js" },
 );
-const settleScript = new Script("__openclawSettleBridge()", {
-  filename: "openclaw-code-mode:controller.js",
-});
-const drainScript = new Script(
+const settleScript = compileController("__openclawSettleBridge()");
+const drainScript = compileController(
   `(() => {
     const error = __openclawAdmissionError();
     if (!error) __openclawDrainQueuedRequests();
     return error;
   })()`,
-  { filename: "openclaw-code-mode:controller.js" },
 );
-const outputScript = new Script("__openclawTakeOutputJson()", {
-  filename: "openclaw-code-mode:controller.js",
-});
-const observeResultScript = new Script("__openclawNodeObserveResult(__openclawResult)", {
-  filename: "openclaw-code-mode:controller.js",
-});
-const rejectionScript = new Script(
+const observeResultScript = compileController("__openclawNodeObserveResult(__openclawResult)");
+const rejectionScript = compileController(
   `(() => {
     const error = __openclawNodeRejection;
     delete globalThis.__openclawNodeRejection;
-    return __openclawNodeEncodeError(error);
+    return __openclawEncodeError(error);
   })()`,
-  { filename: "openclaw-code-mode:controller.js" },
 );
 
 function evaluate(current: NodeCell, script: Script): unknown {
   const remaining = current.deadline - performance.now();
   if (remaining <= 0) {
-    throw new Error("code mode timeout exceeded");
+    throw new CodeModeHeadlessTimeoutError();
   }
   // The host interrupts this Worker; vm.timeout would create a native thread per evaluation.
   return script.runInContext(current.context);
@@ -190,26 +230,6 @@ function sourceFrames(stack: string | undefined, location: SourceLocation): stri
       ?.split("\n")
       .filter((line) => line.includes(USER_SOURCE_FILE) && /^\s+at /u.test(line)) ?? []
   );
-}
-
-function guestError(error: unknown, location: SourceLocation): string {
-  if (!types.isNativeError(error)) {
-    return String(error);
-  }
-  const frames = sourceFrames(error.stack, location);
-  if (frames.length === 0 && error.name === "SyntaxError") {
-    const syntax = /^openclaw-code-mode:user\.js:(\d+)\n[^\n]*\n([ \t]*)\^/u.exec(
-      error.stack ?? "",
-    );
-    const line = syntax?.[1];
-    const prefix = syntax?.[2];
-    if (line !== undefined && prefix !== undefined) {
-      frames.push(
-        ...sourceFrames(`    at ${USER_SOURCE_FILE}:${line}:${prefix.length + 1}`, location),
-      );
-    }
-  }
-  return [`${error.name}: ${error.message}`, ...frames].join("\n");
 }
 
 function createCell(
@@ -226,12 +246,17 @@ function createCell(
     preparedAt + (input.executionTimeoutMs ?? Infinity),
   );
   if (deadline <= preparedAt) {
-    throw new Error("code mode timeout exceeded");
+    throw new CodeModeHeadlessTimeoutError();
   }
   const program = buildUserSource(source, input.prelude, "utf16");
-  const context = createContext(Object.create(null), { microtaskMode: "afterEvaluate" });
+  const context = createContext(Object.create(null), {
+    microtaskMode: "afterEvaluate",
+    importModuleDynamically: rejectModuleImport,
+  });
+  cellCount++;
   const current: NodeCell = {
     context,
+    gcAttribution: input.gcAttribution,
     config: input.config,
     location: program.location,
     pendingRequests: [],
@@ -296,20 +321,22 @@ function createCell(
     current.progress.observeNetworkContent();
   };
   context["__openclawHostOutput"] = (json: string) => current.progress.append(json);
-  context["__openclawNodeInit"] = JSON.stringify({
-    __openclawCatalog: input.catalog,
-    __openclawNamespaces: input.namespaces,
-    __openclawApiFiles: input.apiFiles ?? [],
-    __openclawSwarmEnabled: input.swarmEnabled === true,
-    __openclawMaxPendingToolCalls: input.config.maxPendingToolCalls,
-  });
+  context["__openclawNodeInit"] = new TextDecoder().decode(input.initialization);
+  context["__openclawNodeMaxPending"] = input.config.maxPendingToolCalls;
+  context["__openclawMaxOutputBytes"] = input.config.maxOutputBytes;
   context["__openclawNodeFinish"] = (ok: boolean, json: string) => {
     current.outcome = { ok, json };
   };
   progress.deadline = performance.timeOrigin + deadline;
   consumed?.();
   evaluate(current, initializeScript);
-  evaluate(current, new Script(program.source, { filename: USER_SOURCE_FILE }));
+  evaluate(
+    current,
+    new Script(program.source, {
+      filename: USER_SOURCE_FILE,
+      importModuleDynamically: rejectModuleImport,
+    }),
+  );
   evaluate(current, observeResultScript);
   return current;
 }
@@ -329,12 +356,6 @@ function settle(current: NodeCell, requests: SettledBridgeRequest[]): void {
   }
 }
 
-function takeOutput(current: NodeCell): unknown[] {
-  const json = evaluate(current, outputScript);
-  // SAFETY: The shared controller serializes its private output array before crossing this boundary.
-  return JSON.parse(String(json)) as unknown[];
-}
-
 function formatGuestFailure(
   current: NodeCell,
   json: string,
@@ -351,7 +372,7 @@ function formatGuestFailure(
     value.name === "ReferenceError" &&
     /^(?:require|module|process) is not defined$/u.test(value.message)
   ) {
-    return { code: "invalid_input", error: "code mode module access is disabled." };
+    return { code: "invalid_input", error: CODE_MODE_MODULE_ACCESS_ERROR };
   }
   return {
     code: value.bridgeCode ?? "internal_error",
@@ -366,7 +387,7 @@ function failed(
   code: "invalid_input" | "internal_error" | "timeout",
   error: string,
   output = EMPTY_CODE_MODE_OUTPUT,
-  failurePhase?: "bridge",
+  failurePhase?: CodeModeFailurePhase,
 ): Extract<NodeResult, { status: "failed" }> {
   return {
     status: "failed",
@@ -379,15 +400,21 @@ function failed(
 }
 
 async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeResult> {
-  let output: unknown[] = [];
+  let output: CodeModeOutputSource = EMPTY_CODE_MODE_OUTPUT;
   let consumed = channel?.consumeInput;
+  const consume = () => {
+    const receipt = consumed;
+    consumed = undefined;
+    receipt?.();
+  };
   const config = input.config;
+  workerId = input.gcAttribution?.workerId;
   const startedAt = performance.now();
   const progress = new CodeModeNodeProgress(input.progress);
   try {
     const current =
       input.kind === "exec"
-        ? createCell(input, prepareSource(input.source), startedAt, progress, consumed)
+        ? createCell(input, prepareSource(input.source), startedAt, progress, consume)
         : cell;
     if (!current) {
       throw new Error("code mode continuation is no longer available");
@@ -403,12 +430,9 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       current.pendingRequests = input.pendingRequests ?? [];
       current.canceledRequestIds = [];
       settle(current, input.settledRequests);
-    } else {
-      consumed = undefined;
     }
     for (;;) {
-      consumed?.();
-      consumed = undefined;
+      consume();
       const admissionError = current.admissionError ?? evaluate(current, drainScript);
       if (admissionError !== undefined && typeof admissionError !== "string") {
         throw new Error("invalid code mode admission error");
@@ -418,10 +442,15 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       }
       // Native rejection/handled notifications arrive at the end of the turn.
       await setImmediate();
-      output = takeOutput(current);
+      // Import rejection crosses Node's loader microtasks before guest catch/await can run.
+      if (current.moduleImportRejected) {
+        current.moduleImportRejected = false;
+        continue;
+      }
+      output = progress.output();
       const pending = !current.outcome;
       if (pending && current.pendingRequests.length === 0) {
-        throw new Error("code mode promise is pending without host work");
+        throw new ToolInputError("code mode promise is pending without host work");
       }
       if (pending || current.pendingRequests.length > 0) {
         const settlementMode = pending
@@ -434,7 +463,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           pendingRequests: current.pendingRequests,
           canceledRequestIds: current.canceledRequestIds,
           settlementMode,
-          output: captureCodeModeOutput(output, config.maxOutputBytes),
+          output,
           // Worker-wide V8 allocation is diagnostic, not a per-context memory bound.
           memoryUsedBytes: getHeapStatistics().used_heap_size,
           ...(current.networkContentObserved ? { networkContentObserved: true as const } : {}),
@@ -443,13 +472,12 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           return { status: "waiting", ...boundary, continuation: undefined };
         }
         const response = await channel.request({ status: "boundary", ...boundary });
-        output = [];
+        output = EMPTY_CODE_MODE_OUTPUT;
         consumed = response.consumed;
         // SAFETY: The task-bound host sends the shared typed continuation protocol.
         const command = response.input as CodeModeWorkerContinuation;
         if (command.kind === "checkpoint") {
-          consumed();
-          consumed = undefined;
+          consume();
           return {
             status: "waiting",
             ...boundary,
@@ -465,7 +493,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           command.timeoutMs <= 0 ||
           command.timeoutMs > config.timeoutMs
         ) {
-          throw new Error("code mode timeout exceeded");
+          throw new Error("invalid code mode continuation timeout");
         }
         current.deadline = performance.now() + command.timeoutMs;
         current.pendingRequests = command.pendingRequests;
@@ -481,16 +509,21 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       }
       if (failureJson !== undefined) {
         const failure = formatGuestFailure(current, failureJson);
+        channel?.notify({
+          status: "failure",
+          error: JSON.parse(failureJson),
+          failurePhase: failure.failurePhase ?? "guest",
+        });
         return failed(
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),
-          captureCodeModeOutput(output, config.maxOutputBytes),
+          output,
           failure.failurePhase,
         );
       }
       return {
         status: "completed",
-        output: captureCodeModeOutput(output, config.maxOutputBytes),
+        output,
         value: captureCodeModeValue(
           JSON.parse(outcome.json),
           config.maxOutputBytes,
@@ -501,46 +534,49 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       };
     }
   } catch (error) {
-    const timeout = types.isNativeError(error) && error.message === "code mode timeout exceeded";
-    if (cell && output.length === 0 && !timeout) {
-      try {
-        output = takeOutput(cell);
-      } catch {
-        /* An exhausted guest cannot serialize more output. */
-      }
+    const timeout = error instanceof CodeModeHeadlessTimeoutError;
+    // Guest exceptions arrive through the observed outcome; this catch owns worker failures.
+    const failurePhase =
+      error instanceof ToolInputError ? "input" : timeout && progress.deadline ? "guest" : "host";
+    channel?.notify({
+      status: "failure",
+      error: types.isNativeError(error)
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : String(error),
+      failurePhase,
+    });
+    if (cell && output.count === 0 && !timeout) {
+      output = progress.output();
     }
     return failed(
       timeout ? "timeout" : error instanceof ToolInputError ? "invalid_input" : "internal_error",
       boundCodeModeError(
         timeout
           ? "code mode timeout exceeded"
-          : cell
-            ? guestError(error, cell.location)
-            : error instanceof Error
-              ? error.message
-              : String(error),
+          : types.isNativeError(error)
+            ? error.message
+            : String(error),
         config.maxOutputBytes,
       ),
-      timeout ? progress.output() : captureCodeModeOutput(output, config.maxOutputBytes),
+      timeout ? progress.output() : output,
+      failurePhase,
     );
+  } finally {
+    // Rejected source and failed settlement still release the task's input custody.
+    consume();
   }
 }
 
-serveWorkerTasks(async (input, channel): Promise<NodeResult> => {
-  if (
-    !isRecord(input) ||
-    !isRecord(input.config) ||
-    (input.kind !== "exec" && input.kind !== "resume")
-  ) {
-    return failed("invalid_input", "invalid code mode worker input");
-  }
-  // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
-  const result = await run(input as NodeInput, channel);
-  if (cell?.networkContentObserved) {
-    result.networkContentObserved = true;
-  }
-  if (result.status !== "waiting") {
-    cell = undefined;
-  }
-  return result;
-});
+serveWorkerTasks<NodeResult, NodeInput>(
+  async (input, channel): Promise<NodeResult> => {
+    const result = await run(input, channel);
+    if (cell?.networkContentObserved) {
+      result.networkContentObserved = true;
+    }
+    if (result.status !== "waiting") {
+      cell = undefined;
+    }
+    return result;
+  },
+  { idleGc: false },
+);

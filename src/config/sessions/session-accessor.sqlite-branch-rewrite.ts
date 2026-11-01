@@ -1,9 +1,7 @@
-import { isDeepStrictEqual } from "node:util";
 import type {
   SessionEntry,
   SessionLeafControl,
 } from "../../agents/sessions/session-manager-types.js";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -15,30 +13,28 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
+import { preparePriorWorkspaceRewriteInTransaction } from "./session-accessor.sqlite-prior-workspace.js";
+import { createTranscriptIdentityReader } from "./session-accessor.sqlite-read.js";
 import {
-  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
-import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
-  redactTranscriptMessageForStorage,
+  sanitizeTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
-/** Capture a constant-size snapshot; the session owner prepares payloads outside the write lock. */
+/** The session owner prepares payloads; the transaction checks their source version once. */
 export function prepareTranscriptRewriteSync(
   scope: SessionTranscriptWriteScope,
-  appendParentId: string | null,
   assertActive: () => void,
   loadedVersion: SessionTranscriptContextVersion | undefined,
   admit?: (stage: "transaction" | "commit") => void,
@@ -63,14 +59,8 @@ export function prepareTranscriptRewriteSync(
   }
   assertActive();
   assertOwnedTranscriptWriteCommit(fencedScope);
-  const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
   const conflict = () => new Error("Session transcript changed before rewrite publication");
-  if (
-    !loadedVersion ||
-    version.generation !== loadedVersion.generation ||
-    version.rawSeq !== loadedVersion.rawSeq ||
-    resolveTranscriptMessageAppendParent(database, resolved.sessionId, {}) !== appendParentId
-  ) {
+  if (!loadedVersion) {
     throw conflict();
   }
   return (entries, sources, adopt) => {
@@ -84,7 +74,7 @@ export function prepareTranscriptRewriteSync(
     if (!preparation?.messagesAlreadyRedacted) {
       for (const entry of entries) {
         if (entry.type === "message") {
-          entry.message = redactTranscriptMessageForStorage(entry.message, {});
+          entry.message = sanitizeTranscriptMessageForStorage(entry.message);
         }
       }
     }
@@ -109,31 +99,16 @@ export function prepareTranscriptRewriteSync(
           resolved.sessionId,
         );
         if (
-          currentVersion.generation !== version.generation ||
-          currentVersion.rawSeq !== version.rawSeq
+          currentVersion.generation !== loadedVersion.generation ||
+          currentVersion.rawSeq !== loadedVersion.rawSeq ||
+          currentVersion.updatedAt !== loadedVersion.updatedAt
         ) {
           throw conflict();
         }
-        // A loaded manager may predate an in-place repair even when its entry ids match.
-        // Compare only the copied suffix, never hydrate the complete archive under the lock.
-        for (const source of sources.values()) {
-          const row = executeSqliteQueryTakeFirstSync(
-            current.db,
-            getSessionKysely(current.db)
-              .selectFrom("transcript_event_identities as identity")
-              .innerJoin("transcript_events as event", (join) =>
-                join
-                  .onRef("event.session_id", "=", "identity.session_id")
-                  .onRef("event.seq", "=", "identity.seq"),
-              )
-              .select(transcriptEventJsonSql(current.db, "event").as("event_json"))
-              .where("identity.session_id", "=", resolved.sessionId)
-              .where("identity.event_id", "=", source.id),
-          );
-          if (!row || !isDeepStrictEqual(JSON.parse(row.event_json), source)) {
-            throw conflict();
-          }
-        }
+        const priorWorkspace =
+          fresh?.entry?.priorWorkspace &&
+          preparePriorWorkspaceRewriteInTransaction(current, resolved);
+        const copies: { sourceId: string; copyId: string }[] = [];
         // The existing append/relocation owners participate in the same transaction.
         // Interruption rolls back entries, key ownership, and receipt publications together.
         for (const entry of entries) {
@@ -156,8 +131,8 @@ export function prepareTranscriptRewriteSync(
                     parentId: entry.parentId,
                     now: Date.parse(entry.timestamp),
                     message: entry.message,
-                    messageAlreadyRedacted: true,
                     appendMode: entry.appendMode,
+                    supersedesEntryId: source.id,
                     idempotencyLookup: "caller-checked",
                   },
                   undefined,
@@ -168,9 +143,22 @@ export function prepareTranscriptRewriteSync(
               throw new Error("Transcript rewrite message was not appended");
             }
             entry.message = result.message;
+            // The loaded view must match the committed row for later source comparisons.
+            entry.supersedesEntryId = source.id;
+            copies.push({ sourceId: source.id, copyId: entry.id });
           } else if (!appendTranscriptEventInTransaction(current, resolved, entry, preparation)) {
             throw new Error("Transcript rewrite entry was not appended");
           }
+        }
+        if (priorWorkspace) {
+          const identity = createTranscriptIdentityReader(current, resolved.sessionId);
+          priorWorkspace.commitCopies(
+            copies.flatMap(({ sourceId, copyId }) => {
+              const source = identity(sourceId);
+              const copy = identity(copyId);
+              return source && copy ? [{ sourceSeq: source.seq, seq: copy.seq }] : [];
+            }),
+          );
         }
         assertActive();
         assertOwnedTranscriptWriteCommit(fencedScope);

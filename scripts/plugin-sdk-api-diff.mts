@@ -23,6 +23,7 @@ import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
 import {
   createPluginSdkApiDiffSet,
+  encodePluginSdkApiArtifact,
   createPluginSdkApiReleaseEvidence,
   createPluginSdkApiReleaseEvidenceSet,
 } from "./plugin-sdk-api-release-evidence.mjs";
@@ -437,7 +438,7 @@ async function main(): Promise<void> {
           ),
         )
       : primary.diff;
-    await writeFile(args.jsonPath, `${JSON.stringify(diff, null, 2)}\n`);
+    await writeFile(args.jsonPath, `${JSON.stringify(encodePluginSdkApiArtifact(diff))}\n`);
   }
   if (args.evidencePath) {
     const evidence = args.bases
@@ -447,7 +448,7 @@ async function main(): Promise<void> {
           ),
         )
       : primary.evidence;
-    await writeFile(args.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    await writeFile(args.evidencePath, `${JSON.stringify(encodePluginSdkApiArtifact(evidence))}\n`);
   }
   if (args.summaryPath) {
     await writeFile(args.summaryPath, report);

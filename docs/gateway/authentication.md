@@ -151,7 +151,7 @@ When you remove provider auth through the gateway control plane, OpenClaw delete
 
 ### OpenAI and legacy `openai-codex` ids
 
-OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the canonical provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
+OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the standard provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
 
 If you see `openai-codex` in older config, auth profile ids, or `auth.order.openai-codex`, treat it as legacy migration input — don't create new `openai-codex` profiles. Run:
 
@@ -160,7 +160,7 @@ openclaw doctor --fix
 openclaw models auth list --provider openai
 ```
 
-Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the canonical `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
+Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the current `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
 
 ### During login (CLI)
 

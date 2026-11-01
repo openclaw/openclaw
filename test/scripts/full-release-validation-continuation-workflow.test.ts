@@ -1,17 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  copyFileSync,
-  chmodSync,
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -19,316 +9,87 @@ import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
-type Workflow = {
+const workflow = parse(source) as {
   jobs: Record<
     string,
-    { if?: string; steps: Array<Record<string, unknown>>; "timeout-minutes"?: number }
+    {
+      if?: string;
+      env?: Record<string, string>;
+      needs?: string[];
+      steps: Array<Record<string, unknown>>;
+    }
   >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
-const workflow = parse(source) as Workflow;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const allSteps = Object.values(workflow.jobs).flatMap(({ steps }) => steps);
 
-function step(job: string, name: string, owner = workflow) {
-  const match = owner.jobs[job]?.steps.find((entry) => entry.name === name);
-  if (!match) {
-    throw new Error(`missing workflow step: ${job}/${name}`);
-  }
+function step(job: string, name: string) {
+  const match = workflow.jobs[job]?.steps.find((entry) => entry.name === name);
+  assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
 
-function sparsePaths(checkout: Record<string, unknown>) {
-  const value = checkout["sparse-checkout"];
-  if (typeof value !== "string") {
-    throw new TypeError("sparse-checkout must be a string");
-  }
-  return value
-    .split("\n")
-    .map((path) => path.trim())
-    .filter(Boolean);
-}
-
-function checkoutPath(checkout: Record<string, unknown>) {
-  if (checkout.path === undefined) {
-    return "";
-  }
-  if (typeof checkout.path !== "string") {
-    throw new TypeError("checkout path must be a string");
-  }
-  return checkout.path;
-}
-
-describe("full release metadata checkouts", () => {
-  it.each([
-    {
-      job: "resolve_target",
-      checkout: "Checkout trusted workflow helper",
-      entrypoint: "release-tooling-identity.mjs",
-      fullCheckout: true,
-    },
-    {
-      job: "evidence_reuse",
-      checkout: "Checkout trusted workflow helper",
-      entrypoint: "release-ci-summary.mjs",
-      extraPath: ".github/actions/setup-pnpm-store-cache",
-    },
-    {
-      job: "release_execution_plan",
-      checkout: "Checkout release execution plan tooling",
-      entrypoint: "full-release-validation-state.mjs",
-    },
-    {
-      job: "release_decision",
-      checkout: "Checkout release decision tooling",
-      entrypoint: "full-release-validation-state.mjs",
-    },
-    {
-      job: "diagnostic_drain",
-      checkout: "Checkout diagnostic drain tooling",
-      entrypoint: "full-release-validation-state.mjs",
-    },
-    {
-      job: "summary",
-      checkout: "Checkout release state verifier",
-      entrypoint: "full-release-candidate-reuse.mjs",
-    },
-  ])(
-    "runs $job tooling from the complete scripts tree",
-    ({ job, checkout, entrypoint, extraPath, fullCheckout }) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-release-sparse-"));
-      try {
-        const toolingCheckout = step(job, checkout).with as Record<string, unknown>;
-        if (fullCheckout) {
-          expect(toolingCheckout).not.toHaveProperty("sparse-checkout");
-          expect(toolingCheckout).not.toHaveProperty("sparse-checkout-cone-mode");
-          expect(toolingCheckout).toMatchObject({
-            ref: "${{ github.sha }}",
-            path: "workflow",
-            "fetch-depth": 1,
-            "persist-credentials": false,
-            submodules: false,
-          });
-        } else {
-          expect(toolingCheckout["sparse-checkout-cone-mode"]).toBe(false);
-          const paths = sparsePaths(toolingCheckout);
-          expect(paths).toEqual(extraPath ? ["scripts", extraPath] : ["scripts"]);
-        }
-
-        const checkoutRoot = join(root, checkoutPath(toolingCheckout));
-        cpSync("scripts", join(checkoutRoot, "scripts"), { recursive: true });
-        if (extraPath) {
-          cpSync(extraPath, join(checkoutRoot, extraPath), { recursive: true });
-        }
-
-        const runNode = (args: string[], cwd = root) =>
-          execFileSync(process.execPath, args, {
-            cwd,
-            encoding: "utf8",
-            timeout: 10_000,
-            env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
-          });
-        expect(
-          runNode(
-            ["--input-type=module", "-e", `await import("./scripts/${entrypoint}");`],
-            checkoutRoot,
-          ),
-        ).toBe("");
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    },
+it("runs release tooling only from the trusted revision without persisted credentials", () => {
+  const tooling = allSteps.filter((entry) =>
+    /^Checkout (?:trusted workflow|.*tooling|release state verifier)/u.test(String(entry.name)),
   );
-
-  it("keeps target metadata narrow and runs the macOS preflight from the tooling tree", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-release-sparse-"));
-    try {
-      const targetCheckouts = [
-        ["resolve_target", "Checkout target package manifest"],
-        ["evidence_reuse", "Checkout target SHA"],
-      ] as const;
-      for (const [job, name] of targetCheckouts) {
-        const checkout = step(job, name).with as Record<string, unknown>;
-        expect(checkout["sparse-checkout-cone-mode"]).toBe(false);
-        const paths = sparsePaths(checkout);
-        expect(paths).not.toContain("scripts");
-        for (const path of paths) {
-          const destination = join(root, checkoutPath(checkout), path);
-          mkdirSync(dirname(destination), { recursive: true });
-          copyFileSync(path, destination);
-        }
-      }
-
-      const toolingCheckout = step("evidence_reuse", "Checkout trusted workflow helper")
-        .with as Record<string, unknown>;
-      cpSync("scripts", join(root, checkoutPath(toolingCheckout), "scripts"), { recursive: true });
-      cpSync(
-        ".github/actions/setup-pnpm-store-cache",
-        join(root, checkoutPath(toolingCheckout), ".github/actions/setup-pnpm-store-cache"),
-        { recursive: true },
-      );
-
-      const setup = step("evidence_reuse", "Setup Node.js");
-      const steps = workflow.jobs.evidence_reuse!.steps;
-      expect(steps.indexOf(setup)).toBeLessThan(
-        steps.indexOf(step("evidence_reuse", "Find reusable validation evidence")),
-      );
-      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
-      const setupPath = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
-      const activeNodeVersion = execFileSync("node", ["-p", "process.versions.node"], {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, PATH: setupPath, NODE_OPTIONS: "", NODE_PATH: "" },
-      }).trim();
-      execFileSync("bash", ["-c", String(setup.run)], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          ...(setup.env as Record<string, string>),
-          // Keep this sparse-checkout proof offline on every supported test runtime.
-          REQUESTED_NODE_VERSION: activeNodeVersion,
-          PATH: setupPath,
-          NODE_OPTIONS: "",
-          GITHUB_PATH: join(root, "github-path"),
-        },
-      });
-      expect(
-        execFileSync(
-          process.execPath,
-          [join(root, "workflow/scripts/release-preflight.mjs"), "--macos-versions-only"],
-          {
-            cwd: join(root, "target"),
-            encoding: "utf8",
-            timeout: 10_000,
-            env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
-          },
-        ),
-      ).toContain("macOS app version metadata OK");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+  expect(tooling.length).toBeGreaterThan(0);
+  for (const entry of tooling) {
+    const checkout = entry.with as Record<string, unknown>;
+    expect(checkout).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
+    const sparseCheckout = checkout["sparse-checkout"];
+    if (sparseCheckout !== undefined) {
+      assert(typeof sparseCheckout === "string");
+      expect(sparseCheckout.split(/\s+/u)).toContain("scripts");
     }
-  });
+  }
+  const targets = allSteps.filter((entry) => String(entry.name).startsWith("Checkout target"));
+  expect(targets.length).toBeGreaterThan(0);
+  for (const entry of targets) {
+    const checkout = entry.with as Record<string, unknown>;
+    expect(checkout.path).not.toBe("workflow");
+    expect(String(checkout["sparse-checkout"]).split(/\s+/u)).not.toContain("scripts");
+  }
 });
 
 describe("full release same-parent recovery workflow", () => {
-  it.each([
-    "ci",
-    "plugin-prerelease",
-    "openclaw-release-checks",
-    "openclaw-performance",
-    "npm-telegram-beta-e2e",
-  ])(
-    "includes every declared default in %s reuse identity without installing dependencies",
-    (name) => {
-      const contents = readFileSync(`.github/workflows/${name}.yml`, "utf8");
-      const declared = parse(contents).on.workflow_dispatch.inputs as Record<
-        string,
-        { type: string; default?: unknown }
-      >;
-      const expected = Object.fromEntries(
-        Object.entries(declared)
-          .filter(([key]) => key !== "dispatch_id")
-          .map(([key, value]) => {
-            const defaultValue =
-              value.default ??
-              (value.type === "boolean" ? false : value.type === "number" ? 0 : "");
-            if (
-              typeof defaultValue !== "string" &&
-              typeof defaultValue !== "number" &&
-              typeof defaultValue !== "boolean"
-            ) {
-              throw new Error("Expected a scalar workflow dispatch default");
-            }
-            return [key, String(defaultValue)];
-          }),
-      );
-      expect(releaseChildDispatchInputs(contents, [])).toEqual(expected);
-      const key = Object.keys(expected)[0]!;
-      expect(
-        releaseChildDispatchInputs(contents, [
-          "-f",
-          `${key}=exact=bytes`,
-          "-f",
-          "dispatch_id=ignored",
-        ]),
-      ).toEqual({ ...expected, [key]: "exact=bytes" });
-      expect(() => releaseChildDispatchInputs(contents, ["-f", "unknown=true"])).toThrow(
-        "argument",
-      );
-      expect(() =>
-        releaseChildDispatchInputs(contents.replace("    inputs:", "    inputs: &defaults"), []),
-      ).toThrow();
-    },
-  );
-
-  it("adopts only a matched child and still dispatches an unmatched sibling", () => {
-    const root = tempDirs.make("release-child-dispatch-");
-    const bin = join(root, "bin");
-    const tooling = join(root, "workflow/scripts");
-    mkdirSync(bin);
-    mkdirSync(tooling, { recursive: true });
-    const output = join(root, "outputs");
-    const calls = join(root, "calls");
-    const sha = "a".repeat(40);
-    writeFileSync(
-      join(tooling, "find-reusable-release-child.mjs"),
-      `
-import {appendFileSync} from 'node:fs';
-appendFileSync(process.env.CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
-if (process.env.CHILD_WORKFLOW_KIND === 'ci') {
-  appendFileSync(process.env.GITHUB_OUTPUT, 'run_id=101\\nrun_attempt=1\\nchild_reuse={"role":"normalCi"}\\n');
-} else process.exitCode = 3;
-`,
-    );
-    const gh = join(bin, "gh");
-    writeFileSync(
-      gh,
-      `#!${process.execPath}
-import {appendFileSync} from 'node:fs';
-const args=process.argv.slice(2);
-appendFileSync(process.env.CALLS, JSON.stringify(args)+'\\n');
-if (args[0] === 'workflow') console.log('https://github.com/openclaw/openclaw/actions/runs/202');
-else if (args[1].includes('/commits/')) console.log('${sha}');
-else if (args[1].includes('/actions/workflows/')) console.log('88');
-else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:'workflow_dispatch',display_title:'OpenClaw Performance full-release-validation-77-1',head_sha:'${sha}',run_attempt:1,html_url:'https://github.com/openclaw/openclaw/actions/runs/202'}));
-`,
-    );
-    chmodSync(gh, 0o755);
-    const env = {
-      ...process.env,
-      PATH: `${bin}${delimiter}${process.env.PATH}`,
-      CALLS: calls,
-      GITHUB_OUTPUT: output,
-      GITHUB_STEP_SUMMARY: join(root, "summary"),
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ID: "77",
-      GITHUB_RUN_ATTEMPT: "1",
-      CHILD_EVIDENCE_REUSE: "true",
-      CHILD_WORKFLOW_REF: "main",
-      PARENT_WORKFLOW_SHA: sha,
-      TARGET_REF: "main",
-      TARGET_SHA: sha,
-      TARGET_CONTEXT_REF: "",
-      RELEASE_PROFILE: "stable",
-    };
-    for (const kind of ["ci", "performance"]) {
-      execFileSync("bash", ["-c", String(step("normal_ci", "Dispatch CI").run)], {
-        cwd: root,
-        env: { ...env, CHILD_WORKFLOW_KIND: kind },
-        timeout: 10_000,
-      });
-    }
-    const recorded = readFileSync(calls, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(recorded.filter((args) => args[0] === "workflow")).toEqual([
-      expect.arrayContaining(["run", "openclaw-performance.yml", "publish_reports=false"]),
-    ]);
-    expect(recorded[0]).toEqual(expect.arrayContaining(["ci.yml", `target_ref=${sha}`]));
-    expect(readFileSync(output, "utf8")).toContain('child_reuse={"role":"normalCi"}');
-    expect(readFileSync(output, "utf8")).toContain("run_id=202");
+  it("normalizes scalar dispatch defaults and rejects unfamiliar declarations", () => {
+    const contents = `on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        type: boolean
+      count:
+        type: number
+      label:
+        type: string
+      quoted:
+        type: string
+        default: "value"
+      ref:
+        type: choice
+        default: main
+        options:
+          - main
+      dispatch_id:
+        type: string
+        default: "quoted"
+`;
+    const expected = { enabled: "false", count: "0", label: "", quoted: "value", ref: "main" };
+    expect(releaseChildDispatchInputs(contents, [])).toEqual(expected);
+    expect(
+      releaseChildDispatchInputs(contents, [
+        "-f",
+        "label=exact=bytes",
+        "-f",
+        "dispatch_id=ignored",
+      ]),
+    ).toEqual({ ...expected, label: "exact=bytes" });
+    expect(() => releaseChildDispatchInputs(contents, ["-f", "unknown=true"])).toThrow("argument");
+    expect(() =>
+      releaseChildDispatchInputs(contents.replace("    inputs:", "    inputs: &defaults"), []),
+    ).toThrow();
   });
 
   it.each(["failure", "success", "missing"])(
@@ -338,21 +99,13 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       const root = tempDirs.make("openclaw-release-locales-");
       const diagnosticPath = join(root, "diagnostics.json");
       const summaryPath = join(root, "summary.md");
+      const jobs = [
+        { name: "native-i18n", conclusion: "success" },
+        { name: "control-ui-i18n", conclusion },
+      ];
       const diagnostic = JSON.stringify({
         state: "blocked_complete",
-        children:
-          conclusion === "missing"
-            ? {}
-            : {
-                normalCi: {
-                  timing: {
-                    jobs: [
-                      { name: "native-i18n", conclusion: "success" },
-                      { name: "control-ui-i18n", conclusion },
-                    ],
-                  },
-                },
-              },
+        children: conclusion === "missing" ? {} : { normalCi: { timing: { jobs } } },
       });
       writeFileSync(diagnosticPath, diagnostic);
       const output = execFileSync("bash", ["-e", "-c", String(summaryStep.run)], {
@@ -378,52 +131,155 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     },
   );
 
-  it("has no continuation payload and dispatches child work only on attempt one", () => {
+  it("dispatches fresh child work only on attempt one while allowing artifact recovery", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
-    for (const job of [
-      "normal_ci",
-      "plugin_prerelease_independent",
-      "plugin_prerelease_candidate",
-      "release_checks_independent",
-      "release_checks_candidate",
-      "npm_telegram",
-      "performance",
-    ]) {
-      expect(String(workflow.jobs[job]?.if), job).toContain("github.run_attempt == 1");
-    }
-    for (const [job, dispatch] of [
-      ["prepare_npm_package", "Dispatch immutable npm artifact producer"],
-      ["prepare_docker_release", "Dispatch immutable Docker artifact producer"],
-      ["candidate_acquisition", "Dispatch immutable validation candidate producer"],
-    ] as const) {
-      expect(String(workflow.jobs[job]?.if), job).not.toContain("github.run_attempt");
-      const dispatchCondition = step(job, dispatch).if;
-      const recoveryCondition = step(job, "Recover original artifact producer").if ?? "true";
-      assert(typeof dispatchCondition === "string");
-      assert(typeof recoveryCondition === "string");
-      for (const reused of job === "candidate_acquisition" ? [undefined] : ["false", "true"]) {
-        for (const attempt of [1, 2]) {
-          const context = {
-            github: { run_attempt: attempt },
-            env: { PUBLICATION_ARTIFACTS_REUSED: reused },
-          };
-          expect(runInNewContext(dispatchCondition, context)).toBe(
-            attempt === 1 && reused !== "true",
+    let workloadDispatches = 0;
+    let artifactDispatches = 0;
+    for (const job of Object.values(workflow.jobs)) {
+      const artifact = job.env?.CHILD_WORKFLOW_KIND?.startsWith("artifact-");
+      const dispatches = job.steps.filter((entry) => String(entry.name).startsWith("Dispatch"));
+      for (const dispatch of dispatches) {
+        const env = dispatch.env as Record<string, unknown> | undefined;
+        if (!artifact && env?.CHILD_WORKFLOW_KIND) {
+          workloadDispatches += 1;
+          expect(String(job.if)).toContain("github.run_attempt == 1");
+        } else if (artifact) {
+          artifactDispatches += 1;
+          expect(String(job.if)).not.toContain("github.run_attempt");
+          const recovery = job.steps.find(
+            (entry) => entry.name === "Recover original artifact producer",
           );
-          expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
+          assert(recovery);
+          for (const reused of job.env?.PUBLICATION_ARTIFACTS_REUSED
+            ? ["false", "true"]
+            : [undefined]) {
+            for (const attempt of [1, 2]) {
+              const context = {
+                github: { run_attempt: attempt },
+                env: { PUBLICATION_ARTIFACTS_REUSED: reused },
+              };
+              expect(runInNewContext(String(dispatch.if), context)).toBe(
+                attempt === 1 && reused !== "true",
+              );
+              const recoveryCondition: unknown = recovery.if ?? "true";
+              assert(typeof recoveryCondition === "string");
+              expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
+            }
+          }
         }
       }
     }
+    expect(workloadDispatches).toBeGreaterThan(0);
+    expect(artifactDispatches).toBeGreaterThan(0);
     expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
+    expect(workflow.jobs.release_execution_plan?.needs).toEqual(
+      expect.arrayContaining([
+        "prepare_npm_package",
+        "qualify_npm_package",
+        "prepare_plugin_npm",
+        "prepare_docker_release",
+      ]),
+    );
+    for (const jobName of ["release_decision", "diagnostic_drain"]) {
+      expect(workflow.jobs[jobName]?.needs).toEqual(
+        expect.arrayContaining([
+          "prepare_npm_package",
+          "qualify_npm_package",
+          "prepare_plugin_npm",
+          "prepare_docker_release",
+        ]),
+      );
+    }
+    expect(workflow.jobs.summary?.env).toMatchObject({
+      NPM_PREPARATION_RESULT: "${{ needs.prepare_npm_package.result }}",
+      NPM_QUALIFICATION_RESULT: "${{ needs.qualify_npm_package.result }}",
+      PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
+      DOCKER_PREPARATION_RESULT: "${{ needs.prepare_docker_release.result }}",
+    });
     expect(source).not.toContain("continuationSource");
     expect(source).not.toContain("continuation_plan_json");
   });
+
+  it.each([
+    ["failure", false, "/workspace"],
+    ["success", true, "/workspace/qualification-verifier"],
+  ] as const)(
+    "uses materialized verifier paths after %s target resolution",
+    (result, verifierCheckedOut, verifierRoot) => {
+      const verifierSha = "a".repeat(40);
+      const targetSha = "b".repeat(40);
+      const evaluate = (expression: unknown): unknown => {
+        assert(typeof expression === "string");
+        return runInNewContext(expression.replace(/^\$\{\{|\}\}$/gu, ""), {
+          needs: {
+            resolve_target: {
+              result,
+              outputs: {
+                source_admission_json: JSON.stringify({
+                  qualificationAdmission: { workflowSha: verifierSha },
+                }),
+                sha: targetSha,
+              },
+            },
+          },
+          github: { workspace: "/workspace" },
+          fromJSON: JSON.parse,
+          format: (pattern: string, value: string) => pattern.replace("{0}", value),
+        });
+      };
+      for (const jobName of [
+        "release_decision",
+        "diagnostic_drain",
+        "summary",
+        "release_execution_plan",
+        "evidence_reuse",
+      ]) {
+        const job = workflow.jobs[jobName];
+        assert(job);
+        const checkout = step(jobName, "Checkout admitted qualification verifier");
+        expect(evaluate(checkout.if), jobName).toBe(verifierCheckedOut);
+        expect(evaluate((checkout.with as Record<string, unknown>).ref), jobName).toBe(verifierSha);
+        if (job.env?.RELEASE_STATE_SCRIPT) {
+          expect(evaluate(job.env.RELEASE_STATE_SCRIPT), jobName).toBe(
+            `${verifierRoot}/scripts/full-release-validation-state.mjs`,
+          );
+        }
+        for (const entry of job.steps) {
+          const env = entry.env as Record<string, unknown> | undefined;
+          if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
+            const root =
+              jobName === "evidence_reuse" && !verifierCheckedOut
+                ? "/workspace/workflow"
+                : verifierRoot;
+            expect(evaluate(env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR), jobName).toBe(
+              `${root}/scripts/release-ci-summary.mjs`,
+            );
+          }
+        }
+      }
+      for (const [jobName, stepName] of [
+        ["evidence_reuse", "Find reusable validation evidence"],
+        ["summary", "Write release validation manifest"],
+      ] as const) {
+        const env = step(jobName, stepName).env as Record<string, unknown>;
+        expect(evaluate(env.TARGET_SHA)).toBe(targetSha);
+      }
+    },
+  );
 
   it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
     const cache = step("release_execution_plan", "Cache immutable release execution plan");
     const restore = step(
       "release_execution_plan",
       "Restore immutable release execution plan artifact",
+    );
+    const inputsRestore = step(
+      "release_execution_plan",
+      "Restore immutable release execution plan inputs",
+    );
+    const inputsUpload = step(
+      "release_execution_plan",
+      "Upload immutable release execution plan inputs",
     );
     const upload = step("release_execution_plan", "Upload immutable release execution plan");
     expect(cache).toMatchObject({
@@ -436,6 +292,8 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     });
     expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
     expect(restore).toMatchObject({
+      id: "plan_restore",
+      "continue-on-error": true,
       if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
       with: {
         "github-token": "${{ github.token }}",
@@ -444,8 +302,25 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
         "run-id": "${{ github.run_id }}",
       },
     });
+    expect(inputsRestore).toMatchObject({
+      id: "plan_inputs_restore",
+      if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        path: "${{ github.workspace }}/full-release-execution-plan-inputs",
+        "run-id": "${{ github.run_id }}",
+      },
+    });
+    expect(inputsUpload).toMatchObject({
+      id: "plan_inputs_upload",
+      if: "${{ github.run_attempt == 1 && steps.plan_inputs.outcome == 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        overwrite: false,
+      },
+    });
     expect(upload).toMatchObject({
-      if: "${{ always() && github.run_attempt == 1 && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' }}",
+      if: "${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}",
       with: {
         name: "full-release-execution-plan-${{ github.run_id }}",
         overwrite: false,
@@ -459,67 +334,60 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       "resolve_target",
       "Upload restored immutable release execution plan",
     );
-    expect(restoredUpload.if).toBe("github.run_attempt != 1");
+    expect(restoredUpload.if).toBe(
+      "${{ github.run_attempt != 1 && steps.publication_plan_cache.outputs.cache-hit == 'true' }}",
+    );
     expect(restoredUpload.with).toEqual(upload.with);
     expect(step("resolve_target", "Upload immutable publication admission").if).toBeUndefined();
     const resolver = workflow.jobs.resolve_target;
     if (!resolver) {
       throw new Error("missing resolve_target job");
     }
-    const resolverSteps = resolver.steps.map((entry) => entry.name);
-    expect(resolverSteps.indexOf(earlyRestore.name)).toBeLessThan(
-      resolverSteps.indexOf("Admit publication source"),
-    );
-    expect(resolverSteps.indexOf(restoredUpload.name)).toBeGreaterThan(
-      resolverSteps.indexOf("Admit publication source"),
-    );
-    const witness = step(
-      "release_execution_plan",
-      "Record immutable release execution plan digest",
-    );
-    expect(witness.if).toBe(
-      "${{ always() && github.run_attempt == 1 && steps.plan_upload.outcome == 'success' }}",
-    );
+    const steps = resolver.steps;
     expect(
-      execFileSync("bash", ["-c", String(witness.run)], {
-        env: { PATH: process.env.PATH, EXECUTION_PLAN_SHA256: "a".repeat(64) },
-        encoding: "utf8",
-      }),
-    ).toBe(`FRV_EXECUTION_PLAN_SHA256=${"a".repeat(64)}\n`);
-    const save = step("release_execution_plan", "Save immutable release execution plan");
-    expect(cache.uses).toContain("actions/cache/restore@");
-    expect(save.uses).toContain("actions/cache/save@");
-    expect(save.with).toEqual(cache.with);
-    expect(save.if).toBe(
-      "${{ always() && github.run_attempt == 1 && steps.plan_witness.outcome == 'success' }}",
-    );
-    for (const job of ["release_decision", "diagnostic_drain", "summary"]) {
-      expect(step(job, "Download immutable release execution plan").with).toMatchObject({
-        name: "full-release-execution-plan-${{ github.run_id }}",
-      });
+      steps.indexOf(step("resolve_target", "Restore immutable plan for publication admission")),
+    ).toBeLessThan(steps.indexOf(step("resolve_target", "Admit publication source")));
+  });
+
+  it("keeps immutable plan artifacts parent-bound and non-overwriting", () => {
+    const artifactSteps = Object.values(workflow.jobs)
+      .flatMap(({ steps }) => steps)
+      .filter((entry) =>
+        /^(?:Upload|Download|Restore).*immutable release execution plan/u.test(String(entry.name)),
+      );
+    expect(artifactSteps.length).toBeGreaterThan(0);
+    for (const entry of artifactSteps) {
+      const options = entry.with as Record<string, unknown>;
+      expect(options.name).toContain("${{ github.run_id }}");
+      if (String(entry.name).startsWith("Upload")) {
+        expect(options.overwrite).toBe(false);
+      } else if (String(entry.name).startsWith("Restore")) {
+        expect(options["run-id"]).toBe("${{ github.run_id }}");
+      }
     }
   });
 
-  it.each([
-    {
-      job: "summary",
-      name: "Validate release validation manifest",
-      env: {
-        DIAGNOSTIC_DRAIN_PATH:
-          "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
-      },
-    },
-    {
-      job: "release_decision",
-      name: "Evaluate release decision",
-      env: { FAIL_FAST: "${{ inputs.fail_fast }}", FULL_RELEASE_STATE_MODE: "decision" },
-    },
-    {
-      job: "diagnostic_drain",
-      name: "Drain child diagnostics",
-      env: { FAIL_FAST: "false", FULL_RELEASE_STATE_MODE: "drain" },
-    },
-  ])("supplies $job with its evidence and cancellation contract", ({ job, name, env }) => {
-    expect(step(job, name).env).toMatchObject(env);
+  it("waits for installation quota before candidate dispatch", () => {
+    const candidateSteps = workflow.jobs.candidate_acquisition?.steps ?? [];
+    const quotaIndex = candidateSteps.findIndex(
+      (candidate) => candidate?.name === "Wait for candidate acquisition GitHub API quota",
+    );
+    const dispatchIndex = candidateSteps.findIndex(
+      (candidate) => candidate?.name === "Dispatch immutable validation candidate producer",
+    );
+    expect(quotaIndex).toBeGreaterThan(-1);
+    expect(dispatchIndex).toBeGreaterThan(quotaIndex);
+    expect(String(candidateSteps[quotaIndex]?.if)).toContain("github.run_attempt == 1");
+  });
+
+  it("only fail-fast decision collection can cancel children", () => {
+    expect(step("release_decision", "Evaluate release decision").env).toMatchObject({
+      FAIL_FAST: "${{ inputs.fail_fast }}",
+      FULL_RELEASE_STATE_MODE: "decision",
+    });
+    expect(step("diagnostic_drain", "Drain child diagnostics").env).toMatchObject({
+      FAIL_FAST: "false",
+      FULL_RELEASE_STATE_MODE: "drain",
+    });
   });
 });

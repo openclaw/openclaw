@@ -4,6 +4,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type {
+  AsyncSessionSourceCheck,
+  SessionSourceCheck,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { isAbortRequestText } from "./abort-primitives.js";
@@ -12,13 +16,14 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 export type FastAbortRequestParams = {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
-  isCommandTargetCurrent?: () => boolean;
+  isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
 };
 
 export type FastAbortResult = {
   handled: boolean;
   aborted: boolean;
   rejectionReason?: "finalizing";
+  localModelMayStillBeFinishing?: true;
   stoppedSubagents?: number;
   failedSubagents?: number;
 };
@@ -27,20 +32,25 @@ export function formatAbortReplyText(
   stoppedSubagents?: number,
   rejectionReason?: "finalizing",
   failedSubagents?: number,
+  localModelMayStillBeFinishing?: boolean,
 ): string {
   const failureSuffix =
-    typeof failedSubagents === "number" && failedSubagents > 0
+    failedSubagents !== undefined && failedSubagents > 0
       ? ` Cancellation was incomplete for ${failedSubagents} sub-agent${failedSubagents === 1 ? "" : "s"}. Retry /stop.`
+      : "";
+  const caveat =
+    localModelMayStillBeFinishing && !rejectionReason
+      ? " Cancellation requested; the local model may still be finishing."
       : "";
   const base =
     rejectionReason === "finalizing"
       ? "Agent reply is already finalizing and can no longer be aborted."
       : "⚙️ Agent was aborted.";
-  if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
-    return `${base}${failureSuffix}`;
+  if (stoppedSubagents === undefined || stoppedSubagents <= 0) {
+    return `${base}${failureSuffix}${caveat}`;
   }
   const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
-  return `${base} Stopped ${stoppedSubagents} ${label}.${failureSuffix}`;
+  return `${base} Stopped ${stoppedSubagents} ${label}.${failureSuffix}${caveat}`;
 }
 
 /** Normalize ingress once; current authorization belongs to the loaded operation. */

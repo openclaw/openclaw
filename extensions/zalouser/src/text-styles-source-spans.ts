@@ -1,6 +1,6 @@
-import type { MarkdownIRWithBlockMetadata } from "./text-styles-shared.js";
+import type { MarkdownIRWithMetadata } from "./text-styles-shared.js";
 
-export function createMarkdownSource(source: string, ir: MarkdownIRWithBlockMetadata) {
+export function createMarkdownSource(source: string, ir: MarkdownIRWithMetadata) {
   const lines = source.split("\n");
   let offset = 0;
   const lineStarts = lines.map((line) => {
@@ -94,7 +94,7 @@ export function sourceContainerProjection(
 
 export function sourceListItemContent(
   context: MarkdownSource,
-  item: NonNullable<MarkdownIRWithBlockMetadata["listItems"]>[number],
+  item: NonNullable<MarkdownIRWithMetadata["listItems"]>[number],
 ): string {
   const { source, ir, lineStarts: sourceLineStarts } = context;
   if (

@@ -17,12 +17,49 @@ export type CodexAppServerProcessIdentity = Pick<PosixProcess, "pid" | "pgid" | 
 const MAX_CONTAINED_PROCESSES = 512;
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const MAX_PROCESS_QUIESCE_PASSES = 16;
+const heldStoppedRoots = new Map<
+  PosixProcess,
+  { child: ContainableTransport; stoppedDescendants: ReadonlyMap<string, PosixProcess> }
+>();
+
+// A stopped process never observes its owner exiting: it is reparented and stays
+// stopped forever. Release held processes when the owner exits mid-containment.
+function releaseHeldProcessesOnExit(): void {
+  for (const [root, { child, stoppedDescendants }] of heldStoppedRoots) {
+    // Same release as the failure unwind: a stopped, unkilled descendant cannot be
+    // reaped, and a resumed native server exits on stdin EOF. The root kill below
+    // reaches only its own group, or the root alone when it shares the owner's.
+    for (const descendant of stoppedDescendants.values()) {
+      signalProcess(descendant.pid, "SIGCONT");
+    }
+    // An unreaped direct child still owns its PID.
+    if (child.exitCode == null && child.signalCode == null) {
+      signalProcess(root.pgid === root.pid ? -root.pid : root.pid, "SIGKILL");
+    }
+  }
+}
+
+function holdStoppedRoot(
+  root: PosixProcess,
+  child: ContainableTransport,
+  stoppedDescendants: ReadonlyMap<string, PosixProcess>,
+): () => void {
+  if (heldStoppedRoots.size === 0) {
+    process.on("exit", releaseHeldProcessesOnExit);
+  }
+  heldStoppedRoots.set(root, { child, stoppedDescendants });
+  return () => {
+    if (heldStoppedRoots.delete(root) && heldStoppedRoots.size === 0) {
+      process.off("exit", releaseHeldProcessesOnExit);
+    }
+  };
+}
 
 /** Discharges the registered root obligation, including an already-obsolete PID. */
 export async function terminateCodexAppServerOrphan(
   expected: CodexAppServerProcessIdentity,
 ): Promise<boolean> {
-  const deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
+  const deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS;
   // A retired root needs only identity evidence; unrelated processes cannot
   // make its durable registration live again or restore its former ancestry.
   const initial = (await readCodexAppServerProcessSnapshot(deadline, [expected.pid])).find(
@@ -49,21 +86,22 @@ export async function terminateCodexAppServerOrphan(
         signalProcess(current.pgid === current.pid ? -current.pid : current.pid, "SIGKILL");
       }
     }
-    while (Date.now() < deadline) {
+    while (performance.now() < deadline) {
       const snapshot = await readCodexAppServerProcessSnapshot(deadline, [expected.pid]).catch(
         () => undefined,
       );
-      if (!snapshot?.some((row) => row.pid === process.pid)) {
-        return false;
-      }
-      const current = snapshot.find((row) => row.pid === expected.pid);
-      if (!current || !hasSameIdentity(current, expected) || isDeadProcessState(current.state)) {
-        gone = true;
-        return true;
+      if (snapshot?.some((row) => row.pid === process.pid)) {
+        const current = snapshot.find((row) => row.pid === expected.pid);
+        if (!current || !hasSameIdentity(current, expected) || isDeadProcessState(current.state)) {
+          gone = true;
+          return true;
+        }
       }
       if (!contained) {
         return false;
       }
+      // macOS hides a killed process's topology until it is gone. Failed
+      // inspection proves neither exit nor survival, so observe again.
       await new Promise((resolve) => {
         setTimeout(resolve, 20);
       });
@@ -74,7 +112,7 @@ export async function terminateCodexAppServerOrphan(
       await signalSameProcess(
         contained.root,
         "SIGCONT",
-        Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+        performance.now() + MAX_PROCESS_CONTAINMENT_MS,
         "root",
       );
     }
@@ -84,7 +122,7 @@ export async function terminateCodexAppServerOrphan(
 export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
   expected?: CodexAppServerProcessIdentity,
-  deadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS,
+  deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS,
 ): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
   if (child.exitCode != null || child.signalCode != null) {
@@ -94,8 +132,10 @@ export async function terminateCodexAppServerDescendants(
     return undefined;
   }
   // Inspection failures never grant containment or signal authority.
-  const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
-  if (!snapshot || Date.now() >= deadline) {
+  const snapshot = await readCodexAppServerProcessSnapshot(deadline, undefined, [rootPid]).catch(
+    () => undefined,
+  );
+  if (!snapshot || performance.now() >= deadline) {
     return undefined;
   }
   const root = snapshot.find((row) => row.pid === rootPid);
@@ -117,7 +157,12 @@ export async function terminateCodexAppServerDescendants(
     return undefined;
   }
   const stoppedDescendants = new Map<string, PosixProcess>();
+  // Hold before the awaited SIGSTOP; process.exit can land in any await below.
+  // Orphans lack an unreaped handle, so their durable registration keeps cleanup.
+  // An owner SIGKILL runs no exit handler; that remains the accepted gap.
+  const release = expected ? undefined : holdStoppedRoot(root, child, stoppedDescendants);
   if (!(await signalSameProcess(root, "SIGSTOP", deadline, "root"))) {
+    release?.();
     return undefined;
   }
   let resumeRootOnUnwind = true;
@@ -135,13 +180,18 @@ export async function terminateCodexAppServerDescendants(
     // Parents are last: every destructive signal revalidates the exact live PID
     // while the stopped ancestry still prevents new descendants.
     for (const descendant of descendants.toReversed()) {
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         return undefined;
       }
-      if (!isDeadProcessState(descendant.state)) {
-        if (!(await signalSameProcess(descendant, "SIGKILL", deadline)) || Date.now() >= deadline) {
-          return undefined;
-        }
+      const killed =
+        isDeadProcessState(descendant.state) ||
+        (await signalSameProcess(descendant, "SIGKILL", deadline));
+      if (killed) {
+        // Dead or killed PIDs can be reaped and reused; never release them later.
+        stoppedDescendants.delete(identityKey(descendant));
+      }
+      if (!killed || performance.now() >= deadline) {
+        return undefined;
       }
     }
     // SIGKILL can remain pending for an uninterruptible process. Keep the root
@@ -152,8 +202,16 @@ export async function terminateCodexAppServerDescendants(
         root.pid,
         ...remaining.keys(),
       ]).catch(() => undefined);
-      if (!terminationSnapshot || Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         return undefined;
+      }
+      if (!terminationSnapshot) {
+        // A just-killed descendant can be briefly uninspectable on macOS; the
+        // stopped root keeps custody, so observe again until the deadline.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        continue;
       }
       const currentRoot = terminationSnapshot.find((row) => row.pid === root.pid);
       if (!currentRoot || !isSameLiveRoot(currentRoot, root, true)) {
@@ -182,6 +240,7 @@ export async function terminateCodexAppServerDescendants(
         }
         resumed = true;
         resumeTransportRoot(child, root, false);
+        release?.();
       },
     };
   } finally {
@@ -189,7 +248,7 @@ export async function terminateCodexAppServerDescendants(
       if (expected) {
         // Orphans have no retained child handle. Failed inspection leaves the
         // registration intact; never release a reused PID while unwinding.
-        const releaseDeadline = Date.now() + MAX_PROCESS_CONTAINMENT_MS;
+        const releaseDeadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS;
         for (const descendant of stoppedDescendants.values()) {
           await signalSameProcess(descendant, "SIGCONT", releaseDeadline);
         }
@@ -201,6 +260,7 @@ export async function terminateCodexAppServerDescendants(
         }
         resumeTransportRoot(child, root, true);
       }
+      release?.();
     }
   }
 }
@@ -214,11 +274,14 @@ async function quiesceDescendants(
   const provenByPid = new Map(initialDescendants.map((descendant) => [descendant.pid, descendant]));
   const stopFailures = new Map<string, number>();
   for (let pass = 0; pass < MAX_PROCESS_QUIESCE_PASSES; pass += 1) {
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       return undefined;
     }
-    const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
-    if (!snapshot || Date.now() >= deadline) {
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline, undefined, [
+      root.pid,
+      ...provenByPid.keys(),
+    ]).catch(() => undefined);
+    if (!snapshot || performance.now() >= deadline) {
       return undefined;
     }
     const currentRoot = snapshot.find((row) => row.pid === root.pid);
@@ -226,7 +289,10 @@ async function quiesceDescendants(
       return undefined;
     }
     if (!isSameLiveRoot(currentRoot, root, true)) {
-      if (!(await signalSameProcess(root, "SIGSTOP", deadline, "root")) || Date.now() >= deadline) {
+      if (
+        !(await signalSameProcess(root, "SIGSTOP", deadline, "root")) ||
+        performance.now() >= deadline
+      ) {
         return undefined;
       }
       continue;
@@ -261,14 +327,14 @@ async function quiesceDescendants(
     }
     let allStopped = true;
     for (const descendant of provenByPid.values()) {
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         return undefined;
       }
       if (isStoppedState(descendant.state)) {
         continue;
       }
       const stopQueued = await signalSameProcess(descendant, "SIGSTOP", deadline);
-      if (Date.now() >= deadline) {
+      if (performance.now() >= deadline) {
         return undefined;
       }
       if (stopQueued) {

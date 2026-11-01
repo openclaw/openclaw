@@ -12,7 +12,12 @@ import {
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
+import {
+  isRetiredModelPickerProvider,
+  omitCliRuntimeAliasTwins,
+  resolveCliRuntimeTwinRoute,
+  type CliRuntimeTwinRoute,
+} from "../../agents/model-runtime-aliases.js";
 import {
   dedupeModelCatalogEntries,
   LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
@@ -25,13 +30,10 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
-import {
-  openAIModelCatalogRoutePolicy,
-  resolveModelCatalogIdentityKey,
-} from "../../agents/openai-model-routes.js";
+import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -49,6 +51,7 @@ export type ModelsCommandSessionEntry = Partial<
     SessionEntry,
     | "authProfileOverride"
     | "authProfileOverrideSource"
+    | "authProfileOverrideCompactionCount"
     | "modelProvider"
     | "providerOverride"
     | "model"
@@ -194,24 +197,42 @@ export async function loadModelsProviderData(
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
   const modelAvailability = new Map<string, ModelReadiness>();
+  const twinRoutes = new Map<string, { twin: CliRuntimeTwinRoute; runtime?: { id: string } }>();
   const recordModelAvailability = (
     entry: ModelCatalogEntry,
     evaluation: ReturnType<typeof decisions.evaluateNative>,
     provider = entry.provider,
   ) => {
-    modelAvailability.set(`${normalizeProviderId(provider)}/${entry.id}`, {
-      availability: evaluation.availability,
-      unavailableReason: evaluation.unavailableReason,
-      runtimeAuth: evaluation.runtimeAuth,
-      runtimeId: resolveModelRuntimeRoute(provider)
+    const key = `${normalizeProviderId(provider)}/${entry.id}`;
+    const twin =
+      options.view === "all"
+        ? undefined
+        : resolveCliRuntimeTwinRoute(entry, {
+            config: cfg,
+            agentId: owner.agentId ?? agentId ?? "main",
+            cliRuntimeBindings: decisions.cliRuntimeBindings,
+          });
+    const runtime =
+      resolveModelRuntimeRoute(provider) || (twin && !twin.alias)
         ? resolveCatalogDecisionRuntime({
             cfg,
             agentId: owner.agentId ?? agentId ?? "main",
             entry,
             evaluation,
             pluginRegistry: owner.pluginRegistry,
-          })?.id
-        : undefined,
+          })
+        : undefined;
+    // An unavailable canonical row must not hide the only usable CLI choice.
+    if (twin && (twin.alias || evaluation.availability === true)) {
+      twinRoutes.set(key, { twin, runtime });
+    } else {
+      twinRoutes.delete(key);
+    }
+    modelAvailability.set(key, {
+      availability: evaluation.availability,
+      unavailableReason: evaluation.unavailableReason,
+      runtimeAuth: evaluation.runtimeAuth,
+      runtimeId: resolveModelRuntimeRoute(provider) ? runtime?.id : undefined,
     });
   };
   const hasAuth: ModelCatalogAuthChecker =
@@ -235,7 +256,6 @@ export async function loadModelsProviderData(
     workspaceDir,
     view: options.view,
     policy: visibilityPolicy,
-    routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
       const evaluation = evaluateEntry(entry, routeVariants);
@@ -246,7 +266,6 @@ export async function loadModelsProviderData(
       return resolveLogicalModelCatalogEntryState({
         evaluation,
         authBacked: options.view === "all" || evaluation.availability === true,
-        routePolicy: openAIModelCatalogRoutePolicy,
       });
     },
   });
@@ -357,7 +376,7 @@ export async function loadModelsProviderData(
   for (const modelConfig of [cfg.agents?.defaults?.model, cfg.agents?.defaults?.imageModel]) {
     if (typeof modelConfig === "string") {
       addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
+    } else if (modelConfig) {
       addRawModelRef(modelConfig.primary);
       for (const fallback of modelConfig.fallbacks ?? []) {
         addRawModelRef(fallback);
@@ -378,18 +397,6 @@ export async function loadModelsProviderData(
     }
   }
 
-  const providers = [...byProvider.keys()].toSorted();
-  const loginProviders = new Set(
-    providers.filter(
-      (provider) =>
-        resolveProviderChannelLoginChoice(provider, {
-          config: cfg,
-          workspaceDir,
-          metadataSnapshot: owner.metadataSnapshot,
-        }).status !== "unsupported",
-    ),
-  );
-
   const modelNames = new Map<string, string>();
   for (const entry of [...catalog, ...visibleCatalog]) {
     if (entry.name && entry.name !== entry.id) {
@@ -403,7 +410,6 @@ export async function loadModelsProviderData(
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeChoicesByModel = new Map<string, ModelsRuntimeChoice[]>();
   for (const [provider, models] of byProvider) {
-    const providerChoices = new Map<string, ModelsRuntimeChoice>();
     for (const model of models) {
       const entry = selectionCatalog.find(
         (row) => normalizeProviderId(row.provider) === provider && row.id === model,
@@ -439,17 +445,65 @@ export async function loadModelsProviderData(
         };
       });
       runtimeChoicesByModel.set(`${provider}/${model}`, choices);
-      for (const choice of choices) {
+    }
+  }
+
+  if (options.view !== "all") {
+    const selectionPolicies = [
+      visibilityPolicy,
+      ...Object.values(cfg.gateway?.roles?.definitions ?? {}).flatMap(
+        ({ modelPolicy }) =>
+          prepareOperatorModelPolicy({
+            cfg,
+            policy: modelPolicy,
+            manifestPlugins: owner.metadataSnapshot,
+          }) ?? [],
+      ),
+    ];
+    const retained = new Set(
+      omitCliRuntimeAliasTwins(
+        [...byProvider].flatMap(([provider, models]) =>
+          [...models].map((id) => {
+            const prepared = twinRoutes.get(`${provider}/${id}`);
+            return { row: { provider, id, agentRuntime: prepared?.runtime }, twin: prepared?.twin };
+          }),
+        ),
+        selectionPolicies,
+      ).map(({ provider, id }) => `${provider}/${id}`),
+    );
+    for (const [provider, models] of byProvider) {
+      for (const model of models) {
+        if (!retained.has(`${provider}/${model}`)) {
+          models.delete(model);
+          runtimeChoicesByModel.delete(`${provider}/${model}`);
+        }
+      }
+      if (models.size === 0 && !pendingProviders?.includes(provider)) {
+        byProvider.delete(provider);
+      }
+    }
+  }
+  for (const [provider, models] of byProvider) {
+    const providerChoices = new Map<string, ModelsRuntimeChoice>();
+    for (const model of models) {
+      for (const choice of runtimeChoicesByModel.get(`${provider}/${model}`) ?? []) {
         providerChoices.set(choice.id, choice);
       }
     }
     runtimeChoicesByProvider.set(provider, [...providerChoices.values()]);
   }
 
-  // Auth and visibility cross awaits. Retired owners must restart the whole projection.
-  if (!owner.isCurrent()) {
-    throw new PreparedModelRuntimePublicationSupersededError("model browse owner was superseded");
-  }
+  const providers = [...byProvider.keys()].toSorted();
+  const loginProviders = new Set(
+    providers.filter(
+      (provider) =>
+        resolveProviderChannelLoginChoice(provider, {
+          config: cfg,
+          workspaceDir,
+          metadataSnapshot: owner.metadataSnapshot,
+        }).status !== "unsupported",
+    ),
+  );
 
   return {
     byProvider,

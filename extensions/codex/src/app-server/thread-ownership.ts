@@ -152,7 +152,7 @@ export async function rollbackCodexAppServerBindingSubscription(
 
 /** Releases only the physical client and native thread recorded by the displaced binding owner. */
 export async function releaseCodexAppServerBindingSubscription(
-  binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId">,
+  binding: Pick<CodexAppServerThreadBinding, "threadId" | "clientId" | "conversationIncognito">,
   options: {
     allowUntracked?: boolean;
     assertCurrent?: () => void;
@@ -184,7 +184,7 @@ export async function releaseCodexAppServerBindingSubscription(
         `Codex thread ${binding.threadId} has an active run; stop it before changing its owner.`,
       );
     }
-    if (!options.allowUntracked) {
+    if (!options.allowUntracked && binding.conversationIncognito !== true) {
       return;
     }
     const unsubscribed = await unsubscribeCodexThreadBestEffort(clientLease.client, {
@@ -219,13 +219,13 @@ export async function retireCodexConversationThreadBinding(params: {
   afterClear?: () => Promise<void>;
 }): Promise<boolean> {
   const assertCurrent = params.assertCurrent;
-  const expected = params.bindingStore.read(params.identity);
+  const expected = await params.bindingStore.readAsync(params.identity);
   if (!expected || (params.expectedThreadId && expected.threadId !== params.expectedThreadId)) {
     return false;
   }
   return await withCodexAppServerThreadMutation(expected.threadId, () =>
     params.bindingStore.withLease(params.identity, async () => {
-      const current = params.bindingStore.read(params.identity);
+      const current = await params.bindingStore.readAsync(params.identity);
       if (
         !current ||
         !isSameCodexAppServerThreadOwner(current, expected) ||

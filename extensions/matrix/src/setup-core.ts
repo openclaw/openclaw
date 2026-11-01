@@ -1,4 +1,5 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -26,11 +27,7 @@ function resolveMatrixSetupAccountId(params: { accountId?: string; name?: string
 export function createMatrixSetupWizardProxy(
   loadWizardModule: () => Promise<MatrixSetupWizardModule>,
 ): ChannelSetupWizardAdapter {
-  let wizardPromise: Promise<ChannelSetupWizardAdapter> | null = null;
-  const loadWizard = () => {
-    wizardPromise ??= loadWizardModule().then((module) => module.matrixSetupWizard);
-    return wizardPromise;
-  };
+  const loadWizard = createLazyRuntimeNamedExport(loadWizardModule, "matrixSetupWizard");
   return {
     channel,
     getStatus: async (ctx) => await (await loadWizard()).getStatus(ctx),
@@ -68,7 +65,7 @@ export const finishMatrixSetupAfterConfigWrite: NonNullable<
   });
 };
 
-export const matrixSetupAdapter: ChannelSetupAdapter = {
+export const matrixSetupAdapter = {
   singleAccountKeysToMove,
   namedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget,
@@ -97,7 +94,7 @@ export const matrixSetupAdapter: ChannelSetupAdapter = {
       input,
     }),
   afterAccountConfigWritten: finishMatrixSetupAfterConfigWrite,
-};
+} satisfies ChannelSetupAdapter;
 
 export const matrixSetupContract = defineChannelSetupContract({
   fields: {

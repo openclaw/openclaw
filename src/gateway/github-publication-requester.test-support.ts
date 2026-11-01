@@ -1,7 +1,8 @@
 import { fileURLToPath } from "node:url";
-import { expect, vi, type Mock } from "vitest";
+import { expect, onTestFinished, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginStateKeyedStore,
@@ -11,7 +12,7 @@ import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { decodeGitHubPublicationRequester } from "../state/github-publication-requester.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -23,19 +24,19 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
-import { readGitHubPublicationRequest } from "./github-publication-store.js";
+import { createVisitorAccessPluginConfig } from "../test-utils/visitor-access-config.test-support.js";
+import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
+import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
+import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
-  createGitHubPublicationRequesterFixture,
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
+  overrideCommands,
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
-import {
-  readRepositoryGitHubPublication,
-  repositoryGitHubPublicationDigest,
-} from "./github-repository-publication-store.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
@@ -46,19 +47,130 @@ import {
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
-const mocks = githubPublicationTestMocks();
-
 type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
-type Requester = NonNullable<Parameters<Coordinator["requestForSession"]>[0]["requester"]>;
+type Requester = NonNullable<Parameters<Coordinator["requestForSessionV2"]>[0]["requester"]>;
 export const guestScopes = [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE];
+export const publicationGuestEmail = "publication-guest@example.test";
+export const publicationBackends = ["local", "repository"] as const;
+export const forPublicationBackends = <T extends string>(changes: readonly T[]) =>
+  publicationBackends.flatMap((backend) => changes.map((change) => ({ backend, change })));
+
+export function createPublicationRepositories(fork = false) {
+  const baseRepo = {
+    id: 10,
+    full_name: "openclaw/openclaw",
+    private: false,
+    archived: false,
+    owner: { type: "Organization" },
+    permissions: { push: true },
+  };
+  const headRepo = fork
+    ? {
+        ...baseRepo,
+        id: 20,
+        full_name: "contributor/openclaw",
+        owner: { type: "User" },
+        permissions: { push: false },
+      }
+    : baseRepo;
+  return { baseRepo, headRepo };
+}
+
+export function capturePublicationGuest(
+  f: Awaited<ReturnType<typeof createRequesterPolicyFixture>>,
+) {
+  return createGitHubPublicationRequesterFixture({
+    profileId: f.guestProfile,
+    scopes: guestScopes,
+    ...f.guestSource.session,
+  });
+}
+
+export async function startVisitorPublicationFixture(
+  f: Parameters<typeof prepareVisitorPublicationFixture>[0],
+) {
+  const visitors = await prepareVisitorPublicationFixture(f);
+  try {
+    await visitors.start();
+    await visitors.execute("visitor_invite", { email: publicationGuestEmail, days: 1 });
+    return Object.assign(visitors, { [Symbol.asyncDispose]: () => visitors.close() });
+  } catch (error) {
+    await visitors.close();
+    throw error;
+  }
+}
+
+export async function queueGuestPublication(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+  key: string,
+  claimBound = false,
+) {
+  const original = await capturePublicationGuest(f);
+  const claim =
+    claimBound && f.backend === "local"
+      ? await f.placements.claimTurn({
+          ...f.session,
+          agentId: "main",
+          owner: { kind: "local" },
+          claimId: "immediate-alias-retry-claim",
+          runId: "immediate-alias-retry-run",
+        })
+      : await holdWorkerTurn(f);
+  const input = f.request(key, original.requester);
+  const queued = claimBound
+    ? await f.coordinator.requestForClaimV2({ ...input, claim })
+    : await f.coordinator.requestForSessionV2(input);
+  expect(queued.status).toBe("requested");
+  return { original, claim, input, queued };
+}
+
+export async function resumePublicationFixture(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+) {
+  const restarted = f.restart();
+  await restarted.resumeSessionRequests();
+  return restarted;
+}
+
+export async function createGitHubPublicationRequesterFixture(params: {
+  profileId: string;
+  scopes: readonly string[];
+  sessionKey: string;
+  agentId: string;
+  getCommittedRuntimeConfig?: () => OpenClawConfig;
+}) {
+  const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
+    import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
+    import("./server/ws-connection/connect-operator-access.js"),
+  ]);
+  const client = createOperatorWsClient({
+    connId: params.profileId,
+    scopes: [...params.scopes],
+  });
+  client.authenticatedUserProfile = {
+    profileId: params.profileId,
+    displayName: null,
+    avatarRevision: "fixture",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+  prepareGatewayConnectOperatorAccess(client);
+  const context = {
+    getRuntimeConfig: currentGitHubPublicationConfig,
+    getCommittedRuntimeConfig: params.getCommittedRuntimeConfig ?? currentGitHubPublicationConfig,
+  };
+  const session = { sessionKey: params.sessionKey, agentId: params.agentId };
+  const captured = await prepareGitHubPublicationRequesterV2({ client, context }, session);
+  onTestFinished(captured.release);
+  return { ...captured, client, context, session };
+}
 
 async function createRequesterPolicySources(
   session: { sessionId: string; sessionKey: string },
   workspace: string,
 ) {
-  const guestProfile = (await ensureCanonicalUserProfileForEmail("publication-guest@example.test"))
-    .id;
+  const guestProfile = (await ensureCanonicalUserProfileForEmail(publicationGuestEmail)).id;
   const maintainerProfile = (
     await ensureCanonicalUserProfileForEmail("publication-maintainer@example.test")
   ).id;
@@ -83,43 +195,35 @@ async function createRequesterPolicySources(
     loadSessionEntryReadOnly({ agentId: "main", sessionKey: session.sessionKey }),
   ).toMatchObject({
     createdActor: { type: "human", source: "profile", id: guestProfile },
-    sandbox: "required",
   });
-  const guestSource = await createGitHubPublicationRequesterFixture({
-    profileId: guestProfile,
-    scopes: guestScopes,
-    sessionKey: session.sessionKey,
-    agentId: "main",
-  });
-  const maintainerSource = await createGitHubPublicationRequesterFixture({
-    profileId: maintainerProfile,
-    scopes: ["operator.admin"],
-    sessionKey: session.sessionKey,
-    agentId: "main",
-  });
-  const guest = guestSource.requester;
-  const maintainer = maintainerSource.requester;
+  const capture = (profileId: string, scopes: readonly string[]) =>
+    createGitHubPublicationRequesterFixture({
+      profileId,
+      scopes,
+      sessionKey: session.sessionKey,
+      agentId: "main",
+    });
+  const guestSource = await capture(guestProfile, guestScopes);
+  const maintainerSource = await capture(maintainerProfile, ["operator.admin"]);
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
   const externalWrites: string[] = [];
-  const transport = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+  overrideCommands((argv, input) => {
     if (argv.includes("push") || argv.includes("POST") || argv.includes("graphql")) {
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(options!.input!).title);
+      publishedTitles.push(JSON.parse(input!).title);
     }
-    return await transport(argv, options);
   });
   return {
     config,
     session,
     database,
-    guest,
+    guest: guestSource.requester,
     guestSource,
     guestProfile,
-    maintainer,
+    maintainer: maintainerSource.requester,
     maintainerSource,
     maintainerProfile,
     publishedTitles,
@@ -145,6 +249,7 @@ export async function createRequesterPublicationFixture(
   repositoryOptions: {
     requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
     baseFiles?: Record<string, string>;
+    initialCheckpoint?: boolean;
   } = {},
 ) {
   const repository =
@@ -154,6 +259,7 @@ export async function createRequesterPublicationFixture(
           repositoryOptions.requestedRef,
           session,
           repositoryOptions.baseFiles,
+          repositoryOptions.initialCheckpoint,
         )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);
@@ -194,8 +300,10 @@ export async function createRequesterPublicationFixture(
       return decodeGitHubPublicationRequester(
         backend === "repository"
           ? readRepositoryGitHubPublication(requestId)?.requester_authority_json
-          : readGitHubPublicationSessionLifecycle({ publicationKind: "shared", requestId })
-              ?.requester_authority_json,
+          : readGitHubPublicationSessionLifecycle(
+              { publicationKind: "shared", requestId },
+              openOpenClawStateDatabase().db,
+            )?.requester_authority_json,
       );
     },
     removeRequesterSnapshot(requestId: string) {
@@ -242,27 +350,30 @@ type StoredVisitorGrant = {
 };
 
 export function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): OpenClawConfig {
-  const roles = f.config.gateway!.roles!;
-  const config: OpenClawConfig = {
-    ...f.config,
+  const config = withPublicationGuestRole(f.config, {
+    sandbox: "required" as const,
+    accessPolicyPlugin: "visitor-access",
+    modelPolicy: {},
+  });
+  setRuntimeConfigSnapshot(config);
+  return config;
+}
+
+export function withPublicationGuestRole(
+  config: OpenClawConfig,
+  overrides: Partial<GatewayOperatorRoleDefinition>,
+): OpenClawConfig {
+  const roles = config.gateway!.roles!;
+  return {
+    ...config,
     gateway: {
-      ...f.config.gateway,
+      ...config.gateway,
       roles: {
         ...roles,
-        definitions: {
-          ...roles.definitions,
-          guest: {
-            ...roles.definitions.guest!,
-            sandbox: "required",
-            accessPolicyPlugin: "visitor-access",
-            modelPolicy: {},
-          },
-        },
+        definitions: { ...roles.definitions, guest: { ...roles.definitions.guest!, ...overrides } },
       },
     },
   };
-  setRuntimeConfigSnapshot(config);
-  return config;
 }
 
 export async function prepareVisitorPublicationFixture(f: {
@@ -271,18 +382,7 @@ export async function prepareVisitorPublicationFixture(f: {
   maintainer: Requester;
   local?: { cwd: string };
 }) {
-  const [
-    { loadAndActivateRootPluginRegistry },
-    { startPluginServices },
-    {
-      captureActivePluginRegistrySnapshot,
-      clearActivePluginRegistry,
-      restoreActivePluginRegistrySnapshot,
-      stageActivePluginRegistry,
-      rollbackStagedPluginRegistry,
-    },
-    { createEmptyPluginRegistry },
-  ] = await Promise.all([
+  const [loader, servicesRuntime, runtime, registryFactory] = await Promise.all([
     import("../plugins/loader.js"),
     import("../plugins/services.test-support.js"),
     import("../plugins/runtime.js"),
@@ -290,20 +390,11 @@ export async function prepareVisitorPublicationFixture(f: {
   ]);
   const config: OpenClawConfig = {
     ...requireVisitorPublicationPolicy(f),
-    plugins: {
-      allow: ["visitor-access"],
-      slots: { memory: "none" },
-      entries: {
-        "visitor-access": {
-          enabled: true,
-          config: {
-            accountId: "publication-test",
-            appId: "publication-test",
-            apiToken: "synthetic-publication-policy-token",
-          },
-        },
-      },
-    },
+    plugins: createVisitorAccessPluginConfig(
+      "publication-test",
+      "publication-test",
+      "synthetic-publication-policy-token",
+    ),
   };
   setRuntimeConfigSnapshot(config);
   const env = {
@@ -313,7 +404,7 @@ export async function prepareVisitorPublicationFixture(f: {
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
   };
   const workspaceDir = f.local?.cwd ?? root;
-  const priorRegistry = captureActivePluginRegistrySnapshot();
+  const priorRegistry = runtime.captureActivePluginRegistrySnapshot();
   const policyUrl =
     "https://api.cloudflare.com/client/v4/accounts/publication-test/access/apps/publication-test/policies";
   let emails: string[] = [];
@@ -348,23 +439,17 @@ export async function prepareVisitorPublicationFixture(f: {
       return Response.json({ success: true, result: {} });
     }),
   );
+  const unexpected = () => {
+    throw new Error("Unexpected Visitor publication Gateway operation");
+  };
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
-    async openPluginPanel() {
-      throw new Error("Unexpected plugin panel request");
-    },
-    async readSessionFacts() {
-      throw new Error("Unexpected session facts request");
-    },
-    async withSessionFacts() {
-      throw new Error("Unexpected session read scope");
-    },
-    subscribeSessionChanges() {
-      throw new Error("Unexpected session changes subscription");
-    },
-    async request() {
-      throw new Error("Unexpected Gateway request");
-    },
+    openPluginPanel: unexpected,
+    readSessionFacts: unexpected,
+    withSessionFacts: unexpected,
+    appendAgentMessage: unexpected,
+    subscribeSessionChanges: unexpected,
+    request: async () => unexpected(),
   };
   vi.spyOn(gateway, "request").mockImplementation(async (method) => {
     expect(method).toBe("users.list");
@@ -376,11 +461,8 @@ export async function prepareVisitorPublicationFixture(f: {
     senderIsOwner: true,
     assertInvocationCurrent: f.maintainer.assertCurrent,
   };
-  const unexpectedSubagent = () => {
-    throw new Error("Visitor publication fixtures must not dispatch subagent work");
-  };
   const register = async () => {
-    const registry = await loadAndActivateRootPluginRegistry({
+    const registry = await loader.loadAndActivateRootPluginRegistry({
       config,
       env,
       workspaceDir,
@@ -391,11 +473,12 @@ export async function prepareVisitorPublicationFixture(f: {
         gateway,
         // Service node setup reads this host facet even when Visitor never invokes nodes.
         subagent: {
-          complete: unexpectedSubagent,
-          run: unexpectedSubagent,
-          waitForRun: unexpectedSubagent,
-          getSessionMessages: unexpectedSubagent,
-          deleteSession: unexpectedSubagent,
+          complete: unexpected,
+          forkSession: unexpected,
+          run: unexpected,
+          waitForRun: unexpected,
+          getSessionMessages: unexpected,
+          deleteSession: unexpected,
         },
       },
     });
@@ -413,7 +496,7 @@ export async function prepareVisitorPublicationFixture(f: {
         env,
       }),
       async start() {
-        await startPluginServices({
+        await servicesRuntime.startPluginServices({
           registry,
           config,
           workspaceDir,
@@ -430,7 +513,7 @@ export async function prepareVisitorPublicationFixture(f: {
             expect(stopped.errors).toEqual([]);
           }
         } finally {
-          await clearActivePluginRegistry(registry);
+          await runtime.clearActivePluginRegistry(registry);
         }
       },
       async execute(name: "visitor_invite" | "visitor_revoke", input: Record<string, unknown>) {
@@ -455,6 +538,11 @@ export async function prepareVisitorPublicationFixture(f: {
     };
   };
   let active = await register();
+  const resetStores = async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+  };
   return {
     get store() {
       return active.store;
@@ -462,30 +550,26 @@ export async function prepareVisitorPublicationFixture(f: {
     start: () => active.start(),
     execute: (...args: Parameters<typeof active.execute>) => active.execute(...args),
     suspendRegistry() {
-      const snapshot = captureActivePluginRegistrySnapshot();
-      stageActivePluginRegistry(
-        createEmptyPluginRegistry(),
+      const snapshot = runtime.captureActivePluginRegistrySnapshot();
+      runtime.stageActivePluginRegistry(
+        registryFactory.createEmptyPluginRegistry(),
         null,
         snapshot.runtimeSubagentMode,
         snapshot.workspaceDir ?? undefined,
       );
-      return () => rollbackStagedPluginRegistry(snapshot);
+      return () => runtime.rollbackStagedPluginRegistry(snapshot);
     },
     async reopen() {
       await active.stop();
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
+      await resetStores();
       active = await register();
     },
     async close() {
       try {
         await active.stop();
       } finally {
-        restoreActivePluginRegistrySnapshot(priorRegistry);
-        await closeOpenClawAgentDatabasesAsync();
-        await closeOpenClawStateDatabaseAsync();
-        resetPluginStateStoreForTests();
+        runtime.restoreActivePluginRegistrySnapshot(priorRegistry);
+        await resetStores();
         vi.unstubAllGlobals();
       }
     },

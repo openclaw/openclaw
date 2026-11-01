@@ -5,6 +5,7 @@ import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime"
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordRetryAfterBodySeconds } from "../retry-after.js";
 
+const DISCORD_UNKNOWN_MESSAGE = 10008;
 const DISCORD_UNKNOWN_VOICE_STATE = 10065;
 const DISCORD_ERROR_BODY_MAX_DEPTH = 64;
 const DISCORD_ERROR_BODY_MAX_NODES = 10_000;
@@ -148,19 +149,26 @@ export function readDiscordMessage(body: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
 
+function readErrorDiscordCode(err: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(asOptionalObjectRecord(err)?.discordCode);
+}
+
+export function isUnknownDiscordMessageError(err: unknown): boolean {
+  return readErrorDiscordCode(err) === DISCORD_UNKNOWN_MESSAGE;
+}
+
 export function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const discordCode = parseStrictNonNegativeInteger(asOptionalObjectRecord(err)?.discordCode);
   return (
-    discordCode === DISCORD_UNKNOWN_VOICE_STATE ||
+    readErrorDiscordCode(err) === DISCORD_UNKNOWN_VOICE_STATE ||
     /unknown voice state/i.test(formatErrorMessage(err))
   );
 }
 
-export function readRetryAfter(body: unknown, response: Response, fallbackSeconds = 0): number {
+export function readRetryAfter(body: unknown, response: Response): number {
   return (
     parseDiscordRetryAfterBodySeconds(asOptionalObjectRecord(body)?.retry_after) ??
     parseRetryAfterHeaderSeconds(response.headers.get("Retry-After")) ??
-    fallbackSeconds
+    1
   );
 }
 
@@ -180,7 +188,6 @@ export class DiscordError extends Error {
   readonly status: number;
   readonly statusCode: number;
   readonly rawBody: unknown;
-  readonly rawError: unknown;
   discordCode?: number;
 
   constructor(response: Response, body: unknown) {
@@ -197,7 +204,6 @@ export class DiscordError extends Error {
     this.status = response.status;
     this.statusCode = response.status;
     this.rawBody = redactedBody;
-    this.rawError = redactedBody;
     // Classification consumes only a parsed non-negative integer and must not
     // depend on diagnostic depth/node truncation in the sanitized raw body.
     this.discordCode = readDiscordCode(body);
@@ -207,7 +213,6 @@ export class DiscordError extends Error {
 export class RateLimitError extends DiscordError {
   readonly retryAfter: number;
   readonly scope: string | null;
-  readonly bucket: string | null;
 
   constructor(
     response: Response,
@@ -215,8 +220,7 @@ export class RateLimitError extends DiscordError {
   ) {
     super(response, body);
     this.name = "RateLimitError";
-    this.retryAfter = readRetryAfter(body, response, 1);
+    this.retryAfter = readRetryAfter(body, response);
     this.scope = body.global ? "global" : readDiscordRateLimitScope(response);
-    this.bucket = readDiscordRateLimitBucket(response);
   }
 }

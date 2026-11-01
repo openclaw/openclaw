@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -37,7 +38,6 @@ function context(broadcast = vi.fn(), cfg: OpenClawConfig = {}): GatewayRequestC
     getRuntimeConfig: () => cfg,
     broadcast,
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
@@ -106,6 +106,7 @@ describe("session typing handler", () => {
     },
   ])("$name", async ({ name, presence, expected }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = `agent:main:typing-namespace-${name.replaceAll(" ", "-")}`;
       const sessionId = "typing-namespace";
       await upsertSessionEntryCore(
@@ -143,6 +144,7 @@ describe("session typing handler", () => {
 
   it("broadcasts bounded draft previews and never includes previews after typing stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       vi.useFakeTimers();
       vi.setSystemTime(30_000);
       const sessionKey = "agent:main:preview";
@@ -209,6 +211,7 @@ describe("session typing handler", () => {
 
   it("keeps a draft beside boolean-only typing until its connection stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       vi.useFakeTimers();
       vi.setSystemTime(40_000);
       const sessionKey = "agent:main:shared-preview";
@@ -273,6 +276,7 @@ describe("session typing handler", () => {
     "replaces a stopped connection's $state preview with the live draft",
     async ({ state, delayMs }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers();
         vi.setSystemTime(50_000);
         const sessionKey = `agent:main:stopped-${state}-preview`;
@@ -318,6 +322,7 @@ describe("session typing handler", () => {
       const cfg = {
         agents: { entries: { main: {}, work: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
       await upsertSessionEntryCore(
         { agentId, sessionKey: "global" },
         {
@@ -353,6 +358,7 @@ describe("session typing handler", () => {
 
   it("keeps an identity typing until its last active connection stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       vi.useFakeTimers();
       vi.setSystemTime(10_000);
       const sessionKey = "agent:main:main";
@@ -406,6 +412,7 @@ describe("session typing handler", () => {
 
   it("does not carry active connections across a session replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       vi.useFakeTimers();
       vi.setSystemTime(15_000);
       const sessionKey = "agent:main:typing-instance";
@@ -481,6 +488,7 @@ describe("session typing handler", () => {
     "drops a delayed refresh after its connection or session is %s",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         vi.useFakeTimers();
         vi.setSystemTime(20_000);
         const sessionKey = "agent:main:typing-reset";
@@ -550,6 +558,7 @@ describe("session typing handler", () => {
 
   it("does not record malformed, hidden, or unauthorized typing", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:typing-activity-authorization";
       const scope = { agentId: "main", sessionKey };
       const entry = {

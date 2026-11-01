@@ -119,7 +119,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
 - `actions.reactions` controls both message reactions and `emoji-list`, which lists the standard and custom reactions allowed in the current chat.
-- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use the standard `chatId:topic:topicId` format in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - `network.dnsResultOrder` defaults to `"ipv4first"` to avoid common IPv6 fetch failures.
 - Retry policy: see [Retry policy](/concepts/retry).
@@ -196,7 +196,7 @@ Before relying on an SSH wrapper for production sends, verify an outbound `imsg 
 - For SSH setups, `cliPath` is an absolute path on the Gateway host. `remoteHost` (`host` or `user@host`) is the Messages Mac, and `dbPath` is interpreted on that Mac. Use an absolute remote database path rather than expanding it from the Gateway user's home.
 - A configured or auto-detected `remoteHost` enables inbound attachment fetches and outbound file staging over the existing strict SSH/SCP transport. Outbound files use an owner-only remote temporary path with best-effort cleanup after success, failure, or timeout; cleanup failure warns and can leave owner-only residue.
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
-- SCP uses strict host-key checking, so ensure the Messages Mac host key already exists in `~/.ssh/known_hosts`.
+- SCP uses strict host-key checking, so check that the Messages Mac host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
 - `channels.imessage.sendTransport`: preferred `imsg` RPC send transport for normal outbound replies. `auto` (default) uses the IMCore bridge for existing chats when it is running, then falls back to AppleScript; `bridge` requires private-API delivery; `applescript` forces the public Messages automation path.
 - `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import type { SessionEntry } from "./types.js";
 
@@ -33,7 +33,7 @@ it("leaves warn-mode rows unchanged and protects admitted work during enforcemen
     log: { warn: () => {}, info: () => {} },
     artifacts: createMaintenanceArtifacts(),
   };
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: shared.storePath,
     identities: ["active"],
     assertAllowed: () => {},

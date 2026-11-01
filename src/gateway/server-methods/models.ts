@@ -9,8 +9,9 @@ import {
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { isPreparedModelRuntimeMissingOwnerError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
@@ -31,7 +32,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads retain inventory; explicit refresh and lifecycle changes own discovery.
+// Ordinary reads serve published rows while the catalog owner acquires native inventory.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -109,10 +110,14 @@ export const modelsHandlers: GatewayRequestHandlers = {
         await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
         assertCurrent();
         if (params.refresh !== true) {
-          getPublishedPreparedModelCatalogOwnerSnapshot({
+          const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
             agentId: resolved.agentId,
             config: cfg,
-          })?.recheckNativeLogin?.();
+          });
+          void owner?.recheckNativeLogin?.();
+          if (!params.preparedOnly && params.view !== "provider-config") {
+            void owner?.loadNativeModelCatalog?.().catch(() => undefined);
+          }
         }
         return {
           assertCurrent,
@@ -140,6 +145,14 @@ export const modelsHandlers: GatewayRequestHandlers = {
                 ...listParams(),
                 publicationScope: preparedScope,
               }));
+            const runtimeOwnership =
+              scope && params.view !== "provider-config"
+                ? await readSessionRuntimeOwnershipAsync({
+                    ...scope,
+                    config: context.getRuntimeConfig(),
+                    assertCurrent,
+                  })
+                : undefined;
             const publish = () => {
               assertCurrent();
               const currentConfig = context.getRuntimeConfig();
@@ -152,10 +165,16 @@ export const modelsHandlers: GatewayRequestHandlers = {
                             sessionModelRevision: sessionModelRevision(
                               scope.sessionEntry,
                               scope.workerInference,
+                              runtimeOwnership ?? null,
                             ),
                           }
                         : {}),
-                      models: projectSessionModelCatalog(scope, result.models, currentConfig),
+                      models: projectSessionModelCatalog(
+                        scope,
+                        result.models,
+                        currentConfig,
+                        runtimeOwnership,
+                      ),
                     }
                   : result;
               const policy = prepareOperatorModelPresentation({
@@ -196,7 +215,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         failure = errorShape(ErrorCodes.INVALID_REQUEST, error.message);
       } else if (error instanceof SessionMutationAuthorizationChangedError) {
         failure = error.error;
-      } else if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+      } else if (isPreparedModelRuntimeMissingOwnerError(error)) {
         failure = errorShape(ErrorCodes.UNAVAILABLE, error.message, {
           retryable: true,
           retryAfterMs: 0,

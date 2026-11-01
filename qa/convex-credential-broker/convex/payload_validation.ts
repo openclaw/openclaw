@@ -56,20 +56,33 @@ function requirePayloadString(
   return value;
 }
 
-function requireDiscordSnowflakePayloadString(
-  payload: Record<string, unknown>,
-  key: string,
-  createFailure: PayloadValidationFailureFactory,
-) {
-  const value = requirePayloadString(payload, key, "discord", createFailure);
-  if (!DISCORD_SNOWFLAKE_RE.test(value)) {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "discord" must include "${key}" as a Discord snowflake string.`,
-    );
-  }
-  return value;
+function createPayloadStringValidator(kind: string, pattern: RegExp, description: string) {
+  return (
+    payload: Record<string, unknown>,
+    key: string,
+    createFailure: PayloadValidationFailureFactory,
+  ) => {
+    const value = requirePayloadString(payload, key, kind, createFailure);
+    if (!pattern.test(value)) {
+      throwPayloadError(
+        createFailure,
+        `Credential payload for kind "${kind}" must include "${key}" as ${description}.`,
+      );
+    }
+    return value;
+  };
 }
+
+const requireDiscordSnowflakePayloadString = createPayloadStringValidator(
+  "discord",
+  DISCORD_SNOWFLAKE_RE,
+  "a Discord snowflake string",
+);
+const requireE164PayloadString = createPayloadStringValidator(
+  "whatsapp",
+  E164_RE,
+  "an E.164 phone number string",
+);
 
 function decodeBuzzPrivateKey(value: string) {
   if (BUZZ_PRIVATE_KEY_HEX_RE.test(value)) {
@@ -359,33 +372,12 @@ function normalizeDiscordCredentialPayload(
   } satisfies Record<string, unknown>;
 }
 
-function requireE164PayloadString(
-  payload: Record<string, unknown>,
-  key: string,
-  kind: string,
-  createFailure: PayloadValidationFailureFactory,
-) {
-  const value = requirePayloadString(payload, key, kind, createFailure);
-  if (!E164_RE.test(value)) {
-    throwPayloadError(
-      createFailure,
-      `Credential payload for kind "${kind}" must include "${key}" as an E.164 phone number string.`,
-    );
-  }
-  return value;
-}
-
 function normalizeWhatsAppCredentialPayload(
   payload: Record<string, unknown>,
   createFailure: PayloadValidationFailureFactory,
 ) {
-  const driverPhoneE164 = requireE164PayloadString(
-    payload,
-    "driverPhoneE164",
-    "whatsapp",
-    createFailure,
-  );
-  const sutPhoneE164 = requireE164PayloadString(payload, "sutPhoneE164", "whatsapp", createFailure);
+  const driverPhoneE164 = requireE164PayloadString(payload, "driverPhoneE164", createFailure);
+  const sutPhoneE164 = requireE164PayloadString(payload, "sutPhoneE164", createFailure);
   if (driverPhoneE164 === sutPhoneE164) {
     throwPayloadError(
       createFailure,

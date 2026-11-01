@@ -1,9 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   SKILL_LIBRARY_MAX_SELECTIONS,
   type SkillLibrarySelection,
   type SkillsLibraryActivateParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { SkillLibraryError } from "../skill-library-error.js";
@@ -11,12 +12,14 @@ import type { SkillLibraryReadInput, SkillLibraryReadOutput } from "./read.contr
 import {
   hydrateSkillLibraryWorkerAuthority,
   listSkillLibraryInDatabase,
+  projectSkillLibraryPresentation,
   readSkillLibraryMetadataInDatabase,
   resolveSkillLibraryPresentationInDatabase,
 } from "./service.kernel.js";
 import {
   selectSkillLibraryEntries,
   resolveSkillLibraryActor,
+  resolveSkillLibraryActorFromProfile,
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
   requireSkillLibraryUpload,
@@ -24,11 +27,15 @@ import {
   type SkillLibraryAuthority,
 } from "./store.js";
 
-function seed(db: DatabaseSync, authority: SkillLibraryAuthority): SkillLibrarySelection[] {
+function seed(
+  db: EngineConnection,
+  authority: SkillLibraryAuthority,
+  preparedActor?: ReturnType<typeof resolveSkillLibraryActor>,
+): SkillLibrarySelection[] {
   if (!authority.profileId || !tableExists(db, "skill_library_entries")) {
     return [];
   }
-  const actor = resolveSkillLibraryActor(db, authority);
+  const actor = preparedActor ?? resolveSkillLibraryActor(db, authority);
   const { profileId } = actor;
   return selectSkillLibraryEntries(db, authority, { enabledOnly: true }, actor)
     .filter(
@@ -50,7 +57,7 @@ function seed(db: DatabaseSync, authority: SkillLibraryAuthority): SkillLibraryS
 }
 
 function change(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   current: readonly SkillLibrarySelection[],
   params: SkillsLibraryActivateParams,
@@ -86,9 +93,45 @@ function change(
 }
 
 export const skillLibraryReadOperations = {
-  "skillLibrary.read": (input: SkillLibraryReadInput, db: DatabaseSync): SkillLibraryReadOutput => {
+  "skillLibrary.read": (
+    input: SkillLibraryReadInput,
+    db: EngineConnection,
+  ): SkillLibraryReadOutput => {
+    if (
+      input.kind === "seed" &&
+      (!input.authority.profileId ||
+        getAdmittedSqliteSchemaFacts(db)?.tables.has("skill_library_entries") === false)
+    ) {
+      return { type: "skillLibrary.read", kind: "seed", value: [], profileIds: [] };
+    }
     const profileIds = new Set<string>();
     const authority = hydrateSkillLibraryWorkerAuthority(input.authority, profileIds);
+    if (input.kind === "session") {
+      const actor = resolveSkillLibraryActorFromProfile(
+        authority,
+        input.authority.config,
+        input.sessionFacts.profile,
+      );
+      if (authority.profileId) {
+        profileIds.add(authority.profileId);
+      }
+      if (actor.profileId) {
+        profileIds.add(actor.profileId);
+      }
+      return {
+        type: "skillLibrary.read",
+        kind: "session",
+        value: {
+          selections:
+            !authority.profileId ||
+            getAdmittedSqliteSchemaFacts(db)?.tables.has("skill_library_entries") === false
+              ? []
+              : runSqliteDeferredTransactionSync(db, () => seed(db, authority, actor)),
+          presentation: projectSkillLibraryPresentation(actor, input.sessionFacts.multipleProfiles),
+        },
+        profileIds: [...profileIds],
+      };
+    }
     const value = runSqliteDeferredTransactionSync(db, () => {
       if (
         !["profile", "presentation", "list", "seed"].includes(input.kind) &&

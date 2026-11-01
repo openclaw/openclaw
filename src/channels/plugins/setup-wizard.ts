@@ -1,9 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { resolveChannelAllowFrom } from "../account-resolution.js";
 import { writeChannelSection } from "./config-helpers.js";
 import { resolveChannelSetupExecutionAdapter } from "./setup-contract.js";
-import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import { promptChannelAccessConfig } from "./setup-group-access.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   readChannelConfigSection,
@@ -177,11 +178,11 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;
       const accountContext = (currentCfg = next) => ({ cfg: currentCfg, accountId });
-      const collectCredentialValues = (currentCfg = next): ChannelSetupWizardCredentialValues => {
+      const collectCredentialValues = (): ChannelSetupWizardCredentialValues => {
         const values: ChannelSetupWizardCredentialValues = {};
         for (const credential of wizard.credentials) {
           const resolvedValue = normalizeOptionalString(
-            credential.inspect(accountContext(currentCfg)).resolvedValue,
+            credential.inspect(accountContext()).resolvedValue,
           );
           if (resolvedValue) {
             values[credential.inputKey] = resolvedValue;
@@ -440,8 +441,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         if (access.helpLines && access.helpLines.length > 0) {
           await prompter.note(access.helpLines.join("\n"), access.helpTitle ?? access.label);
         }
-        next = await configureChannelAccessWithAllowlist({
-          cfg: next,
+        const accessConfig = await promptChannelAccessConfig({
           prompter,
           label: access.label,
           currentPolicy: access.currentPolicy(accountContext()),
@@ -449,21 +449,26 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
           placeholder: access.placeholder,
           updatePrompt: access.updatePrompt(accountContext()),
           skipAllowlistEntries: access.skipAllowlistEntries,
-          setPolicy: (currentCfg, policy) =>
-            access.setPolicy({ ...accountContext(currentCfg), policy }),
-          resolveAllowlist: access.resolveAllowlist
-            ? async ({ cfg: currentCfg, entries }) =>
-                await access.resolveAllowlist!({
-                  ...stepContext(currentCfg),
-                  entries,
-                  prompter,
-                })
-            : undefined,
-          applyAllowlist: access.applyAllowlist
-            ? ({ cfg: currentCfg, resolved }) =>
-                access.applyAllowlist!({ ...accountContext(currentCfg), resolved })
-            : undefined,
         });
+        if (accessConfig) {
+          if (
+            accessConfig.policy !== "allowlist" ||
+            access.skipAllowlistEntries ||
+            !access.resolveAllowlist ||
+            !access.applyAllowlist
+          ) {
+            // Open/disabled policies must not reapply stale allowlist entries.
+            next = access.setPolicy({ ...accountContext(), policy: accessConfig.policy });
+          } else {
+            const resolved = await access.resolveAllowlist({
+              ...stepContext(),
+              entries: accessConfig.entries,
+              prompter,
+            });
+            next = access.setPolicy({ ...accountContext(), policy: "allowlist" });
+            next = access.applyAllowlist({ ...accountContext(), resolved });
+          }
+        }
       }
 
       if (forceAllowFrom && wizard.allowFrom) {
@@ -485,7 +490,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             allowFrom.helpTitle ?? `${plugin.meta.label} allowlist`,
           );
         }
-        const existingAllowFrom = plugin.config.resolveAllowFrom?.(accountContext()) ?? [];
+        const existingAllowFrom =
+          (await resolveChannelAllowFrom({ plugin, ...accountContext() })) ?? [];
         const unique = await promptResolvedAllowFrom({
           prompter,
           existing: existingAllowFrom,

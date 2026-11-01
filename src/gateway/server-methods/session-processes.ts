@@ -3,8 +3,6 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   SessionsProcessesListParamsSchema,
   SessionsProcessesStopParamsSchema,
-  SessionsProcessesListResultSchema,
-  SessionsProcessesStopResultSchema,
   type SessionsProcessesListResult,
   type SessionsProcessesStopResult,
 } from "../../../packages/gateway-protocol/src/schema/session-processes.js";
@@ -14,14 +12,18 @@ import {
 } from "../../agents/bash-process-observation.js";
 import type { WorkerProcessOperation } from "../../worker/worker-process-observation.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  sessionMutationForbiddenError,
+} from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
-import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
@@ -35,17 +37,18 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
       ? { ...params }
       : undefined;
   if (!input) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Invalid session process request"),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "Invalid session process request");
     return;
   }
   const authority = readGatewayRequestMutationAuthority(options);
   const projection = requireSessionRowProjection(context);
   const queries = (cfg: ReturnType<typeof context.getRuntimeConfig>) => {
-    const agent = resolveRequestedSessionAgentId(cfg, input.key, input.agentId);
+    const agent = resolveRequestedSessionAgentId(
+      cfg,
+      input.key,
+      input.agentId,
+      stop ? "write" : "read",
+    );
     if (!agent.ok) {
       throw new SessionMutationAuthorizationChangedError(agent.error);
     }
@@ -64,7 +67,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
     const row = read.describe(query, captured);
     if (
       !row ||
-      presentation.sharing.entryFilter?.(row.key, row.entry) === false ||
+      !presentation.sharing.canReadTarget(presentation.target(query)!) ||
       (captured &&
         (row.entry.sessionId !== captured.entry.sessionId ||
           row.entry.lifecycleRevision !== captured.entry.lifecycleRevision ||
@@ -72,11 +75,8 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
           row.agentId !== captured.agentId ||
           row.storeTarget.storePath !== captured.storeTarget.storePath))
     ) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Session process access changed; refresh the conversation.",
-        ),
+      throw sessionMutationForbiddenError(
+        "Session process access changed; refresh the conversation.",
       );
     }
     return row;
@@ -84,13 +84,10 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
   const selected = await withReadySessionRows(projection, queries, select);
   const sessionId = selected.entry.sessionId;
   if ("sessionId" in input && input.sessionId !== sessionId) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Session changed; refresh the process list before stopping a process.",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "Session changed; refresh the process list before stopping a process.",
     );
     return;
   }
@@ -103,6 +100,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
     select(projection, selected);
     placement?.assertCurrent();
   };
+  let releaseStopAuthorization: (() => void) | undefined;
   try {
     assertCurrent();
     const owner = placement?.placement;
@@ -147,37 +145,38 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
           ? { sessionId, ...readBackgroundProcesses(scope) }
           : stopBackgroundProcess(scope, operation);
     }
-    // Reenter readiness for publication after remote I/O. A stale response cannot leak
-    // output after a reset, a sharing change, or an execution placement replacement.
-    await withReadySessionRows(projection, queries, () => {
-      assertCurrent();
-      const expected = stop ? SessionsProcessesStopResultSchema : SessionsProcessesListResultSchema;
-      if (
-        !Value.Check(expected, result) ||
-        (!stop && "sessionId" in result && result.sessionId !== sessionId)
-      ) {
-        throw new Error("Worker returned an invalid process observation; reconnect and retry.");
-      }
-      if ("processes" in result) {
-        const stopParams = { key: selected.key, agentId: selected.agentId };
-        const stopScope = authorizeOperatorScopesForMethod(
-          "sessions.processes.stop",
-          client?.connect.scopes ?? [],
-          stopParams,
-        );
-        const canStop = Boolean(
-          client &&
-          stopScope.allowed &&
-          !resolveSessionMutationAuthorization({
+    const stopParams = { key: selected.key, agentId: selected.agentId };
+    const stopScope = authorizeOperatorScopesForMethod(
+      "sessions.processes.stop",
+      client?.connect.scopes ?? [],
+      stopParams,
+    );
+    const stopAuthorization =
+      "processes" in result && client && stopScope.allowed
+        ? await resolveSessionMutationAuthorizationAsync({
             client,
             method: "sessions.processes.stop",
             requestParams: stopParams,
             context,
-            // Keep the admitted own-session ceiling, just as dispatch authorization does.
             sessionScope: stopScope.sessionScope,
             sessionRowRead: projection,
-          }).error,
-        );
+            assertInvocationCurrent: assertCurrent,
+          })
+        : undefined;
+    releaseStopAuthorization = stopAuthorization?.authorization?.release;
+    // Reenter readiness for publication after remote I/O. A stale response cannot leak
+    // output after a reset, a sharing change, or an execution placement replacement.
+    await withReadySessionRows(projection, queries, () => {
+      assertCurrent();
+      if (
+        "processes" in result === stop ||
+        ("sessionId" in result && result.sessionId !== sessionId)
+      ) {
+        throw new Error("Worker returned an invalid process observation; reconnect and retry.");
+      }
+      if ("processes" in result) {
+        stopAuthorization?.authorization?.assertCurrent();
+        const canStop = Boolean(stopAuthorization && !stopAuthorization.error);
         result = {
           ...result,
           processes: result.processes.map((row) => ({ ...row, canStop: row.canStop && canStop })),
@@ -186,6 +185,7 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
       respond(true, result);
     });
   } finally {
+    releaseStopAuthorization?.();
     placement?.release();
   }
 }

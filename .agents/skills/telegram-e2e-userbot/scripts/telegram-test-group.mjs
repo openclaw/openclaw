@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand, sanitizeChildEnvironment } from "./run-mock-sut-user-e2e.mjs";
@@ -10,7 +11,7 @@ const USER_DRIVER_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)),
 // credential release, so every exit path deletes it under the same lease.
 async function ownTelegramFixture(
   credential,
-  { kind, evidenceKey, prepare, cleanup, runCommandImpl },
+  { kind, evidenceKey, prepare, cleanup, runCommandImpl, timeoutMs = 60_000 },
 ) {
   const evidence = { setup: { status: "started" }, cleanup: { status: "pending" } };
   credential[evidenceKey] = evidence;
@@ -24,7 +25,7 @@ async function ownTelegramFixture(
       {
         cwd: process.cwd(),
         env: { ...sanitizeChildEnvironment(), ...credential.driverEnv },
-        timeoutMs: 60_000,
+        timeoutMs,
       },
     );
     if (result.status !== 0 || result.timedOut) {
@@ -46,7 +47,33 @@ async function ownTelegramFixture(
         if (evidence.cleanup.ok !== true)
           throw new Error(`Telegram ${kind} cleanup was not confirmed.`);
       } catch (error) {
-        evidence.cleanup = { status: "failed", error: error.message };
+        evidence.cleanup = { ...evidence.cleanup, status: "failed", error: error.message };
+        if (kind === "forum" && credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR) {
+          try {
+            const manifest = path.join(
+              credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
+              "owned-test-forum.json",
+            );
+            if (fs.existsSync(manifest)) {
+              const record = JSON.parse(fs.readFileSync(manifest, "utf8"));
+              if (record.status !== "deleted") {
+                Object.assign(evidence.cleanup, {
+                  status:
+                    record.status === "deletion-pending-verification"
+                      ? record.status
+                      : "uncertain-creation",
+                  title: record.title,
+                  createdAt: record.createdAt,
+                  testerUserId: record.testerUserId,
+                  groupId: record.groupId || record.basicGroupId,
+                  ...(record.deletion ? { deletion: record.deletion } : {}),
+                });
+              }
+            }
+          } catch {
+            // Interrupted manifest writes must not replace the original cleanup failure.
+          }
+        }
         throw error;
       }
       await releaseCredential();
@@ -55,11 +82,15 @@ async function ownTelegramFixture(
   };
   try {
     evidence.setup = await run(prepare);
-    if (evidence.setup.ok !== true || !/^-\d+$/u.test(evidence.setup.groupId)) {
-      throw new Error(`Telegram ${kind} setup returned an invalid group identity.`);
+    const dmTopic = kind === "DM topic";
+    const chatId = dmTopic ? evidence.setup.chatId : evidence.setup.groupId;
+    if (evidence.setup.ok !== true || !(dmTopic ? /^[1-9]\d*$/u : /^-\d+$/u).test(chatId)) {
+      throw new Error(`Telegram ${kind} setup returned an invalid chat identity.`);
     }
-    credential.groupId = evidence.setup.groupId;
-    credential.driverEnv.TELEGRAM_USER_DRIVER_CHAT_ID = credential.groupId;
+    if (!dmTopic) {
+      credential.groupId = chatId;
+    }
+    credential.driverEnv.TELEGRAM_USER_DRIVER_CHAT_ID = chatId;
   } catch (error) {
     evidence.setup = { status: "failed", error: error.message };
     throw error;
@@ -92,4 +123,19 @@ export async function prepareTelegramTestForum(credential, { runCommandImpl = ru
     throw new Error("Telegram forum setup returned an invalid topic identity.");
   }
   return forum;
+}
+
+export async function prepareTelegramTestDmTopic(credential, { runCommandImpl = runCommand } = {}) {
+  const topic = await ownTelegramFixture(credential, {
+    kind: "DM topic",
+    evidenceKey: "testDmTopic",
+    prepare: ["prepare-dm-topic"],
+    cleanup: "cleanup-dm-topic",
+    runCommandImpl,
+    timeoutMs: 180_000,
+  });
+  if (!Number.isSafeInteger(topic.forumTopicId) || topic.forumTopicId < 1) {
+    throw new Error("Telegram DM topic setup returned an invalid topic identity.");
+  }
+  return topic;
 }

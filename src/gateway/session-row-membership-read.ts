@@ -1,12 +1,19 @@
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import {
-  mergeCombinedSessionStore,
-  prepareCombinedSessionStore,
-} from "../config/sessions/combined-store-gateway.js";
-import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+  prepareCombinedSessionStoreForGatewayAsync,
+  prepareCombinedSessionStoreLineage,
+} from "../config/sessions/combined-store-gateway-read.js";
+import { mergeCombinedSessionStore } from "../config/sessions/combined-store-gateway.js";
+import type {
+  CombinedSessionStoreScopeTargets,
+  GatewaySessionStoreDiscovery,
+} from "../config/sessions/combined-store.types.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
+import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   assertExistingDatabaseIdentity,
@@ -171,16 +178,16 @@ export function createSessionRowMembershipReadAccess(params: {
       const members = row && membership.membership(row.storeTarget.storePath, row.key);
       return members ? new Set(members) : undefined;
     },
-    readSource(target: records.Row | records.Lookup) {
+    readSource(target: records.Row | records.Lookup): CapturedSessionEntryReadSource | undefined {
       const row = "storeTarget" in target ? target : params.lookup(target);
       if (!row) {
         throw new Error("Session store changed while preparing authorization");
       }
-      const source = params.stores().get(row.storeTarget.storePath);
-      // Incognito rows retain their process-local locator and native lifetime guard.
-      if (!source && isIncognitoSessionKey(row.key)) {
+      // Memory rows retain actor custody and never describe a physical database source.
+      if (isIncognitoSessionKey(row.key)) {
         return undefined;
       }
+      const source = params.stores().get(row.storeTarget.storePath);
       if (!source || !params.owner().isCurrent(row)) {
         throw new Error("Session store changed while preparing authorization");
       }
@@ -299,29 +306,53 @@ export function createSessionRowEntryReadAccess(
         async loadCombinedStore<T>(
           cfg: OpenClawConfig,
           discovery: GatewaySessionStoreDiscovery,
-          consume: (load: () => ReturnType<typeof mergeCombinedSessionStore>) => T,
+          consume: (
+            load: () => ReturnType<typeof mergeCombinedSessionStore>,
+            scopes: CombinedSessionStoreScopeTargets,
+          ) => T,
         ): Promise<T> {
           const options = {
             discovery,
             includeIncognito: false,
             preserveSentinelOwners: "physical" as const,
           };
-          const preparedStore = prepareCombinedSessionStore(cfg, options);
-          // Pin every physical source before the first worker request yields.
+          const { prepared: preparedStore, scopes } =
+            await prepareCombinedSessionStoreForGatewayAsync(cfg, options, [
+              ...new Set([...listAgentIds(cfg), ...[...rows.values()].map((row) => row.agentId)]),
+            ]);
+          // Pin sources and resident entries before a worker wait can invalidate their rows.
           const captures = preparedStore.reads.flatMap(({ storeTarget: physical }) => {
             const file = readDatabasePathIdentitySync(physical.storePath);
             if (!file.key.startsWith("file:")) {
               return [];
             }
             const identity = file.key.slice("file:".length);
+            const previous = findStoreGeneration(stores, physical.storePath, {
+              identity,
+              birthtime: file.birthtime,
+            });
+            let entries: SessionEntrySummary[] | undefined;
+            if (previous) {
+              entries = [];
+              for (const id of byStore.get(previous.target.storePath) ?? []) {
+                const row = rows.get(id);
+                const entry =
+                  row?.storedEntry ??
+                  row?.pendingDatabaseFacts?.entry ??
+                  row?.retainedDatabaseFacts?.entry;
+                if (!row || !entry) {
+                  entries = undefined;
+                  break;
+                }
+                entries.push({ sessionKey: row.key, entry });
+              }
+            }
             return [
               {
                 target: physical,
                 file,
-                previous: findStoreGeneration(stores, physical.storePath, {
-                  identity,
-                  birthtime: file.birthtime,
-                }),
+                previous: entries ? previous : undefined,
+                entries,
               },
             ];
           });
@@ -334,7 +365,10 @@ export function createSessionRowEntryReadAccess(
             })),
             async (owners) => {
               const entries = new Map<string, SessionEntrySummary[]>();
-              for (const [index, { target, file, previous }] of captures.entries()) {
+              for (const [
+                index,
+                { target, file, previous, entries: capturedEntries },
+              ] of captures.entries()) {
                 const prepared = previous
                   ? undefined
                   : await owners[index]!.readStoreProjection({
@@ -356,41 +390,44 @@ export function createSessionRowEntryReadAccess(
                 if (prepared) {
                   replaced.add(target.storePath);
                   entries.set(target.storePath, prepared.entries);
+                } else if (capturedEntries) {
+                  entries.set(target.storePath, capturedEntries);
                 }
               }
+              // Reject replaced sources before publishing their rows and sharing metadata.
               for (const [index, { target, file }] of captures.entries()) {
                 owners[index]!.assertCurrent();
                 assertExistingDatabaseIdentity(target.storePath, file.key, file.birthtime);
               }
-              return consume(() =>
-                mergeCombinedSessionStore(
-                  cfg,
-                  {
-                    ...options,
-                    onStoreLoaded(target, agentId, owner) {
-                      const source = sources.get(target.storePath);
-                      if (source) {
-                        source.agentId = agentId;
-                        source.discoveryAgentId = owner?.agentId ?? null;
-                        source.discoveryOrder = owner?.order;
-                      }
+              const readEntries = (target: SessionStoreTarget) =>
+                entries.get(target.storePath) ?? [];
+              const lineage = await prepareCombinedSessionStoreLineage(
+                cfg,
+                preparedStore,
+                readEntries,
+                discovery,
+              );
+              return consume(
+                () =>
+                  mergeCombinedSessionStore(
+                    cfg,
+                    {
+                      ...options,
+                      onStoreLoaded(target, agentId, owner) {
+                        const source = sources.get(target.storePath);
+                        if (source) {
+                          source.agentId = agentId;
+                          source.discoveryAgentId = owner?.agentId ?? null;
+                          source.discoveryOrder = owner?.order;
+                        }
+                      },
                     },
-                  },
-                  preparedStore,
-                  (target) => {
-                    const previous = captures.find(
-                      (capture) => capture.target.storePath === target.storePath,
-                    )?.previous;
-                    if (previous) {
-                      return [...(byStore.get(previous.target.storePath) ?? [])].flatMap((id) => {
-                        const row = rows.get(id);
-                        const entry = row && (row.storedEntry ?? readSessionRowEntry(row));
-                        return row && entry ? [{ sessionKey: row.key, entry }] : [];
-                      });
-                    }
-                    return entries.get(target.storePath) ?? [];
-                  },
-                ),
+                    preparedStore,
+                    readEntries,
+                    lineage,
+                    lineage.readIncognitoEntries,
+                  ),
+                scopes!,
               );
             },
             projectionLane,
@@ -398,7 +435,7 @@ export function createSessionRowEntryReadAccess(
         },
         updateMembership() {
           membership.updateTargets(
-            [...sources.values()].map((source) => ({
+            Array.from(sources.values(), (source) => ({
               agentId: source.target.agentId,
               storePath: source.target.storePath,
               discoveryAgentId: source.discoveryAgentId,

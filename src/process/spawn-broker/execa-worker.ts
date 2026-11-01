@@ -1,9 +1,14 @@
 import type { ChildProcess } from "node:child_process";
-import { Socket } from "node:net";
-import type { Transform } from "node:stream";
+import { once } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createConnection, createServer, Socket } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Transform, type TransformCallback } from "node:stream";
 import { execa } from "execa";
+import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { spawnInAgentExecCgroup } from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
-import { createExecaOutput } from "./execa-output.js";
 import {
   serializeExecaError,
   type BrokerExecaOptions,
@@ -11,6 +16,53 @@ import {
   type BrokerOutputOption,
 } from "./execa-protocol.js";
 import { holdPipeForTransfer } from "./pipe.js";
+
+/** Execa retains its reader; the Gateway receives a separate native output socket. */
+async function createExecaOutput(): Promise<{ receiver: Socket; transform: Transform }> {
+  const directory = await mkdtemp(path.join(tmpdir(), "oc-spawn-"));
+  const server = createServer({ pauseOnConnect: true });
+  let writer: Socket | undefined;
+  let receiver: Socket | undefined;
+  try {
+    const socketPath = path.join(directory, "out");
+    server.listen(socketPath);
+    await once(server, "listening");
+    const accepted = new Promise<Socket>((resolve) => {
+      server.once("connection", resolve);
+    });
+    receiver = createConnection(socketPath);
+    [writer] = await Promise.all([accepted, once(receiver, "connect")]);
+    const destination = writer;
+    const transform = new Transform({
+      transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) {
+        // The callback gates execa's reader too, unlike a second .pipe() consumer.
+        destination.write(chunk, (error) => callback(error, chunk));
+      },
+      flush(callback: TransformCallback) {
+        destination.end(callback);
+      },
+      destroy(error, callback) {
+        destination.destroy();
+        callback(error);
+      },
+    });
+    destination.on("error", (error) => transform.destroy(error));
+    destination.once("close", () => {
+      if (!destination.writableFinished) {
+        transform.destroy();
+      }
+    });
+    return { receiver, transform };
+  } catch (error) {
+    writer?.destroy();
+    receiver?.destroy();
+    throw error;
+  } finally {
+    server.close();
+    // Connected sockets retain their endpoints after the private rendezvous is removed.
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 
 function outputOption(options: BrokerExecaOptions, fd: 1 | 2): BrokerOutputOption {
   const explicit = fd === 1 ? options.stdout : options.stderr;
@@ -24,6 +76,7 @@ export type BrokerExecaProcess = {
   child: ChildProcess;
   stdio: (Socket | null)[];
   result: Promise<BrokerExecaResult>;
+  groupStartedAt?: number | null;
   cancel: () => void;
   kill: (signal?: NodeJS.Signals | number) => boolean;
   outputDrained: (fd: number, error?: Error) => void;
@@ -34,6 +87,7 @@ export async function startBrokerExeca(
   argv: string[],
   options: BrokerExecaOptions,
   assertCurrent: () => void,
+  execCgroup?: string,
 ): Promise<BrokerExecaProcess> {
   const controller = new AbortController();
   const outputs = new Map<number, { receiver: Socket; transform: Transform }>();
@@ -65,11 +119,18 @@ export async function startBrokerExeca(
         : execa(argv[0]!, argv.slice(1), { ...spawnOptions, encoding });
     let subprocess: ReturnType<typeof start>;
     try {
-      subprocess = start();
+      subprocess = spawnInAgentExecCgroup(execCgroup, start);
     } catch (error) {
       throw await adoptAbandonedSpawnError(error);
     }
     const child = subprocess.nodeChildProcess;
+    // Capture before returning across an await: libuv may reap a short-lived leader.
+    const groupStartedAt =
+      child.pid &&
+      process.platform !== "win32" &&
+      (options.detached === true || options.killDescendants === true)
+        ? getProcessInstanceStartTime(child.pid)
+        : undefined;
     const stdio = [0, 1, 2].map((fd) => {
       if (fd === 0 && options.input !== undefined) {
         return null;
@@ -121,6 +182,7 @@ export async function startBrokerExeca(
       child,
       stdio,
       result,
+      groupStartedAt,
       cancel() {
         clearDeadline();
         controller.abort();

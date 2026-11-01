@@ -18,7 +18,8 @@ openclaw-lobster-pet .lobster-pet {
 
 .lobster-pet__motion {
   position: absolute;
-  inset: 0;
+  /* Sprites use pixel coordinates; a full-size moving box overflows the composer. */
+  inset: 0 auto auto 0;
   pointer-events: none;
 }
 
@@ -121,8 +122,24 @@ openclaw-lobster-pet .lobster-bottle {
 }
 
 /* Restore hit testing beneath the pointer-inert decorative pet host. */
-wa-dropdown.lobster-pet-dismiss-menu {
+.lobster-pet-dismiss-menu {
   pointer-events: auto;
+}
+
+.lobster-pet-dismiss-menu__panel {
+  --oc-overlay-distance: 0px;
+}
+
+.lobster-pet-dismiss-menu__trigger {
+  position: fixed;
+  left: var(--lobster-pet-menu-x);
+  top: var(--lobster-pet-menu-y);
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .lobster-pet--elder {

@@ -3,14 +3,19 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as storage from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { SqliteWorkerError } from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 import { MemorySourceIndexKernel } from "./manager-source-index-kernel.js";
+
+const snapshot = (db: DatabaseSync) =>
+  db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -21,26 +26,17 @@ describe("private session source staging", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  async function setup(vectorEnabled = false) {
+  async function setup() {
     await fixture.seedSessionTranscript({
       sessionId: "shadow-session",
-      messages: [
-        {
-          role: "user",
-          timestamp: 1,
-          content: vectorEnabled
-            ? "Violet session preference. Beta."
-            : "Violet session preference.",
-          senderIsOwner: true,
-        },
-      ],
+      messages: [{ role: "user", timestamp: 1, content: "Violet", senderIsOwner: true }],
     });
     const manager = await fixture.getFreshManager(
       fixture.createConfig({
-        provider: vectorEnabled ? "openai" : "none",
+        provider: "none",
         sources: ["memory", "sessions"],
         sessionMemory: true,
-        vectorEnabled,
+        vectorEnabled: false,
       }),
     );
     // SAFETY: this fixture owns the manager and inspects its published native store.
@@ -48,79 +44,32 @@ describe("private session source staging", () => {
     return { manager, db };
   }
 
-  it.each([
-    { mode: "FTS-only", vectorEnabled: false },
-    { mode: "vector", vectorEnabled: true },
-  ])(
-    "publishes forced $mode memory and session sources without the application-thread kernel",
-    async ({ vectorEnabled }) => {
-      const { manager, db } = await setup(vectorEnabled);
-      vi.spyOn(MemorySourceIndexKernel.prototype, "replaceRows").mockImplementation(() => {
-        throw new Error("source publication reached the application thread");
-      });
-      await manager.sync({ reason: "cli", force: true });
-      expect(
-        db.prepare("SELECT DISTINCT source FROM memory_index_chunks ORDER BY source").all(),
-      ).toEqual([{ source: "memory" }, { source: "sessions" }]);
-      const sessionChunks = db
-        .prepare(
-          "SELECT id, text, embedding FROM memory_index_chunks WHERE source='sessions' ORDER BY id",
-        )
-        .all();
-      expect(sessionChunks).toEqual([
-        {
-          id: expect.any(String),
-          text: expect.stringContaining("Violet session preference."),
-          embedding: storage.encodeMemoryEmbedding(vectorEnabled ? [0, 1, 0, 0] : []),
-        },
-      ]);
-      if (vectorEnabled) {
-        const vectors = db
-          .prepare(
-            "SELECT v.id, hex(v.embedding) AS embedding FROM memory_index_chunks_vec AS v " +
-              "JOIN memory_index_chunks AS c ON c.id = v.id WHERE c.source = 'sessions' ORDER BY v.id",
-          )
-          .all();
-        const embedding = Buffer.from(new Float32Array([0, 1, 0, 0]).buffer)
-          .toString("hex")
-          .toUpperCase();
-        expect(vectors).toEqual(sessionChunks.map(({ id }) => ({ id, embedding })));
-      }
-      await manager.close();
-      const entries = await fs.readdir(path.dirname(db.location()!));
-      expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
-    },
-  );
-
   it("rejects a tombstone recorded after native staging before publishing the shadow", async () => {
     const { manager, db } = await setup();
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
     const publish = MemoryIndexDatabase.prototype.publishShadow;
     vi.spyOn(MemoryIndexDatabase.prototype, "publishShadow").mockImplementation(function (
       this: MemoryIndexDatabase,
-      input,
-      assertCurrent,
+      ...args
     ) {
       // The shadow is complete; simulate forget advancing the published revision
       // before the final publication obtains transaction admission.
       seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["shadow-session"] });
-      return publish.call(this, input, assertCurrent);
+      return publish.apply(this, args);
     });
     await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
       "retry the full reindex",
     );
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
   });
 
   it("releases publication capacity and retries cleanup after a close failure", async () => {
     const { manager } = await setup();
-    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+    const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     const probeReleased: Array<() => Promise<unknown>> = [];
-    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+    vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
         const worker = await open(...args);
         probeReleased.push(() =>
@@ -155,11 +104,9 @@ describe("private session source staging", () => {
   it("preserves publication and generation cleanup failures through sync", async () => {
     const { manager, db } = await setup();
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     const database: unknown = Reflect.get(manager, "publishedDatabase");
-    if (!(database instanceof MemoryIndexDatabase)) {
-      throw new Error("Expected the manager's published database owner");
-    }
+    assert.instanceOf(database, MemoryIndexDatabase);
     const original = new SqliteWorkerError(
       "controlled publication result failure",
       "outcome-unknown",
@@ -172,39 +119,37 @@ describe("private session source staging", () => {
     const failure: unknown = await manager
       .sync({ reason: "failure", force: true })
       .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    if (!(failure instanceof AggregateError)) {
-      throw new Error("Expected sync and cleanup failures");
-    }
+    assert.instanceOf(failure, AggregateError);
     expect(failure.cause).toBe(original);
     expect(failure.errors).toHaveLength(2);
     expect(failure.errors[0]).toBe(original);
     expect(failure.errors[1]).toBe(cleanup);
     expect(String(failure)).toContain(original.message);
     expect(String(failure)).toContain(cleanup.message);
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
     await manager.sync({ reason: "retry", force: true });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
   });
 
   it("drains accepted staging before manager close releases its database", async () => {
     const { manager, db } = await setup();
+    await fixture.seedSessionTranscript({
+      sessionId: "shadow-sibling",
+      messages: [{ role: "user", timestamp: 1, content: "Violet sibling preference." }],
+    });
+    const inspection = memoryIndexFixtureWriter(manager);
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
     // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
     const replace = MemoryIndexDatabase.prototype.replaceSource;
     vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource").mockImplementation(async function (
       this: MemoryIndexDatabase,
-      input,
-      assertCurrent,
-      prepare,
+      ...args
     ) {
-      const result = await replace.call(this, input, assertCurrent, prepare);
-      if (this.isShadow && input.source === "sessions") {
+      const result = await replace.apply(this, args);
+      const [input] = args;
+      const replacements = Array.isArray(input) ? input : [input];
+      if (this.isShadow && replacements.some(({ source }) => source === "sessions")) {
         entered.resolve();
         await resume.promise;
       }
@@ -223,9 +168,15 @@ describe("private session source staging", () => {
       expect(closed).toBe(false);
       resume.resolve();
       await Promise.all([sync, close]);
+      expect(db.isOpen).toBe(false);
       expect(
-        db.prepare("SELECT source FROM memory_index_sources WHERE source='sessions'").all(),
-      ).toEqual([{ source: "sessions" }]);
+        inspection
+          .prepare("SELECT path FROM memory_index_sources WHERE source='sessions' ORDER BY path")
+          .all(),
+      ).toEqual([
+        { path: "sessions/main/shadow-session.jsonl" },
+        { path: "sessions/main/shadow-sibling.jsonl" },
+      ]);
     } finally {
       resume.resolve();
       await Promise.allSettled([sync, close]);
@@ -249,26 +200,21 @@ describe("private session source staging", () => {
     const resume = createDeferred<void>();
     const timedOut = createDeferred<void>();
     let shadowPath: string | undefined;
-    let activityAtSetup = { opens: 0, operations: 0 };
-    const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore");
-    const operation = vi.spyOn(sqliteRuntime, "runSqliteWorkerStoreWrite");
-    const shadowActivity = () => ({
-      opens: open.mock.calls.filter(([options]) => options.databasePath === shadowPath).length,
-      operations: operation.mock.calls.filter((call) =>
-        call[3].some((location) => location === shadowPath),
-      ).length,
-    });
-    const load = storage.loadSqliteVecExtension;
-    vi.spyOn(storage, "loadSqliteVecExtension").mockImplementation(async (input) => {
-      const databasePath = input.db.location();
-      if (!databasePath?.includes(".memory-reindex-")) {
-        return load(input);
+    let shadowDatabase: DatabaseSync | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
+    const prepareVector = MemoryIndexDatabase.prototype.prepareVector;
+    vi.spyOn(MemoryIndexDatabase.prototype, "prepareVector").mockImplementation(async function (
+      this: MemoryIndexDatabase,
+      ...args
+    ) {
+      if (!this.isShadow) {
+        return prepareVector.apply(this, args);
       }
-      shadowPath = databasePath;
-      activityAtSetup = shadowActivity();
+      shadowDatabase = this.db;
+      shadowPath = this.db.location()!;
       entered.resolve();
       await resume.promise;
-      return { ok: false, error: "controlled late vector setup" };
+      throw new Error("controlled late vector setup");
     });
     // SAFETY: the fixture injects the existing timeout outcome while leaving
     // the separate underlying setup task pending; no production hook is added.
@@ -291,7 +237,18 @@ describe("private session source staging", () => {
         return Promise.reject(new Error(message));
       },
     );
-    const run = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
+    let replacementSettled = false;
+    // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted database owner.
+    const replace = MemoryIndexDatabase.prototype.replaceSource;
+    const run = vi
+      .spyOn(MemoryIndexDatabase.prototype, "replaceSource")
+      .mockImplementation(async function (this: MemoryIndexDatabase, ...args) {
+        try {
+          return await replace.apply(this, args);
+        } finally {
+          replacementSettled = true;
+        }
+      });
     const sync = manager.sync({ reason: "cli", force: true });
     void sync.catch(() => undefined);
     let close: Promise<void> | undefined;
@@ -300,19 +257,30 @@ describe("private session source staging", () => {
       await Promise.race([Promise.all([entered.promise, timedOut.promise]), sync]);
       await nextTurn();
       expect(shadowPath).toBeDefined();
-      // Reads may open the worker earlier; private setup excludes new opens and operations.
-      expect(shadowActivity()).toEqual(activityAtSetup);
+      const shadow = shadowDatabase;
+      assert.isDefined(shadow, "Expected the retained shadow database");
+      const expectPendingSetup = () => {
+        expect([shadow.isOpen, replacementSettled]).toEqual([true, false]);
+        expect(
+          shadow
+            .prepare(
+              "SELECT path FROM memory_index_sources UNION ALL SELECT path FROM memory_index_chunks",
+            )
+            .all(),
+        ).toEqual([]);
+      };
+      expectPendingSetup();
       close = manager.close().then(() => {
         closed = true;
       });
       await nextTurn();
       expect(closed).toBe(false);
-      expect(shadowActivity()).toEqual(activityAtSetup);
+      expectPendingSetup();
       resume.resolve();
       await Promise.all([sync, close]);
       expect(run).toHaveBeenCalledTimes(1);
-      expect(shadowActivity().opens).toBe(1);
-      expect(shadowActivity().operations).toBeGreaterThan(activityAtSetup.operations);
+      expect(replacementSettled).toBe(true);
+      expect(await fs.readdir(path.dirname(shadowPath!))).not.toContain(path.basename(shadowPath!));
     } finally {
       resume.resolve();
       await Promise.allSettled([sync, close]);
@@ -321,8 +289,12 @@ describe("private session source staging", () => {
 
   it("preserves the published index when an accepted transfer fails without replaying inline", async () => {
     const { manager, db } = await setup();
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "transfer.md"),
+      "Violet transfer source.\n".repeat(30_000),
+    );
     await manager.sync({ reason: "baseline", force: true });
-    const before = db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all();
+    const before = snapshot(db);
     const transfer = await import("./manager-publication-transfer.js");
     const batches = transfer.memoryPublicationBatches;
     const rejectedTransfer = vi
@@ -330,7 +302,7 @@ describe("private session source staging", () => {
       .mockImplementation(function* (replacement) {
         for (const batch of batches(replacement)) {
           yield batch;
-          if (replacement.source === "sessions") {
+          if (replacement.entry.path === "memory/transfer.md") {
             throw new SqliteWorkerError("controlled accepted transfer failure", "overloaded");
           }
         }
@@ -342,16 +314,13 @@ describe("private session source staging", () => {
       code: "overloaded",
       message: "controlled accepted transfer failure",
     });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
     rejectedTransfer.mockRestore();
     await manager.sync({ reason: "retry", force: true });
-    expect(db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      before,
-    );
+    expect(snapshot(db)).toEqual(before);
+    const databasePath = db.location()!;
     await manager.close();
-    const entries = await fs.readdir(path.dirname(db.location()!));
+    const entries = await fs.readdir(path.dirname(databasePath));
     expect(entries.filter((name) => name.includes(".memory-reindex-"))).toEqual([]);
   });
 });

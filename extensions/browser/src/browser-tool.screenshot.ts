@@ -5,7 +5,7 @@ import {
   jsonResult,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";

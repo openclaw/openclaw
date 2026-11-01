@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { DoctorMemoryDreamingPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -134,22 +135,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   removedStaleLock: boolean;
 };
 
-export type ShortTermDreamingStatsEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
+export type ShortTermDreamingStatsEntry = DoctorMemoryDreamingPayload["shortTermEntries"][number];
 
 export type ShortTermDreamingStats = {
   shortTermCount: number;
@@ -500,9 +486,7 @@ export function formatMemoryDreamingDay(epochMs: number, timezone?: string): str
     const year = values.get("year");
     const month = values.get("month");
     const day = values.get("day");
-    if (year && month && day) {
-      return `${year}-${month}-${day}`;
-    }
+    return `${year}-${month}-${day}`;
   } catch {
     // Fall back to host-local day for invalid or unsupported timezones.
   }
@@ -524,11 +508,9 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
+  // An explicitly empty roster owns no agent workspaces; listAgentIds already
+  // supplies the implicit owner for raw pre-roster configs.
   const agentIds = listAgentIds(cfg);
-  if (agentIds.length === 0) {
-    agentIds.push(resolveDefaultAgentId(cfg));
-  }
-
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
     const workspaceDir = workspaceDirRaw?.trim();

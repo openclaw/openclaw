@@ -21,6 +21,7 @@ import { materializeSkill } from "../loading/skill-materializer.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillEntry } from "../types.js";
 import { readSkillLibraryManifestTree, skillLibraryRevisionDir } from "./bundle.js";
+import type { SkillLibraryReadQueries } from "./read.contract.js";
 import {
   readSkillLibrarySelectionDescriptions,
   readSkillLibrarySelectionManifests,
@@ -105,6 +106,26 @@ export async function seedSkillLibrarySelection(
   }
   const prepared = await captureSkillLibraryAccess(authority, options).read("seed", undefined);
   return bindPreparedSelection(prepared);
+}
+
+export type PreparedSkillLibrarySession = SkillLibraryReadQueries["session"]["output"] & {
+  assertCurrent: () => void;
+};
+
+/** Human ingress consumes one snapshot for initial pins and authoring presentation. */
+export async function prepareSkillLibrarySession(
+  authority: SkillLibraryAuthority,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<PreparedSkillLibrarySession> {
+  const prepared = await captureSkillLibraryAccess(authority, options).read("session", undefined);
+  return {
+    selections: bindPreparedSelection({
+      value: prepared.value.selections,
+      assertCurrent: prepared.assertCurrent,
+    }),
+    presentation: prepared.value.presentation,
+    assertCurrent: prepared.assertCurrent,
+  };
 }
 
 /** Session mutation authorization is separate; retain library authority through its commit. */

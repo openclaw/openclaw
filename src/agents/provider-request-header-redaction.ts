@@ -51,46 +51,59 @@ function normalizePercentEscapeHexCase(value: string): string {
   return value.replace(/%[0-9A-F]{1,2}/giu, (escape) => escape.toUpperCase());
 }
 
-function redactExactSecretValues(
-  text: string,
+/** Match only active values, without diagnostic patterns or replacement-string ambiguity. */
+export function createExactSecretValueMatcher(
   values: readonly string[],
-  sourceTruncated: boolean,
-): string {
+): (text: string) => boolean {
+  const representations = collectSecretRepresentations(values);
+  if (representations.length === 0) {
+    return () => false;
+  }
+  const pattern = new RegExp(representations.map(secretRepresentationPattern).join("|"), "u");
+  return (text) => pattern.test(text);
+}
+
+export function createExactSecretValueRedactor(
+  values: readonly string[],
+): (text: string, sourceTruncated: boolean) => string {
   const representations = collectSecretRepresentations(values).toSorted(
     (left, right) => right[0].length - left[0].length,
   );
   if (representations.length === 0) {
-    return text;
+    return (text) => text;
   }
   const matcher = new RegExp(representations.map(secretRepresentationPattern).join("|"), "gu");
-  const redacted = text.replace(matcher, REDACTED_SECRET);
-  if (!sourceTruncated) {
-    return redacted;
-  }
-
-  let longestPartialSuffix = 0;
-  for (const [candidate, percentCaseInsensitive] of representations) {
-    const comparableText = percentCaseInsensitive
-      ? normalizePercentEscapeHexCase(redacted)
-      : redacted;
-    const comparableCandidate = percentCaseInsensitive
-      ? normalizePercentEscapeHexCase(candidate)
-      : candidate;
-    let prefixLength = Math.min(comparableCandidate.length - 1, comparableText.length);
-    while (
-      prefixLength > longestPartialSuffix &&
-      !comparableText.endsWith(comparableCandidate.slice(0, prefixLength))
-    ) {
-      prefixLength -= 1;
+  return (text, sourceTruncated) => {
+    const redacted = text.replace(matcher, REDACTED_SECRET);
+    if (!sourceTruncated) {
+      return redacted;
     }
-    longestPartialSuffix = Math.max(longestPartialSuffix, prefixLength);
-  }
-  return longestPartialSuffix === 0
-    ? redacted
-    : `${redacted.slice(0, -longestPartialSuffix)}${REDACTED_SECRET}`;
+
+    let longestPartialSuffix = 0;
+    let normalizedRedacted: string | undefined;
+    for (const [candidate, percentCaseInsensitive] of representations) {
+      const comparableText = percentCaseInsensitive
+        ? (normalizedRedacted ??= normalizePercentEscapeHexCase(redacted))
+        : redacted;
+      const comparableCandidate = percentCaseInsensitive
+        ? normalizePercentEscapeHexCase(candidate)
+        : candidate;
+      let prefixLength = Math.min(comparableCandidate.length - 1, comparableText.length);
+      while (
+        prefixLength > longestPartialSuffix &&
+        !comparableText.endsWith(comparableCandidate.slice(0, prefixLength))
+      ) {
+        prefixLength -= 1;
+      }
+      longestPartialSuffix = Math.max(longestPartialSuffix, prefixLength);
+    }
+    return longestPartialSuffix === 0
+      ? redacted
+      : `${redacted.slice(0, -longestPartialSuffix)}${REDACTED_SECRET}`;
+  };
 }
 
-function collectRequestHeaderSecretValues(headers: HeadersInit): string[] {
+export function collectRequestHeaderSecretValues(headers: HeadersInit): string[] {
   // Arbitrary configured headers can carry credentials. Authorization intermediaries
   // can also reflect the credential without its scheme, so redact both scoped forms.
   const entries =
@@ -141,9 +154,8 @@ export function redactProviderResponseErrorText(
   headers: HeadersInit,
   options?: { sourceTruncated?: boolean },
 ): string {
-  const exactRedacted = redactExactSecretValues(
+  const exactRedacted = createExactSecretValueRedactor(collectRequestHeaderSecretValues(headers))(
     text,
-    collectRequestHeaderSecretValues(headers),
     options?.sourceTruncated === true,
   );
   return redactToolPayloadText(exactRedacted);

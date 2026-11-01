@@ -1,5 +1,12 @@
 {
   "id": "workboard",
+  "backupResources": [
+    {
+      "disposition": "include",
+      "scope": "state",
+      "relativePath": "plugins/workboard/workboard.sqlite"
+    }
+  ],
   "uiCapabilities": [
     "page",
     "navigation",
@@ -232,9 +239,9 @@
     "properties": {}
   },
   "controlUi": {
-    "entry": "dist/control-ui/eea70db01259b142b298c182e17c7d9e05a471d05f73af7e7d467fc2b36505e3/index.js",
+    "entry": "dist/control-ui/2efb22eddf2e20b1dc8056aa181f78460ecbac562653cf1d15c4387ac6626388/index.js",
     "styles": [
-      "dist/control-ui/eea70db01259b142b298c182e17c7d9e05a471d05f73af7e7d467fc2b36505e3/index.css"
+      "dist/control-ui/2efb22eddf2e20b1dc8056aa181f78460ecbac562653cf1d15c4387ac6626388/index.css"
     ]
   }
 }

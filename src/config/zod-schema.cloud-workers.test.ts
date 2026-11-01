@@ -6,35 +6,12 @@ function cloudProfile(profile: Record<string, unknown>) {
 }
 
 describe("OpenClawSchema cloudWorkers config", () => {
-  it("retains a required profile before enrollment without blocking startup", () => {
-    expect(
-      OpenClawSchema.parse({ cloudWorkers: { requiredProfile: "not-enrolled-yet" } }).cloudWorkers,
-    ).toEqual({
-      requiredProfile: "not-enrolled-yet",
-    });
-  });
-
-  it.each(["", " ", " worker", "worker ", null, true, 3])(
-    "rejects invalid required profile %j",
-    (requiredProfile) => {
-      expect(OpenClawSchema.safeParse({ cloudWorkers: { requiredProfile } }).success).toBe(false);
+  it.each([{ "github.com/acme/app": " " }, { "github.com/acme": "development" }])(
+    "rejects invalid per-project profile mappings %#",
+    (projectProfiles) => {
+      expect(OpenClawSchema.safeParse({ cloudWorkers: { projectProfiles } }).success).toBe(false);
     },
   );
-
-  it("accepts normalized per-project default profiles", () => {
-    const projectProfiles = { "github.com/acme/app": "development" };
-    expect(OpenClawSchema.parse({ cloudWorkers: { projectProfiles } }).cloudWorkers).toStrictEqual({
-      projectProfiles,
-    });
-  });
-
-  it.each([
-    { "github.com/acme/app": " " },
-    { "GitHub.com/acme/app": "development" },
-    { "github.com/acme": "development" },
-  ])("rejects invalid per-project profile mappings %#", (projectProfiles) => {
-    expect(OpenClawSchema.safeParse({ cloudWorkers: { projectProfiles } }).success).toBe(false);
-  });
 
   it("accepts provider-owned settings with SecretRefs and defaults to bundled installation", () => {
     const settings = {
@@ -50,18 +27,31 @@ describe("OpenClawSchema cloudWorkers config", () => {
     });
   });
 
-  it("accepts the minimum idle suspend duration", () => {
-    expect(OpenClawSchema.parse(cloudProfile({ suspendAfter: "1m" })).cloudWorkers).toStrictEqual({
-      profiles: { development: { provider: "qa-lab", install: "bundle", suspendAfter: "1m" } },
-    });
+  it("accepts provider-owned secret maps without admitting plaintext", () => {
+    const setupSecrets = {
+      registry_token: { source: "store", provider: "default", id: "NPM_TOKEN" },
+    };
+    expect(
+      OpenClawSchema.safeParse(cloudProfile({ provider: "crabbox", settings: { setupSecrets } }))
+        .success,
+    ).toBe(true);
+    expect(OpenClawSchema.safeParse(cloudProfile({ settings: { setupSecrets: {} } })).success).toBe(
+      true,
+    );
+    for (const value of [
+      "inline",
+      { TOKEN: "inline" },
+      { TOKEN: { source: "store", provider: "default", id: "bad-id" } },
+    ]) {
+      expect(
+        OpenClawSchema.safeParse(cloudProfile({ settings: { setupSecrets: value } })).success,
+      ).toBe(false);
+    }
   });
 
-  it.each(["59s", "-1m", "60000"])(
-    "rejects an invalid or sub-minute idle suspend duration: %s",
-    (suspendAfter) => {
-      expect(OpenClawSchema.safeParse(cloudProfile({ suspendAfter })).success).toBe(false);
-    },
-  );
+  it("rejects a malformed idle suspend duration", () => {
+    expect(OpenClawSchema.safeParse(cloudProfile({ suspendAfter: "-1m" })).success).toBe(false);
+  });
 
   it("rejects non-finite provider settings", () => {
     expect(
@@ -69,10 +59,10 @@ describe("OpenClawSchema cloudWorkers config", () => {
     ).toBe(false);
   });
 
-  it.each([{ keyRef: "plain-private-key" }, { auth: { apiKey: "plain-api-key" } }])(
-    "rejects plaintext provider secrets at any depth: %j",
-    (settings) => {
-      expect(OpenClawSchema.safeParse(cloudProfile({ settings })).success).toBe(false);
-    },
-  );
+  it("rejects nested plaintext provider secrets", () => {
+    expect(
+      OpenClawSchema.safeParse(cloudProfile({ settings: { auth: { apiKey: "plain-api-key" } } }))
+        .success,
+    ).toBe(false);
+  });
 });

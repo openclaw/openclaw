@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
@@ -9,6 +10,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRegistryContextCleanup } from "../registry/subagent-registry-context-cleanup.js";
 import * as registryDeps from "../registry/subagent-registry-deps.js";
+import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -27,11 +29,18 @@ it.each(["transition", "complete"] as const)(
   "publishes a requester wake %s before recording its concurrent ended hook",
   async (operation) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const input = armRequesterWake(records());
       await admitCompletionFixtureDatabase();
       seedSubagentCompletionDelivery({ subagent: input.subagent });
       subagentRuns.set(input.subagent.runId, input.subagent);
       const registry = createEmptyPluginRegistry();
+      registry.typedHooks.push({
+        pluginId: "test",
+        hookName: "subagent_ended",
+        source: "test",
+        handler: async () => {},
+      });
       const hookRunner = createHookRunner(registry);
       const hookReached = createDeferred();
       const runtime = vi
@@ -41,11 +50,10 @@ it.each(["transition", "complete"] as const)(
         hookReached.resolve();
         return hookRunner;
       });
-      const warn = vi.fn();
+      using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
       const cleanup = createSubagentRegistryContextCleanup({
         isEndedHookOwnerCurrent: (entry) =>
           isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
-        warn,
       });
       const acknowledged = createDeferred();
       const releaseAcknowledgement = createDeferred();
@@ -77,19 +85,17 @@ it.each(["transition", "complete"] as const)(
       });
       let hook: Promise<void> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           acknowledged.promise,
-          publication.then(() => {
-            throw new Error("Requester wake returned before its held acknowledgement");
-          }),
-        ]);
+          publication,
+          "Requester wake returned before its held acknowledgement",
+        );
         hook = cleanup.emitSubagentEndedHookForRun({ entry: input.subagent });
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           hookReached.promise,
-          hook.then(() => {
-            throw new Error("Ended hook returned before reaching its producer");
-          }),
-        ]);
+          hook,
+          "Ended hook returned before reaching its producer",
+        );
         expect.soft(input.subagent.endedHookEmittedAt).toBeUndefined();
         releaseAcknowledgement.resolve();
         await expect(publication).resolves.toEqual({ applied: true, publication: "published" });

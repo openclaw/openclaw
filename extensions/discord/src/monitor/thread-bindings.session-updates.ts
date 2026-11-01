@@ -1,9 +1,11 @@
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
   resolveBindingIdsForTargetSession,
   mutateBindingsForTargetSession,
   updateBindingsForTargetSessionSync,
 } from "./thread-bindings.session-shared.js";
+import { ensureBindingsLoaded } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 function createDurationUpdate(field: "idleTimeoutMs" | "maxAgeMs", raw: number) {
@@ -27,6 +29,16 @@ function createDurationSetters<Field extends "idleTimeoutMs" | "maxAgeMs">(field
       return mutateBindingsForTargetSession(params, createDurationUpdate(field, params[field]));
     },
     set: (params: Params): ThreadBindingRecord[] => {
+      const method =
+        field === "idleTimeoutMs"
+          ? "setThreadBindingIdleTimeoutBySessionKey"
+          : "setThreadBindingMaxAgeBySessionKey";
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method,
+        replacement: `${method}Async`,
+      });
+      ensureBindingsLoaded();
       const ids = resolveBindingIdsForTargetSession(params);
       return updateBindingsForTargetSessionSync(ids, createDurationUpdate(field, params[field]));
     },
@@ -39,8 +51,8 @@ const maxAgeSetters = createDurationSetters("maxAgeMs");
 export const setThreadBindingIdleTimeoutBySessionKeyAsync = idleSetters.setAsync;
 export const setThreadBindingMaxAgeBySessionKeyAsync = maxAgeSetters.setAsync;
 
-/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
+/** @deprecated Use setThreadBindingIdleTimeoutBySessionKeyAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
 export const setThreadBindingIdleTimeoutBySessionKey = idleSetters.set;
 
-/** @deprecated Use the awaited lifecycle setter; retained for the generic SDK contract. */
+/** @deprecated Use setThreadBindingMaxAgeBySessionKeyAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
 export const setThreadBindingMaxAgeBySessionKey = maxAgeSetters.set;

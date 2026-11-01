@@ -14,6 +14,7 @@ export type MemoryOriginDeletion = {
 
 export type MemoryEntryOriginBinding =
   | { kind: "origin" }
+  | { kind: "origin-existing" }
   | { kind: "forget"; prepareTombstones: boolean; extensionPath?: string };
 
 export type MemoryForgetLineage = {
@@ -51,6 +52,11 @@ export type MemoryEntryOriginOperations = {
     output: MemoryForgetLineageResult;
   };
   record: { input: MemoryOriginRecord; output: MemoryEntryOrigin[] };
+  reserve: {
+    input: { agentId: string; operations: Array<{ entryKey: string; parentKeys: string[] }> };
+    output: MemoryOriginDeletion[];
+  };
+  prune: { input: { agentId: string; entryKeys: string[] }; output: number };
   delete: { input: MemoryOriginDeletion; output: number };
 };
 
@@ -67,13 +73,9 @@ export type MemoryOriginReadInput = {
   stateDir: string;
 } & (
   | ({ kind: "origin-rows" } & MemoryOriginReadFilters)
-  | ({ kind: "origin-exists"; entryKeys: readonly string[] } & MemoryOriginReadFilters)
   | { kind: "session-tombstones"; sessionIds: readonly string[] }
-  | { kind: "origin-index-keys" }
 );
 
 export type MemoryOriginReadOutput =
   | { kind: "origin-rows"; rows: MemoryEntryOrigin[] }
-  | { kind: "origin-exists"; exists: boolean }
-  | { kind: "session-tombstones"; indices: number[] }
-  | { kind: "origin-index-keys"; keys: string[] };
+  | { kind: "session-tombstones"; indices: number[] };

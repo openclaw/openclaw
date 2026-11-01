@@ -6,6 +6,7 @@ import { resolveGatewayPublicOrigin } from "../../../src/config/gateway-public-o
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
@@ -145,7 +146,9 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
 export function markdownSessionPublicOrigin(
   context?: ApplicationContext | null,
 ): string | undefined {
-  const config = context?.runtimeConfig?.state.configSnapshot?.runtimeConfig;
+  const config = context?.runtimeConfig
+    ? currentDisplayRuntimeConfig(context.runtimeConfig.state)
+    : null;
   return resolveGatewayPublicOrigin({
     gateway: { publicOrigin: readNonBlankString(asOptionalRecord(config?.gateway)?.publicOrigin) },
   });

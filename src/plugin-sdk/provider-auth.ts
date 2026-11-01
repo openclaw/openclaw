@@ -1,5 +1,8 @@
 // Provider auth helpers define auth methods, credential resolution, and setup status contracts.
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { applyProviderAuthConfigPatchWithNormalization } from "../plugins/provider-auth-choice-helpers.js";
+import type { ProviderAuthResult } from "../plugins/types.js";
 import { normalizeGithubCopilotDomain } from "./github-copilot-domain.js";
 
 export { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
@@ -8,16 +11,36 @@ export type { SecretInput } from "../config/types.secrets.js";
 export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
-export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
+export type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+} from "../agents/auth-profiles/types.js";
 
 export { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 export { normalizeGithubCopilotDomain, resolveAuthProfileOrder };
+
+/** Apply an auth result with the host's header-deletion and model-map merge semantics. */
+export function applyProviderAuthConfigPatch(
+  config: OpenClawConfig,
+  patch: ProviderAuthResult["configPatch"],
+  options?: Pick<ProviderAuthResult, "replaceDefaultModels">,
+): OpenClawConfig {
+  return applyProviderAuthConfigPatchWithNormalization(config, patch, options);
+}
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 export {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreForLocalUpdate,
+  ensureAuthProfileStoreForLocalUpdateAsync,
+  loadAuthProfileStoreForRuntimeAsync,
 } from "../agents/auth-profiles/store-runtime.js";
-export { listProfilesForProvider, upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+export {
+  listProfilesForProvider,
+  upsertAuthProfile,
+  upsertAuthProfileAsync,
+} from "../agents/auth-profiles/profiles.js";
 export {
   removeProviderAuthProfilesWithLockCompat as removeProviderAuthProfilesWithLock,
   updateAuthProfileStoreWithLockCompat as updateAuthProfileStoreWithLock,
@@ -54,6 +77,7 @@ export {
   applyAuthProfileConfig,
   buildApiKeyCredential,
   upsertApiKeyProfile,
+  upsertApiKeyProfileAsync,
   writeOAuthCredentials,
   type ApiKeyStorageOptions,
   type WriteOAuthCredentialsOptions,
@@ -97,7 +121,10 @@ export {
 
 export {
   isProviderApiKeyConfigured,
+  isProviderApiKeyConfiguredAsync,
   isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
   listUsableProviderAuthProfileIds,
+  listUsableProviderAuthProfileIdsAsync,
   resolveProviderAuthProfileApiKey,
 } from "../plugins/provider-auth-availability.js";

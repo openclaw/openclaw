@@ -70,9 +70,10 @@ vi.mock("../agents/auth-profiles.js", () => ({
   persistAuthProfileBatch,
 }));
 
-const loadAuthProfileStoreWithoutExternalProfiles = vi.hoisted(() => vi.fn());
-vi.mock("../agents/auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreWithoutExternalProfiles,
+const loadAuthProfileStoreWithoutExternalProfilesAsync = vi.hoisted(() => vi.fn());
+vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
@@ -87,11 +88,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 const resolveDefaultAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir,
-}));
-
-const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
-vi.mock("../plugins/provider-auth-helpers.js", () => ({
-  applyAuthProfileConfig,
 }));
 
 const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
@@ -244,11 +240,10 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    loadAuthProfileStoreWithoutExternalProfiles.mockReset().mockReturnValue({
+    loadAuthProfileStoreWithoutExternalProfilesAsync.mockReset().mockResolvedValue({
       version: 1,
       profiles: {},
     });
-    applyAuthProfileConfig.mockImplementation((config) => config);
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
     resolvePluginSetupProvider.mockReturnValue(undefined);
     resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
@@ -273,7 +268,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       provider: provider.id,
       key: "synthetic-saved-key",
     } as const;
-    loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue({
       version: 1,
       profiles: {
         "saved:local": credential,
@@ -289,7 +284,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(run.mock.calls[0]?.[0].existingProfiles).toEqual([
       { profileId: "saved:local", credential },
     ]);
-    expect(loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith("/tmp/agent");
+    expect(loadAuthProfileStoreWithoutExternalProfilesAsync).toHaveBeenCalledWith("/tmp/agent");
   });
 
   it("stages provider profiles until the caller commits them", async () => {
@@ -494,26 +489,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("merges provider config patches and emits provider notes", async () => {
-    applyAuthProfileConfig.mockImplementation(((
-      config: {
-        auth?: {
-          profiles?: Record<string, { provider: string; mode: string }>;
-        };
-      },
-      profile: { profileId: string; provider: string; mode: string },
-    ) => ({
-      ...config,
-      auth: {
-        profiles: {
-          ...config.auth?.profiles,
-          [profile.profileId]: {
-            provider: profile.provider,
-            mode: profile.mode,
-          },
-        },
-      },
-    })) as never);
-
     const events: string[] = [];
     const note = vi.fn(async () => {
       events.push("note");

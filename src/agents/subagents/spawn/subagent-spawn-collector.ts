@@ -21,7 +21,6 @@ import type { holdQueuedSwarmRun, activateSwarmRun } from "../swarm/swarm-schedu
 import {
   type bindSubagentSpawnCleanup,
   type cleanupFailedSpawnBeforeAgentStart,
-  retrySubagentCleanup,
   terminateAcceptedCollectorRun,
 } from "./subagent-spawn-cleanup.js";
 import type { PreparedContextEngineSubagentSpawn } from "./subagent-spawn-context.js";
@@ -202,8 +201,6 @@ export function createCollectorLaunchCallbacks(params: {
     await disposeFailedPreparation();
     releaseAuthority();
   };
-  // Scheduler retries repeat settlement, never the launch or admitted cleanup.
-  let startAttempt: Promise<void> | undefined;
   const cleanupOnce = async () =>
     await Promise.allSettled([
       Promise.resolve().then(() => preparation?.rollback()),
@@ -288,10 +285,7 @@ export function createCollectorLaunchCallbacks(params: {
           await registrationScope.settleFailedLaunch(launchError);
           return;
         }
-        await retrySubagentCleanup(async () => {
-          await settleFailedQueuedSubagentLaunch(childRunId, launchError);
-          return true;
-        });
+        await settleFailedQueuedSubagentLaunch(childRunId, launchError);
       };
       if (!dispatchAttempted && registrationScope) {
         await settleFailure();
@@ -317,7 +311,7 @@ export function createCollectorLaunchCallbacks(params: {
   };
   return {
     signal: params.operatorAuthority?.signal,
-    start: () => (startAttempt ??= startOnce()),
+    start: startOnce,
     onStartFailure: settleLaunchFailure,
     onRemoved: async (reason) => {
       try {
@@ -355,8 +349,8 @@ export function createCollectorLaunchCallbacks(params: {
             }
             throw new Error("Collector source revocation cleanup is incomplete");
           }
-        } else if (reason === "shutdown" || canCleanupCreatedSession?.() === false) {
-          // Restart replays queuedLaunch without repeating its durable context preparation.
+        } else if (canCleanupCreatedSession?.() === false) {
+          // A replacement owns the session; cleanup must not roll it back.
           await preparation?.dispose();
         } else {
           await preparation?.rollback();

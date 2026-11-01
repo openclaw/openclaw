@@ -96,6 +96,7 @@ export function createDiscordLivePolicyReader(params: {
       if (!resolution || key !== resolutionKey) {
         resolutionKey = key;
         resolution = resolveDiscordAllowlistConfig({
+          accountId: params.accountId,
           token,
           guildEntries: discordConfig.guilds,
           allowFrom,

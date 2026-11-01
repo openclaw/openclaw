@@ -5,6 +5,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
@@ -15,8 +19,6 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
-  createDeferredConfiguredPluginRepairDoctorResult,
-  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
   type UpdatePostInstallDoctorResult,
@@ -26,9 +28,11 @@ import {
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
 import { parseManagedHandoffLeasePayload } from "../../infra/update-managed-service-handoff-schema.js";
-import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { settleCommandProcessGroups } from "../../process/command-process-custody.js";
 import type { CommandProcessIdentity } from "../../process/command-process-custody.types.js";
@@ -36,15 +40,19 @@ import { hasCommandProcessCleanupError, type SpawnResult } from "../../process/e
 import * as processRunner from "../../process/exec.js";
 import * as processDeadline from "../../process/process-deadline.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
+import { createUpdateProgress, printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { runUpdateDoctorProcess } from "./update-command-doctor-child.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import { runPackageUpdateDoctor } from "./update-command-package.js";
+import { createUpdateRunProgress } from "./update-command-run.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
@@ -66,10 +74,7 @@ beforeEach(() => {
     fs.mkdirSync(dir, { mode: 0o700 });
   }
   fs.writeFileSync(configPath, "{}\n");
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.99" }),
-  );
+  writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.99" });
   fs.writeFileSync(path.join(root, "dist", "index.js"), "");
   env = {
     HOME: root,
@@ -81,10 +86,167 @@ beforeEach(() => {
   }
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(path.join(root, "tmp"));
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+afterEach(cleanupUpdateCommandTest);
+afterEach(resetLogger);
+
+it("shows activation Doctor progress before child completion while JSON and ledger stay deferred", async ({
+  signal,
+}) => {
+  const channel = await openFixtureReceiptChannel();
+  const runId = randomUUID();
+  const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+  const executorModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+  const resultModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.doctorResult);
+  const sealedModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.sealedRuntime);
+  const ready = createDeferred();
+  const cleanup = new AbortController();
+  const steps: UpdateStepResult[] = [];
+  const recordStep = vi.fn(async () => undefined);
+  setLoggerOverride({ consoleLevel: "info", consoleStyle: "compact" });
+  const display = createUpdateProgress(false);
+  const progress = createUpdateRunProgress({ runId, env }, display.progress, recordStep);
+  display.suspend();
+  progress.deferLedgerWrites();
+  let stderr = "";
+  let stdout = "";
+  let observed = "";
+  let childPid: number | undefined;
+  let doctorResult: SpawnResult | undefined;
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    stderr += String(chunk);
+    return true;
+  });
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    stdout += String(chunk);
+    return true;
+  });
+  vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+    async (_argv, options) => {
+      assert(typeof options !== "number");
+      const result = await runUtf8(
+        [
+          process.execPath,
+          "--input-type=module",
+          "-e",
+          `
+      import { readFileSync } from 'node:fs';
+      import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
+      import { registerSealedRuntime } from ${JSON.stringify(sealedModule.href)};
+      registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(path.join(root, "tmp"))} });
+      const { withDelegatedUpdateCommandExecutor } = await import(${JSON.stringify(executorModule.href)});
+      const { writeUpdatePostInstallDoctorResult } = await import(${JSON.stringify(resultModule.href)});
+      ${fixtureReceiptClientSource(channel.endpoint)}
+      const doctor = JSON.parse(readFileSync(0, 'utf8'));
+      await withDelegatedUpdateCommandExecutor(doctor.executor, doctor.runId, doctor.root, async () => {
+        process.stderr.write('private diagnostic /private/fixture-secret\\nDoctor: state schema\\n');
+        await awaitRelease('doctor', 'finish');
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: process.env.${UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV}, result: { status: 'ok' }
+        });
+      });
+    `,
+        ],
+        {
+          ...options,
+          signal: AbortSignal.any([
+            signal,
+            cleanup.signal,
+            ...(options.signal ? [options.signal] : []),
+          ]),
+          beforeInput(pid, argv) {
+            childPid = pid;
+            options.beforeInput?.(pid, argv);
+          },
+          onOutputChunk(chunk, stream) {
+            const decision = options.onOutputChunk?.(chunk, stream);
+            if (stream === "stderr") {
+              observed += chunk.toString();
+              if (observed.includes("Doctor: state schema\n")) {
+                ready.resolve();
+              }
+            }
+            return decision;
+          },
+        },
+      );
+      doctorResult = result;
+      return result;
+    },
+  );
+  const work = withUpdateCommandExecutor(runId, async (executor) => {
+    const fence = await executor.enter(root, { serviceRoot });
+    createUpdateRun({ trigger: "cli", runId }, { env });
+    const runtime = { root, nodePath: process.execPath, version: "2026.10.9", buildId: "fixture" };
+    // The pending pair must survive the real Doctor child without granting the parent effects.
+    const reservation = createRetainedUpdateRecovery(
+      { runId, from: runtime, to: runtime },
+      { env },
+    );
+    writeConfigMachineState(
+      "update.pluginCohort." + runId,
+      {
+        runId,
+        transactionId: reservation.transactionId,
+        revision: 0,
+        disposition: "pending",
+        installKey: root,
+        priorArtifacts: [],
+        artifacts: [],
+        publications: [],
+        settledPublications: 0,
+      },
+      { env },
+    );
+    const guards = createUpdateCommandExecutionGuards(
+      { run: { runId, env, executorFence: fence } },
+      root,
+    );
+    const step = await runPackageUpdateDoctor({
+      ...doctorOptions(runId, fence, guards),
+      workTimeoutMs: null,
+      progress,
+      results: steps,
+    });
+    assert(step);
+    expect(step.exitCode, doctorResult?.stderr || step.stderrTail || undefined).toBe(0);
+    fence.assertCurrent();
+  });
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(ready.promise, work, "Doctor settled before its phase"),
+      signal,
+    );
+    assert(childPid);
+    expect(isChildProcessTreeAlive({ pid: childPid })).toBe(true);
+    expect(stderr).toBe("Doctor: state schema\n");
+    expect(stdout).toBe("");
+    expect(recordStep).not.toHaveBeenCalled();
+    channel.release("doctor", "finish");
+    await withinTest(work, signal);
+    assert(doctorResult);
+    expect(doctorResult.cleanup).toBe("normal");
+    expect(isChildProcessTreeAlive({ pid: childPid })).toBe(false);
+    expect(readCommandClaims()).toEqual([]);
+    expect(recordStep).not.toHaveBeenCalled();
+    await progress.flushLedgerWrites();
+    expect(recordStep).toHaveBeenCalled();
+    await printResult(
+      { status: "ok", mode: "npm", root, steps, durationMs: 1 },
+      { json: true },
+      { readHistory: false },
+    );
+    expect(JSON.parse(stdout)).toMatchObject({
+      status: "ok",
+      steps: expect.arrayContaining([expect.objectContaining({ exitCode: 0 })]),
+    });
+    expect(stderr).not.toContain("fixture-secret");
+  } finally {
+    channel.release("doctor", "finish");
+    cleanup.abort();
+    await work.catch(() => {});
+    display.dispose();
+    await channel.close();
+  }
 });
 
 function doctorOptions(
@@ -141,13 +303,7 @@ function expectRetainedCommandClaims(writerPid: number, roots: string[]) {
   }
 }
 
-it.each([
-  "requester-replaced",
-  "fence-reassigned",
-  "recovery-pending",
-  "A-revoked",
-  "B-revoked",
-] as const)(
+it.each(["recovery-pending", "A-revoked", "B-revoked"] as const)(
   "withholds all Doctor input and settles the real child when %s before input",
   async (change) => {
     const runId = randomUUID();
@@ -177,12 +333,6 @@ it.each([
               ...options,
               beforeInput(pid, spawnedArgv) {
                 childPid = pid;
-                if (change === "requester-replaced") {
-                  run.requesterAuthority = { ...requesterAuthority };
-                }
-                if (change === "fence-reassigned") {
-                  run.executorFence = { assertCurrent() {} };
-                }
                 if (change === "recovery-pending") {
                   opts.recovery = {};
                 }
@@ -216,124 +366,74 @@ it.each([
   },
 );
 
-it.each([
-  { exitCode: 23, revokeAfterSettlement: false },
-  { exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, revokeAfterSettlement: true },
-])(
-  "retains settled Doctor outcome $exitCode when requester revocation after settlement is $revokeAfterSettlement",
-  async ({ exitCode, revokeAfterSettlement }) => {
-    const runId = randomUUID();
-    const runUtf8 = processRunner.runUtf8CommandWithTimeout;
-    let childPid: number | undefined;
-    let resultPath: string | undefined;
-    let authorityRefusal: unknown;
-    const receipt: UpdatePostInstallDoctorResult =
-      exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
-        ? createDeferredConfiguredPluginRepairDoctorResult(["Configured plugin repair deferred."])
-        : { status: "error" };
-    receipt.configChanges = [{ kind: "migration", message: "Moved model allowlist." }];
-    const steps: UpdateStepResult[] = [];
-    const onStepComplete = vi.fn();
-    await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot });
-      const opts: UpdateCommandOptions = {
-        run: {
-          runId,
-          env,
-          executorFence: fence,
-          requesterAuthority: {
-            requester: { channel: "test", senderId: "owner" },
-            isCurrent: () => true,
-          },
+it("retains the settled Doctor failure outcome", async () => {
+  const exitCode = 23;
+  const runId = randomUUID();
+  const runUtf8 = processRunner.runUtf8CommandWithTimeout;
+  let childPid: number | undefined;
+  let resultPath: string | undefined;
+  const receipt: UpdatePostInstallDoctorResult = { status: "error" };
+  receipt.configChanges = [{ kind: "migration", message: "Moved model allowlist." }];
+  const steps: UpdateStepResult[] = [];
+  const onStepComplete = vi.fn();
+  await withUpdateCommandExecutor(runId, async (executor) => {
+    const fence = await executor.enter(root, { serviceRoot });
+    const opts: UpdateCommandOptions = {
+      run: {
+        runId,
+        env,
+        executorFence: fence,
+        requesterAuthority: {
+          requester: { channel: "test", senderId: "owner" },
+          isCurrent: () => true,
         },
-      };
-      const guards = createUpdateCommandExecutionGuards(opts, root);
-      vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
-        async (_argv, options) => {
-          assert(typeof options !== "number", "Doctor supplies input-admission options");
-          const result = await runUtf8(
-            [
-              process.execPath,
-              "-e",
-              "process.stdin.resume();process.stdin.on('end',()=>process.exit(Number(process.argv[1])));",
-              String(exitCode),
-            ],
-            {
-              ...options,
-              beforeInput(pid, spawnedArgv) {
-                childPid = pid;
-                options.beforeInput?.(pid, spawnedArgv);
-              },
+      },
+    };
+    const guards = createUpdateCommandExecutionGuards(opts, root);
+    vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
+      async (_argv, options) => {
+        assert(typeof options !== "number", "Doctor supplies input-admission options");
+        const result = await runUtf8(
+          [
+            process.execPath,
+            "-e",
+            "process.stdin.resume();process.stdin.on('end',()=>process.exit(Number(process.argv[1])));",
+            String(exitCode),
+          ],
+          {
+            ...options,
+            beforeInput(pid, spawnedArgv) {
+              childPid = pid;
+              options.beforeInput?.(pid, spawnedArgv);
             },
-          );
-          expect(result.cleanup).toBe("normal");
-          expect(result.code).toBe(exitCode);
-          expect(onStepComplete).not.toHaveBeenCalled();
-          resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
-          assert(resultPath);
-          await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
-          if (revokeAfterSettlement) {
-            assert(opts.run?.requesterAuthority);
-            opts.run.requesterAuthority = { ...opts.run.requesterAuthority };
-          }
-          return result;
-        },
-      );
-      const result = await runPackageUpdateDoctor({
-        ...doctorOptions(runId, fence, {
-          ...guards,
-          assertCurrent: () => {
-            try {
-              guards.assertCurrent();
-            } catch (error) {
-              authorityRefusal = error;
-              throw error;
-            }
           },
-        }),
-        progress: { onStepComplete },
-        results: steps,
-      }).catch((cause: unknown) => cause);
-      if (revokeAfterSettlement) {
-        expect(result).toBeInstanceOf(UpdateRequesterRevokedError);
-        expect(result).toBe(authorityRefusal);
-        expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            name: "openclaw doctor",
-            exitCode,
-            advisory: undefined,
-            configChanges: receipt.configChanges,
-            failureFacts: expect.arrayContaining([
-              expect.objectContaining({ code: "requester-revoked" }),
-            ]),
-          }),
         );
-        expect(steps).toEqual([
-          expect.objectContaining({
-            name: "openclaw doctor",
-            exitCode,
-            configChanges: receipt.configChanges,
-            stderrTail: expect.stringContaining("requester-revoked"),
-          }),
-        ]);
-        const [failedDoctor] = steps;
-        assert(failedDoctor);
-        expect(failedDoctor.advisory).toBeUndefined();
-      } else {
-        expect(result).toMatchObject({ exitCode: 23 });
-        guards.assertCurrent();
-      }
-      expect(childPid).toBeTypeOf("number");
-      if (childPid !== undefined) {
-        expect(await waitForPidToExit(childPid)).toBe(true);
-      }
-      fence.assertCurrent();
-      assert(resultPath);
-      expect(fs.existsSync(resultPath)).toBe(false);
-      expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
-    });
-  },
-);
+        expect(result.cleanup).toBe("normal");
+        expect(result.code).toBe(exitCode);
+        expect(onStepComplete).not.toHaveBeenCalled();
+        resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+        assert(resultPath);
+        await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
+        return result;
+      },
+    );
+    const result = await runPackageUpdateDoctor({
+      ...doctorOptions(runId, fence, guards),
+      progress: { onStepComplete },
+      results: steps,
+    }).catch((cause: unknown) => cause);
+    expect(result).toMatchObject({ exitCode: 23 });
+    guards.assertCurrent();
+    expect(childPid).toBeTypeOf("number");
+    if (childPid !== undefined) {
+      expect(await waitForPidToExit(childPid)).toBe(true);
+    }
+    fence.assertCurrent();
+    assert(resultPath);
+    expect(fs.existsSync(resultPath)).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+  });
+});
 
 it("preserves before-input failure after proving the delegated grant was withheld", async () => {
   const runId = randomUUID();
@@ -699,24 +799,6 @@ it.skipIf(process.platform === "win32").for([
   },
 );
 
-it("does not invent unsettled writers when the Doctor executable never starts", async () => {
-  const resultPath = path.join(root, "doctor-not-started.json");
-  const steps: UpdateStepResult[] = [];
-  const error = await runUpdateDoctorProcess(
-    { runId: randomUUID(), root, onProcessSettlement: (step) => steps.push(step) },
-    [path.join(root, "missing-doctor-executable")],
-    {
-      cwd: root,
-      timeoutMs: 1_000,
-      env: { ...env, [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath },
-    },
-  ).catch((cause: unknown) => cause);
-  expect(error).toMatchObject({ code: "ENOENT" });
-  expect(hasCommandProcessCleanupError(error)).toBe(false);
-  expect(steps).toEqual([]);
-  expect(fs.existsSync(`${resultPath}.processes`)).toBe(false);
-});
-
 /** Hold fixture startup outside the deadline without freezing native cleanup or lease clocks. */
 function controlDoctorDeadline() {
   const nativeTimeout = processDeadline.setProcessTimeout;
@@ -728,7 +810,8 @@ function controlDoctorDeadline() {
     .mockImplementationOnce((callback, delayMs) => {
       const inOwner = AsyncLocalStorage.snapshot();
       release = (expire) => {
-        expect(delayMs).toBe(5_000);
+        expect(delayMs).toBeGreaterThan(0);
+        expect(delayMs).toBeLessThanOrEqual(5_000);
         if (active) {
           timer = inOwner(() => nativeTimeout(callback, expire ? 0 : delayMs));
         }

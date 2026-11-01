@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   consumeGatewaySuspendHandoff,
@@ -33,14 +35,15 @@ export function createGatewayRunSignals(params: {
   logger: Pick<SubsystemLogger, "debug" | "info" | "warn" | "error">;
   timeoutMs: number;
   getIteration: () => object;
+  isTerminal: () => boolean;
   isForcedExitStarted: () => boolean;
   isForegroundUpdateClosed: () => boolean;
+  getRequest: () => GatewayRunSignalRequest | null;
   isRuntimeResetPending: () => boolean;
   isShuttingDown: () => boolean;
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
   getTerminalHostedStop: () => ReturnType<typeof createGatewayHostLifecycle> | undefined;
   updateSuccessor: Pick<GatewayUpdateSuccessor, "stop" | "stopRequested">;
-  forceExit: (reason: string) => Promise<void>;
   request: (
     action: GatewayRunSignalAction,
     signal: GatewayRunSignalRequest["signal"],
@@ -58,6 +61,8 @@ export function createGatewayRunSignals(params: {
   let signalStoreOpening: Promise<void> | undefined;
   let reopenSignalStore: (() => void) | undefined;
   let signalsActive = true;
+  let sigtermIteration: object | undefined;
+  let duplicateSigtermLogged = false;
   const sealSignalStore = () => {
     signalStoreOpen = false;
     signalStoreOpening ??= new Promise<void>((resolve) => {
@@ -70,23 +75,17 @@ export function createGatewayRunSignals(params: {
     reopenSignalStore = undefined;
     signalStoreOpening = undefined;
   };
-  const drainRestartSignals = async () => {
+  const drainRestartSignals = async (sealStore = false) => {
     for (;;) {
       if (!signalSettlement) {
         break;
       }
       await signalSettlement;
     }
-  };
-  const settleRestartSignals = async () => {
-    for (;;) {
-      if (!signalSettlement) {
-        break;
-      }
-      await signalSettlement;
+    if (sealStore) {
+      // Captured signals wait for close to settle before reacquiring this file.
+      sealSignalStore();
     }
-    // Captured signals wait for close to settle before reacquiring this file.
-    sealSignalStore();
   };
   const enqueueSignal = (
     readIntent: boolean,
@@ -95,10 +94,16 @@ export function createGatewayRunSignals(params: {
   ) => {
     const iteration = params.getIteration();
     const acceptedAtMs = performance.now();
+    const controller = new AbortController();
+    let waitingFor = "earlier signal settlement";
     signalAdmission = beginGatewayRestartSignalAdmission() ?? signalAdmission;
     const isCurrent = () =>
-      signalsActive && !params.isForcedExitStarted() && params.getIteration() === iteration;
+      signalsActive &&
+      !params.isTerminal() &&
+      !params.isForcedExitStarted() &&
+      params.getIteration() === iteration;
     const assertCurrent = () => {
+      controller.signal.throwIfAborted();
       if (!isCurrent()) {
         throw new Error("Gateway signal belongs to a retired lifecycle iteration");
       }
@@ -111,50 +116,51 @@ export function createGatewayRunSignals(params: {
             undefined,
             undefined,
             assertCurrent,
+            controller.signal,
           )
         : undefined;
     } catch (error) {
       preparationFailure = { error };
     }
-    const deadline = consumeIntent
-      ? setTimeout(
-          () => {
-            void params.forceExit("gateway.restart_signal_settlement_timeout");
-          },
-          Math.max(0, params.timeoutMs - (performance.now() - acceptedAtMs)),
-        )
-      : undefined;
-    deadline?.unref?.();
     const processSignal = async () => {
-      try {
-        if (!isCurrent()) {
-          return;
-        }
-        if (preparationFailure) {
-          throw preparationFailure.error;
-        }
-        for (;;) {
-          if (!consumeIntent || signalStoreOpen) {
-            break;
-          }
-          await signalStoreOpening;
-          if (!isCurrent()) {
-            return;
-          }
-        }
-        const restartIntent = consumeIntent ? await consumeIntent() : null;
-        if (isCurrent()) {
-          handle(restartIntent, acceptedAtMs);
-        }
-      } catch (error) {
-        if (isCurrent()) {
-          failed(error, acceptedAtMs);
-        }
-      } finally {
-        clearTimeout(deadline);
+      if (!isCurrent() || controller.signal.aborted) {
+        return;
       }
+      if (preparationFailure) {
+        throw preparationFailure.error;
+      }
+      waitingFor = "restart-intent store to reopen";
+      for (;;) {
+        if (!consumeIntent || signalStoreOpen) {
+          break;
+        }
+        await signalStoreOpening;
+        assertCurrent();
+      }
+      waitingFor = "restart-intent consumption";
+      const restartIntent = consumeIntent ? await consumeIntent() : null;
+      assertCurrent();
+      handle(restartIntent, acceptedAtMs);
     };
-    const settled = signalSettlement ? signalSettlement.then(processSignal) : processSignal();
+    // Intent metadata must not spend the shutdown budget or prevent resume markers.
+    // Native writes still settle with their owner; abort refuses any late consumption.
+    const timeoutMs = Math.min(1_000, params.timeoutMs);
+    const settled = raceWithTimeout(
+      () => (signalSettlement ? signalSettlement.then(processSignal) : processSignal()),
+      Math.max(0, timeoutMs - (performance.now() - acceptedAtMs)),
+      () => {
+        const error = new Error(
+          `restart signal settlement exceeded ${timeoutMs}ms waiting for ${waitingFor}`,
+        );
+        controller.abort(error);
+        throw error;
+      },
+      { ref: false },
+    ).catch((error: unknown) => {
+      if (isCurrent()) {
+        failed(error, acceptedAtMs);
+      }
+    });
     signalSettlement = settled;
     void settled.then(() => {
       if (signalSettlement === settled) {
@@ -164,9 +170,12 @@ export function createGatewayRunSignals(params: {
       }
     });
   };
-  const onSigterm = () => {
-    observeSignal("SIGTERM");
-    gatewayLog.debug("signal SIGTERM received");
+  // In-process emitters can retire their async scope during shutdown. The loop
+  // owns signal consumption and restart, including the next state-lock acquisition.
+  const onSigterm = AsyncLocalStorage.bind(() => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     const terminalHostedStop = params.getTerminalHostedStop();
     if (terminalHostedStop) {
       // Kernel cleanup is already joined. A native stop signal belongs to this
@@ -178,18 +187,32 @@ export function createGatewayRunSignals(params: {
       updateSuccessor.stop("SIGTERM");
       return;
     }
+    const iteration = params.getIteration();
+    if (params.isShuttingDown() && sigtermIteration === iteration) {
+      if (!duplicateSigtermLogged) {
+        duplicateSigtermLogged = true;
+        gatewayLog.info("duplicate SIGTERM ignored");
+      }
+      return;
+    }
+    sigtermIteration = iteration;
+    duplicateSigtermLogged = false;
     if (params.isForcedExitStarted()) {
       request("stop", "SIGTERM");
       return;
     }
-    // Transfer this in-memory authority before even the reversible signal fence.
+    if (params.isShuttingDown() && !params.getRequest()?.foregroundUpdate) {
+      // Only a foreground updater's first SIGTERM can carry another restart intent.
+      // Ordinary shutdown owns the sealed store; in-place restart stops directly.
+      request("stop", "SIGTERM");
+      return;
+    }
+    observeSignal("SIGTERM");
     let suspendHandoff: ReturnType<typeof consumeGatewaySuspendHandoff> | undefined;
-    if (!params.isShuttingDown()) {
-      try {
-        suspendHandoff = consumeGatewaySuspendHandoff(params.getExternalRestartOwner());
-      } catch (error) {
-        suspendHandoff = { ok: false, error: formatErrorMessage(error) };
-      }
+    try {
+      suspendHandoff = consumeGatewaySuspendHandoff(params.getExternalRestartOwner());
+    } catch (error) {
+      suspendHandoff = { ok: false, error: formatErrorMessage(error) };
     }
     enqueueSignal(
       true,
@@ -212,10 +235,12 @@ export function createGatewayRunSignals(params: {
         });
       },
     );
-  };
-  const onSigint = () => {
+  });
+  const onSigint = AsyncLocalStorage.bind(() => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGINT");
-    gatewayLog.debug("signal SIGINT received");
     if (params.isForcedExitStarted()) {
       request("stop", "SIGINT");
       return;
@@ -224,9 +249,12 @@ export function createGatewayRunSignals(params: {
       false,
       (_intent, acceptedAtMs) =>
         request("stop", "SIGINT", undefined, undefined, undefined, { acceptedAtMs }),
-      (error) => gatewayLog.error(`failed to handle SIGINT: ${formatErrorMessage(error)}`),
+      (error, acceptedAtMs) => {
+        gatewayLog.error(`failed to handle SIGINT: ${formatErrorMessage(error)}`);
+        request("stop", "SIGINT", undefined, undefined, undefined, { acceptedAtMs });
+      },
     );
-  };
+  });
   const restartSignalFailed = (err: unknown, releaseToken = true) => {
     gatewayLog.error(`SIGUSR2 handler failed: ${formatErrorMessage(err)}`);
     if (!releaseToken) {
@@ -245,9 +273,11 @@ export function createGatewayRunSignals(params: {
       }
     }
   };
-  const onRestartSignal = () => {
+  const onRestartSignal = AsyncLocalStorage.bind(() => {
+    if (!signalsActive || params.isTerminal()) {
+      return;
+    }
     observeSignal("SIGUSR2");
-    gatewayLog.debug("signal SIGUSR2 received");
     if (params.isForegroundUpdateClosed()) {
       return;
     }
@@ -259,46 +289,57 @@ export function createGatewayRunSignals(params: {
       const reason = eagerLifecycleRuntime.peekGatewayRestartReason();
       const deferRestartDrain = params.isRuntimeResetPending();
       eagerLifecycleRuntime.markGatewayRestartHandled();
-      enqueueSignal(
-        true,
-        (durableIntent, acceptedAtMs) => {
-          const restartIntent = durableIntent
-            ? { ...durableIntent, ...(localIntent?.successorOwner ? localIntent : {}) }
-            : localIntent;
-          if (!durableIntent && !authorized) {
-            if (!eagerLifecycleRuntime.isGatewayRestartExternallyAllowed()) {
-              gatewayLog.warn("SIGUSR2 restart ignored (not authorized; commands.restart=false).");
-              gatewayLog.warn(
-                "An unauthorized SIGUSR2 restart signal was received and ignored. " +
-                  "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
-                  "or restart the gateway through your service manager.",
-              );
-              return;
+      const handleRestart = (durableIntent: GatewayRestartIntent | null, acceptedAtMs: number) => {
+        const restartIntent = durableIntent
+          ? {
+              ...durableIntent,
+              ...(localIntent?.successorOwner || localIntent?.requireFreshProcess
+                ? localIntent
+                : {}),
             }
-            if (params.isShuttingDown()) {
-              gatewayLog.info("received SIGUSR2 during shutdown; ignoring");
-              return;
-            }
-            eagerLifecycleRuntime.abortPendingChannelReloads();
-            eagerLifecycleRuntime.scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
+          : localIntent;
+        if (!durableIntent && !authorized) {
+          if (!eagerLifecycleRuntime.isGatewayRestartExternallyAllowed()) {
+            gatewayLog.warn("SIGUSR2 restart ignored (not authorized; commands.restart=false).");
+            gatewayLog.warn(
+              "An unauthorized SIGUSR2 restart signal was received and ignored. " +
+                "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
+                "or restart the gateway through your service manager.",
+            );
+            return;
+          }
+          if (params.isShuttingDown()) {
+            gatewayLog.info("received SIGUSR2 during shutdown; ignoring");
             return;
           }
           eagerLifecycleRuntime.abortPendingChannelReloads();
-          request(
-            "restart",
-            "SIGUSR2",
-            restartIntent?.reason ?? (durableIntent ? "gateway.restart" : reason),
-            restartIntent ?? undefined,
-            undefined,
-            { acceptedAtMs, deferRestartDrain },
-          );
-        },
-        (error) => restartSignalFailed(error, false),
-      );
+          eagerLifecycleRuntime.scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
+          return;
+        }
+        eagerLifecycleRuntime.abortPendingChannelReloads();
+        request(
+          "restart",
+          "SIGUSR2",
+          restartIntent?.reason ?? (durableIntent ? "gateway.restart" : reason),
+          restartIntent ?? undefined,
+          undefined,
+          { acceptedAtMs, deferRestartDrain },
+        );
+      };
+      enqueueSignal(true, handleRestart, (error, acceptedAtMs) => {
+        if (!authorized) {
+          restartSignalFailed(error, false);
+          return;
+        }
+        gatewayLog.warn(
+          `Restart intent could not be read; continuing the authorized local restart: ${formatErrorMessage(error)}`,
+        );
+        handleRestart(null, acceptedAtMs);
+      });
     } catch (err) {
       restartSignalFailed(err);
     }
-  };
+  });
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
@@ -317,8 +358,8 @@ export function createGatewayRunSignals(params: {
     },
     sealStore: sealSignalStore,
     openStore: openSignalStore,
-    drain: drainRestartSignals,
-    settle: settleRestartSignals,
+    drain: () => drainRestartSignals(),
+    settle: () => drainRestartSignals(true),
     retire,
     close() {
       retire();

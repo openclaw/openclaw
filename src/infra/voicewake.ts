@@ -1,18 +1,19 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
+import {
+  readVoiceWakeMachineState,
+  writeConfigMachineStateAsync,
+} from "../state/config-machine-state-async.js";
 
 // Voice wake config stores trigger words used by local voice integrations.
 type VoiceWakeConfig = {
   triggers: string[];
-  updatedAtMs: number;
 };
 
 const DEFAULT_TRIGGERS = ["openclaw", "claude", "computer"];
 const VOICEWAKE_TRIGGERS_STATE_KEY = "voicewake.triggers";
 
-function sanitizeTriggers(triggers: string[] | undefined | null): string[] {
-  const cleaned = (triggers ?? [])
+function sanitizeTriggers(triggers: unknown): string[] {
+  const cleaned = (Array.isArray(triggers) ? triggers : [])
     .map((w) => normalizeOptionalString(w) ?? "")
     .filter((w) => w.length > 0);
   return cleaned.length > 0 ? cleaned : DEFAULT_TRIGGERS;
@@ -28,16 +29,15 @@ export function defaultVoiceWakeTriggers() {
 
 /** Load persisted voice wake triggers, falling back to defaults. */
 export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
-  const state = readConfigMachineStateWithMetadata<string[]>(
+  const state = await readVoiceWakeMachineState(
     VOICEWAKE_TRIGGERS_STATE_KEY,
     stateDatabaseOptions(baseDir),
   );
   if (!state) {
-    return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
+    return { triggers: defaultVoiceWakeTriggers() };
   }
   return {
     triggers: sanitizeTriggers(state.value),
-    updatedAtMs: Math.max(0, state.updatedAtMs),
   };
 }
 
@@ -46,6 +46,10 @@ export async function setVoiceWakeTriggers(
   baseDir?: string,
 ): Promise<VoiceWakeConfig> {
   const sanitized = sanitizeTriggers(triggers);
-  writeConfigMachineState(VOICEWAKE_TRIGGERS_STATE_KEY, sanitized, stateDatabaseOptions(baseDir));
-  return loadVoiceWakeConfig(baseDir);
+  await writeConfigMachineStateAsync(
+    VOICEWAKE_TRIGGERS_STATE_KEY,
+    sanitized,
+    stateDatabaseOptions(baseDir),
+  );
+  return { triggers: sanitized };
 }

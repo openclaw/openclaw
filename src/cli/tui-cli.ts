@@ -1,24 +1,16 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
 import type { Command } from "commander";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import type { TuiOptions } from "../tui/tui-types.js";
 import { formatDocsHelp } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 import { resolveSessionTarget } from "./session-target.js";
 import { addTuiOptions } from "./tui-cli-options.js";
 
-type TuiCliOptions = {
-  local?: boolean;
-  url?: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-  session?: string;
-  deliver?: boolean;
-  thinking?: string;
-  message?: string;
+type TuiCliOptions = Omit<TuiOptions, "timeoutMs" | "historyLimit" | "initialMessageTimeoutMs"> & {
   timeoutMs?: string;
   historyLimit?: string;
 };
@@ -47,10 +39,8 @@ export async function runTuiCliAction(
   if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
     defaultRuntime.error(`warning: invalid --timeout-ms "${opts.timeoutMs}"; ignoring`);
   }
-  const historyLimit = parseStrictPositiveInteger(opts.historyLimit ?? "200");
-  if (historyLimit === undefined) {
-    throw new Error("--history-limit must be a positive integer.");
-  }
+  const historyLimit =
+    parseOptionalPositiveInteger(opts.historyLimit ?? undefined, "--history-limit", ".") ?? 200;
   if (!isLocal && historyLimit > CHAT_HISTORY_MAX_ENTRIES) {
     throw new Error(`--history-limit must be at most ${CHAT_HISTORY_MAX_ENTRIES}.`);
   }
@@ -80,7 +70,6 @@ export async function runTuiCliAction(
     message: opts.message,
     timeoutMs,
     historyLimit,
-    forceProcessExitOnReturn: true,
   });
 }
 

@@ -1,8 +1,11 @@
-import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
+import type {
+  EmbeddingInput,
+  EmbeddingProviderCallOptions,
+} from "openclaw/plugin-sdk/embedding-providers";
 import {
-  buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  resolveEmbeddingProviderSsrFPolicy,
   formatEmbeddingTaskText,
   normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
@@ -47,8 +50,6 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
 };
 
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
-
-// --- Gemini Embedding 2 support ---
 
 const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
@@ -105,6 +106,8 @@ export function buildGeminiEmbeddingRequest(params: {
   input: EmbeddingInput;
   model: string;
   role: "query" | "document";
+  queryInstructionApplied?: boolean;
+  documentFormatApplied?: boolean;
   taskType: GeminiTaskType;
   outputDimensionality?: number;
   modelPath?: string;
@@ -119,7 +122,11 @@ export function buildGeminiEmbeddingRequest(params: {
   ) ?? [{ text: input.text }];
   const isStableEmbedding2 = normalizeGeminiModel(params.model) === "gemini-embedding-2";
   const request: GeminiEmbeddingRequest = { content: { parts } };
-  if (isStableEmbedding2 && parts.every((part) => "text" in part)) {
+  if (
+    isStableEmbedding2 &&
+    !(params.role === "query" ? params.queryInstructionApplied : params.documentFormatApplied) &&
+    parts.every((part) => "text" in part)
+  ) {
     const first = parts[0];
     if (first && "text" in first) {
       const taskType =
@@ -325,7 +332,7 @@ export async function createGeminiEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    callOptions?: { signal?: AbortSignal },
+    callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
@@ -337,6 +344,7 @@ export async function createGeminiEmbeddingProvider(
         input: text,
         model: client.model,
         role: "query",
+        queryInstructionApplied: callOptions?.queryInstructionApplied,
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
         outputDimensionality,
       }),
@@ -350,7 +358,7 @@ export async function createGeminiEmbeddingProvider(
 
   const embedDocuments = async (
     inputs: EmbeddingInput[],
-    callOptions?: { signal?: AbortSignal },
+    callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> => {
     if (inputs.length === 0) {
       return [];
@@ -364,6 +372,7 @@ export async function createGeminiEmbeddingProvider(
             input,
             model: client.model,
             role: "document",
+            documentFormatApplied: callOptions?.documentFormatApplied,
             modelPath: client.modelPath,
             taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
             outputDimensionality,
@@ -437,12 +446,25 @@ async function resolveGeminiEmbeddingClient(
     );
   }
 
-  const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign(
-    {},
-    providerOwnsDestination ? providerConfig?.headers : undefined,
-    remote?.headers,
-  );
+  const ssrfPolicy = resolveEmbeddingProviderSsrFPolicy({
+    provider: "google",
+    api: providerConfig?.api ?? "google-generative-ai",
+    baseUrl,
+    allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
+  });
+  const headerOverrides: Record<string, string> = {};
+  for (const [path, source] of [
+    [
+      "models.providers.google.headers",
+      providerOwnsDestination ? providerConfig?.headers : undefined,
+    ],
+    ["memory.search.remote.headers", remote?.headers],
+  ] as const) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      headerOverrides[name] =
+        resolveMemorySecretInputString({ value: value ?? null, path: `${path}.${name}` }) ?? "";
+    }
+  }
   const headers: Record<string, string> = {
     ...headerOverrides,
     ...resolveGoogleApiClientHeaders({

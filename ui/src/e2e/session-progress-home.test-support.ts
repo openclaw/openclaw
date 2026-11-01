@@ -1,7 +1,11 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
 
 /** Mobile exposes Home through the navigation drawer, not an offscreen click. */
-export async function openProgressHomeDock(page: Page): Promise<void> {
+export async function openProgressHomeDock(
+  page: Page,
+  options: { waitForSession?: boolean } = {},
+): Promise<void> {
   const label = "Talk to your Home agent";
   const toggle = page.getByRole("button", { name: label, exact: true, includeHidden: true });
   await toggle.waitFor({ state: "attached" });
@@ -20,5 +24,22 @@ export async function openProgressHomeDock(page: Page): Promise<void> {
       .getByRole("dialog", { name: "Navigation", exact: true })
       .waitFor({ state: "hidden" });
   }
-  await page.locator("openclaw-home-session").waitFor();
+  if (options.waitForSession !== false) {
+    await page.locator("openclaw-home-session").waitFor();
+  }
+}
+
+export async function waitForProgressScrollIdle(thread: Locator) {
+  await expect
+    .poll(() =>
+      thread.evaluate(async (element) => {
+        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
+        return before.every((value, index) => value === after[index]);
+      }),
+    )
+    .toBe(true);
 }

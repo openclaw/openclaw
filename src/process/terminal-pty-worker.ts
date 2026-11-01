@@ -1,5 +1,6 @@
-import { decodeTerminalPtyControl, type TerminalPtyEvent } from "./terminal-pty-protocol.js";
-import { prepareTerminalPty, spawnTerminalPty, type TerminalPtyHandle } from "./terminal-pty.js";
+import { enterAgentExecCgroup } from "./linux-exec-cgroup.js";
+import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
+import { prepareTerminalPty, type TerminalPtyHandle } from "./terminal-pty.js";
 
 let pty: TerminalPtyHandle | undefined;
 let starting = false;
@@ -40,12 +41,8 @@ process.once("SIGTERM", close);
 process.once("SIGINT", close);
 process.stdout.on("error", close);
 process.stdout.on("drain", () => pty?.resume());
-process.on("message", (raw: unknown) => {
-  const message = decodeTerminalPtyControl(raw);
-  if (!message) {
-    finish({ type: "error", message: "Invalid terminal host message" });
-    return;
-  }
+// Only the spawning host writes this channel; launch authority is checked separately.
+process.on("message", (message: TerminalPtyControl) => {
   if (message.type === "start" || message.type === "prepare") {
     if (starting || parentLost) {
       return;
@@ -58,25 +55,30 @@ process.on("message", (raw: unknown) => {
       });
       return;
     }
-    const startup =
-      message.type === "prepare"
-        ? prepareTerminalPty(message.params).then(
-            (launch) =>
-              new Promise<TerminalPtyHandle>((resolve, reject) => {
-                authorizeLaunch = () => {
-                  try {
-                    if (parentLost || finished) {
-                      throw new Error("Terminal host retired before launch");
-                    }
-                    resolve(launch());
-                  } catch (error) {
-                    reject(error instanceof Error ? error : new Error(String(error)));
-                  }
-                };
-                report({ type: "prepared" });
-              }),
-          )
-        : spawnTerminalPty(message.params);
+    if (message.params.executionIntent === "agent-tool") {
+      enterAgentExecCgroup();
+    }
+    const startup = prepareTerminalPty(message.params).then((launch) => {
+      if (message.type === "start") {
+        if (parentLost || finished) {
+          throw new Error("Terminal host retired before launch");
+        }
+        return launch();
+      }
+      return new Promise<TerminalPtyHandle>((resolve, reject) => {
+        authorizeLaunch = () => {
+          try {
+            if (parentLost || finished) {
+              throw new Error("Terminal host retired before launch");
+            }
+            resolve(launch());
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        };
+        report({ type: "prepared" });
+      });
+    });
     void startup.then(
       (handle) => {
         pty = handle;

@@ -2,7 +2,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { promisify } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -27,36 +27,35 @@ function appendBounded(current: string, chunk: Buffer | string): string {
 function parseStart(raw: string | undefined): RouteOwnerStart {
   const parsed: unknown = JSON.parse(raw ?? "null");
   const argv = isRecord(parsed) ? parsed.argv : undefined;
-  if (
-    !Array.isArray(argv) ||
-    !argv.every((entry) => typeof entry === "string") ||
-    argv.length === 0
-  ) {
+  if (!isStringArray(argv) || argv.length === 0) {
     throw new Error("invalid Tailscale route-owner start payload");
   }
   return { argv };
 }
 
+const pendingReports = new Set<Promise<void>>();
+
 function send(message: TailscaleRouteOwnerMessage): void {
-  if (!process.connected || !process.send) {
+  const sendMessage = process.send?.bind(process);
+  if (!process.connected || !sendMessage) {
     return;
   }
-  try {
-    process.send(message, () => undefined);
-  } catch {
-    // The parent can disappear between the connected check and send.
-  }
+  const report = new Promise<void>((resolve) => {
+    try {
+      sendMessage(message, () => resolve());
+    } catch {
+      // The parent can disappear between the connected check and send.
+      resolve();
+    }
+  });
+  pendingReports.add(report);
+  void report.then(() => pendingReports.delete(report));
 }
 
 export type TailscaleRouteOwnerExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
   stopping: boolean;
-};
-
-export type TailscaleRouteOwnerHandle = {
-  exited: Promise<TailscaleRouteOwnerExit>;
-  stop: () => void;
 };
 
 async function signalChild(
@@ -96,7 +95,10 @@ async function signalChild(
 export function runTailscaleRouteOwner(
   start: RouteOwnerStart,
   sendMessage: (message: TailscaleRouteOwnerMessage) => void = send,
-): TailscaleRouteOwnerHandle {
+): {
+  exited: Promise<TailscaleRouteOwnerExit>;
+  stop: () => void;
+} {
   const command = start.argv[0];
   if (!command) {
     throw new Error("Tailscale route-owner command is empty");
@@ -169,23 +171,36 @@ export function runTailscaleRouteOwner(
 }
 
 if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
+  let finalExitCode = 0;
   try {
     const owner = runTailscaleRouteOwner(parseStart(process.argv[3]));
     // The owner survives a Gateway process-group kill. IPC closure releases the
     // detached claim even when the Gateway cannot run its shutdown hooks.
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-      process.once(signal, owner.stop);
-    }
-    process.once("disconnect", owner.stop);
-    process.once("message", (message: unknown) => {
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    const onMessage = (message: unknown) => {
       if (isRecord(message) && message.type === "stop") {
         owner.stop();
       }
-    });
-    if (!process.connected) {
-      owner.stop();
+    };
+    for (const signal of signals) {
+      process.on(signal, owner.stop);
     }
-    void owner.exited.then((exit) => process.exit(exit.stopping ? 0 : 1));
+    process.once("disconnect", owner.stop);
+    process.once("message", onMessage);
+    try {
+      if (!process.connected) {
+        owner.stop();
+      }
+      const exit = await owner.exited;
+      finalExitCode = exit.stopping ? 0 : 1;
+    } finally {
+      // Retirement must not signal the departed claim again on our own disconnect.
+      for (const signal of signals) {
+        process.off(signal, owner.stop);
+      }
+      process.off("disconnect", owner.stop);
+      process.off("message", onMessage);
+    }
   } catch (error) {
     send({
       type: "failed",
@@ -194,6 +209,14 @@ if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
       stdout: "",
       stderr: error instanceof Error ? error.message : String(error),
     });
-    process.exit(1);
+    finalExitCode = 1;
+  } finally {
+    // The foreground claim and its pipes have closed. Join its final failure
+    // report before releasing the parent-owned IPC channel.
+    await Promise.all(pendingReports);
+    if (process.connected) {
+      process.disconnect?.();
+    }
+    process.exitCode = finalExitCode;
   }
 }

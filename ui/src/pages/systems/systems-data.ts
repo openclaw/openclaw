@@ -9,13 +9,7 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 
-export type SystemsInventory = {
-  environments: EnvironmentSummary[];
-  nodes: NodeListNode[];
-  gatewaySystemInfo: SystemInfoResult | null;
-  gatewaySampledAtMs: number | null;
-  errors: { nodes?: string; systemInfo?: string };
-};
+export type SystemsInventory = NonNullable<Awaited<ReturnType<typeof loadSystemsInventory>>>;
 
 type SystemsSessionRelation = {
   // These are recorded bindings, not proof that a model turn ran on the host.
@@ -30,13 +24,13 @@ export type SystemsInventoryRow = {
   sessions: SystemsSessionRelation[];
 };
 
-/** The route owns connection epochs, refresh scheduling and publication of this snapshot. */
+/** The route owns refresh scheduling and publication of this snapshot. */
 export async function loadSystemsInventory(
   gateway: ApplicationGateway,
-  options: { isCurrent: () => boolean; signal?: AbortSignal; fresh?: boolean },
-): Promise<SystemsInventory | undefined> {
+  options: { signal?: AbortSignal; fresh?: boolean },
+) {
   const client = gateway.snapshot.client;
-  if (!client || !options.isCurrent() || options.signal?.aborted) {
+  if (!client) {
     return undefined;
   }
   const requestOptions = { signal: options.signal };
@@ -49,16 +43,6 @@ export async function loadSystemsInventory(
     client.request<{ nodes: NodeListNode[] }>("node.list", {}, requestOptions),
     readSystemInfo(gateway, options.signal, { fresh: options.fresh }),
   ]);
-  if (!options.isCurrent() || options.signal?.aborted) {
-    return undefined;
-  }
-  if (
-    systemInfo.status === "rejected" &&
-    systemInfo.reason instanceof DOMException &&
-    systemInfo.reason.name === "AbortError"
-  ) {
-    return undefined;
-  }
   // Never rebuild inventory from auxiliary node reads: that would resurrect cloud-owned
   // pairings deliberately suppressed by environments.list and hide inventory failures.
   if (inventory.status === "rejected") {

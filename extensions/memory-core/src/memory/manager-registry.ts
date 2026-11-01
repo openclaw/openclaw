@@ -1,8 +1,8 @@
 // Memory Core plugin module owns manager cache and close serialization.
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
-  MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCreateResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -12,10 +12,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  resolveMemoryCoreLocalServiceHostIdentity,
-  type MemoryCoreAcquireLocalService,
-} from "./embedding-local-service.js";
+import { resolveMemoryCoreLocalServiceHostIdentity } from "./embedding-local-service.js";
 import {
   MemoryManagerReloadError,
   type MemoryManagerLifecycle,
@@ -54,7 +51,7 @@ export function resolveMemoryIndexManagerCacheKey(params: {
   settings: ResolvedMemorySearchConfig;
   providerRequirement: unknown;
   purpose: MemoryIndexManagerPurpose;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
 }): string {
   return [
     params.agentId,
@@ -81,9 +78,7 @@ export type MemoryManagerProviderFactory = (
 
 type ManagerOwnership = {
   key: string;
-  pending: Map<object, MemoryEmbeddingProviderAdapter>;
-  providers: Map<MemoryEmbeddingProvider, MemoryEmbeddingProviderAdapter>;
-  failedAdapters: Set<MemoryEmbeddingProviderAdapter>;
+  adapters: Set<MemoryEmbeddingProviderAdapter>;
   retiring: boolean;
 };
 
@@ -106,9 +101,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     if (!owner) {
       owner = {
         key,
-        pending: new Map(),
-        providers: new Map(),
-        failedAdapters: new Set(),
+        adapters: new Set(),
         retiring: false,
       };
       this.managers.set(manager, owner);
@@ -128,47 +121,14 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     if (owner.retiring || this.reload?.retireRuntime || this.reload?.adapters.has(adapter)) {
       throw new MemoryManagerReloadError();
     }
-    const acquisition = {};
-    // Record the exact adapter before creation can yield; late results belong to
-    // this manager's close, including when replacement began during creation.
-    owner.pending.set(acquisition, adapter);
-    try {
-      const result = await create();
-      if (result.provider) {
-        owner.providers.set(result.provider, adapter);
-        owner.failedAdapters.delete(adapter);
-      } else {
-        owner.failedAdapters.add(adapter);
-      }
-      return result;
-    } catch (error) {
-      owner.failedAdapters.add(adapter);
-      throw error;
-    } finally {
-      owner.pending.delete(acquisition);
-    }
-  }
-
-  canPublishProbe(manager: T): boolean {
-    const owner = this.managers.get(manager);
-    return owner !== undefined && !owner.retiring;
+    // Remember attempted adapters, including a primary that fell back.
+    owner.adapters.add(adapter);
+    return await create();
   }
 
   getProbeOwners(manager: T): readonly MemoryEmbeddingProviderAdapter[] {
     const owner = this.managers.get(manager);
-    return owner
-      ? [
-          ...new Set([
-            ...owner.pending.values(),
-            ...owner.providers.values(),
-            ...owner.failedAdapters,
-          ]),
-        ]
-      : [];
-  }
-
-  releaseProvider(manager: T, provider: MemoryEmbeddingProvider): void {
-    this.managers.get(manager)?.providers.delete(provider);
+    return owner ? [...owner.adapters] : [];
   }
 
   private prepareManagersForReload(reload: MemoryReloadState) {
@@ -189,8 +149,8 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       );
       for (const [manager, owner] of selected) {
         owner.retiring = true;
-        // Release reuse before cleanup can yield. Keep the retiring owner so
-        // late provider/probe work cannot publish into its replacement's cache.
+        // Release reuse before cleanup can yield. Keep the retiring owner to
+        // decline late provider creation.
         if (this.cache.get(owner.key) === manager) {
           this.cache.delete(owner.key);
         }
@@ -221,27 +181,13 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       throw new MemoryManagerReloadError();
     }
     return await this.runScopeOperation(params, async () => {
-      if (this.reload?.retireRuntime) {
-        throw new MemoryManagerReloadError();
-      }
       const prepared = await callbacks.prepare();
       if (!prepared) {
         return null;
       }
-      if (this.reload?.retireRuntime) {
-        throw new MemoryManagerReloadError();
-      }
       const create = async () => {
-        if (this.reload?.retireRuntime) {
-          throw new MemoryManagerReloadError();
-        }
         const manager = await prepared.create();
-        const owner = this.track(manager, prepared.key);
-        if (this.reload?.retireRuntime) {
-          owner.retiring = true;
-          await this.closeEntries([[prepared.key, manager]]);
-          throw new MemoryManagerReloadError();
-        }
+        this.track(manager, prepared.key);
         return manager;
       };
       if (params.purpose !== "default") {
@@ -256,16 +202,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       // The scope queue already serializes creation and replacement for this agent.
       const existing = this.cache.get(prepared.key);
       if (existing) {
-        // Other sidecars may drain between preparation and memory cleanup.
-        // Recheck after the scope await without discarding the manager needed for rollback.
-        const reload = this.reload;
-        if (
-          reload &&
-          (reload.retireRuntime ||
-            this.getProbeOwners(existing).some((adapter) => reload.adapters.has(adapter)))
-        ) {
-          throw new MemoryManagerReloadError();
-        }
         return existing;
       }
       const manager = await create();
@@ -304,16 +240,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     params: { agentId: string; purpose: MemoryIndexManagerPurpose },
     operation: () => Promise<R>,
   ): Promise<R> {
-    while (this.closePromise) {
-      const globalClose = this.closePromise;
-      try {
-        await globalClose;
-      } catch {
-        if (this.closePromise === globalClose) {
-          await this.closeAll();
-        }
-      }
-    }
+    await this.closePromise;
     return await enqueueKeyedTask({
       tails: this.scopeOperations,
       key: JSON.stringify([params.agentId, params.purpose]),

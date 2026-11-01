@@ -5,6 +5,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { observeSecretStoreMutation } from "./secret-store-changes.js";
 import { assertSecretStoreValue } from "./secret-store-validation.js";
 import type {
   SecretStoreBatchWriteParams as KernelBatchParams,
@@ -44,21 +45,25 @@ function write(params: SecretStoreBatchWriteParams, capturePrevious: boolean) {
       registerSecretValueForRedaction(entry.expectedValue);
     }
   }
-  const result = runOpenClawStateWorkerOperation(
-    context,
-    async (scope) => {
-      const results = await scope.execute({
-        type: "secrets.write",
-        input: { ...captured, capturePrevious, now },
-      });
-      for (const written of results) {
-        if (written.previous) {
-          registerSecretValueForRedaction(written.previous.value);
+  const result = observeSecretStoreMutation(
+    runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => {
+        const results = await scope.execute({
+          type: "secrets.write",
+          input: { ...captured, capturePrevious, now },
+        });
+        for (const written of results) {
+          if (written.previous) {
+            registerSecretValueForRedaction(written.previous.value);
+          }
         }
-      }
-      return results;
-    },
-    admission(context, assertCurrent),
+        return results;
+      },
+      admission(context, assertCurrent),
+    ),
+    context.admission.databasePath,
+    captured.entries.map((entry) => entry.name),
   );
   return { context, result };
 }
@@ -88,14 +93,18 @@ export async function deleteSecretStoreEntry(
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext(params.database);
   const input = { scope: { ...params.scope }, name: params.name, now: Date.now() };
-  await runOpenClawStateWorkerOperation(
-    context,
-    (owner) =>
-      owner.execute({
-        type: "secrets.delete",
-        input,
-      }),
-    admission(context, params.assertCurrent),
+  await observeSecretStoreMutation(
+    runOpenClawStateWorkerOperation(
+      context,
+      (owner) =>
+        owner.execute({
+          type: "secrets.delete",
+          input,
+        }),
+      admission(context, params.assertCurrent),
+    ),
+    context.admission.databasePath,
+    [params.name],
   );
 }
 
@@ -124,21 +133,25 @@ export async function writeSecretStoreEntryWithRollback(params: SecretStoreWrite
   return {
     rollback: () => {
       const now = Date.now();
-      return (rollback ??= runOpenClawStateWorkerOperation(
-        pending.context,
-        (owner) =>
-          owner.execute({
-            type: "secrets.rollback",
-            input: {
-              scope: capturedScope,
-              name: entry.name,
-              expectedUpdatedBy: writer,
-              previous,
-              now,
-            },
-          }),
-        // Exact-write compensation retains cleanup authority after the requester ends.
-        admission(pending.context),
+      return (rollback ??= observeSecretStoreMutation(
+        runOpenClawStateWorkerOperation(
+          pending.context,
+          (owner) =>
+            owner.execute({
+              type: "secrets.rollback",
+              input: {
+                scope: capturedScope,
+                name: entry.name,
+                expectedUpdatedBy: writer,
+                previous,
+                now,
+              },
+            }),
+          // Exact-write compensation retains cleanup authority after the requester ends.
+          admission(pending.context),
+        ),
+        pending.context.admission.databasePath,
+        [entry.name],
       ));
     },
   };

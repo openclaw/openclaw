@@ -19,6 +19,62 @@ when you return to the app after changing a grant in System Settings, focus the
 Dashboard, or complete a permission request. Open Dashboard windows do not start
 background permission polling.
 
+## When a tool needs permission
+
+Native tools check permissions when they need them. A missing permission stops
+the command with `PERMISSION_MISSING`, identifies the affected Mac and capabilities,
+and shows an inline **Grant** card in the Control UI conversation. Computer Control
+reports its missing Accessibility, Event Posting, Screen Recording, and OpenClaw
+capability grants together. The agent waits for your confirmation before retrying.
+
+In the Mac app, the card's primary action follows the current permission state:
+**Grant _permission_** requests access, **Open System Settings** handles denied or
+stale grants, **Relaunch OpenClaw** handles a required restart, and
+**Enable _capability_** turns on a capability that is off in OpenClaw using the
+same native confirmation as **Settings → This Mac**. A stale Accessibility grant
+needs to be removed and re-added. Once the app observes the required grants,
+**Try again** sends a short confirmation to the agent. Granting permission does
+not automatically repeat the command.
+
+For a request that needs both an OpenClaw capability and macOS permissions, the
+**Enable** button names only the disabled capability. The card lists the remaining
+permissions below the explanation, then updates its action after the capability
+is enabled. Each click dispatches only the current step's capabilities; later
+permission grants and relaunches require their own card actions.
+
+Location uses the same capability for its OpenClaw mode and macOS grant. If
+Location is off and macOS has already denied or restricted access, or system-wide
+Location Services is off, the card offers **Open System Settings** for Location
+Services first, without asking to enable Location. This also applies when the app
+still has a grant but Location Services is off. After access is restored,
+**Enable Location** turns on While Using access
+with the native confirmation.
+If macOS has not asked yet, enabling Location requests access once; the mode
+stays off if you deny it.
+
+The card refreshes permission status after every native grant attempt, including
+cancelled or failed requests. Denying a Screen Recording prompt changes the next
+action to **Open System Settings**; macOS does not show the prompt again. Returning
+to the app refreshes the card after you change access in System Settings.
+
+Accessibility is explicitly requested before a possibly stale grant is reported.
+If an Event Posting request remains denied, enable access in System Settings,
+then use **Relaunch OpenClaw**: macOS can cache that denial until the app restarts.
+
+In a browser, or when the command targets another Mac, open the OpenClaw app on
+that Mac and go to **Settings → This Mac → Permissions**, grant the requested
+access, then confirm in the conversation.
+
+The structured error carries `capabilities` and one remediation `state`:
+`not-determined`, `denied`, `restart-required`, `stale-grant`, or
+`disabled-in-openclaw`. These describe native authorization or an OpenClaw
+capability switch, independently of the agent's tool approvals.
+
+Camera discovery (`camera.list`) requires the OpenClaw camera switch
+(`cameraEnabled`), but does not request macOS camera access. Taking a photo,
+recording video, or controlling camera movement also requires the separate
+macOS Camera grant (`camera`).
+
 Screen Recording and Accessibility show **Not granted** until access is confirmed;
 macOS's binary checks do not distinguish a first request from a denial. Click
 **Grant** to request access before looking for OpenClaw in System Settings.

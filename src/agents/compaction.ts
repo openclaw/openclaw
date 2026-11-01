@@ -7,8 +7,9 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ModelRequestHeaders } from "../llm/types.js";
 import { sanitizeCompactionMessages } from "./compaction-planning.js";
+import { isCompactionSummaryRefusal } from "./compaction-summary-refusal.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
   AgentMessage,
@@ -20,8 +21,6 @@ import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
 export { estimateMessagesTokens } from "./compaction-planning.js";
-
-const log = createSubsystemLogger("compaction");
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
@@ -37,7 +36,7 @@ type CompactionSummaryParams = {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal: AbortSignal;
   reserveTokens: number;
   customInstructions?: string;
@@ -60,12 +59,11 @@ function buildCompactionSummarizationInstructions(
       : instructions?.identifierPolicy === "custom"
         ? instructions.identifierInstructions?.trim() || IDENTIFIER_PRESERVATION_INSTRUCTIONS
         : IDENTIFIER_PRESERVATION_INSTRUCTIONS;
-  if (!custom) {
-    return identifierPreservation;
-  }
-  return identifierPreservation
-    ? `${identifierPreservation}\n\nAdditional focus:\n${custom}`
-    : `Additional focus:\n${custom}`;
+  return (
+    [identifierPreservation, custom && `Additional focus:\n${custom}`]
+      .filter(Boolean)
+      .join("\n\n") || undefined
+  );
 }
 
 /**
@@ -113,6 +111,7 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
         // AbortErrors without caller cancellation remain retryable.
         shouldRetry: (err) =>
           !params.signal.aborted &&
+          !isCompactionSummaryRefusal(err) &&
           !(err instanceof SummaryOutputBudgetError) &&
           (isAbortError(err) || !isTimeoutError(err)),
       },
@@ -121,7 +120,6 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
     if (params.signal.aborted) {
       throw err;
     }
-    log.warn(`Summarization failed: ${formatErrorMessage(err)}`);
     throw new CompactionError(
       "summarization_failed",
       `Summarization failed for ${messages.length} messages: ${formatErrorMessage(err)}`,

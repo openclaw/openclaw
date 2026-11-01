@@ -104,6 +104,7 @@ const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
 const runPostCorePluginConvergence = vi.hoisted(() =>
   vi.fn(async (): Promise<StartupConvergenceResult> => ({
     changes: [],
+    configChanges: [],
     notices: [],
     warnings: [],
     errored: false,
@@ -259,6 +260,7 @@ vi.mock("./doctor/shared/plugin-metadata-snapshot-scope.js", () => ({
     run: (_scope: unknown, operation: () => unknown) =>
       runWithPluginMetadataSnapshot(params.getBaseSnapshot(), operation),
     invalidate: vi.fn(),
+    [Symbol.asyncDispose]: async () => {},
   }),
 }));
 

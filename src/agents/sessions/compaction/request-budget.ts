@@ -150,6 +150,25 @@ export function estimateCompactedRequestTokens(
   );
 }
 
+export function assertCompactionRequestCanFit(
+  messages: AgentMessage[],
+  budget: CompactionRequestBudget | undefined,
+  hasCompactableHistory: boolean,
+): void {
+  // Try useful history reduction for pending input; only fixed overhead is unreclaimable here.
+  if (budget && (!hasCompactableHistory || budget.fixedTokens > budget.contextWindow)) {
+    const requestTokens = estimateCompactedRequestTokens(messages, budget);
+    if (requestTokens > budget.contextWindow) {
+      const historyTokens = requestTokens - budget.fixedTokens - budget.pendingTokens;
+      throw new Error(
+        `The estimated foreground request budget still exceeds the ${budget.contextWindow}-token model window ` +
+          `(fixed instructions and tools: ${budget.fixedTokens}; pending input: ${budget.pendingTokens}; retained history: ${historyTokens}). ` +
+          "No further history compaction can make this request fit. Use /context detail to reduce fixed context, shorten the request, or select a larger-context model.",
+      );
+    }
+  }
+}
+
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
   messages: AgentMessage[],

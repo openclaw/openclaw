@@ -21,7 +21,7 @@ sidebarTitle: "Setup"
     A custom provider with `api: "ollama"` follows the same rules. For example, an `ollama-remote` provider pointed at a private LAN host can use `apiKey: "ollama-local"`; sub-agents resolve that marker through the Ollama provider hook instead of treating it as a missing credential. `memory.search.provider` can also point at a custom provider id so embeddings use that Ollama endpoint.
   </Accordion>
   <Accordion title="Auth profiles">
-    SQLite auth stores hold the credential for a provider id; put endpoint settings (`baseUrl`, `api`, models, headers, timeouts) in `models.providers.<id>`. Older flat `auth-profiles.json` files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; `openclaw doctor --fix` imports them into SQLite as a canonical `ollama-windows:default` API-key profile with a backup. A `baseUrl` value in that legacy file is noise and should move to provider config.
+    SQLite auth stores hold the credential for a provider id; put endpoint settings (`baseUrl`, `api`, models, headers, timeouts) in `models.providers.<id>`. Older flat `auth-profiles.json` files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; `openclaw doctor --fix` imports them into SQLite as an `ollama-windows:default` API-key profile with a backup. A `baseUrl` value in that legacy file is noise and should move to provider config.
   </Accordion>
   <Accordion title="Memory embedding scope">
     Bearer auth for Ollama memory embeddings is scoped to the host it was declared for:
@@ -77,13 +77,22 @@ sidebarTitle: "Setup"
       --custom-model-id "qwen3.5:27b"
     ```
 
-    `--custom-base-url` and `--custom-model-id` are optional; omitting them uses the local default host and the `gemma4` suggested model.
+    `--custom-base-url` and `--custom-model-id` are optional. Omitting the base URL
+    uses the local default host. Without a model ID, setup prefers an installed
+    model with tool support and at least 16K of context, favoring non-reasoning
+    models and then smaller models. If none qualifies, it tries the `gemma4`
+    suggested model.
 
     A local model advertised as embedding-only cannot be selected as the chat
     default. Setup reports an error and leaves the existing configuration intact;
     reset preflight also rejects an explicitly selected embedding-only model or
     an inventory advertised as entirely embedding-only. Models that support both
     completion and embeddings remain eligible.
+
+    Existing configured embedding rows are not deleted. Remove them from
+    `models.providers.ollama.models`, or rerun Ollama onboarding to rebuild the
+    list. Re-onboarding replaces that provider's model catalog, so preserve any
+    custom model entries you want to keep before running it.
 
   </Tab>
 
@@ -144,8 +153,8 @@ when you want both.
 
 OpenClaw prompts for the base URL, discovers local models, and checks
 `ollama signin` status. When signed in, it suggests hosted defaults
-(`minimax-m2.7:cloud`, `minimax-m3:cloud`, `kimi-k3:cloud`, `glm-5.1:cloud`,
-`glm-5.2:cloud`). If not signed in, setup stays local-only until you run
+(`minimax-m2.7:cloud`, `minimax-m3:cloud`, `kimi-k3:cloud`, `glm-5.2:cloud`).
+If not signed in, setup stays local-only until you run
 `ollama signin`.
 
 For cloud-only access without a local daemon, use `openclaw onboard --auth-choice ollama-cloud` and see [Ollama Cloud](/providers/ollama-cloud) — that path does not need `ollama signin` or a running server:

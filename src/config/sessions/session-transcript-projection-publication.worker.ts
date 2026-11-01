@@ -1,9 +1,13 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
-  assertTransactionUsable,
+  runSqliteImmediateTransactionSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
@@ -15,12 +19,13 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-c
 import {
   publishUnchangedSessionTranscriptAuthority,
   readStagedSessionTranscriptAuthority,
-  type SessionTranscriptAuthorityReceipt,
 } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import {
-  isSessionTranscriptIndexStatusClean,
-  maintainSessionTranscriptIndexStatus,
-} from "./session-transcript-index-status.worker.js";
+  isSessionTranscriptIndexReady,
+  publishSessionTranscriptIndexReady,
+} from "./session-transcript-index-readiness.js";
+import { maintainSessionTranscriptIndexStatus } from "./session-transcript-index-status.worker.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
@@ -40,7 +45,7 @@ export type TranscriptProjectionRebuildOperations = {
   };
   appendChunk: {
     input: Parameters<typeof appendPreparedSessionTranscriptProjectionChunkInTransaction>[1];
-    output: boolean;
+    output: void;
   };
   finalize: {
     input: { plan: PreparedSessionTranscriptProjectionMetadata; claimId: number };
@@ -75,20 +80,47 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
   function execute(
     command: SqliteWorkerCommand<TranscriptProjectionPublicationOperations>,
   ): TranscriptProjectionPublicationOperations[keyof TranscriptProjectionPublicationOperations]["output"] {
-    if (
-      (command.type === "preflight" || command.type === "sweep") &&
-      isSessionTranscriptIndexStatusClean(db)
-    ) {
-      return { sessionIds: [], hasMore: false, traversalComplete: true };
+    backend.assertOpen();
+    if (command.type === "preflight" || command.type === "sweep") {
+      if (isSessionTranscriptIndexReady(context.databasePath)) {
+        return { sessionIds: [], hasMore: false, traversalComplete: true };
+      }
+      // Derived maintenance has no prepared row or publication facts. Admit the whole
+      // bounded effect, then reread rows without waiting for the host under a write lock.
+      context.admit("transaction");
+      context.admit("commit");
+      let entered = false;
+      try {
+        const run = () =>
+          runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              entered = true;
+              return maintainSessionTranscriptIndexStatus(db);
+            },
+            {
+              operationLabel: `sessions.transcript-index.${command.type}`,
+              beginLockFailureReporting: "suppress",
+            },
+          );
+        const status = isPostgresSqlConnection(db) ? run() : runWithSqliteBusyTimeout(db, 0, run);
+        if (!status.hasMore && status.sessionIds.length === 0) {
+          publishSessionTranscriptIndexReady(db, context.databasePath);
+        }
+        return status;
+      } catch (error) {
+        if (entered || !isSqliteLockError(error)) {
+          throw error;
+        }
+        // The existing drain yields and obtains fresh grants on its next attempt.
+        return { sessionIds: [], hasMore: true, traversalComplete: false };
+      }
     }
     return withSqlitePostCommitPublications(db, () =>
       runSqliteWorkerTransactionSync(
         context,
         () => {
           switch (command.type) {
-            case "preflight":
-            case "sweep":
-              return maintainSessionTranscriptIndexStatus(db);
             case "claim":
               return claimPreparedSessionTranscriptProjectionInTransaction(
                 db,
@@ -127,7 +159,6 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
               };
             }
           }
-          throw new Error("Unknown transcript projection publication operation");
         },
         {
           operationLabel: `sessions.transcript-index.${command.type}`,
@@ -137,14 +168,11 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
       ),
     );
   }
-  return {
+  const backend = bindSqliteWorkerDatabase<TranscriptProjectionPublicationOperations>(db, {
     execute,
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Transcript projection publication did not settle");
-      }
-    },
-    close() {},
+  });
+  return {
+    ...backend,
+    execute,
   } satisfies SqliteWorkerBackend<TranscriptProjectionPublicationOperations>;
 }

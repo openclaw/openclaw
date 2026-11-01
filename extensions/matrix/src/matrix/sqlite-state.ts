@@ -5,7 +5,6 @@ import { getMatrixRuntime } from "../runtime.js";
 type MatrixSqliteStateOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-  stateRootDir?: string;
 };
 
 function resolveStateDirOverride(
@@ -16,7 +15,6 @@ function resolveStateDirOverride(
   }
   return (
     options.stateDir ||
-    options.stateRootDir ||
     getMatrixRuntime().state.resolveStateDir(options.env ?? process.env, os.homedir)
   );
 }
@@ -39,15 +37,11 @@ export function resolveMatrixSqliteStateEnv(
 }
 
 export async function updateMatrixKeyedState<T>(
-  store: PluginStateKeyedStore<T>,
+  store: PluginStateKeyedStore<T, 2>,
   key: string,
   update: (current: T | undefined) => T | undefined,
-  legacyUpdate: () => boolean | Promise<boolean>,
   onUndefined: "keep" | "skip" = "keep",
 ): Promise<boolean> {
-  if (!store.observe || !store.compareAndApply) {
-    return await legacyUpdate();
-  }
   let observation = await store.observe(key);
   for (;;) {
     const value = update(observation.value);

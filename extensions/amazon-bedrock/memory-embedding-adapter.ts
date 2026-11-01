@@ -1,4 +1,3 @@
-import { isMissingEmbeddingApiKeyError } from "openclaw/plugin-sdk/embedding-provider-adapter";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createBedrockEmbeddingProvider,
@@ -12,8 +11,6 @@ export const bedrockMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapt
   transport: "remote",
   authProviderId: "amazon-bedrock",
   autoSelectPriority: 60,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     if (!(await hasAwsCredentials())) {
       throw new Error(

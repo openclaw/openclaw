@@ -368,8 +368,7 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   const nextChannel = { ...base };
   for (const key of keysToMove) {
     if (!(key in nextAccount)) {
-      const value = base[key];
-      nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+      nextAccount[key] = base[key];
     }
     delete nextChannel[key];
   }

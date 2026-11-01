@@ -8,6 +8,7 @@ import {
   normalizeQaCredentialConvexSiteUrl,
   normalizeQaCredentialEndpointPrefix,
   parseQaCredentialPositiveIntegerEnv,
+  parseQaCredentialResponsePayload,
 } from "./qa-credentials-common.runtime.js";
 import { fingerprintQaCredentialId } from "./qa-credentials-fingerprint.runtime.js";
 
@@ -72,13 +73,11 @@ export type QaCredentialRecord = z.infer<typeof credentialRecordSchema>;
 
 export class QaCredentialAdminError extends Error {
   code: string;
-  httpStatus?: number;
 
-  constructor(params: { code: string; message: string; httpStatus?: number }) {
+  constructor(params: { code: string; message: string }) {
     super(params.message);
     this.name = "QaCredentialAdminError";
     this.code = params.code;
-    this.httpStatus = params.httpStatus;
   }
 }
 
@@ -274,25 +273,12 @@ function resolveAdminConfig(options: AdminBaseOptions, operation: "add" | "remov
   };
 }
 
-function parseJsonResponsePayload(text: string) {
-  if (!text.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-async function postJson<T>(params: {
-  authToken: string;
-  body: Record<string, unknown>;
-  fetchImpl: typeof fetch;
-  httpTimeoutMs: number;
-  responseSchema: z.ZodType<T>;
-  url: string;
-}) {
+async function postJson<T>(
+  params: ReturnType<typeof resolveAdminConfig> & {
+    body: Record<string, unknown>;
+    responseSchema: z.ZodType<T>;
+  },
+) {
   const httpTimeoutMs = resolveTimerTimeoutMs(params.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   let response: Response;
   let text: string;
@@ -321,21 +307,19 @@ async function postJson<T>(params: {
       message: `Convex credential admin request failed: ${formatErrorMessage(error)}`,
     });
   }
-  const payload = parseJsonResponsePayload(text);
+  const payload = parseQaCredentialResponsePayload(text);
 
   const brokerError = brokerErrorSchema.safeParse(payload);
   if (brokerError.success) {
     throw new QaCredentialAdminError({
       code: brokerError.data.code,
       message: brokerError.data.message,
-      httpStatus: response.status,
     });
   }
   if (!response.ok) {
     throw new QaCredentialAdminError({
       code: "BROKER_HTTP_ERROR",
       message: `Convex credential admin request failed with HTTP ${response.status}.`,
-      httpStatus: response.status,
     });
   }
 
@@ -344,7 +328,6 @@ async function postJson<T>(params: {
     throw new QaCredentialAdminError({
       code: "INVALID_RESPONSE",
       message: `Convex credential admin response did not match expected shape: ${parsed.error.message}`,
-      httpStatus: response.status,
     });
   }
 

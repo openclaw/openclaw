@@ -1,9 +1,13 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   assertOperatorModelAllowed,
   createOperatorModelSelectionAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStoreAsync,
+  findPersistedAuthProfileCredentialAsync,
+} from "../../agents/auth-profiles/store-runtime.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import {
   createModelVisibilityPolicy,
@@ -17,7 +21,8 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveProfileOverride } from "./directive-handling.auth-profile.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { prepareUserModelAccountAuthority } from "../../state/user-model-account-operations.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
@@ -33,14 +38,14 @@ function validateOperatorSelection(
   }
 }
 
-function resolveStoredNumericProfileModelDirective(
+async function resolveStoredNumericProfileModelDirective(
   raw: string,
   agentDir: string,
-): {
+): Promise<{
   modelRaw: string;
   profileId: string;
   profileProvider: string;
-} | null {
+} | null> {
   const lastSlash = raw.lastIndexOf("/");
   const profileDelimiter = raw.indexOf("@", lastSlash + 1);
   if (profileDelimiter <= 0) {
@@ -53,7 +58,7 @@ function resolveStoredNumericProfileModelDirective(
   }
 
   const modelRaw = raw.slice(0, profileDelimiter).trim();
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     allowKeychainPrompt: false,
   });
   const profile = store.profiles[profileId];
@@ -128,7 +133,7 @@ export async function resolveModelSelectionFromDirective(params: {
   }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
-      ? resolveStoredNumericProfileModelDirective(raw, params.agentDir)
+      ? await resolveStoredNumericProfileModelDirective(raw, params.agentDir)
       : null;
   const resolveSelection = (directive: string) =>
     resolveModelDirectiveSelection({
@@ -187,17 +192,49 @@ export async function resolveModelSelectionFromDirective(params: {
     params.directives.rawModelProfile ??
     (useStoredNumericProfile ? storedNumericProfile?.profileId : undefined);
   if (modelSelection && rawProfile) {
-    const profileResolved = await resolveProfileOverride({
-      rawProfile,
-      provider: modelSelection.provider,
-      agentDir: params.agentDir,
-      requesterProfileId: params.requesterProfileId,
-    });
-    if (profileResolved.error) {
-      return { errorText: profileResolved.error };
+    const provider = modelSelection.provider;
+    const agentDir = params.agentDir;
+    const requesterProfileId = params.requesterProfileId;
+    const profileId = normalizeOptionalString(rawProfile);
+    if (profileId) {
+      let profileProvider: string;
+      if (isUserModelAuthProfileId(profileId)) {
+        const account = requesterProfileId
+          ? await prepareUserModelAccountAuthority({
+              profileId: requesterProfileId,
+              authProfileId: profileId,
+            })
+          : undefined;
+        const unavailable = "Select a personal model account connected to your signed-in profile.";
+        if (!account) {
+          return { errorText: unavailable };
+        }
+        const validateSelection = () => (account.isCurrent() ? undefined : unavailable);
+        const selectionError = validateSelection();
+        if (selectionError) {
+          return { errorText: selectionError };
+        }
+        profileProvider = account.provider;
+        validateAuthProfileSelection = validateSelection;
+      } else {
+        // Persisted credentials are checked first because they avoid keychain prompts.
+        const profile =
+          (await findPersistedAuthProfileCredentialAsync({ agentDir, profileId })) ??
+          (await ensureAuthProfileStoreAsync(agentDir, { allowKeychainPrompt: false })).profiles[
+            profileId
+          ];
+        if (!profile) {
+          return { errorText: `Auth profile "${profileId}" not found.` };
+        }
+        profileProvider = profile.provider;
+      }
+      if (profileProvider !== provider) {
+        return {
+          errorText: `Auth profile "${profileId}" is for ${profileProvider}, not ${provider}.`,
+        };
+      }
+      profileOverride = profileId;
     }
-    profileOverride = profileResolved.profileId;
-    validateAuthProfileSelection = profileResolved.validateSelection;
   }
 
   return {

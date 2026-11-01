@@ -1,15 +1,13 @@
 // Process-local grants retain their durable parent and exact placement authority.
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import {
-  readPlacementGrantRows,
-  type PlacementGrantReadInput,
-  type PlacementGrantRows,
-} from "./operator-approval-placement-grants.read.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
+import type {
+  PlacementGrantReadInput,
+  PlacementGrantRows,
+} from "./operator-approval-placement-grants.read.worker.js";
 import { readPlacementStandingGrant } from "./operator-approval-store.js";
 import { fromRow } from "./worker-environments/placement-row-codec.js";
 
@@ -56,7 +54,7 @@ export type PlacementStandingGrantRuntime = {
   retain: (grant: RetainPlacementGrantInput) => boolean;
   /** @deprecated Released SDK compatibility; use validateAsync. */
   validate: (binding: PlacementStandingGrantMintSpec) => ConsumePlacementStandingGrantResult;
-  /** Synchronous final transport guard; also retained for released SDK callers. */
+  /** Final receipt guard; prepare with consumeAsync immediately before transport handoff. */
   consume: (binding: PlacementStandingGrantMintSpec) => ConsumePlacementStandingGrantResult;
   resolveBindingAsync?: (
     input: PlacementGrantResolutionInput,
@@ -66,6 +64,9 @@ export type PlacementStandingGrantRuntime = {
     approvalId?: string;
   }>;
   retainAsync?: (grant: RetainPlacementGrantInput) => Promise<boolean>;
+  consumeAsync?: (
+    binding: PlacementStandingGrantMintSpec,
+  ) => Promise<ConsumePlacementStandingGrantResult>;
   validateAsync?: (
     binding: PlacementStandingGrantMintSpec,
   ) => Promise<ConsumePlacementStandingGrantResult>;
@@ -177,15 +178,10 @@ function prepareRetainedGrant(
 export function createPlacementStandingGrantRuntime(params: {
   runtimeEpoch: string;
   databaseOptions?: OpenClawStateDatabaseOptions;
-  now?: () => number;
 }): Required<PlacementStandingGrantRuntime> {
   const grants = new Map<string, PlacementStandingGrantRecord>();
-  const now = params.now ?? Date.now;
-  const read = (input: PlacementGrantReadInput) =>
-    runOpenClawStateWriteTransaction(
-      (database) => readPlacementGrantRows(database.db, input),
-      params.databaseOptions,
-    );
+  const databasePath = resolveDatabasePath(params.databaseOptions);
+  const validatedReceipts = new WeakMap<PlacementStandingGrantRecord, string>();
   const readAsync = (input: PlacementGrantReadInput) =>
     readPlacementStandingGrant(input, {
       databaseOptions: params.databaseOptions,
@@ -199,7 +195,7 @@ export function createPlacementStandingGrantRuntime(params: {
       return { outcome: "no-grant" };
     }
     const outcome =
-      grant.expiresAtMs <= now()
+      grant.expiresAtMs <= Date.now()
         ? "expired"
         : grant.nodeId !== binding.nodeId
           ? "node-changed"
@@ -240,18 +236,21 @@ export function createPlacementStandingGrantRuntime(params: {
     }
     return { outcome: "consumed", grant };
   };
-  const resolve = (binding: PlacementStandingGrantMintSpec) => {
+  const consume = (
+    binding: PlacementStandingGrantMintSpec,
+  ): ConsumePlacementStandingGrantResult => {
     const result = checkLocal(binding);
-    return result.outcome === "consumed"
-      ? checkRows(
-          binding,
-          result.grant,
-          read({
-            ...binding,
-            approvalId: result.grant.mintedByApprovalId,
-          }),
-        )
-      : result;
+    if (result.outcome !== "consumed") {
+      return result;
+    }
+    if (!samePlacement(result.grant, binding)) {
+      return { outcome: "placement-changed" };
+    }
+    // Revocations between the worker snapshot and the transport effect invalidate the grant.
+    const receipt = validatedReceipts.get(result.grant);
+    return receipt && receipt === readSqliteDatabaseWriteTokenForPath(databasePath)
+      ? result
+      : { outcome: "no-grant" };
   };
   const validateAsync = async (input: PlacementStandingGrantMintSpec) => {
     const binding = { ...input };
@@ -259,6 +258,7 @@ export function createPlacementStandingGrantRuntime(params: {
     if (before.outcome !== "consumed") {
       return before;
     }
+    const receipt = readSqliteDatabaseWriteTokenForPath(databasePath);
     const rows = await readAsync({ ...binding, approvalId: before.grant.mintedByApprovalId });
     const current = checkLocal(binding);
     if (current.outcome !== "consumed") {
@@ -267,7 +267,11 @@ export function createPlacementStandingGrantRuntime(params: {
     if (current.grant !== before.grant) {
       return { outcome: "no-grant" } as const;
     }
-    return checkRows(binding, current.grant, rows);
+    const result = checkRows(binding, current.grant, rows);
+    if (result.outcome === "consumed" && receipt) {
+      validatedReceipts.set(result.grant, receipt);
+    }
+    return result;
   };
   const retain = (grant: PlacementStandingGrantRecord, rows: PlacementGrantRows): boolean => {
     if (checkRows(grant, grant, rows, false).outcome !== "consumed") {
@@ -277,8 +281,9 @@ export function createPlacementStandingGrantRuntime(params: {
     return true;
   };
   return {
-    resolveBinding: (input) =>
-      validResolutionInput(input) ? resolveBinding(input, read(input)) : null,
+    resolveBinding: () => {
+      throw new Error("Placement grant resolveBinding is asynchronous; use resolveBindingAsync.");
+    },
     resolveBindingAsync: async (input) => {
       const captured = { ...input };
       return validResolutionInput(captured)
@@ -314,16 +319,8 @@ export function createPlacementStandingGrantRuntime(params: {
         checkRows(binding, grant, rows).outcome === "consumed";
       return { binding, ...(valid ? { approvalId: grant.mintedByApprovalId } : {}) };
     },
-    retain: (input) => {
-      const grant = prepareRetainedGrant(input);
-      if (!grant) {
-        return false;
-      }
-      try {
-        return retain(grant, read({ ...grant, approvalId: grant.mintedByApprovalId }));
-      } catch {
-        return false;
-      }
+    retain: () => {
+      throw new Error("Placement grant retain is asynchronous; use retainAsync.");
     },
     retainAsync: async (input) => {
       const grant = prepareRetainedGrant(input);
@@ -336,10 +333,11 @@ export function createPlacementStandingGrantRuntime(params: {
         return false;
       }
     },
-    validate: resolve,
+    validate: () => {
+      throw new Error("Placement grant validate is asynchronous; use validateAsync.");
+    },
     validateAsync,
-    // SDK/native writers can revoke the parent or placement outside owner publications.
-    // The synchronous transport callback must reread those rows immediately before send.
-    consume: resolve,
+    consumeAsync: validateAsync,
+    consume,
   };
 }

@@ -28,7 +28,7 @@ export function installAttemptPermissionPrompt(input: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
     "pluginRuntimeRefreshPending" | "registerPluginRuntimeRefreshConsumer"
-  >;
+  > & { model: Pick<EmbeddedRunAttemptParams["model"], "api"> };
   runAbortSignal: AbortSignal;
   setActiveSessionSystemPrompt: (systemPrompt: string) => string;
   prepareInitialUserTurnReplay?: InitialUserTurnReplayPreparation;
@@ -149,31 +149,35 @@ export function installAttemptPermissionPrompt(input: {
             inherited?.systemPrompt ?? context.systemPrompt,
             signal,
           );
-          // Tool results and extension context clear provider facts within one real user turn.
-          let runtimeContextCleared = false;
-          for (let index = context.messages.length - 1; index >= 0; index--) {
-            const message = context.messages[index]!;
-            if (message.role === "user") {
-              break;
-            }
-            if (message.role === "toolResult") {
-              runtimeContextCleared = true;
-            } else if (message.role === "custom" && !message.excludeFromContext) {
-              if (!isOpenClawSystemUpdateMessage(message)) {
-                runtimeContextCleared = true;
-                continue;
-              }
-              const details = asOptionalRecord(message.details);
-              if (details?.kind === "runtime-context" && details.turnScoped === true) {
-                if (runtimeContextCleared) {
-                  input.runAbortSignal.throwIfAborted();
-                  signal?.throwIfAborted();
-                  activeSession[agentSessionQueuePromptContext]({
-                    ...message,
-                    timestamp: Date.now(),
-                  });
-                }
+          // Anthropic clears turn-scoped system messages at later user-role messages, including tool
+          // results (`clear_at`), so renew there. Other in-history routes keep the carrier visible;
+          // renewing it would stack copies.
+          if (attempt.model.api === "anthropic-messages") {
+            let runtimeContextCleared = false;
+            for (let index = context.messages.length - 1; index >= 0; index--) {
+              const message = context.messages[index]!;
+              if (message.role === "user") {
                 break;
+              }
+              if (message.role === "toolResult") {
+                runtimeContextCleared = true;
+              } else if (message.role === "custom" && !message.excludeFromContext) {
+                if (!isOpenClawSystemUpdateMessage(message)) {
+                  runtimeContextCleared = true;
+                  continue;
+                }
+                const details = asOptionalRecord(message.details);
+                if (details?.kind === "runtime-context" && details.turnScoped === true) {
+                  if (runtimeContextCleared) {
+                    input.runAbortSignal.throwIfAborted();
+                    signal?.throwIfAborted();
+                    activeSession[agentSessionQueuePromptContext]({
+                      ...message,
+                      timestamp: Date.now(),
+                    });
+                  }
+                  break;
+                }
               }
             }
           }

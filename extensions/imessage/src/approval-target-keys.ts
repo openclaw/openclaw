@@ -3,6 +3,7 @@
 // must survive the outbound/inbound key asymmetry described on
 // enumerateApprovalTargetKeys. Kept transport-neutral so neither binding module
 // depends on the other.
+import { chatContextFromIMessageTarget } from "./chat-context.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
@@ -26,9 +27,7 @@ function chatIdToKeyValue(chatId: number | string | undefined): string | null {
   return value || null;
 }
 
-export function enumerateConversationKeyForms(
-  conversation: IMessageApprovalConversationKey,
-): string[] {
+function enumerateConversationKeyForms(conversation: IMessageApprovalConversationKey): string[] {
   const forms: string[] = [];
   const chatGuid = conversation.chatGuid?.trim();
   if (chatGuid) {
@@ -82,14 +81,8 @@ export function buildIMessageApprovalConversationKeyForTarget(
 ): IMessageApprovalConversationKey | null {
   try {
     const target = parseIMessageTarget(to);
-    if (target.kind === "chat_id") {
-      return { chatId: target.chatId };
-    }
-    if (target.kind === "chat_guid") {
-      return { chatGuid: target.chatGuid };
-    }
-    if (target.kind === "chat_identifier") {
-      return { chatIdentifier: target.chatIdentifier };
+    if (target.kind !== "handle") {
+      return chatContextFromIMessageTarget(target);
     }
     const handle = normalizeIMessageHandle(target.to);
     return handle ? { handle } : null;

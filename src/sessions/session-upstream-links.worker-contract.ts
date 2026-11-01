@@ -31,7 +31,6 @@ export type SessionUpstreamWorkerOperations = {
     input: { sessionKey: string; agentId: string; expected?: SessionUpstreamLink };
     output: "deleted" | "absent" | "changed";
   };
-  "sessionUpstream.current": { input: SessionUpstreamLink; output: boolean };
   "sessionUpstream.settle": {
     input: {
       expected: SessionUpstreamLink;

@@ -80,9 +80,27 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 When `VLLM_API_KEY` is set (or an auth profile exists) and `models.providers.vllm` is **not** defined, OpenClaw queries `GET http://127.0.0.1:8000/v1/models` and converts the returned IDs into model entries.
 
+Discovery recognizes DeepSeek V4 and Nemotron 3 Nano, Super, and Ultra reasoning models, including served-name aliases such as `yk_deepseek_v4` and `yk_nemotron-3-super`. An explicitly configured `reasoning: false` still disables reasoning capability.
+
 <Note>
 If you set `models.providers.vllm` explicitly, OpenClaw uses only your declared models. Add `"vllm/*": {}` to `agents.defaults.models` to make OpenClaw also query that configured provider's `/models` endpoint and include all advertised vLLM models.
 </Note>
+
+### Serving context limits
+
+When discovery returns a positive integer `max_model_len`, OpenClaw keeps it as
+the observed context ceiling for that server and model. Inference budgets cannot
+exceed that ceiling, even when an explicit model `contextWindow` or `contextTokens`
+is larger. Smaller configured limits still apply. Static model defaults and
+missing or invalid server metadata do not become observed ceilings.
+
+The observation belongs to the discovered API and base URL. A model-level endpoint
+override does not inherit another route's ceiling. Explicit provider configuration
+without `"vllm/*"` remains manual and does not probe the server.
+
+After changing vLLM's serving limit, explicitly refresh the model catalog. New
+turns use the refreshed observation; an already prepared turn keeps its current
+budget. OpenClaw does not poll the server for every inference request.
 
 ## Explicit configuration
 
@@ -129,6 +147,58 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
 ```
 
 ## Advanced configuration
+
+### Prioritize interactive requests
+
+When interactive and background work share one vLLM engine, enable native
+priority scheduling on the server:
+
+```bash
+vllm serve <model-id> --scheduling-policy priority
+```
+
+Then opt in for that model in OpenClaw:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "vllm/your-model-id": { params: { priorityScheduling: true } },
+      },
+    },
+  },
+}
+```
+
+`priorityScheduling` is an optional boolean, disabled by default. It applies
+only to the selected `vllm/*` model's params; agent-specific model params can
+override it. Global or agent-wide params do not enable it. Other providers and
+fallback models do not inherit the opt-in.
+
+| Request                                              | Native `priority` |
+| ---------------------------------------------------- | ----------------: |
+| Interactive user turn or manual `/compact`           |            `-100` |
+| Delegated or unclassified work                       |               `0` |
+| Cron, heartbeat, memory, or simple helper completion |             `100` |
+
+Run-triggered compaction inherits the originating urgency. Independent automatic
+compaction uses background priority. Simple helper completions include utility
+summaries and tool-side model calls, even when a user is waiting for their result.
+
+Lower numbers are scheduled first under contention; arrival order breaks ties.
+OpenClaw sends the native field and does not maintain another queue, reserve
+capacity, or isolate model memory. See the [vLLM scheduler reference](https://docs.vllm.ai/en/stable/api/vllm/config/scheduler/).
+
+When enabled, dynamic priority takes precedence over an explicit
+`extraBody.priority` or `extra_body.priority`. When disabled, OpenClaw adds no
+scheduling field and preserves existing literal priority overrides, including
+zero. Numeric `priority: 0` never enables scheduling.
+
+The vLLM request contract requires priority scheduling for nonzero priorities.
+Before switching the server back to FCFS, disable `priorityScheduling` and remove
+any explicit nonzero priority overrides. This new optional field needs no Doctor
+migration.
 
 <AccordionGroup>
   <Accordion title="Proxy-style behavior">
@@ -195,12 +265,12 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
 
     `/think off` sends both template flags as `false`, because vLLM enables DeepSeek thinking when either flag is true. Hosted DeepSeek's root `thinking` object and root `reasoning_effort` are removed. Existing explicit template kwargs and the final `params.extra_body` override remain authoritative. Explicit Qwen thinking formats take precedence over the model-name match.
 
-    This request shaping does not enable reasoning for catalog rows marked `reasoning: false` or change discovery heuristics. Configure the model explicitly if discovery does not recognize its reasoning capability.
+    This request shaping does not enable reasoning for catalog rows marked `reasoning: false`. Configure the model explicitly if discovery does not recognize its reasoning capability.
 
   </Accordion>
 
   <Accordion title="Nemotron 3 thinking controls">
-    For `vllm/nemotron-3-*` models with thinking off, the bundled plugin sends:
+    For Nemotron 3 models (including served-name aliases such as `vllm/yk_nemotron-3-super`) with thinking off, the bundled plugin sends:
 
     ```json
     {
@@ -322,7 +392,7 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
     }
     ```
 
-    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls the whole agent run.
+    `timeoutSeconds` applies to vLLM model HTTP requests only: connection setup, response headers, body streaming, and the total guarded-fetch abort. It also raises the LLM idle/stream watchdog ceiling above the implicit ~120s default for this provider. Prefer this over increasing `agents.defaults.timeoutSeconds`, which controls each model attempt's execution budget. A lower agent or run-specific timeout still caps the attempt; each configured fallback gets a fresh budget.
 
   </Accordion>
 

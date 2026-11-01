@@ -1,6 +1,7 @@
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { inspectTlsCertificateError } from "../infra/tls-certificate-errors.js";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
@@ -33,10 +34,22 @@ const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
+export const CONTEXT_OVERFLOW_ERROR_MESSAGE =
+  "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
   "LLM streaming response contained a malformed fragment. Please try again.";
 
 type ErrorPayload = Record<string, unknown>;
+
+const PROVIDER_PRECAUTION_NOTICE =
+  "Chat stopped as a precaution. Review the findings in chat before continuing.";
+const PROVIDER_REFUSAL_NOTICE_RE =
+  /^The provider refused this request(?: \(category: [a-zA-Z0-9_-]{1,64}\))?\. Revise the request and try again\.$/u;
+
+/** Recognize canonical display copy, not refusal or retry authority. */
+export function isProviderRefusalNoticeText(text: string): boolean {
+  return text === PROVIDER_PRECAUTION_NOTICE || PROVIDER_REFUSAL_NOTICE_RE.test(text);
+}
 
 export function formatProviderRefusalText(message: {
   diagnostics?: unknown;
@@ -57,7 +70,7 @@ export function formatProviderRefusalText(message: {
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
   if (safeCategory === "misalignment") {
-    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+    return PROVIDER_PRECAUTION_NOTICE;
   }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }
@@ -76,7 +89,7 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   const error = asOptionalRecord(record.error);
   return (
     [error?.message, error?.type, error?.code].some((value) => typeof value === "string") ||
-    (typeof record.error === "string" && typeof record.message === "string")
+    typeof record.error === "string"
   );
 }
 
@@ -200,13 +213,18 @@ export function parseApiErrorInfo(raw?: string) {
     ? errorCode !== undefined && !errorType
       ? errorCode
       : errorType
-    : readStringField(payload, "error");
+    : typeof payload.message === "string"
+      ? readStringField(payload, "error")
+      : undefined;
   const code = errorCode ?? readStringField(payload, "code");
   return {
     httpCode,
     type: type ?? readStringField(payload, "type"),
     ...(code === undefined ? {} : { code }),
-    message: readStringField(error, "message") ?? readStringField(payload, "message"),
+    message:
+      readStringField(error, "message") ??
+      readStringField(payload, "message") ??
+      readStringField(payload, "error"),
     requestId: readStringField(payload, "request_id") ?? readStringField(payload, "requestId"),
   };
 }
@@ -269,7 +287,10 @@ const TRANSPORT_ERRORS = [
 ];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
+  return (
+    TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value) ||
+    inspectTlsCertificateError({ code: value })?.code === value
+  );
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {

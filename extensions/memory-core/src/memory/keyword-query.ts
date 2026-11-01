@@ -1,3 +1,5 @@
+import type { TextQuery } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type FtsCanonicalTokenizer = "unicode61" | "trigram";
@@ -7,13 +9,6 @@ export function tokenizeFtsQuery(raw: string, includeLeadingMarks = false): stri
     ? /[\p{L}\p{M}\p{N}_]+/gu
     : /[\p{L}\p{N}_][\p{L}\p{M}\p{N}_]*/gu;
   return normalizeStringEntries(raw.match(pattern) ?? []);
-}
-
-export function buildFtsQuery(
-  raw: string,
-  canonicalTokenizer?: FtsCanonicalTokenizer,
-): string | null {
-  return buildMatchQueryFromTerms(tokenizeFtsQuery(raw), canonicalTokenizer);
 }
 
 function simpleCaseFold(character: string): string {
@@ -115,17 +110,18 @@ function canonicalTermForms(term: string, tokenizer?: FtsCanonicalTokenizer): st
 export function buildMatchQueryFromTerms(
   terms: string[],
   canonicalTokenizer?: FtsCanonicalTokenizer,
-): string | null {
+  matchAny = false,
+): TextQuery | null {
   if (terms.length === 0) {
     return null;
   }
-  const quoted = uniqueStrings(terms).map((term) => {
+  const clauses: TextQuery[] = uniqueStrings(terms).map((term) => {
     const forms = canonicalTermForms(term, canonicalTokenizer);
-    const alternatives = forms.map((form) => `"${form.replaceAll('"', "")}"`);
+    const alternatives: TextQuery[] = forms.map((text) => ({ kind: "term", text }));
     // Alternatives belong to each word: one document can mix NFC and NFD words.
-    return alternatives.length === 1 ? alternatives[0] : `(${alternatives.join(" OR ")})`;
+    return alternatives.length === 1 ? alternatives[0]! : { kind: "any", clauses: alternatives };
   });
-  return quoted.join(" AND ");
+  return { kind: matchAny ? "any" : "all", clauses };
 }
 
 export function planKeywordSearch(params: {
@@ -133,15 +129,32 @@ export function planKeywordSearch(params: {
   ftsTokenizer?: "unicode61" | "trigram";
   includeLeadingMarks?: boolean;
   canonicalVariants?: boolean;
-}): { matchQuery: string | null; substringTerms: string[] } {
+  matchAny?: boolean;
+}): { matchQuery: TextQuery | null; substringTerms: string[]; tokens: string[] } {
   const canonicalTokenizer = params.canonicalVariants
     ? (params.ftsTokenizer ?? "unicode61")
     : undefined;
-  if (params.ftsTokenizer !== "trigram") {
-    const matchQuery = buildFtsQuery(params.query, canonicalTokenizer);
-    return { matchQuery, substringTerms: [] };
+  const tokens = tokenizeFtsQuery(
+    params.query,
+    params.ftsTokenizer === "trigram" && params.includeLeadingMarks,
+  );
+  if (params.matchAny) {
+    // Retain the existing six-term language expansion without double-counting
+    // terms already present in a different case or canonical spelling.
+    const key = (term: string) => Array.from(term.normalize("NFC"), simpleCaseFold).join("");
+    const seen = new Set(tokens.map(key));
+    const expanded = extractKeywords(params.query.normalize("NFC"), params).slice(0, 6);
+    for (const token of tokenizeFtsQuery(expanded.join(" "))) {
+      if (!seen.has(key(token))) {
+        seen.add(key(token));
+        tokens.push(token);
+      }
+    }
   }
-  const tokens = tokenizeFtsQuery(params.query, params.includeLeadingMarks);
+  if (params.ftsTokenizer !== "trigram") {
+    const matchQuery = buildMatchQueryFromTerms(tokens, canonicalTokenizer, params.matchAny);
+    return { matchQuery, substringTerms: [], tokens };
+  }
   const matchTerms: string[] = [];
   const substringTerms: string[] = [];
   for (const token of tokens) {
@@ -155,8 +168,9 @@ export function planKeywordSearch(params: {
     }
   }
   return {
-    matchQuery: buildMatchQueryFromTerms(matchTerms, canonicalTokenizer),
+    matchQuery: buildMatchQueryFromTerms(matchTerms, canonicalTokenizer, params.matchAny),
     substringTerms,
+    tokens,
   };
 }
 

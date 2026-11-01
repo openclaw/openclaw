@@ -1,4 +1,3 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillsWorkshopAutonomousMode } from "../../config/types.skills.js";
 
@@ -6,19 +5,18 @@ import type { SkillsWorkshopAutonomousMode } from "../../config/types.skills.js"
 type SkillWorkshopConfig = {
   autonomous: {
     mode: SkillsWorkshopAutonomousMode;
+    channelNotices: boolean;
   };
   maxSkillBytes: number;
 };
 
 export function resolveSkillWorkshopConfig(config?: OpenClawConfig): SkillWorkshopConfig {
-  const raw = asNullableRecord(config?.skills?.workshop) ?? {};
-  const mode = asNullableRecord(raw.autonomous)?.mode;
-  const maxSkillBytes = raw.maxSkillBytes;
+  const raw = config?.skills?.workshop;
   return {
-    autonomous: { mode: mode === "off" || mode === "auto" ? mode : "auto" },
-    maxSkillBytes:
-      typeof maxSkillBytes === "number" && Number.isFinite(maxSkillBytes)
-        ? Math.min(Math.max(Math.trunc(maxSkillBytes), 1024), 200_000)
-        : 40_000,
+    autonomous: {
+      mode: raw?.autonomous?.mode ?? "auto",
+      channelNotices: raw?.autonomous?.channelNotices ?? false,
+    },
+    maxSkillBytes: Math.min(Math.max(raw?.maxSkillBytes ?? 40_000, 1024), 200_000),
   };
 }

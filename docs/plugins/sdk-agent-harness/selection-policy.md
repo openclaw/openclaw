@@ -47,7 +47,7 @@ A durable native harness pin retains its transcript owner; an observed harness
 on a plugin-owned concrete model chat does not become a pin, even when model
 selection is locked. For concrete-model execution, neither a request nor a pin
 makes an incompatible route compatible: the harness must support the prepared
-facts, declare the exact-request OpenClaw fallback, or fail closed.
+facts, declare the exact-request OpenClaw fallback, or refuse to run.
 [Bound native session ownership](/plugins/sdk-agent-harness#bound-native-session-ownership) separately
 identifies sessions whose verified native connection owns model and auth, so
 unrelated outer route metadata does not replace that connection.

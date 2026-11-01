@@ -1,15 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearInternalHooks, registerInternalHook } from "../hooks/internal-hooks.js";
 import type { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
@@ -18,15 +14,14 @@ import { registerAgentWorkspaceAccess } from "./workspace-access.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
-const memoryRuntimeMocks = vi.hoisted(() => ({ classifyWorkspacePaths: vi.fn() }));
+const { classify } = vi.hoisted(() => ({ classify: vi.fn() }));
 
+// mock-isolation: Workspace classification is fixed without loading unrelated memory plugins.
 vi.mock("../plugins/memory-runtime.js", () => ({
-  classifyActiveMemoryWorkspacePaths: (...args: unknown[]) =>
-    memoryRuntimeMocks.classifyWorkspacePaths(...args),
+  classifyActiveMemoryWorkspacePaths: classify,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let testState: OpenClawTestState | undefined;
+let testState: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
 let workspaceDir: string;
 let remoteDir: string;
 let release: (() => void) | undefined;
@@ -49,18 +44,29 @@ function createRemoteBridge() {
   });
 }
 
+const resolveFiles = (params: Partial<Parameters<typeof resolveBootstrapFilesForRun>[0]> = {}) =>
+  resolveBootstrapFilesForRun({ workspaceDir, ...params });
+const profileDir = (root: string, id: string) => path.join(root, "users", id);
+async function write(root: string, name: string, content: string) {
+  const file = path.join(root, name);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, content);
+}
+const agentClassification = {
+  status: "classified",
+  classifications: [{ relativePath: "USER.md", originClass: "agent" }],
+};
+
 describe.runIf(process.platform !== "win32")("remote bootstrap read provenance", () => {
   beforeEach(async () => {
     clearInternalHooks();
     release = undefined;
-    workspaceDir = tempDirs.make("bootstrap-gateway-");
-    remoteDir = tempDirs.make("bootstrap-remote-");
     resetLegacyWorkspaceStateCheckForTest();
-    memoryRuntimeMocks.classifyWorkspacePaths.mockReset();
-    testState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-remote-bootstrap-state-",
-    });
+    classify.mockReset().mockResolvedValue(agentClassification);
+    testState = await createOpenClawTestState({ layout: "state-only" });
+    workspaceDir = testState.workspaceDir;
+    remoteDir = testState.path("remote");
+    await fs.mkdir(remoteDir);
   });
 
   afterEach(async () => {
@@ -75,53 +81,40 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
   it("selects personal files from the bound workspace and rejects remote profile aliases", async () => {
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
-    for (const root of [workspaceDir, remoteDir]) {
-      await fs.mkdir(path.join(root, "users", alice.id), { recursive: true });
-      await fs.writeFile(
-        path.join(root, "users", alice.id, "USER.md"),
-        root === remoteDir ? "Remote Alice" : "Local decoy",
-      );
-    }
-    await fs.symlink(
-      path.join(remoteDir, "users", alice.id),
-      path.join(remoteDir, "users", bob.id),
-      "junction",
-    );
+    await write(profileDir(workspaceDir, alice.id), "USER.md", "Local decoy");
+    await write(profileDir(remoteDir, alice.id), "USER.md", "Remote Alice");
+    await fs.symlink(profileDir(remoteDir, alice.id), profileDir(remoteDir, bob.id), "junction");
     bindRemote();
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      bootstrapUserProfileId: alice.id,
-    });
+    const files = await resolveFiles({ bootstrapUserProfileId: alice.id });
     expect(files.filter((file) => file.name === "USER.md").map((file) => file.content)).toEqual([
       "Remote Alice",
     ]);
-    const aliased = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      bootstrapUserProfileId: bob.id,
-    });
+    const aliased = await resolveFiles({ bootstrapUserProfileId: bob.id });
     expect(aliased.some((file) => file.content === "Remote Alice")).toBe(false);
   });
 
   it("finds bootstrap files in large remote directories just as it does locally", async () => {
-    await fs.writeFile(path.join(remoteDir, "AGENTS.md"), "Harness instructions");
+    await write(remoteDir, "AGENTS.md", "Instructions");
     for (let start = 0; start < 4100; start += 100) {
       await Promise.all(
         Array.from({ length: 100 }, (_, offset) =>
-          fs.writeFile(path.join(remoteDir, `${String(start + offset).padStart(4, "0")}.txt`), ""),
+          fs.writeFile(path.join(remoteDir, `${start + offset}.txt`), ""),
         ),
       );
     }
     const local = await loadExtraBootstrapFilesWithDiagnostics(remoteDir, ["*.md"]);
-    expect(local.files).toMatchObject([{ name: "AGENTS.md", content: "Harness instructions" }]);
+    expect(local.files).toMatchObject([{ name: "AGENTS.md", content: "Instructions" }]);
     bindRemote();
     const remote = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, ["*.md"]);
-    expect(remote.diagnostics).toEqual([]);
-    expect(remote.files).toMatchObject([{ name: "AGENTS.md", content: "Harness instructions" }]);
+    expect(remote).toMatchObject({
+      diagnostics: [],
+      files: [{ name: "AGENTS.md", content: "Instructions" }],
+    });
   });
 
   it("refreshes remote read provenance even when the cached path and bytes are unchanged", async () => {
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "Gateway decoy");
-    await fs.writeFile(path.join(remoteDir, "USER.md"), "Harness profile");
+    await write(workspaceDir, "USER.md", "Gateway decoy");
+    await write(remoteDir, "USER.md", "Harness profile");
     const bridge = createRemoteBridge();
     let workspaceSource = true;
     const read = bridge.readFileWithSource!.bind(bridge);
@@ -133,7 +126,7 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
       };
     };
     bindRemote(bridge);
-    memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(
+    classify.mockImplementation(
       async ({ readSources }: Parameters<typeof classifyActiveMemoryWorkspacePaths>[0]) => ({
         status: "classified",
         classifications: (readSources ?? []).map((source) => ({
@@ -142,40 +135,29 @@ describe.runIf(process.platform !== "win32")("remote bootstrap read provenance",
         })),
       }),
     );
-    const params = {
-      workspaceDir,
-      sessionKey: "agent:main:remote-source-cache",
-      config: {},
-      agentId: "main",
-    };
-    const first = await resolveBootstrapFilesForRun(params);
+    const params = { sessionKey: "agent:main:cache", config: {}, agentId: "main" };
+    const first = await resolveFiles(params);
     expect(first.find((file) => file.name === "USER.md")?.content).toBe("Harness profile");
     workspaceSource = false;
-    const second = await resolveBootstrapFilesForRun(params);
+    const second = await resolveFiles(params);
     expect(second.some((file) => file.name === "USER.md")).toBe(false);
     expect(await fs.readFile(path.join(workspaceDir, "USER.md"), "utf8")).toBe("Gateway decoy");
   });
 
   it.each(["classification", "hook"])("rejects remote context revoked during %s", async (stage) => {
-    await fs.writeFile(path.join(remoteDir, "USER.md"), "Harness profile");
+    await write(remoteDir, "USER.md", "Harness profile");
     const revoke = bindRemote();
-    memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(async () => {
-      if (stage === "classification") {
+    if (stage === "classification") {
+      classify.mockImplementationOnce(async () => {
         revoke();
-      }
-      return {
-        status: "classified",
-        classifications: [{ relativePath: "USER.md", originClass: "agent" }],
-      };
-    });
-    if (stage === "hook") {
+        return agentClassification;
+      });
+    } else {
       registerInternalHook("agent:bootstrap", async () => {
         await Promise.resolve();
         revoke();
       });
     }
-    await expect(
-      resolveBootstrapFilesForRun({ workspaceDir, config: {}, agentId: "main" }),
-    ).rejects.toThrow(/changed|stopped/);
+    await expect(resolveFiles({ config: {}, agentId: "main" })).rejects.toThrow(/changed|stopped/);
   });
 });

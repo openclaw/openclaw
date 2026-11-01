@@ -66,12 +66,9 @@ export function createExplicitSystemAgentConfig(
   };
 }
 
-export function createGatewayTimeoutError() {
-  const err = new Error("gateway timeout after 90000ms");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "timeout",
-    timeoutMs: 90_000,
+function transportError(message: string) {
+  return Object.assign(new Error(message), {
+    name: "GatewayTransportError",
     connectionDetails: {
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
@@ -80,17 +77,29 @@ export function createGatewayTimeoutError() {
   });
 }
 
+export function createGatewayTimeoutError() {
+  return Object.assign(transportError("gateway timeout after 90000ms"), {
+    kind: "timeout",
+    timeoutMs: 90_000,
+  });
+}
+
 export function createGatewayNormalCloseError() {
-  const err = new Error("gateway closed (1000 normal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
+  return Object.assign(transportError("gateway closed (1000 normal closure): no close reason"), {
     kind: "closed",
     code: 1000,
     reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
   });
 }
+
+export function gatewaySuccessReply(text: string) {
+  return {
+    runId: "idem-1",
+    status: "ok",
+    result: { payloads: [{ text }], meta: { stub: true } },
+  };
+}
+
+export const remoteGatewayConfig = {
+  gateway: { mode: "remote" as const, remote: { url: "wss://gateway.example" } },
+};

@@ -8,8 +8,8 @@ import {
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import { deliverFallback } from "./bot-message-dispatch-delivery.js";
 import {
   enqueueDraftEvent,
@@ -24,13 +24,11 @@ import type {
 } from "./bot-message-dispatch.types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
-import { TelegramRequestNotStartedError } from "./network-errors.js";
+import { hasTelegramNetworkErrorCode, TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { editMessageTelegram } from "./send.js";
 
-type BufferedDispatchParams = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
->[0];
+type BufferedDispatchParams = Parameters<typeof dispatchReplyWithBufferedBlockDispatcher>[0];
 type ReplyOptions = NonNullable<BufferedDispatchParams["replyOptions"]>;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
@@ -82,6 +80,7 @@ export function createProgressState(
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     toolIcons: true,
+    compactToolRuns: true,
     commentaryItalics: false,
     updateOnLineChange: true,
     shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
@@ -160,10 +159,9 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   ) {
     return;
   }
-  const text =
-    turn.finalDeliveryNotDispatched && !turn.previewLifecycle.finalDelivered
-      ? "I couldn't send the reply to Telegram. Check OpenClaw chat history for the answer and the Gateway logs for the delivery error."
-      : "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
+  const text = hasTelegramNetworkErrorCode(turn.finalDeliveryError)
+    ? "I couldn't deliver my reply because of a network problem. Please ask again."
+    : "I couldn't deliver my reply. Please ask again.";
   const stream = turn.answerLane.stream;
   const messageId = stream?.messageId();
   if (
@@ -185,17 +183,12 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
     if (turn.isSuperseded()) {
       return;
     }
-    await (turn.telegramDeps.editMessageTelegram ?? editMessageTelegram)(
-      turn.context.chatId,
-      messageId,
-      text,
-      {
-        api: turn.bot.api,
-        cfg: turn.cfg,
-        accountId: turn.context.route.accountId,
-        linkPreview: turn.telegramCfg.linkPreview,
-      },
-    );
+    await editMessageTelegram(turn.context.chatId, messageId, text, {
+      api: turn.bot.api,
+      cfg: turn.cfg,
+      accountId: turn.context.route.accountId,
+      linkPreview: turn.telegramCfg.linkPreview,
+    });
     turn.answerLane.finalized = true;
     turn.deliveryState.markDelivered();
     await turn.previewLifecycle.observeDelivery(
@@ -236,6 +229,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
     reasoningGate: false,
     toolIcons: true,
+    compactToolRuns: true,
     updateOnLineChange: true,
     initialSnapshot: turn.progressCompositor.getSnapshot(),
     update: (_text, options) => {
@@ -401,7 +395,9 @@ export async function handleItemEvent(
       turn.progressCompositor.resetActivity();
     }
     rendered =
-      (payload.kind === "preamble" || (await canPushToolProgress(turn))) &&
+      (payload.kind === "preamble" ||
+        payload.kind === "model-wait" ||
+        (await canPushToolProgress(turn))) &&
       (await turn.progressCompositor.pushItemEvent(payload));
   });
   return rendered;

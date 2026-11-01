@@ -12,18 +12,11 @@ import {
 
 export type CurrentWorkChange = NonNullable<ReturnType<typeof parseSessionChangedEvent>>[0] & {
   snapshot?: unknown;
-  eventTs?: number;
   parentKeys: readonly string[];
   ancestorSnapshots?: readonly unknown[];
 };
 
 export const CURRENT_WORK_CHANGE_LIMIT = 1_000;
-
-export type CurrentWorkFence = {
-  retiredAt?: number | null;
-  observedAt?: number | null;
-  authority?: true;
-};
 
 export function currentWorkIdentity(session: {
   key: string;
@@ -62,9 +55,6 @@ export function readCurrentWorkChange(payload: unknown): CurrentWorkChange | nul
       parsed?.[2].controlOwnerSessionKey,
       parsed?.[2].parentSessionKey,
     ].filter((key): key is string => typeof key === "string" && Boolean(key)),
-    ...(typeof parsed?.[1].ts === "number" && Number.isFinite(parsed[1].ts)
-      ? { eventTs: parsed[1].ts }
-      : {}),
     ...(snapshot ? { snapshot } : {}),
   };
 }
@@ -94,66 +84,12 @@ export function isOlderCurrentWorkChange(
 export function reconcileCurrentWork(
   result: SessionsListResult,
   changes: Iterable<CurrentWorkChange>,
-  fences: Map<string, CurrentWorkFence>,
-  retirementOverflowed: boolean,
-  acceptRead = false,
-): {
-  result: SessionsListResult;
-  requiresRefresh: boolean;
-  canPublish: boolean;
-  retirementOverflowed: boolean;
-} {
-  if (acceptRead) {
-    for (const [identity, { retiredAt }] of fences) {
-      if (typeof retiredAt === "number" && retiredAt > result.ts) {
-        fences.set(identity, { retiredAt });
-      } else {
-        fences.delete(identity);
-      }
-    }
-  }
+) {
   const rows = new Map(
     result.sessions.map((row) => [currentWorkIdentity(row), { row, requiresRefresh: false }]),
   );
-  for (const [identity, { row }] of rows) {
-    const retiredAt = fences.get(identity)?.retiredAt;
-    if (
-      retiredAt !== undefined &&
-      (retiredAt === null || (row.snapshotAt ?? result.ts) <= retiredAt)
-    ) {
-      rows.delete(identity);
-    }
-  }
-  let overflowed = retirementOverflowed || fences.size >= CURRENT_WORK_CHANGE_LIMIT;
   let requiresAncestorRefresh = false;
-  const observe = (
-    identity: string,
-    fact: "retiredAt" | "observedAt" | "authority",
-    sampledAt: number | null,
-  ) => {
-    if (!fences.has(identity) && fences.size >= CURRENT_WORK_CHANGE_LIMIT) {
-      overflowed = true;
-      return;
-    }
-    const fence: CurrentWorkFence = fences.get(identity) ?? {};
-    if (fact === "authority") {
-      fence.authority = true;
-    } else {
-      const previous = fence[fact];
-      fence[fact] =
-        previous === null || sampledAt === null ? null : Math.max(previous ?? 0, sampledAt);
-      if (
-        fact === "retiredAt" &&
-        sampledAt !== null &&
-        typeof fence.observedAt === "number" &&
-        sampledAt >= fence.observedAt
-      ) {
-        delete fence.observedAt;
-      }
-    }
-    fences.set(identity, fence);
-    overflowed ||= fences.size >= CURRENT_WORK_CHANGE_LIMIT;
-  };
+  let requiresMembershipRefresh = false;
   for (const change of changes) {
     const identity = currentWorkIdentity(change);
     const state = rows.get(identity);
@@ -182,28 +118,13 @@ export function reconcileCurrentWork(
       (change.hasActiveRun === false &&
         (change.snapshot !== undefined || change.activeRunIds !== undefined || !change.runId));
     const terminal = change.hasActiveRun === false || change.status !== null;
-    const retirementAt = change.snapshotAt ?? change.eventTs ?? change.updatedAt;
     if (!state) {
-      const fence = fences.get(identity);
-      const retiredAt = fence?.retiredAt;
-      const coveredRetirement =
-        typeof retiredAt === "number" &&
-        retirementAt !== null &&
-        (retirementAt < retiredAt ||
-          (retirementAt === retiredAt && !change.snapshot && !active && !inactive && terminal));
-      // Older observations cannot turn a proven retirement back into uncertainty.
-      if (coveredRetirement) {
-        continue;
-      }
       if (
         [...rows.values()].some(({ row }) =>
           matchesExistingSession(row, change.key, change.agentId),
         )
       ) {
-        observe(identity, "authority", null);
-        if (inactive) {
-          observe(identity, "retiredAt", retirementAt);
-        }
+        requiresMembershipRefresh = true;
         continue;
       }
       if (change.isAncestorReference) {
@@ -218,23 +139,8 @@ export function reconcileCurrentWork(
       }
       if (
         change.snapshot &&
-        change.hasActiveRun === true &&
-        change.snapshotAt !== undefined &&
-        !result.hasMore &&
-        change.snapshotAt < result.ts
-      ) {
-        continue;
-      }
-      if (
-        change.snapshot &&
         change.reason !== "delete" &&
         change.hasActiveRun === true &&
-        change.snapshotAt !== undefined &&
-        !overflowed &&
-        retiredAt !== null &&
-        fence?.observedAt !== null &&
-        !fence?.authority &&
-        change.snapshotAt > Math.max(result.ts, retiredAt ?? 0, fence?.observedAt ?? 0) &&
         !result.hasMore &&
         rows.size < (result.limitApplied ?? 100)
       ) {
@@ -244,15 +150,10 @@ export function reconcileCurrentWork(
         }).admittedRow;
         if (row?.hasActiveRun === true) {
           rows.set(identity, { row, requiresRefresh: false });
-          fences.delete(identity);
           continue;
         }
       }
-      if (inactive) {
-        observe(identity, "retiredAt", retirementAt);
-      } else if (active || terminal) {
-        observe(identity, "observedAt", retirementAt);
-      }
+      requiresMembershipRefresh ||= !inactive && (active || terminal);
       continue;
     }
     const { row } = state;
@@ -265,12 +166,10 @@ export function reconcileCurrentWork(
         state.row = reduced.admittedRow;
         state.requiresRefresh = false;
         if (reduced.admittedRow.hasActiveRun !== true) {
-          observe(identity, "retiredAt", retirementAt);
           rows.delete(identity);
         }
       } else if (reduced.deletedKey) {
         rows.delete(identity);
-        observe(identity, "retiredAt", retirementAt);
       } else {
         state.requiresRefresh = true;
       }
@@ -316,7 +215,6 @@ export function reconcileCurrentWork(
       }
     }
     if (next.hasActiveRun !== true) {
-      observe(identity, "retiredAt", retirementAt);
       rows.delete(identity);
       continue;
     }
@@ -327,10 +225,9 @@ export function reconcileCurrentWork(
   const sessions = current.map(({ row }) => row).toSorted(compareSessionRowsByUpdatedAt);
   const canPublish = !current.some((state) => state.requiresRefresh);
   const requiresRefresh =
-    overflowed ||
     requiresAncestorRefresh ||
+    requiresMembershipRefresh ||
     !canPublish ||
-    [...fences.values()].some((fence) => fence.authority || fence.observedAt !== undefined) ||
     (result.hasMore === true && sessions.length < result.sessions.length);
   return {
     result: {
@@ -341,6 +238,5 @@ export function reconcileCurrentWork(
     },
     requiresRefresh,
     canPublish,
-    retirementOverflowed: overflowed,
   };
 }

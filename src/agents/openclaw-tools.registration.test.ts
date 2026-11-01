@@ -1,15 +1,17 @@
 // Verifies OpenClaw tool registration, availability, and construction policy.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import * as userProfileList from "../state/user-profile-list.js";
+import * as userProfileList from "../state/user-profile-list.native.js";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
-import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -20,7 +22,15 @@ import {
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
-import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
+import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
+import { resolveCoreToolFactoryFamily } from "./tool-catalog.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
@@ -28,6 +38,8 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 }));
 
 type CreateOpenClawToolsOptions = NonNullable<Parameters<typeof createOpenClawTools>[0]>;
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 function withDefaultRoster(config: OpenClawConfig | undefined): OpenClawConfig {
   return {
@@ -114,10 +126,32 @@ describe("openclaw-tools progress_card gating", () => {
   });
 
   it.each([false, true])(
+    "keeps progress-card policy with the admitted sandbox owner (allowed: %s)",
+    async (allowed) => {
+      const available = await withPreparedSessionCapabilityRead(() =>
+        shouldIncludeProgressCardToolForOpenClawTools({
+          config: {
+            agents: {
+              entries: {
+                main: { tools: { deny: allowed ? [] : ["progress_card"] } },
+                work: { tools: { deny: allowed ? ["progress_card"] : [] } },
+              },
+            },
+          },
+          agentId: "work",
+          sandboxAgentId: "main",
+          agentSessionKey: "agent:main:policy",
+        }),
+      );
+      expect(available).toBe(allowed);
+    },
+  );
+
+  it.each([false, true])(
     "gates personal instructions on multiple people (%s) without general filesystem access",
     (multipleProfiles) => {
       const identityCount = vi
-        .spyOn(userProfileList, "hasMultipleSessionSharingIdentities")
+        .spyOn(userProfileList, "hasMultipleSessionSharingIdentitiesNative")
         .mockReturnValue(multipleProfiles);
       const tools = createOpenClawCodingTools({
         sessionKey: "agent:main:dashboard:project",
@@ -143,10 +177,13 @@ describe("openclaw-tools progress_card gating", () => {
     },
   );
 
-  it("keeps human-question tools on permitted primary sessions", () => {
+  it("keeps human-question tools on permitted primary sessions", async () => {
     for (const toolName of ["ask_user", "secrets"] as const) {
       const includeTool = (agentSessionKey?: string) =>
-        shouldIncludePrimarySessionToolForOpenClawTools(toolName, { agentSessionKey });
+        shouldIncludePrimarySessionToolForOpenClawTools(toolName, {
+          agentSessionKey,
+          questionInputMode: "native",
+        });
       expect(includeTool()).toBe(false);
       expect(includeTool("agent:main:main")).toBe(true);
       expect(includeTool("agent:main:subagent:worker")).toBe(false);
@@ -160,23 +197,20 @@ describe("openclaw-tools progress_card gating", () => {
     ).toBe(false);
     // ask_user must not depend on the TUI embedded-host flag; normal gateway
     // runs are the primary consumer.
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:non-embedded",
-      }),
-    ).toEqual(expect.arrayContaining(["ask_user", "secrets"]));
-    setEmbeddedMode(true);
-
-    expect(
-      createFastToolNames({
-        agentSessionKey: "agent:main:subagent:worker",
-      }),
-    ).not.toContain("ask_user");
-    expect(
-      createFastToolNames({
-        runSessionKey: "agent:main:run",
-      }),
-    ).toContain("ask_user");
+    for (const [embedded, sessionOptions, available] of [
+      [false, { runSessionKey: "agent:main:non-embedded" }, true],
+      [true, { agentSessionKey: "agent:main:subagent:worker" }, false],
+      [true, { runSessionKey: "agent:main:run" }, true],
+    ] as const) {
+      setEmbeddedMode(embedded);
+      const names = await withPreparedSessionCapabilityRead(() =>
+        createFastToolNames({ ...sessionOptions, questionInputMode: "native" }),
+      );
+      expect(names.includes("ask_user")).toBe(available);
+      if (!embedded) {
+        expect(names).toContain("secrets");
+      }
+    }
   });
 
   it("keeps message tool in embedded message-tool-only completions", () => {
@@ -392,27 +426,24 @@ describe("gateway client capability tool filtering", () => {
   it("retains the requesting browser through coding tool assembly", async () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
     const targets: unknown[] = [];
-    const call = vi
+    using _ = vi
       .spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockImplementation(async () => {
         targets.push(getGatewayToolCallerIdentity()?.gatewayUiCommandTarget);
         return { ok: true } as never;
       });
-    try {
-      const tools = createOpenClawCodingTools({
-        config: withDefaultRoster(undefined),
-        sessionKey: "agent:main:main",
-        clientCaps: ["ui-commands"],
-        gatewayUiCommandTarget,
-      });
-      await expectToolNamed(tools, "screen").execute("select", {
-        action: "navigate",
-        sessionKey: "agent:main:other",
-      });
-      expect(targets).toEqual([gatewayUiCommandTarget]);
-    } finally {
-      call.mockRestore();
-    }
+
+    const tools = createOpenClawCodingTools({
+      config: withDefaultRoster(undefined),
+      sessionKey: "agent:main:main",
+      clientCaps: ["ui-commands"],
+      gatewayUiCommandTarget,
+    });
+    await expectToolNamed(tools, "screen").execute("select", {
+      action: "navigate",
+      sessionKey: "agent:main:other",
+    });
+    expect(targets).toEqual([gatewayUiCommandTarget]);
   });
 
   it("exposes GitHub publication only from a prepared session capability", () => {
@@ -420,13 +451,307 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(createOpenClawTools(), "github_identity_status")).toBe(false);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_publish"),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: false }), "github_identity_status"),
     ).toBe(true);
     expect(
       hasTool(createOpenClawTools({ githubPublicationAvailable: true }), "github_publish"),
     ).toBe(true);
+  });
+
+  it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {
+    const olderTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands"],
+    });
+    const capableTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands", "ui-agent-github-settings"],
+    });
+
+    expect(JSON.stringify(expectToolNamed(olderTools, "screen").parameters)).not.toContain(
+      "github_identity_settings",
+    );
+    expect(JSON.stringify(expectToolNamed(capableTools, "screen").parameters)).toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(olderTools, "github_identity_status").description).not.toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(capableTools, "github_identity_status").description).toContain(
+      "github_identity_settings",
+    );
+  });
+
+  it("keeps reconnect definitions stable when an internal wake has no requesting client", async () => {
+    using _ = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+      effective: { credentialState: "configured_unavailable", refreshState: "expired" },
+    });
+    const listingClientCaps = ["ui-commands", "ui-agent-github-settings"];
+    const assemble = (clientCaps: string[]) =>
+      createTestOpenClawTools({
+        githubPublicationAvailable: false,
+        listingClientCaps,
+        clientCaps,
+        agentSessionKey: "agent:main:reconnect",
+        wrapBeforeToolCallHook: false,
+      });
+    const connected = assemble(listingClientCaps);
+    const background = assemble([]);
+    for (const name of ["screen", "github_identity_status"]) {
+      const before = expectToolNamed(connected, name);
+      const after = expectToolNamed(background, name);
+      expect(after.parameters).toEqual(before.parameters);
+      expect(after.description).toBe(before.description);
+    }
+    expect(
+      JSON.stringify(
+        await expectToolNamed(connected, "github_identity_status").execute("connected", {}),
+      ),
+    ).toContain("github_identity_settings");
+    expect(
+      JSON.stringify(
+        await expectToolNamed(background, "github_identity_status").execute("background", {}),
+      ),
+    ).toContain("Settings → Agents → Tools");
+  });
+
+  it.each([
+    {
+      name: "screen tool is denied",
+      allow: ["github_identity_status"],
+      actions: undefined,
+      expected: false,
+    },
+    {
+      name: "settings action is denied",
+      allow: ["github_identity_status", "screen"],
+      actions: { screen: ["navigate"] },
+      expected: false,
+    },
+    {
+      name: "settings action remains callable",
+      allow: ["github_identity_status", "screen"],
+      actions: { screen: ["github_identity_settings"] },
+      expected: true,
+    },
+  ])("uses manual reconnect guidance when $name", ({ allow, actions, expected }) => {
+    const tools = createTestOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands", "ui-agent-github-settings"],
+      config: {
+        tools: {
+          gatewayPolicy: { allow, ...(actions ? { actions } : {}) },
+        },
+      },
+    });
+
+    const description = expectToolNamed(tools, "github_identity_status").description;
+    if (expected) {
+      expect(description).toContain("github_identity_settings");
+    } else {
+      expect(description).not.toContain("github_identity_settings");
+    }
+  });
+
+  it.each([
+    {
+      scope: "operator.sessions.write",
+      publishing: false,
+      deny: false,
+      managed: true,
+      expected: true,
+    },
+    {
+      scope: "operator.write",
+      publishing: false,
+      deny: false,
+      managed: true,
+      expected: true,
+    },
+    {
+      scope: "operator.admin",
+      publishing: false,
+      deny: false,
+      managed: true,
+      expected: true,
+    },
+    {
+      scope: "operator.write",
+      publishing: false,
+      deny: true,
+      managed: true,
+      expected: false,
+    },
+    {
+      scope: "operator.write",
+      publishing: false,
+      deny: false,
+      managed: false,
+      expected: false,
+    },
+    {
+      scope: "operator.sessions.write",
+      publishing: true,
+      deny: false,
+      managed: true,
+      expected: true,
+    },
+    {
+      scope: "operator.write",
+      publishing: true,
+      deny: false,
+      managed: true,
+      expected: true,
+    },
+    {
+      scope: "operator.admin",
+      publishing: true,
+      deny: false,
+      managed: true,
+      expected: true,
+    },
+  ])(
+    "projects PR actions for $scope, publishing=$publishing, deny=$deny, managed=$managed",
+    async ({ scope, publishing, deny, managed, expected }) => {
+      const cfg = withDefaultRoster(deny ? { tools: { deny: ["github_publish"] } } : {});
+      const sessionKey = "agent:main:nonpublishing-parent";
+      const additionalInheritedToolNamesRef: string[] = [];
+      const tools = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          operatorAuthority: createAdmittedRunOperatorAuthority({
+            profileId: "reviewer",
+            scopes: [scope],
+            assertCurrent: () => {},
+          }),
+        },
+        () =>
+          createOpenClawCodingToolsInternal({
+            config: cfg,
+            sessionKey,
+            sandbox: createAgentToolsSandboxContext({
+              workspaceDir: "/tmp/nonpublishing-parent",
+              sessionKey,
+              tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
+            }),
+            githubPublicationAvailable: managed ? publishing : undefined,
+            additionalInheritedToolNamesRef,
+            senderIsOwner: false,
+            wrapBeforeToolCallHook: false,
+            toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+          }),
+      );
+      expect(additionalInheritedToolNamesRef.includes("github_publish")).toBe(
+        managed && !publishing && !deny,
+      );
+      if (!expected) {
+        expect(hasTool(tools, "github_publish")).toBe(false);
+        return;
+      }
+      expect(tools.filter((tool) => tool.name === "github_publish")).toHaveLength(1);
+      const tool = expectToolNamed(tools, "github_publish");
+      expect(
+        Value.Check(tool.parameters, {
+          action: "inspect",
+          publishingSessionKey: "agent:main:child",
+        }),
+      ).toBe(true);
+      expect(Value.Check(tool.parameters, { title: "Publish workspace" })).toBe(publishing);
+      expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing);
+      expect(
+        Value.Check(tool.parameters, {
+          action: "prepare_pr",
+          pullRequestUrl: "https://github.com/example/repository/pull/1",
+        }),
+      ).toBe(false);
+      expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
+      expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
+      expect(Value.Check(tool.parameters, { action: "ready" })).toBe(true);
+      expect(
+        Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
+      ).toBe(true);
+      expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(false);
+      if (!publishing) {
+        expect(tool.description).toContain("cannot publish its own workspace");
+      }
+    },
+  );
+
+  it.each([
+    { name: "default policy", config: {}, available: true, expected: true },
+    {
+      name: "sandbox deny",
+      config: { tools: { sandbox: { tools: { deny: ["github_publish"] } } } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "restrictive sandbox allow",
+      config: { tools: { sandbox: { tools: { allow: ["read"] } } } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "global deny",
+      config: { tools: { deny: ["github_publish"] } },
+      available: true,
+      expected: false,
+    },
+    {
+      name: "restrictive agent allow",
+      config: { agents: { entries: { main: { tools: { allow: ["read"] } } } } },
+      available: true,
+      expected: false,
+    },
+    { name: "unavailable publication", config: {}, available: false, expected: true },
+    { name: "unprepared publication", config: {}, available: undefined, expected: false },
+  ] satisfies {
+    name: string;
+    config: OpenClawConfig;
+    available: boolean | undefined;
+    expected: boolean;
+  }[])("filters sandbox GitHub publication with $name", async ({ config, available, expected }) => {
+    const cfg = withDefaultRoster(config);
+    const sessionKey = "agent:main:sandbox-publisher";
+    const sandbox = createAgentToolsSandboxContext({
+      workspaceDir: "/tmp/sandbox-publisher",
+      sessionKey,
+      tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
+    });
+    const callers: unknown[] = [];
+    using call = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(async () => {
+        callers.push(getGatewayToolCallerIdentity()?.sessionKey);
+        return { requestId: "publication-1", status: "requested" } as never;
+      });
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey,
+      sandbox,
+      githubPublicationAvailable: available,
+      senderIsOwner: false,
+      wrapBeforeToolCallHook: false,
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+    });
+    expect(hasTool(tools, "github_publish")).toBe(expected);
+    if (expected && available) {
+      await expectToolNamed(tools, "github_publish").execute("publish-1", {
+        title: "Publish fix",
+      });
+      expect(call).toHaveBeenCalledWith("sessions.github.publish", {
+        sessionKey,
+        idempotencyKey: "publish-1",
+        title: "Publish fix",
+      });
+      expect(callers).toEqual([sessionKey]);
+    } else {
+      expect(call).not.toHaveBeenCalled();
+    }
   });
 
   it("omits host UI runtime tools for sandboxed agents", () => {

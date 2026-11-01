@@ -1,14 +1,12 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import type { SessionTranscriptBoundedActiveContext } from "../../config/sessions/session-accessor.sqlite-contract.js";
-import {
-  inspectTranscriptEventsSync,
-  loadTranscriptReadSnapshotSync,
-} from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
+import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
 import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContextLimits,
@@ -115,33 +113,24 @@ export function consumeSessionManagerReload(
   }
 }
 
-export function readSessionManagerReload(
+/** A committed append may need rows after the current model-context admission. */
+export function readCommittedSessionManagerReload(
   target: SessionTranscriptRuntimeTarget,
   limits: SessionManagerBoundedContextLimits | undefined,
-  ignoreReadFence: boolean,
-): PreparedSessionTranscriptReload {
-  if (limits) {
-    return {
-      kind: "bounded",
-      snapshot: readSessionTranscriptBoundedActiveContextCore(target, {
-        ...limits,
-        ...(ignoreReadFence ? { ignoreReadFence: true } : {}),
-      }),
-    };
+): Promise<PreparedSessionTranscriptReload> {
+  const memory = captureSessionManagerIncognitoBinding(target);
+  if (memory) {
+    return prepareSessionManagerMemoryRead(memory).read("session.history.hydrate", {
+      sessionId: target.sessionId,
+      limits,
+    });
   }
-  if (!ignoreReadFence) {
-    return { kind: "full", snapshot: loadTranscriptReadSnapshotSync(target) };
-  }
-  const { events, snapshot } = inspectTranscriptEventsSync(target);
-  return {
-    kind: "full",
-    snapshot: {
-      events,
-      version: {
-        generation: snapshot.generation,
-        rawSeq: snapshot.lastSeq,
-        updatedAt: snapshot.transcriptUpdatedAt,
-      },
-    },
-  };
+  return withSessionTranscriptReadSource(target, ({ scope, resolved, owner, expectedIdentity }) =>
+    owner.readTranscript({
+      target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
+      resolvedScope: resolved,
+      limits,
+      expectedIdentity,
+    }),
+  );
 }

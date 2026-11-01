@@ -85,9 +85,6 @@ export async function runDiscordScenario(
   const observation = {
     token: environment.runtimeEnv.driverBotToken,
     channelId: environment.runtimeEnv.channelId,
-    observedMessages: environment.observedMessages,
-    observationScenarioId: scenario.id,
-    observationScenarioTitle: scenario.title,
   };
   if (run.kind === "progress-draft-lifecycle") {
     const deadline = Date.now() + scenario.timeoutMs;
@@ -102,26 +99,22 @@ export async function runDiscordScenario(
         ...observation,
         afterSnowflake: sent.id,
         timeoutMs: remainingMs(),
-        triggerMessageId: sent.id,
-        triggerTimestamp: sent.timestamp,
         predicate: (message) =>
           message.senderId === environment.sutIdentity.id &&
           message.text.includes(run.progressLabel) &&
-          message.text.includes("• Exec"),
+          message.text.includes("Exec"),
       });
       await waitForDiscordMessageText({
         token: environment.runtimeEnv.driverBotToken,
         channelId: environment.runtimeEnv.channelId,
         messageId: draft.message.messageId,
-        textIncludes: [run.progressLabel, "• Exec"],
+        textIncludes: [run.progressLabel, "Exec"],
         timeoutMs: remainingMs(),
       });
       const final = await pollChannelMessages({
         ...observation,
         afterSnowflake: draft.message.messageId,
         timeoutMs: remainingMs(),
-        triggerMessageId: sent.id,
-        triggerTimestamp: sent.timestamp,
         predicate: (message) =>
           message.senderId === environment.sutIdentity.id && message.text.includes(finalText),
       });
@@ -156,7 +149,7 @@ export async function runDiscordScenario(
       token: environment.runtimeEnv.driverBotToken,
       channelId: environment.runtimeEnv.channelId,
       messageId: failed.draft.message.messageId,
-      textIncludes: [run.progressLabel, "• Exec"],
+      textIncludes: [run.progressLabel, "Exec"],
       timeoutMs: remainingMs(),
     });
     return {
@@ -202,8 +195,6 @@ export async function runDiscordScenario(
       ...observation,
       afterSnowflake: sent.id,
       timeoutMs: replyTimeoutMs,
-      triggerMessageId: sent.id,
-      triggerTimestamp: sent.timestamp,
       predicate: (message) =>
         matchesDiscordScenarioReply({
           channelId: environment.runtimeEnv.channelId,

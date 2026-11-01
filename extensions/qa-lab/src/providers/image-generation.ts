@@ -7,15 +7,13 @@ import type { RuntimeId } from "../runtime-id.js";
 import type { QaProviderMode } from "./index.js";
 import { getQaProvider, QA_DEFAULT_IMAGE_MODEL } from "./index.js";
 
-type QaImageGenerationPatchInput = {
+export function buildQaImageGenerationConfigPatch(input: {
   providerMode: QaProviderMode;
   providerBaseUrl?: string;
   requiredPluginIds: readonly string[];
   existingPluginIds?: readonly string[];
   forcedRuntime?: RuntimeId;
-};
-
-export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchInput) {
+}) {
   const provider = getQaProvider(input.providerMode);
   const modelPatch = (() => {
     if (provider.kind !== "mock") {

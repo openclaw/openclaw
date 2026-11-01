@@ -1,16 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import {
-  copyInternalToolResultState,
-  getInternalToolExecutionPreparer,
-} from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -85,13 +85,13 @@ export function createSubscribedToolSearchExecutor(params: {
             }),
             idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
           };
-          await runWithOwnedSessionTranscriptWrite(
+          const accepted = await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () =>
-              withSessionManagerWrite(manager, async () => {
+              withSessionManagerAppend(manager, async () => {
                 // Revalidate the exact attempt after awaited acceptance and writer admission.
                 if (!params.isCurrent()) {
-                  return;
+                  return false;
                 }
                 if (isRecord(terminal.result)) {
                   copyInternalToolResultState(terminal.result, message);
@@ -99,9 +99,7 @@ export function createSubscribedToolSearchExecutor(params: {
                 const target = manager.getSessionTarget();
                 const sessionId = manager.getSessionId();
                 const entryId = await manager.appendMessageAsync(message);
-                if (!params.isCurrent()) {
-                  return;
-                }
+                // Committed activity still belongs to settlement after presentation loses authority.
                 const activity = params.nestedToolActivityState;
                 if (!terminal.isError) {
                   activity.successfulToolNames.add(toolParams.toolName);
@@ -115,9 +113,14 @@ export function createSubscribedToolSearchExecutor(params: {
                   };
                   activity.accepted.lastEntryId = entryId;
                 }
+                return params.isCurrent();
               }),
           );
+          if (!accepted) {
+            return false;
+          }
           notifyToolActivity(attempt.runId);
+          return undefined;
         },
         // Acceptance belongs inside execution: observers must never see a rejected success.
         execute: async (onImplementationStart) =>

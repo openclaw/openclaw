@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 
 describe("plugin runtime session creation colors", () => {
   it("creates a plugin-owned CLI fork with canonical color", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-cli-session-create" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const runtime = createRuntimeAgent();
       const key = "agent:main:catalog-adopt:claude:source";
       const created = await runtime.session.createSessionEntry({
@@ -63,6 +65,7 @@ describe("plugin runtime session creation colors", () => {
 describe("plugin runtime session patches", () => {
   it("rejects a patch whose owner closes during asynchronous preparation", async () => {
     await withOpenClawTestState({ label: "plugin-runtime-patch-owner" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const runtime = createRuntimeAgent();
       const scope = { agentId: "main", sessionKey: "agent:main:reef:group:room" };
       await runtime.session.upsertSessionEntry({

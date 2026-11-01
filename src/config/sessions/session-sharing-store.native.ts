@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -30,7 +31,12 @@ function assertAuthorizedSessionInstance(
   expectedSessionId: string | undefined,
   expectedEntry?: SessionSharingExpectedEntry,
 ): string {
-  const sessionId = readSessionEntryInstanceId(database, sessionKey);
+  const entry = expectedEntry
+    ? readExactSessionEntryRow(database, sessionKey, "list")?.entry
+    : undefined;
+  const sessionId = expectedEntry
+    ? entry?.sessionId
+    : readSessionEntryInstanceId(database, sessionKey);
   if (
     sessionId === undefined ||
     (expectedSessionId !== undefined && sessionId !== expectedSessionId)
@@ -38,7 +44,6 @@ function assertAuthorizedSessionInstance(
     throw new Error("session changed before sharing mutation");
   }
   if (expectedEntry) {
-    const entry = readExactSessionEntryRow(database, sessionKey, "list")?.entry;
     if (
       !entry ||
       !isDeepStrictEqual(
@@ -94,17 +99,19 @@ export function addSessionMember(
         params.expectedEntry,
       );
       const db = getSessionMemberKysely(database);
-      const result = executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("session_members")
-          .values({
-            session_key: sessionKey,
-            identity_id: identityId,
-            added_by: addedBy,
-            added_at: addedAt,
-          })
-          .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
+      const result = withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("session_members")
+            .values({
+              session_key: sessionKey,
+              identity_id: identityId,
+              added_by: addedBy,
+              added_at: addedAt,
+            })
+            .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
+        ),
       );
       const changed = (result.numAffectedRows ?? 0n) > 0n;
       if (changed) {
@@ -147,27 +154,28 @@ export function removeSessionMember(
         expectedEntry,
       );
       const db = getSessionMemberKysely(database);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_members")
-          .select(["identity_id", "added_by", "added_at"])
-          .where("session_key", "=", sessionKey)
-          .where("identity_id", "=", normalizedIdentityId),
-      );
-      if (
-        !row ||
-        (expected && (row.added_by !== expected.addedBy || row.added_at !== expected.addedAt))
-      ) {
+      // SQLite replaces lone surrogates at binding; the expected grant uses decoded row values.
+      if (expected && expected.addedBy !== toUSVString(expected.addedBy)) {
         return null;
       }
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("session_members")
-          .where("session_key", "=", sessionKey)
-          .where("identity_id", "=", normalizedIdentityId),
+      let removal = db
+        .deleteFrom("session_members")
+        .where("session_key", "=", sessionKey)
+        .where("identity_id", "=", normalizedIdentityId);
+      if (expected) {
+        removal = removal
+          .where("added_by", "=", expected.addedBy)
+          .where("added_at", "=", expected.addedAt);
+      }
+      const row = withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
+        executeSqliteQueryTakeFirstSync(
+          database.db,
+          removal.returning(["identity_id", "added_by", "added_at"]),
+        ),
       );
+      if (!row) {
+        return null;
+      }
       publishCommittedSessionMembership(
         database,
         agentId,

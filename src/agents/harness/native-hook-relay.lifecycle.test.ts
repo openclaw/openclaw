@@ -8,6 +8,7 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as relayBridge from "./native-hook-relay-bridge.js";
 import * as clientStore from "./native-hook-relay-client-store.js";
@@ -22,6 +23,10 @@ import {
   resolveNativeHookRelayDeferredToolApproval,
   testing,
 } from "./native-hook-relay.js";
+import {
+  clearNativeHookRelayBridgeRecordsForTests,
+  clearNativeHookRelaysForTests,
+} from "./native-hook-relay.test-support.js";
 
 function relayParams(runId: string, sessionId = runId) {
   return { provider: "codex", sessionId, runId } satisfies Parameters<
@@ -84,7 +89,7 @@ function bridgeInvocation({ relayId, generation }: RelayIdentity) {
 }
 
 afterEach(async () => {
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
   resetGlobalHookRunner();
   vi.restoreAllMocks();
 });
@@ -122,6 +127,39 @@ it.each(["deferred outcome", "rejection"] as const)(
     expect(onResolution.mock.calls).toEqual(outcome === "deferred outcome" ? [["cancelled"]] : []);
     expect(nativeHookRelayState.pendingPreToolUseApprovals.size).toBe(0);
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+  },
+);
+
+it.each(["policy rejection", "owner closure"] as const)(
+  "refuses a native allow after awaited %s",
+  async (failure) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    let active = true;
+    const relay = registerNativeHookRelay({
+      ...relayParams("async-execution-policy"),
+      runBeforeToolCall: async () => ({ blocked: false, params: { command: "echo synthetic" } }),
+      assertActiveAsync: async () => {
+        entered.resolve();
+        await release.promise;
+        if (failure === "policy rejection") {
+          throw new Error("execution policy changed");
+        }
+      },
+      assertActive: () => {
+        if (!active) {
+          throw new Error("run closed");
+        }
+      },
+    });
+    const pending = invokeNativeHookRelay(policyInvocation(relay));
+    await entered.promise;
+    active = failure !== "owner closure";
+    const rejected = expect(pending).rejects.toThrow(
+      failure === "policy rejection" ? "execution policy changed" : "run closed",
+    );
+    release.resolve();
+    await rejected;
   },
 );
 
@@ -416,7 +454,7 @@ it("joins unregister when listener startup has not completed", async () => {
 
 it("renews logical invocation beyond its original expiry when the listener is unavailable", async () => {
   await withOpenClawTestState({ label: "relay-logical-renewal" }, async () => {
-    await store.clearNativeHookRelayBridgeRecordsForTests();
+    clearNativeHookRelayBridgeRecordsForTests();
     const failure = new Error("fixture listener failed");
     vi.spyOn(Server.prototype, "listen").mockImplementation(function (this: Server) {
       queueMicrotask(() => this.emit("error", failure));
@@ -493,19 +531,11 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
       });
       let successor: ReturnType<typeof registerOwnedNativeHookRelay> | undefined;
       let preparation: Promise<void> | undefined;
-      let settled = false;
       try {
         preparation = relay.prepareInvocation();
-        void preparation.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
+        const settled = observeSettlement(preparation);
         await entered.promise;
-        expect(settled).toBe(false);
+        expect(settled()).toBe(false);
         if (retirement === "cancellation") {
           abort.abort();
           expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
@@ -584,13 +614,13 @@ it("rejects oversized direct bridge responses", async () => {
       });
 
       // Cold locator startup must not consume this byte-limit fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(relay))).rejects.toThrow(
           "native hook relay bridge response too large",
         );
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       await new Promise<void>((resolve) => {
@@ -624,14 +654,14 @@ it("binds direct bridge tokens to the relay they were issued for", async () => {
         record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
       });
       // Cold locator startup must not consume this token-binding fixture's caller deadline.
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       try {
         await expect(invokeNativeHookRelayBridge(bridgeInvocation(second))).rejects.toThrow(
           "native hook relay bridge target mismatch",
         );
         expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
       } finally {
-        clock.mockRestore();
+        vi.useRealTimers();
       }
     } finally {
       first.unregister();
@@ -647,17 +677,17 @@ it("does not start transport when locator lookup consumes the caller deadline", 
     await relay.ready;
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const read = clientStore.readNativeHookRelayClientBridgeRecord;
-    vi.spyOn(clientStore, "readNativeHookRelayClientBridgeRecord").mockImplementation(
-      async (params) => {
-        const record = await read(params);
-        entered.resolve();
-        await resume.promise;
-        return record;
-      },
-    );
-    const startedAt = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    // Start the measured lookup after the runtime's real locator reader is ready.
+    const record = await clientStore.readNativeHookRelayClientBridgeRecord({
+      relayId: relay.relayId,
+    });
+    vi.spyOn(clientStore, "readNativeHookRelayClientBridgeRecord").mockImplementation(async () => {
+      entered.resolve();
+      await resume.promise;
+      return record;
+    });
+    const startedAt = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     const invocation = invokeNativeHookRelayBridge({
       provider: "codex",
       relayId: relay.relayId,
@@ -714,18 +744,10 @@ it("joins a renewal accepted while an earlier drain reports failure", async () =
     const expiresAtMs = relay.expiresAtMs;
     relay.renew(120_000);
     const draining = relay.drain();
-    let settled = false;
-    void draining.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const settled = observeSettlement(draining);
     try {
       await entered.promise;
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       expect(relay.expiresAtMs).toBe(expiresAtMs);
       resume.resolve();
       await expect(draining).rejects.toBe(failure);
@@ -783,7 +805,7 @@ it("does not restore an old locator when renewal finishes after unregister", asy
     } finally {
       resume.resolve();
       relay.unregister();
-      await testing.clearNativeHookRelaysForTests();
+      await clearNativeHookRelaysForTests();
     }
   });
 });

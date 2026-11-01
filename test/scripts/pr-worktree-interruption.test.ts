@@ -11,68 +11,78 @@ import { installCheckoutDeadline } from "./pr-worktree-provision.test-support.js
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+const read = (...parts: string[]) => readFileSync(join(...parts), "utf8");
+const readJson = (...parts: string[]) => JSON.parse(read(...parts));
 function fixture(mode: "native" | "managed" = "native", files = 128) {
   return createProvisionOwnerFixture(tempDirs.make("openclaw-pr-owner-"), mode, files);
 }
 describePosix("PR worktree interruption", () => {
-  it.each(["native"] as const)(
-    "scales the %s checkout deadline with the tree and survives five minutes of progress",
-    (mode) => {
-      const deadlines: number[] = [];
-      for (const files of [128, 256]) {
-        const f = fixture(mode, files);
-        const receipt = installCheckoutDeadline(f);
-        const result = f.run();
-        expect(result.status, result.stderr).toBe(0);
-        const observed = JSON.parse(readFileSync(receipt, "utf8"));
-        expect(observed.elapsed).toBe(300001);
-        deadlines.push(observed.deadline);
-        expectProvisionSeed(f);
-        expect(f.git(f.worktree, "write-tree")).toBe(
-          f.git(f.canonical, "rev-parse", `${f.main}^{tree}`),
-        );
-        expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
-      }
-      expect(deadlines[1]).toBeGreaterThan(deadlines[0]!);
-    },
-  );
-
-  it.each(["retained-gitfile", "removed-gitfile"] as const)(
-    "cleans its interrupted checkout (%s) and provisions it again through entry",
-    (interruption) => {
-      const f = fixture();
-      installCheckoutDeadline(f, interruption);
-      const interrupted = f.run();
-      expect(interrupted.status).not.toBe(0);
-      expect(interrupted.stderr).toContain("Git did not finish within its");
-      expect(existsSync(f.worktree)).toBe(false);
-      expect(existsSync(join(f.canonical, ".git", "worktrees", "pr-42"))).toBe(false);
-      expectProvisionLeaseReleased(f);
-      const lock = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42");
-      // Only this fixture's joined failed operation is recovered by exact owner.
-      delete f.env.NODE_OPTIONS;
-      const recovered = f.run("recover", lock);
-      expect(recovered.status, recovered.stderr).toBe(0);
-      const retried = f.run();
-      expect(retried.status, retried.stderr).toBe(0);
+  it("scales the native checkout deadline with the tree and survives five minutes of progress", () => {
+    const deadlines: number[] = [];
+    for (const files of [128, 256]) {
+      const f = fixture("native", files);
+      const receipt = installCheckoutDeadline(f);
+      const result = f.run();
+      expect(result.status, result.stderr).toBe(0);
+      const observed = readJson(receipt);
+      expect(observed.elapsed).toBe(300001);
+      deadlines.push(observed.deadline);
       expectProvisionSeed(f);
-    },
-  );
+      expect(f.git(f.worktree, "write-tree")).toBe(
+        f.git(f.canonical, "rev-parse", `${f.main}^{tree}`),
+      );
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+    }
+    expect(deadlines[1]).toBeGreaterThan(deadlines[0]!);
+  });
 
-  it.each(["native", "managed"] as const)(
-    "joins slow %s cleanup beyond the former 300 ms force-kill grace",
-    (mode) => {
+  it.each([
+    { mode: "native", interruption: "retained-gitfile" },
+    { mode: "native", interruption: "removed-gitfile" },
+    { mode: "native", interruption: "slow-cleanup" },
+    { mode: "managed", interruption: "slow-cleanup" },
+    { mode: "native", interruption: "external-cancel" },
+  ] as const)(
+    "joins $mode $interruption cleanup without losing ownership",
+    ({ mode, interruption }) => {
       const f = fixture(mode);
-      const receipt = installCheckoutDeadline(f, "slow-cleanup");
+      const receipt = installCheckoutDeadline(f, interruption);
       const result = f.run();
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Git did not finish within its");
-      expect(readFileSync(join(f.root, "cleanup-complete"), "utf8")).toBe("Git cleanup completed");
-      const observed = JSON.parse(readFileSync(receipt, "utf8"));
-      expect(observed.cleanupElapsed).toBe(301);
-      expect(observed.signals).toContain("SIGTERM");
-      expect(observed.signals).not.toContain("SIGKILL");
       expectProvisionLeaseReleased(f);
+      if (interruption !== "external-cancel") {
+        expect(result.stderr).toContain("Git did not finish within its");
+      }
+      if (interruption === "slow-cleanup" || interruption === "external-cancel") {
+        expect(read(f.root, "cleanup-complete")).toBe("Git cleanup completed");
+        const observed = readJson(
+          interruption === "slow-cleanup" ? receipt : join(f.root, "supervisor-grace.json"),
+        );
+        if (interruption === "slow-cleanup") {
+          expect(observed).toMatchObject({
+            cleanupElapsed: 301,
+            signals: expect.arrayContaining(["SIGTERM"]),
+          });
+          expect(observed.signals).not.toContain("SIGKILL");
+        } else {
+          expect(observed.elapsed).toBe(5001);
+          expect(observed.grace).toBeGreaterThan(5001);
+          expect(existsSync(f.worktree)).toBe(false);
+          expect(f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toMatch(
+            /^[0-9a-f]{40}$/,
+          );
+        }
+      } else {
+        expect(
+          [f.worktree, join(f.canonical, ".git", "worktrees", "pr-42")].map(existsSync),
+        ).toEqual([false, false]);
+        expect(result.stderr).toContain("Released the operation lock for PR #42 after exit code");
+        expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+        delete f.env.NODE_OPTIONS;
+        const retried = f.run();
+        expect(retried.status, retried.stderr).toBe(0);
+        expectProvisionSeed(f);
+      }
     },
   );
 
@@ -88,22 +98,6 @@ describePosix("PR worktree interruption", () => {
     expect(f.git(sibling, "rev-parse", "HEAD")).toBe(f.main);
   });
 
-  it("lets interrupted provisioning finish cleanup beyond the supervisor's former five seconds", () => {
-    const f = fixture();
-    installCheckoutDeadline(f, "external-cancel");
-    const result = f.run();
-    expect(result.status).not.toBe(0);
-    const observed = JSON.parse(readFileSync(join(f.root, "supervisor-grace.json"), "utf8"));
-    expect(observed.elapsed).toBe(5001);
-    expect(observed.grace).toBeGreaterThan(5001);
-    expect(readFileSync(join(f.root, "cleanup-complete"), "utf8")).toBe("Git cleanup completed");
-    expect(existsSync(f.worktree)).toBe(false);
-    expectProvisionLeaseReleased(f);
-    expect(f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toMatch(
-      /^[0-9a-f]{40}$/,
-    );
-  });
-
   it("refuses a foreign damaged checkout without modifying its evidence", () => {
     const f = fixture();
     mkdirSync(f.worktree, { recursive: true });
@@ -113,10 +107,10 @@ describePosix("PR worktree interruption", () => {
     const result = f.run();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("damaged worktree metadata");
-    expect(readFileSync(join(f.worktree, ".git"), "utf8")).toBe(pointer);
-    expect(readFileSync(join(f.worktree, "operator-evidence.txt"), "utf8")).toBe(
+    expect([read(f.worktree, ".git"), read(f.worktree, "operator-evidence.txt")]).toEqual([
+      pointer,
       "preserve this checkout\n",
-    );
+    ]);
     expect(f.git(f.canonical, "status", "--porcelain")).toBe("");
   });
 });

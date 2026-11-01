@@ -175,6 +175,7 @@ export function collectNodeRunnerCatalogState(params: {
   };
 }) {
   const sessionHostNodeIds = new Set<string>();
+  const deviceFolderNodeIds = new Set<string>();
   const issuesByNodeId = new Map<string, NodeRunnerInventoryIssue[]>();
   const workerSlotsByNodeId = new Map<string, NodeWorkerCapacitySnapshot>();
   const workerBundleByNodeId = new Map<string, NodeWorkerBundleStatus>();
@@ -187,6 +188,9 @@ export function collectNodeRunnerCatalogState(params: {
     const proof = resolveNodeWorkerSupervisorState(current, state.runnerInventoryByConn);
     if (proof && proof.pairingGeneration === node.pairingGeneration) {
       sessionHostNodeIds.add(node.nodeId);
+      if (proof.workerHost.deviceFolders === true) {
+        deviceFolderNodeIds.add(node.nodeId);
+      }
     }
     const issue =
       resolveNodeRunnerInventoryIssue(current, state.runnerInventoryByConn) ??
@@ -197,14 +201,20 @@ export function collectNodeRunnerCatalogState(params: {
       issuesByNodeId.set(node.nodeId, [issue]);
     }
     if (proof) {
-      workerSlotsByNodeId.set(node.nodeId, { ...proof.workerHost.capacity });
+      workerSlotsByNodeId.set(node.nodeId, proof.workerHost.capacity);
     }
     const observation = state.bundleStatusByConn.get(node.connId);
     if (observation) {
-      workerBundleByNodeId.set(node.nodeId, structuredClone(observation.status));
+      workerBundleByNodeId.set(node.nodeId, observation.status);
     }
   }
-  return { sessionHostNodeIds, issuesByNodeId, workerSlotsByNodeId, workerBundleByNodeId };
+  return {
+    sessionHostNodeIds,
+    deviceFolderNodeIds,
+    issuesByNodeId,
+    workerSlotsByNodeId,
+    workerBundleByNodeId,
+  };
 }
 
 export function resolveNodeWorkerSupervisorProof(

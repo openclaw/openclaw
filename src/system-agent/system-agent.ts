@@ -1,31 +1,23 @@
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import type { SystemAgentAssistantPlanner } from "./assistant.js";
 import { resolveSystemAgentOperation } from "./dialogue.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
+import {
+  requireSystemAgentInferenceRoute,
+  requireSystemAgentPersistentApplyInference,
+} from "./inference-guard.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation,
-  type SystemAgentCommandDeps,
   type SystemAgentOperation,
 } from "./operations.js";
-import {
-  formatSystemAgentOverview,
-  loadSystemAgentOverview,
-  type SystemAgentOverview,
-} from "./overview.js";
+import { formatSystemAgentOverview, loadSystemAgentOverview } from "./overview.js";
 import {
   hasCurrentSystemAgentOwnerPluginArtifacts,
   type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
-
-type SystemAgentInteractiveRunner = (
-  opts: RunSystemAgentOptions,
-  runtime: RuntimeEnv,
-) => Promise<void>;
 
 export type RunSystemAgentOptions = {
   message?: string;
@@ -38,45 +30,14 @@ export type RunSystemAgentOptions = {
   setupWorkspace?: string;
   setupAgentName?: string;
   onReady?: () => void;
-  deps?: SystemAgentCommandDeps;
-  formatOverview?: (overview: SystemAgentOverview) => string;
-  loadOverview?: typeof loadSystemAgentOverview;
-  planWithAssistant?: SystemAgentAssistantPlanner;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
-  runInteractiveTui?: SystemAgentInteractiveRunner;
   /** Exact live-tested route supplied by the inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
 
 /** User-supplied command options before the inference gate binds the run. */
 export type SystemAgentCommandOptions = Omit<RunSystemAgentOptions, "verifiedInference">;
-
-async function requirePersistentApplyInference(
-  opts: RunSystemAgentOptions,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  if (!opts.verifiedInference) {
-    throw new SystemAgentInferenceUnavailableError("conversation");
-  }
-  try {
-    const { resolvePersistentApplyInference } = await import("./setup-inference.js");
-    const route = await resolvePersistentApplyInference({
-      binding: opts.verifiedInference,
-      runtime,
-      deps: opts.deps,
-    });
-    if (route) {
-      return;
-    }
-  } catch (error) {
-    if (error instanceof SystemAgentInferenceUnavailableError) {
-      throw error;
-    }
-    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
-  }
-  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
-}
 
 async function runOneShot(
   operation: SystemAgentOperation,
@@ -88,21 +49,21 @@ async function runOneShot(
   }
   // The planner may take long enough for the verified route to change. Never
   // apply its result under a different inference owner.
-  await requireSystemAgentInferenceRoute(opts.verifiedInference, opts.deps, "conversation");
+  await requireSystemAgentInferenceRoute(opts.verifiedInference, "conversation");
   const approved = opts.yes === true || !isPersistentSystemAgentOperation(operation);
   if (approved && isPersistentSystemAgentOperation(operation)) {
-    await requirePersistentApplyInference(opts, runtime);
+    await requireSystemAgentPersistentApplyInference(
+      { binding: opts.verifiedInference, runtime },
+      (failures) => {
+        if (failures[0] instanceof SystemAgentInferenceUnavailableError) {
+          throw failures[0];
+        }
+        throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
+      },
+    );
   }
   await executeSystemAgentOperation(operation, runtime, {
     approved,
-    deps:
-      opts.deps || opts.formatOverview || opts.loadOverview
-        ? {
-            ...opts.deps,
-            ...(opts.formatOverview ? { formatOverview: opts.formatOverview } : {}),
-            ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
-          }
-        : undefined,
   });
 }
 
@@ -124,20 +85,15 @@ export async function runSystemAgent(
   }
   const { resolveAgentWorkspaceDir } = await import("../agents/agent-scope.js");
   const { loadAgentRuntimePluginRegistryHandle } = await import("../agents/runtime-plugins.js");
-  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  const { withPluginLifecycleLeaseAsync } = await import("../plugins/plugin-lifecycle-lease.js");
   const { createPluginCache, withPluginCache } = await import("../plugins/plugin-cache.js");
   const { withPluginRuntimeRegistryScope } =
     await import("../plugins/runtime/gateway-request-scope.js");
   await using cache = createPluginCache();
-  const readSnapshot =
-    boundOpts.deps?.readConfigFileSnapshot ??
-    (await import("../config/config.js")).readConfigFileSnapshot;
-  const registry = await withPluginLifecycleLease({}, async (lease) => {
-    const snapshot = await readSnapshot();
-    const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, {
-      ...boundOpts.deps,
-      readConfigFileSnapshot: async () => snapshot,
-    });
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const registry = await withPluginLifecycleLeaseAsync({}, async (lease) => {
+    const snapshot = await readConfigFileSnapshot();
+    const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, snapshot);
     if (!currentArtifacts) {
       throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
     }
@@ -145,7 +101,7 @@ export async function runSystemAgent(
     const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);
     // Validate and import under the same lifecycle lease. Frozen probe config could
     // otherwise re-enable a revoked owner or another configured harness during loading.
-    lease.assertOwned();
+    await lease.assertOwned();
     return withPluginCache(cache, () =>
       loadAgentRuntimePluginRegistryHandle({
         basePluginIds: [],
@@ -171,13 +127,9 @@ async function runBoundSystemAgent(
   boundOpts: RunSystemAgentOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  await requireSystemAgentInferenceRoute(
-    boundOpts.verifiedInference,
-    boundOpts.deps,
-    "conversation",
-  );
+  await requireSystemAgentInferenceRoute(boundOpts.verifiedInference, "conversation");
   if (boundOpts.json) {
-    const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
+    const overview = await loadSystemAgentOverview();
     writeRuntimeJson(runtime, overview);
     return;
   }
@@ -197,9 +149,9 @@ async function runBoundSystemAgent(
         delayMs: 0,
         fallback: "none",
       },
-      async () => await (boundOpts.loadOverview ?? loadSystemAgentOverview)(),
+      async () => await loadSystemAgentOverview(),
     );
-    runtime.log((boundOpts.formatOverview ?? formatSystemAgentOverview)(overview));
+    runtime.log(formatSystemAgentOverview(overview));
     runtime.log("");
     const operation = await resolveSystemAgentOperation(boundOpts.message, runtime, {
       ...boundOpts,
@@ -210,8 +162,8 @@ async function runBoundSystemAgent(
   }
 
   if (boundOpts.interactive === false) {
-    const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
-    runtime.log((boundOpts.formatOverview ?? formatSystemAgentOverview)(overview));
+    const overview = await loadSystemAgentOverview();
+    runtime.log(formatSystemAgentOverview(overview));
     return;
   }
 
@@ -226,8 +178,7 @@ async function runBoundSystemAgent(
     return;
   }
 
-  const runInteractiveTui =
-    boundOpts.runInteractiveTui ?? (await import("./tui-backend.js")).runSystemAgentTui;
+  const { runSystemAgentTui } = await import("./tui-backend.js");
   boundOpts.onReady?.();
-  await runInteractiveTui(boundOpts, runtime);
+  await runSystemAgentTui(boundOpts, runtime);
 }

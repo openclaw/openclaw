@@ -64,7 +64,7 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
-Completed nested calls persist as bounded, redacted display-only activity, retaining
+Completed nested calls persist as bounded display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
 Nested invocation ids include the cell's replay identity, so a provider can reuse
@@ -75,11 +75,17 @@ hooks read the accepted activity for their attempt from the transcript when need
 If a `before_message_write` hook suppresses a nested activity row, finalization and
 agent-end hooks omit that activity too. The successful tool still counts as completed
 for turn settlement; suppressing its display history does not undo its execution.
-Starts and partial updates remain transient. Older missing child history cannot be
-reconstructed from source code or outer results.
+Terminal tool and activity events are published only after the nested activity
+append is accepted. Effect and replay-safety evidence is captured before that
+append, so a persistence failure cannot undo a known tool effect or make it safe
+to repeat. Lifecycle accounting settles from the captured outcome even when
+cancellation, supersession, or persistence failure suppresses terminal presentation.
+Starts and partial updates remain transient. Older missing child
+history cannot be reconstructed from source code or outer results.
 
-Nested tool failures cross into the guest as catchable JavaScript errors. If
-guest code does not catch an error, `exec` or `wait` returns a failed tool
+Thrown tool errors are catchable. Returned values may instead report failure.
+Follow the tool's result contract, and inspect possible effects before retrying.
+If guest code does not catch an error, `exec` or `wait` returns a failed tool
 result and the agent can continue normally. Follow the
 [tool-error guidance](/tools/code-mode/quickstart#recover-from-tool-errors) to inspect possible partial
 effects before choosing another action. Network-controlled tool output and errors
@@ -122,18 +128,20 @@ statuses: `completed`, `waiting`, or `failed`.
 
 - A `waiting` result retains an executor continuation, pending bridge requests, and
   scoping metadata (agent run id, session id/key) until `wait` resumes it or
-  it expires.
+  it expires. Successful completion of the observing tool call or model response
+  leaves this parked work available. Cancellation of an active `exec`/`wait`,
+  the parent run, or its catalog still cancels the cell and pending calls.
 - Expiry, wrong-session, wrong-run, and unknown/already-resuming `runId`
   values do not produce a distinct terminal status; they surface as a
   `failed` result (`code: "invalid_input"`) with a message such as `code mode
-run is unavailable or expired.` or `code mode run belongs to a different
-session.`.
+  run is unavailable or expired.` or `code mode run belongs to a different
+  session.`.
 - A run's continuation is released as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown. Continuations
   do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
-runs.`.
+  runs.`.
 
 The selected executor stays fixed for the cell's lifetime. Suspended state is
 bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also
@@ -167,8 +175,7 @@ before parsing another full JSON copy for bounded preview construction. The
 normalized string moves into the same store. Final projection reserves a usable
 reference before allocating the remaining display space to sampled descriptions
 and output; an undisplayable reference is released. Failed admission remains a
-successful partial result with a precise non-retention reason. Headless and
-restart-safe execution do not allocate automatic references.
+successful partial result with a precise non-retention reason. Headless execution does not allocate automatic references.
 
 Catalog teardown, replacement, restriction, and the admitted run's abort clear
 saved data. Appended client tools preserve the same result-store lifetime, including
@@ -191,11 +198,19 @@ committed session-store projection.
 
 The projection is initialized lazily at the first store operation and shares
 the admitted catalog/result-store lifetime. For a persisted session, core uses
-the existing off-thread `SessionManager.openAsync` API to read the full branch
+the off-thread transcript maintenance reader to select store entries on the branch
 ending at the live session's current leaf. This includes custom entries older
 than the live manager's bounded hydration window. An unmatched leaf fails the
 operation rather than exposing a different branch. Subsequent operations use
 the projection, applying this run's own commits without rescanning the branch.
+
+Across admitted runs, core reuses a validated projection only when a fresh read
+matches the physical session identity, transcript rewrite generation, and ordered
+store-entry IDs. The cache retains at most 16 sessions and 8 MiB of accounted
+JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cached.
+Session removal and database shutdown discard retained projections. Store writes,
+branch changes, and rewrites select a new projection through the same replay and
+budget checks. Loaded values remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through
@@ -209,7 +224,7 @@ or disk cache is created. Replay follows branch ancestry, survives compaction,
 and excludes other branches' writes. Custom entries stay outside model context.
 Loading a flagged value marks the receiving cell's runtime as containing
 network content, preserving the normal untrusted-content wrapper across turns.
-Store operations are unavailable in headless or `restartSafe` execution, or
+Store operations are unavailable in headless execution or
 without a bound session manager. See the
 [guest store contract](/tools/code-mode/guest-api#session-store) for data limits.
 
@@ -239,8 +254,16 @@ bridge as QuickJS. Suspension retains the worker, context, and pending promises;
 `wait` continues that context without replaying the source. Cancellation,
 expiry, terminal results, and shutdown release the retained execution.
 
-After successful completion, Node keeps up to four idle workers warm for five
-minutes each, reusing only workers with the same runtime entry and heap limit.
+After successful completion, Node keeps up to eight idle workers. Surplus
+workers have a three-minute cooldown from their last completion, so recurring
+bursts reuse recently needed capacity. The most recently completed compatible
+worker remains warm until pressure, health, runtime rotation, or host shutdown
+retires it. The combined nominal warm-heap budget is 512 MiB with the default
+64 MiB per worker, or 8 GiB at the maximum 1 GiB per-worker configuration;
+external allocations are excluded, so this is not an RSS limit.
+Reuse requires the same runtime entry and heap limit. Serial work reuses the
+most recently completed matching worker so surplus workers from an earlier burst
+can expire instead of having their idle deadlines repeatedly reset.
 Reuse stays within the creating Gateway or CLI command lifetime; closing that
 host joins worker retirement. Standalone executor calls without a host close
 their completed worker immediately. Each new cell still gets a fresh VM context.

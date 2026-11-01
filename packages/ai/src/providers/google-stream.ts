@@ -170,6 +170,16 @@ export async function consumeGoogleGenerateContentStream(params: {
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
       params.output.usage = {
         ...createEmptyTransportUsage(),
+        usageReport: {
+          state:
+            sawTerminalReason ||
+            chunk.candidates?.some(
+              (candidate) =>
+                candidate.finishReason && candidate.finishReason !== "FINISH_REASON_UNSPECIFIED",
+            )
+              ? "available"
+              : "unavailable",
+        },
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,
@@ -315,11 +325,15 @@ export async function consumeGoogleGenerateContentStream(params: {
             contentIndex: blockIndex(),
             partial: params.output,
           });
+          const streamingCall = { ...toolCall, partialJson: JSON.stringify(toolCall.arguments) };
           params.stream.push({
             type: "toolcall_delta",
             contentIndex: blockIndex(),
-            delta: JSON.stringify(toolCall.arguments),
-            partial: params.output,
+            delta: streamingCall.partialJson,
+            partial: {
+              ...params.output,
+              content: [...params.output.content.slice(0, -1), streamingCall],
+            },
           });
           params.stream.push({
             type: "toolcall_end",

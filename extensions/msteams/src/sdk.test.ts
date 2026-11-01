@@ -1,11 +1,10 @@
-// Msteams tests cover sdk plugin behavior.
 import type { ClientOptions, RequestContext } from "@microsoft/teams.common";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startMSTeamsQaBotFrameworkServer } from "./qa/bot-framework-server.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import type { MSTeamsCredentials } from "./token.js";
+import type { MSTeamsCredentials } from "./token-config.js";
 
 const secretCredentials: MSTeamsCredentials = {
   type: "secret",
@@ -13,6 +12,12 @@ const secretCredentials: MSTeamsCredentials = {
   appPassword: "test-secret",
   tenantId: "test-tenant",
 };
+
+function federatedCredentials(
+  options: Partial<Extract<MSTeamsCredentials, { type: "federated" }>> = {},
+): MSTeamsCredentials {
+  return { type: "federated", appId: "test-app-id", tenantId: "test-tenant", ...options };
+}
 
 const privateQaRuntimeSymbol = Symbol.for("openclaw.msteams.privateQaRuntime");
 const privateQaBotToken = [
@@ -233,10 +238,7 @@ describe("createMSTeamsApp", () => {
       expect(active).toBe(revokeAt === "never");
       expect(outbound).toEqual([
         {
-          activity: expect.objectContaining({
-            type: "message",
-            text: "qa outbound",
-          }),
+          activity: expect.objectContaining({ type: "message", text: "qa outbound" }),
           activityId: result.id,
           conversationId: "19:qa-primary@thread.tacv2",
           threadId: "thread-root",
@@ -265,22 +267,12 @@ describe("createMSTeamsApp", () => {
   it.each([
     {
       label: "certificate",
-      credentials: {
-        type: "federated" as const,
-        appId: "test-app-id",
-        tenantId: "test-tenant",
-        certificatePath: "/path/to/cert.pem",
-      },
+      credentials: federatedCredentials({ certificatePath: "/path/to/cert.pem" }),
       expected: { clientId: "test-app-id", token: expect.any(Function) },
     },
     {
       label: "managed identity",
-      credentials: {
-        type: "federated" as const,
-        appId: "test-app-id",
-        tenantId: "test-tenant",
-        useManagedIdentity: true,
-      },
+      credentials: federatedCredentials({ useManagedIdentity: true }),
       expected: {
         clientId: "test-app-id",
         managedIdentityClientId: "system",
@@ -301,14 +293,9 @@ describe("createMSTeamsApp", () => {
     const certificatePath = "/private/msteams-race-sensitive-certificate.pem";
     readSecretFile.mockRejectedValue(new Error(`ENOENT: no such file, open '${certificatePath}'`));
 
-    const creds: MSTeamsCredentials = {
-      type: "federated",
-      appId: "test-app-id",
-      tenantId: "test-tenant",
-      certificatePath,
-    };
-
-    const error = await createMSTeamsApp(creds).catch((caught: unknown) => caught);
+    const error = await createMSTeamsApp(federatedCredentials({ certificatePath })).catch(
+      (caught: unknown) => caught,
+    );
     expect(error).toBeInstanceOf(Error);
     if (error instanceof Error) {
       expect(error.message).toContain("Failed to read certificate file");
@@ -330,13 +317,7 @@ describe("createMSTeamsApp", () => {
   });
 
   it("throws when federated credentials lack certificate and managed identity", async () => {
-    const creds: MSTeamsCredentials = {
-      type: "federated",
-      appId: "test-app-id",
-      tenantId: "test-tenant",
-    };
-
-    await expect(createMSTeamsApp(creds)).rejects.toThrow(
+    await expect(createMSTeamsApp(federatedCredentials())).rejects.toThrow(
       "Federated credentials require either a certificate path or managed identity",
     );
   });
@@ -407,9 +388,7 @@ describe("createMSTeamsApp", () => {
 
   it("rejects configured serviceUrls outside the Bot Framework allowlist", async () => {
     await expect(
-      createMSTeamsApp(secretCredentials, {
-        serviceUrl: "https://attacker.example.com/teams/",
-      }),
+      createMSTeamsApp(secretCredentials, { serviceUrl: "https://attacker.example.com/teams/" }),
     ).rejects.toThrow(/Blocked Microsoft Teams serviceUrl host: attacker\.example\.com/);
   });
 
@@ -500,9 +479,7 @@ describe("createMSTeamsTokenProvider", () => {
 
   it("returns empty string when token is null", async () => {
     const app = {
-      tokenProvider: {
-        getAppToken: async () => null,
-      },
+      tokenProvider: { getAppToken: async () => null },
     };
     const provider = createMSTeamsTokenProvider(app);
 

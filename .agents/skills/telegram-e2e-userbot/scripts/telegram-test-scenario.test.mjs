@@ -89,6 +89,7 @@ function fixture() {
         chat: args?.chat,
         requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
         createForum: args?.createForum,
+        createDmTopic: args?.createDmTopic,
         ...options,
       }),
   };
@@ -313,6 +314,69 @@ test("a run-owned forum receives the scenario's topic sends and is deleted befor
   assert.equal(summary.testForum.cleanup.status, "deleted");
 });
 
+test("a DM topic uses the existing lease and restores mode before release despite stale Bot API flags", async (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-dm-topic-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const f = fixture();
+  const events = [];
+  let threaded = false;
+  const command = f.options.runCommandImpl;
+  f.options.runCommandImpl = async (name, args) => {
+    if (args.includes("prepare-dm-topic") || args.includes("cleanup-dm-topic")) {
+      threaded = args.includes("prepare-dm-topic");
+      events.push(threaded ? "topic-created" : "mode-restored");
+      return {
+        status: 0,
+        timedOut: false,
+        stdout: JSON.stringify({
+          ok: true,
+          chatId: "42",
+          forumTopicId: 777,
+          status: threaded ? "ready" : "restored",
+          threadedMode: { before: !threaded, after: threaded },
+        }),
+      };
+    }
+    assert.equal(args.includes("prepare-group"), false);
+    return command(name, args);
+  };
+  f.options.fetchImpl = async () =>
+    Response.json({
+      ok: true,
+      result: { id: 42, username: "sut_bot", has_topics_enabled: false },
+    });
+  const release = f.credential.release;
+  f.credential.release = async () => {
+    assert.equal(threaded, false);
+    events.push("released");
+    await release();
+  };
+  const output = path.join(root, "summary.json");
+  await runTelegramTestScenario({
+    args: {
+      dm: true,
+      createDmTopic: true,
+      output,
+      scenario: { actions: [{ type: "send", atMs: 0, text: "topic turn" }] },
+    },
+    acquireCredential: async () => f.credential,
+    checkCredential: f.check,
+    driveScenario: async (args, _repo, credential) => {
+      assert.equal(threaded, true);
+      assert.equal(credential.groupId, "-1001", "DM setup must not replace the shared group");
+      assert.equal(credential.chatTarget.kind, "dm");
+      assert.equal(args.scenario.actions[0].forumTopicId, 777);
+      fs.writeFileSync(output, JSON.stringify({ recordingComplete: true }));
+      events.push("delivered");
+    },
+  });
+  assert.deepEqual(events, ["topic-created", "delivered", "mode-restored", "released"]);
+  const summary = JSON.parse(fs.readFileSync(output, "utf8"));
+  assert.equal(summary.testDmTopic.setup.threadedMode.after, true);
+  assert.equal(summary.testDmTopic.cleanup.threadedMode.after, false);
+  assert.equal(f.releaseCount(), 1);
+});
+
 test("a failed run still deletes its run-owned forum before release", async () => {
   const f = fixture();
   const events = [];
@@ -345,6 +409,65 @@ test("a failed run still deletes its run-owned forum before release", async () =
   assert.equal(f.releaseCount(), 1);
   assert.equal(f.credential.testForum.cleanup.status, "deleted");
 });
+
+for (const status of ["setup-failed", "truncated", "deletion-pending-verification"]) {
+  const malformed = status === "truncated";
+  test(`forum cleanup preserves failure evidence with ${status} intent`, async (context) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-uncertain-forum-"));
+    context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const f = fixture();
+    f.credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR = root;
+    const intent = {
+      title: "OpenClaw QA forum uncertain",
+      testerUserId: "123",
+      createdAt: "2026-10-10T14:32:19Z",
+      status,
+      ...(status === "deletion-pending-verification" ? { deletion: { "@type": "ok" } } : {}),
+    };
+    const command = f.options.runCommandImpl;
+    f.options.runCommandImpl = async (name, args) => {
+      if (args.includes("prepare-forum")) {
+        fs.writeFileSync(
+          path.join(root, "owned-test-forum.json"),
+          malformed ? "{" : JSON.stringify(intent),
+        );
+        return { status: 1, stderr: "Timed out waiting for createNewBasicGroupChat" };
+      }
+      if (args.includes("cleanup-forum")) {
+        return { status: 1, timedOut: true, stderr: "search timed out" };
+      }
+      return await command(name, args);
+    };
+    const output = path.join(root, "summary.json");
+    await assert.rejects(
+      runTelegramTestScenario({
+        args: { createForum: true, scenario: { actions: [] }, output },
+        acquireCredential: async () => f.credential,
+        checkCredential: f.check,
+        driveScenario: async () => assert.fail("uncertain creation cannot start a scenario"),
+      }),
+    );
+    const { cleanup } = JSON.parse(fs.readFileSync(output, "utf8")).testForum;
+    assert.equal(
+      cleanup.status,
+      malformed
+        ? "failed"
+        : status === "deletion-pending-verification"
+          ? status
+          : "uncertain-creation",
+    );
+    assert.match(cleanup.error, /search timed out/);
+    if (!malformed) {
+      assert.equal(cleanup.title, intent.title);
+      assert.equal(cleanup.testerUserId, intent.testerUserId);
+      assert.equal(cleanup.createdAt, intent.createdAt);
+      if (status === "deletion-pending-verification") {
+        assert.deepEqual(cleanup.deletion, intent.deletion);
+      }
+    }
+    assert.equal(f.releaseCount(), 0, "failed reconciliation retains the lease for recovery");
+  });
+}
 
 test("DM reaches its SUT with an unusable group and group privacy enabled", async () => {
   const f = fixture();

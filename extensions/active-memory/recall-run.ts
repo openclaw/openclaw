@@ -10,7 +10,7 @@ import {
   cleanupSessionLifecycleArtifacts,
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
-  patchSessionEntry,
+  prepareSessionEntryPatch,
   rethrowIncognitoSessionError,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -232,14 +232,14 @@ export async function runRecallSubagent(params: {
       updatedAt: Date.now(),
       ...(incognito ? { incognito: true } : {}),
     };
-    const createdEntry = await patchSessionEntry({
+    const createdEntry = await prepareSessionEntryPatch({
       agentId: params.agentId,
       fallbackEntry: runtimeEntry,
       replaceEntry: true,
       sessionKey: subagentSessionKey,
       skipMaintenance: true,
       storePath,
-      update: (_entry, context) => (context.existingEntry ? null : runtimeEntry),
+      prepare: (_entry, context) => (context.existingEntry ? null : runtimeEntry),
     });
     if (createdEntry?.sessionId !== subagentSessionId) {
       throw new Error(`active-memory recall session already exists: ${subagentSessionKey}`);

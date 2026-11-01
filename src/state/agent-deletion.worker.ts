@@ -1,11 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import { readClawInstallRecordFromDatabase } from "../claws/provenance-read.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { readAgentDeletionJournalAuthorityInDatabase } from "./agent-deletion-journal-authority.worker.js";
+import { readTemplateInstallRecordFromDatabase } from "../templates/provenance-read.kernel.js";
+import {
+  readAgentDeletionJournalAuthorityInDatabase,
+  retireAgentDeletionJournalInDatabase,
+} from "./agent-deletion-journal-authority.worker.js";
+import { agentDeletionJournalPublication } from "./agent-deletion-journal-publication.js";
 import {
   beginAgentDeletionJournalInDatabase,
   completeAgentDeletionJournalInDatabase,
@@ -20,6 +24,7 @@ import type {
   AgentDeletionWorkerGuard,
   AgentDeletionWorkerPredicate,
 } from "./agent-deletion-worker-contract.js";
+import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
 import { unregisterOpenClawAgentDatabases } from "./openclaw-agent-db-registry.js";
@@ -54,22 +59,22 @@ export function assertAgentDeletionWorkerPredicate(
   ) {
     throw new Error(`Agent ${predicate.agentId} deletion no longer owns database cleanup.`);
   }
-  assertClawInstall(database, predicate);
+  assertTemplateInstall(database, predicate);
 }
 
-function assertClawInstall(
+function assertTemplateInstall(
   database: OpenClawStateDatabase,
   predicate: Omit<AgentDeletionWorkerPredicate, "operationId">,
 ): void {
   if (
-    predicate.expectedClawInstall !== undefined &&
+    predicate.expectedTemplateInstall !== undefined &&
     !isDeepStrictEqual(
-      readClawInstallRecordFromDatabase(database.db, predicate.agentId) ?? null,
-      predicate.expectedClawInstall,
+      readTemplateInstallRecordFromDatabase(database.db, predicate.agentId) ?? null,
+      predicate.expectedTemplateInstall,
     )
   ) {
-    throw Object.assign(new Error(`Claw removal no longer owns agent ${predicate.agentId}.`), {
-      code: "CLAW_INSTALL_CHANGED",
+    throw Object.assign(new Error(`Template removal no longer owns agent ${predicate.agentId}.`), {
+      code: "TEMPLATE_INSTALL_CHANGED",
     });
   }
 }
@@ -90,27 +95,26 @@ function guarded<T>(
   guard: AgentDeletionWorkerGuard,
   context: WorkerWriteOperationContext,
   mutate: (database: OpenClawStateDatabase) => T,
-  publication?: { nonce?: string; journalChanged?: true; unregisterDatabases?: boolean },
+  publication?: { journalChanged?: true; unregisterDatabases?: boolean },
 ): T {
   return context.write(
     (database) => {
       assertLease(database, guard.lease, guard.predicate.agentId);
       assertAgentDeletionWorkerPredicate(database, guard.predicate);
-      const result = mutate(database);
+      const { result: provenance, receipt } = agentDeletionJournalPublication.capture(
+        database.db,
+        () => agentProvenancePublication.capture(database.db, () => mutate(database)),
+      );
+      const { result, receipt: provenanceReceipt } = provenance;
       assertLease(database, guard.lease, guard.predicate.agentId, "commit");
-      if (publication) {
+      if (publication?.journalChanged) {
         deferSqliteWorkerCommitReceipt(database.db, {
-          ...(publication.journalChanged
-            ? {
-                kind: "agent-deletion-mutated",
-                agentId: guard.predicate.agentId,
-                operationId: guard.predicate.operationId,
-                unregisterDatabases: publication.unregisterDatabases === true,
-              }
-            : {}),
-          ...(publication.nonce
-            ? { receiptAuthority: { nonce: publication.nonce, sequence: 1 } }
-            : {}),
+          kind: "agent-deletion-mutated",
+          agentId: guard.predicate.agentId,
+          operationId: guard.predicate.operationId,
+          unregisterDatabases: publication.unregisterDatabases === true,
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
+          provenanceAuthority: agentProvenancePublication.bound(provenanceReceipt),
         });
       }
       return result;
@@ -121,17 +125,16 @@ function guarded<T>(
 
 export const agentDeletionOperations = {
   "agentDeletion.claimCompleted": (
-    input: { agentId: string; operationId: string; nonce: string },
+    input: { agentId: string; operationId: string },
     context: WorkerWriteOperationContext,
   ) =>
     context.write(
       (database) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const claimed = deleteAgentDeletionJournalInDatabase(
-          database,
-          input.agentId,
-          input.operationId,
-          true,
+        const { result: claimed, receipt } = agentDeletionJournalPublication.capture(
+          database.db,
+          () =>
+            deleteAgentDeletionJournalInDatabase(database, input.agentId, input.operationId, true),
         );
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         deferSqliteWorkerCommitReceipt(database.db, {
@@ -139,7 +142,7 @@ export const agentDeletionOperations = {
           agentId: input.agentId,
           operationId: input.operationId,
           claimed,
-          receiptAuthority: { nonce: input.nonce, sequence: 1 },
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
         });
         return claimed;
       },
@@ -151,31 +154,34 @@ export const agentDeletionOperations = {
     input: {
       entry: Parameters<typeof beginAgentDeletionJournalInDatabase>[1];
       lease: OpenClawStateLeaseIdentity;
-      expectedClawInstall?: AgentDeletionWorkerPredicate["expectedClawInstall"];
+      expectedTemplateInstall?: AgentDeletionWorkerPredicate["expectedTemplateInstall"];
       preserveDeleteFiles?: boolean;
-      nonce: string;
+      recoveryOperationId?: string;
     },
     context: WorkerWriteOperationContext,
   ) =>
     context.write(
       (database) => {
         assertLease(database, input.lease, input.entry.agentId);
-        assertClawInstall(database, {
+        assertTemplateInstall(database, {
           agentId: input.entry.agentId,
-          expectedClawInstall: input.expectedClawInstall,
+          expectedTemplateInstall: input.expectedTemplateInstall,
         });
         ensureAgentProvenanceSchema({ database, ...context.stateOptions() });
-        const result = beginAgentDeletionJournalInDatabase(
-          database,
-          input.entry,
-          input.preserveDeleteFiles,
+        const { result, receipt } = agentDeletionJournalPublication.capture(database.db, () =>
+          beginAgentDeletionJournalInDatabase(
+            database,
+            input.entry,
+            input.preserveDeleteFiles,
+            input.recoveryOperationId,
+          ),
         );
         assertLease(database, input.lease, input.entry.agentId, "commit");
         deferSqliteWorkerCommitReceipt(database.db, {
           kind: "agent-deletion-began",
           agentId: input.entry.agentId,
           operationId: input.entry.operationId,
-          receiptAuthority: { nonce: input.nonce, sequence: 1 },
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
         });
         return result;
       },
@@ -185,6 +191,21 @@ export const agentDeletionOperations = {
     input: { guard: AgentDeletionWorkerGuard },
     context: WorkerWriteOperationContext,
   ) => guarded(input.guard, context, () => undefined),
+  "agentDeletion.retire": (
+    input: { guard: AgentDeletionWorkerGuard },
+    context: WorkerWriteOperationContext,
+  ) =>
+    guarded(
+      input.guard,
+      context,
+      (database) => {
+        const { agentId, operationId } = input.guard.predicate;
+        if (!retireAgentDeletionJournalInDatabase(database, agentId, operationId)) {
+          throw new Error(`Failed to retire deletion journal for agent ${agentId}.`);
+        }
+      },
+      { journalChanged: true },
+    ),
   "agentDeletion.assertNoDatabaseLeasesUnowned": (
     input: { agentId: string },
     context: WorkerWriteOperationContext,
@@ -222,8 +243,9 @@ export const agentDeletionOperations = {
             database,
             agentId,
             operationId,
-            input.paths.kind === "database" ? "database_paths_json" : "cleanup_paths_json",
-            input.paths.paths,
+            ...(input.paths.kind === "database"
+              ? (["database_paths_json", input.paths.paths] as const)
+              : (["cleanup_paths_json", input.paths.paths] as const)),
           )
         ) {
           throw new Error(`Failed to fence cleanup paths for agent ${agentId}.`);
@@ -250,7 +272,7 @@ export const agentDeletionOperations = {
       { journalChanged: true, unregisterDatabases: input.unregisterDatabases },
     ),
   "agentDeletion.rollback": (
-    input: { guard: AgentDeletionWorkerGuard; nonce: string },
+    input: { guard: AgentDeletionWorkerGuard },
     context: WorkerWriteOperationContext,
   ) =>
     guarded(
@@ -262,9 +284,9 @@ export const agentDeletionOperations = {
           throw new Error(`Failed to roll back deletion journal for agent ${agentId}.`);
         }
       },
-      { nonce: input.nonce, journalChanged: true },
+      { journalChanged: true },
     ),
-  "agentDeletion.releaseClawRows": (
+  "agentDeletion.releaseTemplateRows": (
     input: {
       guard: AgentDeletionWorkerGuard;
       files: Array<{ path: string; action: string }>;
@@ -286,11 +308,11 @@ export const agentDeletionOperations = {
             input.files.filter((file) => file.action !== "error").map((file) => file.path),
           ),
         ];
-        if (paths.length && tableExists(database.db, "claw_workspace_files")) {
+        if (paths.length && tableExists(database.db, "template_workspace_files")) {
           executeSqliteQuerySync(
             database.db,
             query
-              .deleteFrom("claw_workspace_files")
+              .deleteFrom("template_workspace_files")
               .where("agent_id", "=", agentId)
               .where("target_path", "in", paths),
           );
@@ -298,16 +320,16 @@ export const agentDeletionOperations = {
         if (!input.complete) {
           return false;
         }
-        if (tableExists(database.db, "claw_package_refs")) {
+        if (tableExists(database.db, "template_package_refs")) {
           executeSqliteQuerySync(
             database.db,
-            query.deleteFrom("claw_package_refs").where("agent_id", "=", agentId),
+            query.deleteFrom("template_package_refs").where("agent_id", "=", agentId),
           );
         }
-        if (tableExists(database.db, "claw_installs")) {
+        if (tableExists(database.db, "template_installs")) {
           executeSqliteQuerySync(
             database.db,
-            query.deleteFrom("claw_installs").where("agent_id", "=", agentId),
+            query.deleteFrom("template_installs").where("agent_id", "=", agentId),
           );
         }
         if (!completeAgentDeletionJournalInDatabase(database, agentId, operationId)) {
@@ -317,7 +339,7 @@ export const agentDeletionOperations = {
       },
       { journalChanged: true, unregisterDatabases: input.complete },
     ),
-  "agentDeletion.handoffClawRetry": (
+  "agentDeletion.handoffTemplateRetry": (
     input: { guard: AgentDeletionWorkerGuard; retryOperationId: string; nowMs: number },
     context: WorkerWriteOperationContext,
   ) =>
@@ -330,10 +352,10 @@ export const agentDeletionOperations = {
           !journal ||
           journal.operationId !== operationId ||
           journal.cleanupCompleted ||
-          (input.guard.predicate.expectedClawInstall !== undefined &&
+          (input.guard.predicate.expectedTemplateInstall !== undefined &&
             !isDeepStrictEqual(
-              readClawInstallRecordFromDatabase(database.db, agentId) ?? null,
-              input.guard.predicate.expectedClawInstall,
+              readTemplateInstallRecordFromDatabase(database.db, agentId) ?? null,
+              input.guard.predicate.expectedTemplateInstall,
             ))
         ) {
           assertLease(database, input.guard.lease, agentId, "commit");
@@ -342,19 +364,22 @@ export const agentDeletionOperations = {
         const result = executeSqliteQuerySync(
           database.db,
           getNodeSqliteKysely<DB>(database.db)
-            .updateTable("claw_installs")
+            .updateTable("template_installs")
             .set({ status: "partial", updated_at_ms: input.nowMs })
             .where("agent_id", "=", agentId),
         );
-        if (
-          result.numAffectedRows !== 1n ||
-          !handoffAgentDeletionJournalInDatabase(
-            database,
-            agentId,
-            operationId,
-            input.retryOperationId,
-          )
-        ) {
+        const { result: handedOff, receipt } = agentDeletionJournalPublication.capture(
+          database.db,
+          () =>
+            result.numAffectedRows === 1n &&
+            handoffAgentDeletionJournalInDatabase(
+              database,
+              agentId,
+              operationId,
+              input.retryOperationId,
+            ),
+        );
+        if (!handedOff) {
           throw new Error(`Failed to hand off deletion journal for agent ${agentId}.`);
         }
         assertLease(database, input.guard.lease, agentId, "commit");
@@ -363,6 +388,7 @@ export const agentDeletionOperations = {
           agentId,
           operationId,
           unregisterDatabases: false,
+          journalAuthority: agentDeletionJournalPublication.bound(receipt),
         });
         return true;
       },

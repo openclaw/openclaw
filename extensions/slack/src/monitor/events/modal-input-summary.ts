@@ -1,6 +1,10 @@
-import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictFiniteNumber,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalObjectRecord,
+  normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateSlackText } from "../../truncate.js";
@@ -37,13 +41,11 @@ export type SlackActionSummary = Omit<ModalInputSummary, "actionId" | "blockId">
   workflowId?: string;
 };
 
-function readOptionStrings(options: unknown, read: (option: SelectOption) => unknown): string[] {
+function readOptionValues(options: unknown, read: (option: SelectOption) => unknown): unknown[] {
   if (!Array.isArray(options)) {
     return [];
   }
-  return options
-    .map((option) => (option && typeof option === "object" ? read(option) : undefined))
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return options.map((option) => (option && typeof option === "object" ? read(option) : undefined));
 }
 
 function collectRichTextFragments(value: unknown, out: string[]): void {
@@ -51,8 +53,8 @@ function collectRichTextFragments(value: unknown, out: string[]): void {
   if (!typed) {
     return;
   }
-  if (typeof typed.text === "string" && typed.text.trim().length > 0) {
-    out.push(typed.text.trim());
+  if (typeof typed.text === "string") {
+    out.push(typed.text);
   }
   if (Array.isArray(typed.elements)) {
     for (const child of typed.elements) {
@@ -64,11 +66,8 @@ function collectRichTextFragments(value: unknown, out: string[]): void {
 function summarizeRichTextPreview(value: unknown): string | undefined {
   const fragments: string[] = [];
   collectRichTextFragments(value, fragments);
-  if (fragments.length === 0) {
-    return undefined;
-  }
   const joined = fragments.join(" ").replace(/\s+/g, " ").trim();
-  return truncateSlackText(joined, 120);
+  return joined ? truncateSlackText(joined, 120) : undefined;
 }
 
 export function summarizeAction(action: Record<string, unknown>): SlackActionSummary {
@@ -108,14 +107,14 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
   ]);
   const selectedValues = normalizeUniqueTrimmedStringList([
     ...(typed.selected_option?.value ? [typed.selected_option.value] : []),
-    ...readOptionStrings(typed.selected_options, (option) => option.value),
+    ...readOptionValues(typed.selected_options, (option) => option.value),
     ...selectedUsers,
     ...selectedChannels,
     ...selectedConversations,
   ]);
   const selectedLabels = normalizeUniqueTrimmedStringList([
     ...(typed.selected_option?.text?.text ? [typed.selected_option.text.text] : []),
-    ...readOptionStrings(typed.selected_options, (option) => option.text?.text),
+    ...readOptionValues(typed.selected_options, (option) => option.text?.text),
   ]);
   const inputValue = typeof typed.value === "string" ? typed.value : undefined;
   const inputNumber =
@@ -190,4 +189,38 @@ export function summarizeSlackViewState(values: unknown): ModalInputSummary[] {
     }
   }
   return entries;
+}
+
+export function formatInteractionSelectionLabel(params: {
+  actionId: string;
+  summary: SlackActionSummary;
+  buttonText?: string;
+}): string {
+  if (params.summary.actionType === "button" && params.buttonText?.trim()) {
+    return params.buttonText.trim();
+  }
+  const selected = params.summary.selectedLabels?.length
+    ? params.summary.selectedLabels
+    : params.summary.selectedValues;
+  if (selected?.length) {
+    return selected.length <= 3
+      ? selected.join(", ")
+      : `${selected.slice(0, 3).join(", ")} +${selected.length - 3}`;
+  }
+  if (params.summary.selectedDate) {
+    return params.summary.selectedDate;
+  }
+  if (params.summary.selectedTime) {
+    return params.summary.selectedTime;
+  }
+  if (typeof params.summary.selectedDateTime === "number") {
+    const selectedDateTime = timestampMsToIsoString(params.summary.selectedDateTime * 1000);
+    if (selectedDateTime) {
+      return selectedDateTime;
+    }
+  }
+  if (params.summary.richTextPreview) {
+    return params.summary.richTextPreview;
+  }
+  return normalizeOptionalString(params.summary.value) ?? params.actionId;
 }

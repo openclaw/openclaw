@@ -15,8 +15,7 @@
 .chat-task-feed__time,
 .chat-task-feed__summary,
 .chat-task-feed__user,
-.chat-task-feed__block,
-.chat-task-feed__label {
+.chat-task-feed__block {
   color: var(--muted);
 }
 
@@ -168,10 +167,6 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   scrollbar-gutter: stable;
-}
-
-.chat-task-feed__label {
-  margin-inline-end: 6px;
 }
 
 .chat-task-feed__error {

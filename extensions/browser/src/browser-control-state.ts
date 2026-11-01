@@ -4,6 +4,7 @@
  */
 import type { Server } from "node:http";
 import { BrowserProfileUnavailableError } from "./browser/errors.js";
+import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./browser/runtime-lifecycle.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./browser/server-context.js";
 import { isBrowserRuntimeRunning } from "./browser/server-context.lifecycle.js";
@@ -12,8 +13,8 @@ type BrowserControlOwner = "server" | "service";
 
 let state: BrowserServerState | null = null;
 let lifecycleTail = Promise.resolve();
-let completedEffectiveStops = 0;
 let pendingLifecycles = 0;
+let pendingStops = 0;
 
 /** Serialize complete Browser runtime start/stop workflows. */
 function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
@@ -28,14 +29,13 @@ function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
   return result;
 }
 
-/** Queue startup, but never turn a request made during shutdown into a post-stop restart. */
+/** Serialize startup with the runtime's stop workflow. */
 export function withBrowserControlStart<T>(run: () => Promise<T>): Promise<T> {
-  const effectiveStopsAtRequest = completedEffectiveStops;
+  if (pendingStops > 0) {
+    return Promise.reject(new BrowserProfileUnavailableError("Browser runtime is stopping."));
+  }
   return enqueueBrowserControlLifecycle(() => {
-    if (
-      completedEffectiveStops !== effectiveStopsAtRequest ||
-      (state ? !isBrowserRuntimeRunning(state) : false)
-    ) {
+    if (state && !isBrowserRuntimeRunning(state)) {
       throw new BrowserProfileUnavailableError("Browser runtime is stopping.");
     }
     return run();
@@ -66,7 +66,14 @@ export async function ensureBrowserControlRuntime(params: {
   port: number;
   resolved: BrowserServerState["resolved"];
 }): Promise<BrowserServerState> {
-  if (state && isBrowserRuntimeRunning(state)) {
+  if (state && !isBrowserRuntimeRunning(state)) {
+    throw new BrowserProfileUnavailableError("Browser runtime cleanup must finish before restart.");
+  }
+  // Load before publishing state or adopting the HTTP listener so startup can roll back.
+  const relay = Object.values(params.resolved.profiles).some((p) => p.driver === "extension")
+    ? await getExtensionRelayModule()
+    : null;
+  if (state) {
     if (params.server) {
       // A foreground server takes ownership of the already-started service
       // runtime so shutdown and port reporting follow the visible server.
@@ -74,17 +81,14 @@ export async function ensureBrowserControlRuntime(params: {
       state.port = params.port;
       state.resolved = { ...params.resolved, controlPort: params.port };
     }
-    return state;
+  } else {
+    state = await createBrowserRuntimeState({
+      server: params.server ?? null,
+      port: params.port,
+      resolved: params.resolved,
+    });
   }
-  if (state) {
-    throw new BrowserProfileUnavailableError("Browser runtime cleanup must finish before restart.");
-  }
-
-  state = await createBrowserRuntimeState({
-    server: params.server ?? null,
-    port: params.port,
-    resolved: params.resolved,
-  });
+  await relay?.startConfiguredExtensionRelays(state);
   return state;
 }
 
@@ -94,6 +98,7 @@ export function stopBrowserControlRuntime(params: {
   closeServer?: boolean;
   onWarn: (message: string) => void;
 }): Promise<BrowserServerState | null> {
+  pendingStops += 1;
   return enqueueBrowserControlLifecycle(async () => {
     const current = state;
     if (!current) {
@@ -112,7 +117,8 @@ export function stopBrowserControlRuntime(params: {
       closeServer: params.closeServer,
       onWarn: params.onWarn,
     });
-    completedEffectiveStops += 1;
     return current;
+  }).finally(() => {
+    pendingStops -= 1;
   });
 }

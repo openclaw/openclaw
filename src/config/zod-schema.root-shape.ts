@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "./repository-branch-prefix.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -16,6 +17,7 @@ import {
   SsrFPolicyConfigSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { DatabaseConfigSchema } from "./zod-schema.database.js";
 import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
@@ -46,6 +48,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          skillWorkshopPlugin: z.literal(true).optional(),
           webhookListeners: z
             .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
             .optional(),
@@ -108,7 +111,7 @@ export const OpenClawSchemaShape = {
       cdpUrl: z.string().optional(),
       /** Override the browser executable path (all platforms). */
       executablePath: z.string().optional(),
-      /** Start Chrome headless (best-effort). Default: false */
+      /** Local managed browsers default to headless; false requests a visible window. */
       headless: z.boolean().optional(),
       /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
       noSandbox: z.boolean().optional(),
@@ -363,6 +366,7 @@ export const OpenClawSchemaShape = {
       "worktreeRoot must be an absolute path or a path starting with ~",
     )
     .optional(),
+  repositoryBranchPrefix: z.string().regex(REPOSITORY_BRANCH_PREFIX_PATTERN).optional(),
   worktreeAcceleration: z.boolean().optional(),
   worktreeMaxCount: z.number().int().positive().optional(),
   tools: ToolsSchema,
@@ -387,6 +391,8 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      /** Add to new nonempty agent-tool selections before creator policy and approval. */
+      defaultTools: z.array(z.string().trim().min(1)).optional(),
       /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
       skipMissedJobs: z.boolean().optional(),
       triggers: z
@@ -509,6 +515,7 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  database: DatabaseConfigSchema,
   storage: StorageConfigSchema,
   desktop: DesktopConfigSchema,
   memory: MemorySchema,
@@ -529,7 +536,7 @@ export const OpenClawSchemaShape = {
            * sit outside the configured source root.
            */
           allowSymlinkTargets: z.array(z.string()).optional(),
-          /** Watch skill folders for changes and refresh the skills snapshot. */
+          /** Enable passive skill rescans; explicit changes and startup still refresh immediately. */
           watch: z.boolean().optional(),
         })
         .optional(),
@@ -562,8 +569,10 @@ export const OpenClawSchemaShape = {
           /** Autonomous Skill Workshop learning. */
           autonomous: z
             .strictObject({
-              /** "auto" lets agents save and update Workshop skills; "off" disables autonomous learning. */
-              mode: z.union([z.literal("off"), z.literal("auto")]).optional(),
+              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
+              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
+              /** Post background review notices to supported channels. Default: false. */
+              channelNotices: z.boolean().optional(),
             })
             .optional(),
           /** Maximum Workshop skill file size in bytes. */

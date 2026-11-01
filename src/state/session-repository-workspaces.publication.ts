@@ -1,7 +1,8 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import { registerOpenClawStatePathCacheInvalidation } from "./openclaw-state-db-cache.js";
 import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceMutationResult,
@@ -13,9 +14,8 @@ type Row = {
   value: Readonly<SessionRepositoryWorkspaceRecord> | undefined;
   pending: Set<Promise<void>>;
   uncertain: boolean;
-  detachedAt?: object;
 };
-type Store = { path: string; identity: string; rows: Map<string, Row>; absenceRevision: object };
+type Store = { path: string; identity: string; rows: Map<string, Row> };
 const stores = resolveGlobalMap<string, Store>(
   Symbol.for("openclaw.repositoryWorkspacePublications"),
   "close-and-restart",
@@ -33,7 +33,6 @@ repositoryWorkspacePublication.subscribeFacts((change) => {
     if (store.identity !== identity) {
       continue;
     }
-    store.absenceRevision = {};
     if (change.kind === "unknown") {
       for (const row of store.rows.values()) {
         row.revision = {};
@@ -53,22 +52,13 @@ repositoryWorkspacePublication.subscribeFacts((change) => {
       }
       if (fact.kind === "absent") {
         row.value = undefined;
-        row.detachedAt = store.absenceRevision;
         store.rows.delete(key);
       }
     }
   }
 });
 
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
-    for (const [key, store] of stores) {
-      if (store.path === (event.identity?.canonicalPath ?? event.path)) {
-        stores.delete(key);
-      }
-    }
-  }
-});
+registerOpenClawStatePathCacheInvalidation(stores);
 
 function owner(admission: OpenClawStateDatabaseReadAdmission): Store {
   admission.assertCurrent();
@@ -78,7 +68,6 @@ function owner(admission: OpenClawStateDatabaseReadAdmission): Store {
       path: admission.identity.canonicalPath,
       identity: admission.identity.key,
       rows: new Map(),
-      absenceRevision: {},
     };
     stores.set(admission.coordinationKey, store);
   }
@@ -95,7 +84,7 @@ function rowFor(store: Store, workspaceId: string): Row {
 }
 
 function copy(workspace: SessionRepositoryWorkspaceRecord | undefined) {
-  return workspace ? Object.freeze({ ...workspace }) : undefined;
+  return workspace ? freezeJsonSnapshot(structuredClone(workspace)) : undefined;
 }
 
 /** Fence current-fact consumers before COMMIT and reopen them only after native settlement. */
@@ -124,7 +113,6 @@ export function stageRepositoryWorkspacePublication(
       }
       row.pending.delete(pending.promise);
       if (!row.value && row.pending.size === 0 && store.rows.get(result.workspaceId) === row) {
-        row.detachedAt = store.absenceRevision;
         store.rows.delete(result.workspaceId);
       }
       pending.resolve();
@@ -171,7 +159,6 @@ export async function prepareRepositoryWorkspaceRead(
     row.value = copy(workspace);
     row.uncertain = false;
     if (!workspace) {
-      row.detachedAt = store.absenceRevision;
       store.rows.delete(workspaceId);
     }
     return {
@@ -179,9 +166,6 @@ export async function prepareRepositoryWorkspaceRead(
       assertSourceCurrent: assertSource,
       current() {
         assertSource();
-        if (row.detachedAt && row.detachedAt !== store.absenceRevision) {
-          throw new Error("Repository workspace absence changed; refresh this session");
-        }
         if (row.pending.size || store.rows.get(workspaceId)?.pending.size || row.uncertain) {
           throw new Error("Repository workspace mutation has not settled; refresh this session");
         }

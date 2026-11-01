@@ -1,11 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import { vi } from "vitest";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
-import type {
-  ButtonInteraction,
-  ModalInteraction,
-  StringSelectMenuInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, ModalInteraction } from "../internal/discord.js";
 
 const createComponentInteractionBase = (senderId = "123456789") => {
   const reply = vi.fn().mockResolvedValue(undefined);
@@ -26,7 +22,7 @@ const createComponentInteractionBase = (senderId = "123456789") => {
 };
 
 export const createComponentButtonInteraction = (
-  overrides: Partial<ButtonInteraction> = {},
+  overrides: Partial<BaseComponentInteraction> = {},
   senderId?: string,
 ) => {
   const base = createComponentInteractionBase(senderId);
@@ -35,12 +31,12 @@ export const createComponentButtonInteraction = (
     customId: "occomp:cid=btn_1",
     ...base,
     ...overrides,
-  } as unknown as ButtonInteraction;
+  } as unknown as BaseComponentInteraction;
   return { interaction, defer: base.defer, reply: base.reply };
 };
 
 export const createComponentSelectInteraction = (
-  overrides: Partial<StringSelectMenuInteraction> = {},
+  overrides: Partial<BaseComponentInteraction> = {},
 ) => {
   const base = createComponentInteractionBase();
   const interaction = {
@@ -49,7 +45,7 @@ export const createComponentSelectInteraction = (
     values: ["alpha"],
     ...base,
     ...overrides,
-  } as unknown as StringSelectMenuInteraction;
+  } as unknown as BaseComponentInteraction;
   return { interaction, defer: base.defer, reply: base.reply };
 };
 

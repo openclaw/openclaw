@@ -1,11 +1,31 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import {
-  canRunSessionListBackgroundWork,
-  yieldSessionListBackgroundWork,
-} from "./session-projection-work.js";
+  getGatewayRestartDrainSignal,
+  getGatewayShutdownCleanupSignal,
+} from "../process/gateway-work-admission.js";
+import { yieldSessionListBackgroundWork } from "./session-projection-work.js";
 import { identity, type EntryRow, type Row } from "./session-row-projection-record.js";
-import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
+import {
+  backfillSessionRowTranscriptFields,
+  presentSessionRowTranscriptFields,
+} from "./session-row-transcript-backfill.js";
+
+function transcriptParams(row: Row, entry: EntryRow["entry"]) {
+  return {
+    ...row.storeTarget,
+    agentId: row.agentId,
+    storeAgentId: row.storeTarget.agentId,
+    sessionKey: row.key,
+    sessionId: entry.sessionId,
+    sessionEntry: entry,
+    model: row.materialized && {
+      selectedProvider: row.materialized.source.selectedModel.provider,
+      selectedModel: row.materialized.source.selectedModel.model,
+      config: row.materialized.source.cfg,
+    },
+  };
+}
 
 /** Optional transcript work never participates in row readiness or a foreground response. */
 export function createSessionRowProjectionBackfill(params: {
@@ -14,15 +34,20 @@ export function createSessionRowProjectionBackfill(params: {
   current: (row: Row) => boolean;
   publish: (
     row: Row,
-    fields: Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>,
+    fields: NonNullable<Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>>,
   ) => void;
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
+  const signal = AbortSignal.any([
+    getGatewayRestartDrainSignal(),
+    getGatewayShutdownCleanupSignal(),
+  ]);
   const queued = new Set<string>();
   const revisions = new Map<string, ReturnType<typeof revision>>();
   let pending: Promise<void> | undefined;
   let started = false;
   let disposed = false;
+  const closed = () => disposed || signal.aborted;
   function revision(row: EntryRow, watermark: Row["retainedDatabaseFacts"]) {
     const { entry, materialized } = row;
     return {
@@ -40,16 +65,16 @@ export function createSessionRowProjectionBackfill(params: {
   }
   async function drain() {
     for (;;) {
-      if (disposed || !queued.size) {
+      if (closed() || !queued.size) {
         return;
       }
       await yieldSessionListBackgroundWork();
-      await params.ready();
-      if (disposed) {
+      if (closed()) {
         return;
       }
-      if (!canRunSessionListBackgroundWork()) {
-        continue;
+      await params.ready();
+      if (closed()) {
+        return;
       }
       const id = queued.values().next().value;
       if (id === undefined) {
@@ -62,63 +87,46 @@ export function createSessionRowProjectionBackfill(params: {
       if (!row || !entry || !captured) {
         continue;
       }
-      const current = () => {
-        const live = params.read(id);
-        return !disposed && revisions.get(id) === captured && live?.generation === row.generation;
-      };
-      let interrupted = false;
-      const shouldCommit = () => {
-        if (!canRunSessionListBackgroundWork()) {
-          interrupted = true;
-          return false;
-        }
-        return current();
-      };
       try {
-        const fields = await backfillSessionRowTranscriptFields({
-          ...row.storeTarget,
-          agentId: row.agentId,
-          storeAgentId: row.storeTarget.agentId,
-          sessionKey: row.key,
-          sessionId: entry.sessionId,
-          sessionEntry: entry,
-          shouldCommit,
-          model: row.materialized && {
-            selectedProvider: row.materialized.source.selectedModel.provider,
-            selectedModel: row.materialized.source.selectedModel.model,
-            config: row.materialized.source.cfg,
-          },
-        });
-        // Metadata can rematerialize the row without changing its transcript revision.
-        for (;;) {
-          if (interrupted) {
-            break;
+        const fields = await backfillSessionRowTranscriptFields(
+          transcriptParams(row, entry),
+          signal,
+        );
+        const live = params.read(id);
+        // A replacement/private-session revocation must not publish another session's text.
+        if (!closed() && live?.entry && params.current(row)) {
+          const facts = live.retainedDatabaseFacts;
+          // Superseded reads must not restore previews cleared by broad invalidation.
+          if (revisions.get(id) !== captured) {
+            continue;
           }
-          await params.ready();
-          if (!shouldCommit()) {
-            break;
+          if (fields && facts?.transcriptAssistantMessage === "unknown") {
+            facts.transcriptAssistantMessage = fields.lastAssistantMessage ?? null;
           }
-          const live = params.read(id);
-          if (live && params.current(live)) {
-            params.publish(row, fields);
-            break;
-          }
+          params.publish(
+            live,
+            facts?.transcriptPreview !== undefined &&
+              facts.transcriptAssistantMessage !== "unknown" &&
+              facts.transcriptTerminalModel !== undefined
+              ? presentSessionRowTranscriptFields(transcriptParams(live, live.entry), {
+                  lastMessagePreview: facts.transcriptPreview,
+                  lastAssistantMessage: facts.transcriptAssistantMessage,
+                  terminalModel: facts.transcriptTerminalModel,
+                })
+              : (fields ?? {}),
+          );
         }
       } catch {
         // A later owner publication retries optional fields; do not spin on a cold/error row.
-        if (current()) {
+        if (revisions.get(id) === captured) {
           revisions.delete(id);
-        }
-      } finally {
-        if (interrupted && current()) {
-          queued.add(id);
         }
       }
     }
   }
   function start() {
     started = true;
-    if (!disposed && !pending && queued.size) {
+    if (!closed() && !pending && queued.size) {
       pending = inOwnerContext(drain).then(
         () => {
           pending = undefined;
@@ -135,8 +143,29 @@ export function createSessionRowProjectionBackfill(params: {
   return {
     start,
     prepare(row: EntryRow, facts: Row["retainedDatabaseFacts"]) {
+      if (closed()) {
+        return;
+      }
       const id = identity(row);
       const next = revision(row, facts);
+      if (facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined) {
+        params.publish(
+          row,
+          presentSessionRowTranscriptFields(transcriptParams(row, row.entry), {
+            lastMessagePreview: facts.transcriptPreview,
+            lastAssistantMessage:
+              facts.transcriptAssistantMessage === "unknown"
+                ? (row.lastAssistantMessage ?? null)
+                : facts.transcriptAssistantMessage,
+            terminalModel: facts.transcriptTerminalModel,
+          }),
+        );
+        if (facts.transcriptAssistantMessage !== "unknown") {
+          revisions.set(id, next);
+          queued.delete(id);
+          return;
+        }
+      }
       if (!isDeepStrictEqual(revisions.get(id), next)) {
         revisions.set(id, next);
         queued.add(id);

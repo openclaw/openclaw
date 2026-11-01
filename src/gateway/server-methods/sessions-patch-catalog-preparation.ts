@@ -56,7 +56,7 @@ export function createSessionPatchCatalogPreparation(
           }),
         };
       }
-      const projection = prepareSessionsPatchEntry(params.projection);
+      const projection = await prepareSessionsPatchEntry(params.projection);
       if (projection.kind === "complete") {
         return projection;
       }

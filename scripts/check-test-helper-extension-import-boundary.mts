@@ -4,9 +4,9 @@ import { createExtensionImportBoundaryChecker } from "./lib/extension-import-bou
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const checker = createExtensionImportBoundaryChecker({
-  roots: ["test/helpers"],
+  roots: ["test/helpers", "src/channels/plugins/contracts/test-helpers"],
   boundaryLabel: "test helper",
-  rule: "Rule: test/helpers/** must not import bundled plugin files directly",
+  rule: "Rule: test/helpers/** and src/channels/plugins/contracts/test-helpers/** must not import bundled plugin files directly",
   cleanMessage: "No test-helper import boundary violations found.",
   inventoryTitle: "Test-helper extension import boundary inventory:",
 });

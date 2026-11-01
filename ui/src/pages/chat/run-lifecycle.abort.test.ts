@@ -1,12 +1,16 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import {
+  gatewayHelloForMethods,
+  sessionMutationGatewayHello,
+} from "../../test-helpers/gateway-methods.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import {
   handleAbortChat,
   hasAbortableSessionRun,
@@ -71,6 +75,10 @@ function makeAbortHost(over: Partial<AbortHost> = {}): AbortHost {
     connected: true,
     sessionKey: "agent:main",
     chatRunId: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
     chatLoading: false,
     chatMessage: "",
     chatMessages: [],
@@ -112,12 +120,13 @@ describe("handleAbortChat", () => {
     "keeps a replayed warning with its terminal run (replacement pending: %s)",
     async (replacementPending) => {
       const response = createDeferred<unknown>();
+      const publication = vi.fn();
       const host = makeAbortHost({
         client: createTestGatewayClient(vi.fn(() => response.promise)),
         connected: false,
         chatRunId: "stopped-run",
-        requestUpdate: vi.fn(),
       });
+      chatRunPresentation(host).subscribe(publication);
       await handleAbortChat(host, { preserveDraft: true });
       host.connected = true;
       const stopped = replayPendingChatAbort(host);
@@ -139,12 +148,12 @@ describe("handleAbortChat", () => {
           },
         ];
       }
-      vi.mocked(host.requestUpdate!).mockClear();
+      publication.mockClear();
       const warning = "The stopped reply could not be saved to history.";
       response.resolve({ aborted: true, warning });
       await stopped;
       expect(host.chatRunError?.summary).toBe(replacementPending ? undefined : warning);
-      expect(host.requestUpdate).toHaveBeenCalledTimes(replacementPending ? 0 : 1);
+      expect(publication).toHaveBeenCalledTimes(replacementPending ? 0 : 1);
     },
   );
 
@@ -305,12 +314,7 @@ describe("replayPendingChatAbort", () => {
       chatRunId: "run-main",
       chatError: "Current scope warning",
       lastError: "Current scope warning",
-      hello: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["chat.abort"] },
-      },
+      hello: gatewayHelloForMethods(["chat.abort"], ["operator.read"]),
       pendingAbort: {
         sourceClient: client,
         recoveryScope: client.recoveryScope,

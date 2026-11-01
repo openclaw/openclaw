@@ -1,6 +1,10 @@
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
   createTestParams,
@@ -10,6 +14,7 @@ import {
 } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
+afterEach(() => clearRuntimeConfigSnapshot());
 
 async function compactWithHooks(overrides: Partial<ReturnType<typeof createTestParams>>) {
   const hooks = (["before_prompt_build", "before_compaction", "after_compaction"] as const).map(
@@ -27,6 +32,7 @@ async function compactWithHooks(overrides: Partial<ReturnType<typeof createTestP
     agentAccountId: "account-a",
     ...overrides,
   });
+  setRuntimeConfigSnapshot(params.config ?? {});
   const run = runCodexAppServerAttempt(params);
   await run.waitForTurnAccepted();
   for (const method of ["item/started", "item/completed"] as const) {
@@ -75,7 +81,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
 
   it("omits sender and chat identity from non-user prompt and compaction hooks", async () => {
     const contexts = await compactWithHooks({
-      trigger: "heartbeat",
+      trigger: "cron",
       senderId: "must-not-leak",
       channelContext: { sender: { id: "must-not-leak" }, chat: { id: "must-not-leak" } },
     });
@@ -83,7 +89,7 @@ describe("runCodexAppServerAttempt authenticated hook context", () => {
       expect(context).toMatchObject({
         accountId: "account-a",
         channel: "telegram",
-        trigger: "heartbeat",
+        trigger: "cron",
       });
       for (const key of ["senderId", "chatId", "channelContext"]) {
         expect(context).not.toHaveProperty(key);

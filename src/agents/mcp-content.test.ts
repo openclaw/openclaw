@@ -43,4 +43,38 @@ describe("projectMcpCallToolResult", () => {
       });
     }
   });
+
+  it.each([
+    { label: "pretty", text: JSON.stringify({ answer: 42, items: [1, 2] }, null, 2) },
+    { label: "compact", text: JSON.stringify({ answer: 42, items: [1, 2] }) },
+    { label: "reordered", text: '{"items":[1,2],"answer":42}' },
+  ])("drops a $label JSON mirror of structured content", ({ text }) => {
+    const result = projectMcpCallToolResult({
+      content: [{ type: "text", text }],
+      structuredContent: { answer: 42, items: [1, 2] },
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `structuredContent:\n${JSON.stringify({ answer: 42, items: [1, 2] }, null, 2)}`,
+      },
+    ]);
+  });
+
+  it("keeps text that is not a JSON mirror of structured content", () => {
+    const result = projectMcpCallToolResult({
+      content: [
+        { type: "text", text: '{"answer":41}' },
+        { type: "text", text: '{"answer":42' },
+        { type: "text", text: "answer: 42; retry with a narrower query" },
+      ],
+      structuredContent: { answer: 42 },
+    });
+    expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{\n  "answer": 42\n}' },
+      { type: "text", text: '{"answer":41}' },
+      { type: "text", text: '{"answer":42' },
+      { type: "text", text: "answer: 42; retry with a narrower query" },
+    ]);
+  });
 });

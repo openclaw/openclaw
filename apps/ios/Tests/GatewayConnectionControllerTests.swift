@@ -233,6 +233,22 @@ private func pendingHandoffDiagnostic(
 }
 
 @Suite(.serialized) struct GatewayReconnectErrorRetentionTests {
+    @Test @MainActor func `retained node timeout stays hidden while operator is connected`() throws {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let stableID = "manual|gateway.example.com|443"
+        appModel.connectedGatewayID = stableID
+        appModel.setOperatorConnected(true)
+        let problem = try #require(appModel._test_applyNodeGatewayConnectionError(URLError(.timedOut)))
+        #expect(appModel.gatewayProblemForToast == nil)
+
+        appModel.beginGatewayPreconnectVerification(stableID: stableID, statusText: "Checking gateway")
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.isOperatorGatewayConnected)
+        #expect(appModel.gatewayProblemForToast == nil)
+    }
+
     @Test @MainActor func `retained display problem does not control next retry`() {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }

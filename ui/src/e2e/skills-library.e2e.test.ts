@@ -7,11 +7,10 @@ import type {
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { buildSkillLibraryMock } from "../test-helpers/skill-library-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectNoRequests, expectRequestCount } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Custom skill libraries" });
-const own = buildSkillLibraryMock()[0];
-const shared = buildSkillLibraryMock()[1];
-const team = buildSkillLibraryMock()[2];
+const [own, shared, team] = buildSkillLibraryMock();
 const list: SkillsLibraryListResult = {
   entries: [own.entry, shared.entry, team.entry],
   profileId: "profile-alice",
@@ -32,6 +31,25 @@ const status = {
   managedSkillsDir: "/tmp/synthetic-skills",
   skills: [],
 };
+
+function libraryGateway(page: Page, methodResponses: Record<string, unknown> = {}) {
+  return installMockGateway(page, {
+    operatorScopes: ["operator.read", "operator.write"],
+    methodResponses: {
+      "skills.library.list": list,
+      "skills.status": status,
+      "skills.library.save": published,
+      ...methodResponses,
+    },
+  });
+}
+
+const newSkill = (files: Array<{ path: string; content: string; encoding: "utf8" }> = []) => ({
+  slug: "release-notes",
+  content: own.content,
+  files,
+  expectedRevision: null,
+});
 
 async function openSkillSettings(page: Page) {
   await page.goto(`${suite.server.baseUrl}skills`);
@@ -82,15 +100,7 @@ async function expectSkillNameValidation(page: Page) {
 suite.define(() => {
   it("saves and edits an operator's complete bundle, preserving a stale draft on a narrow viewport", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "skills.library.list": list,
-          "skills.status": status,
-          "skills.library.read": own,
-          "skills.library.save": published,
-        },
-      });
+      const gateway = await libraryGateway(page, { "skills.library.read": own });
       await openSkillSettings(page);
       await page.getByRole("button", { name: "Create skill", exact: true }).click();
       await expectSkillNameValidation(page);
@@ -101,12 +111,7 @@ suite.define(() => {
       await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
       await page.getByLabel("SKILL.md", { exact: true }).fill(own.content);
       await page.getByLabel("SKILL.md", { exact: true }).press("Control+Enter");
-      expect((await gateway.waitForRequest("skills.library.save")).params).toEqual({
-        slug: "release-notes",
-        content: own.content,
-        files: [],
-        expectedRevision: null,
-      });
+      expect((await gateway.waitForRequest("skills.library.save")).params).toEqual(newSkill());
       await page.getByText(/Saved release-notes to personal library/u).waitFor();
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Draft concise/u }).click();
@@ -142,9 +147,7 @@ suite.define(() => {
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(draft);
       await gateway.deferNext("skills.library.save");
       await page.getByRole("button", { name: "Save skill", exact: true }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("skills.library.save")).length)
-        .toBe(2);
+      await expectRequestCount(gateway, "skills.library.save", 2);
       const saves = await gateway.getRequests("skills.library.save");
       expect(await page.getByRole("button", { name: "Close", exact: true }).isDisabled()).toBe(
         true,
@@ -213,14 +216,12 @@ suite.define(() => {
       await expect
         .poll(() => page.getByLabel("SKILL.md", { exact: true }).inputValue())
         .toBe(externalContent);
-      for (const method of [
+      await expectNoRequests(gateway, [
         "skills.install",
         "skills.update",
         "config.patch",
         "skills.library.activate",
-      ]) {
-        expect(await gateway.getRequests(method)).toHaveLength(0);
-      }
+      ]);
     });
   });
 
@@ -228,14 +229,7 @@ suite.define(() => {
     "keeps the file picker aligned through add, select, delete and keyboard save at %ipx",
     async (width) => {
       await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          operatorScopes: ["operator.read", "operator.write"],
-          methodResponses: {
-            "skills.library.list": list,
-            "skills.status": status,
-            "skills.library.save": published,
-          },
-        });
+        const gateway = await libraryGateway(page);
         await openSkillSettings(page);
         await page.getByRole("button", { name: "Create skill", exact: true }).click();
         await page.getByLabel("Skill name", { exact: true }).fill("release-notes");
@@ -249,18 +243,15 @@ suite.define(() => {
         expect(await picker.inputValue()).toBe("references/lilac.txt");
         expect(await support.inputValue()).toBe("Supporting instructions.\n");
         await support.press("Control+Enter");
-        expect((await gateway.waitForRequest("skills.library.save")).params).toEqual({
-          slug: "release-notes",
-          content: own.content,
-          files: [
+        expect((await gateway.waitForRequest("skills.library.save")).params).toEqual(
+          newSkill([
             {
               path: "references/lilac.txt",
               content: "Supporting instructions.\n",
               encoding: "utf8",
             },
-          ],
-          expectedRevision: null,
-        });
+          ]),
+        );
         await page.getByText(/Saved release-notes to personal library/u).waitFor();
         expect(await picker.inputValue()).toBe("references/lilac.txt");
         expect(await support.inputValue()).toBe("Supporting instructions.\n");
@@ -278,9 +269,7 @@ suite.define(() => {
         expect(await skill.inputValue()).toBe(own.content);
         expect(await picker.locator('option[value="references/lilac.txt"]').count()).toBe(0);
         await skill.press("Control+Enter");
-        await expect
-          .poll(async () => (await gateway.getRequests("skills.library.save")).length)
-          .toBe(2);
+        await expectRequestCount(gateway, "skills.library.save", 2);
         expect((await gateway.getRequests("skills.library.save"))[1]?.params).toEqual({
           skillId: published.entry.skillId,
           expectedRevision: published.entry.revision,
@@ -294,18 +283,12 @@ suite.define(() => {
 
   it("imports local support files privately and keeps shared entries read-only", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        operatorScopes: ["operator.read", "operator.write"],
-        methodResponses: {
-          "skills.library.list": list,
-          "skills.status": status,
-          "skills.library.read": {
-            cases: [
-              { match: { skillId: shared.entry.skillId }, response: shared },
-              { match: { skillId: team.entry.skillId }, response: team },
-            ],
-          },
-          "skills.library.save": published,
+      const gateway = await libraryGateway(page, {
+        "skills.library.read": {
+          cases: [
+            { match: { skillId: shared.entry.skillId }, response: shared },
+            { match: { skillId: team.entry.skillId }, response: team },
+          ],
         },
       });
       await openSkillSettings(page);
@@ -375,8 +358,7 @@ suite.define(() => {
       await page.getByText("Skill details", { exact: true }).click();
       await page.getByText(team.entry.skillId, { exact: true }).waitFor();
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
-      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.update")).toHaveLength(0);
+      await expectNoRequests(gateway, ["skills.install", "skills.update"]);
     });
   });
 
@@ -437,8 +419,7 @@ suite.define(() => {
         { action: "chunk", uploadId, offset: 0, data: bytes.toString("base64") },
         { action: "commit", uploadId },
       ]);
-      expect(await gateway.getRequests("skills.install")).toHaveLength(0);
-      expect(await gateway.getRequests("skills.library.save")).toHaveLength(0);
+      await expectNoRequests(gateway, ["skills.install", "skills.library.save"]);
       expect(pageErrors).toEqual([]);
     });
   });
@@ -476,9 +457,7 @@ suite.define(() => {
       });
       await page.getByLabel("Retained revision").selectOption(oldRevision);
       await page.getByRole("button", { name: "Restore revision" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("skills.library.mutate")).length)
-        .toBe(2);
+      await expectRequestCount(gateway, "skills.library.mutate", 2);
       expect((await gateway.getRequests("skills.library.mutate"))[1]?.params).toMatchObject({
         skillId: own.entry.skillId,
         action: "rollback",

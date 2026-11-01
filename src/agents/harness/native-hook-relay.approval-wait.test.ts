@@ -6,12 +6,12 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import { invokeNativeHookRelay, registerNativeHookRelay } from "./native-hook-relay.js";
 import {
-  invokeNativeHookRelay,
-  registerNativeHookRelay,
-  registerOwnedNativeHookRelay,
-  testing,
-} from "./native-hook-relay.js";
+  clearNativeHookRelaysForTests,
+  registerTestNativeHookRelay as registerRelay,
+  registerOwnedTestNativeHookRelay as registerOwnedRelay,
+} from "./native-hook-relay.test-support.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -32,27 +32,8 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   mockCallGatewayTool.mockReset();
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
 });
-
-function registerRelay(overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {}) {
-  return registerNativeHookRelay({
-    provider: "codex",
-    sessionId: "session-1",
-    runId: "run-1",
-    ...overrides,
-  });
-}
-function registerOwnedRelay(
-  overrides: Partial<Parameters<typeof registerOwnedNativeHookRelay>[0]> = {},
-) {
-  return registerOwnedNativeHookRelay({
-    provider: "codex",
-    sessionId: "session-1",
-    runId: "run-1",
-    ...overrides,
-  });
-}
 
 async function invokePermissionRequest(
   relayId: string,

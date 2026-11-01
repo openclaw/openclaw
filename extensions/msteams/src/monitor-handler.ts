@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
@@ -9,7 +10,12 @@ import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.j
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 import type { MSTeamsIngressDispatchResult, MSTeamsIngressLifecycle } from "./msteams-ingress.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
-import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
+
+const DEFAULT_PROMPT_STARTERS = [
+  "What can you do?",
+  "Summarize my last meeting",
+  "Help me draft an email",
+];
 
 export async function isMSTeamsInvokeAuthorized(params: {
   context: Pick<MSTeamsTurnContext, "activity">;
@@ -17,8 +23,14 @@ export async function isMSTeamsInvokeAuthorized(params: {
   invokeKind: "feedback" | "signin" | "card action";
 }): Promise<boolean> {
   const { context, deps, invokeKind } = params;
+  const cfg = deps.readConfig?.() ?? deps.cfg;
+  const account = resolveMSTeamsAccountConfig(cfg, deps.accountId);
+  if (account.enabled === false || (account.appId && account.appId !== deps.appId)) {
+    return false;
+  }
   const resolved = await resolveMSTeamsSenderAccess({
-    cfg: deps.cfg,
+    cfg,
+    accountId: deps.accountId,
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
@@ -78,7 +90,9 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
   const handleMembersAdded = async (ctx: MSTeamsTurnContext) => {
     const membersAdded = ctx.activity?.membersAdded ?? [];
     const botId = ctx.activity?.recipient?.id;
-    const msteamsCfg = deps.cfg.channels?.msteams;
+    const msteamsCfg = deps.cfg.channels?.msteams
+      ? resolveMSTeamsAccountConfig(deps.cfg, deps.accountId)
+      : undefined;
 
     for (const member of membersAdded) {
       if (member.id === botId) {
@@ -88,11 +102,33 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
         const isPersonal = conversationType === "personal";
 
         if (isPersonal && msteamsCfg?.welcomeCard !== false) {
-          const botName = ctx.activity?.recipient?.name ?? undefined;
-          const card = buildWelcomeCard({
-            botName,
-            promptStarters: msteamsCfg?.promptStarters,
-          });
+          const botName = ctx.activity?.recipient?.name || "OpenClaw";
+          const starters = msteamsCfg?.promptStarters?.length
+            ? msteamsCfg.promptStarters
+            : DEFAULT_PROMPT_STARTERS;
+          const card = {
+            type: "AdaptiveCard",
+            version: "1.5",
+            body: [
+              {
+                type: "TextBlock",
+                text: `Hi! I'm ${botName}.`,
+                // Adaptive Card TextWeight/TextSize enums are PascalCase.
+                weight: "Bolder",
+                size: "Medium",
+              },
+              {
+                type: "TextBlock",
+                text: "I can help you with questions, tasks, and more. Here are some things to try:",
+                wrap: true,
+              },
+            ],
+            actions: starters.map((label) => ({
+              type: "Action.Submit",
+              title: label,
+              data: { msteams: { type: "imBack", value: label } },
+            })),
+          };
           try {
             await ctx.sendActivity(buildMSTeamsAdaptiveCardActivity(card));
             deps.log.info("sent welcome card");
@@ -100,9 +136,11 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
             deps.log.debug?.("failed to send welcome card", { error: formatUnknownError(err) });
           }
         } else if (!isPersonal && msteamsCfg?.groupWelcomeCard === true) {
-          const botName = ctx.activity?.recipient?.name ?? undefined;
+          const botName = ctx.activity?.recipient?.name || "OpenClaw";
           try {
-            await ctx.sendActivity(buildGroupWelcomeText(botName));
+            await ctx.sendActivity(
+              `Hi! I'm ${botName}. Mention me with @${botName} to get started.`,
+            );
             deps.log.info("sent group welcome message");
           } catch (err) {
             deps.log.debug?.("failed to send group welcome", { error: formatUnknownError(err) });

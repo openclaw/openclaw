@@ -1,17 +1,16 @@
+import { readAssistantThinkingAppend } from "@openclaw/ai/internal/shared";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
-/**
- * Embedded-agent message text utilities.
- * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
- * and compact tool metadata for channel delivery and transcript replay.
- */
-import type { AssistantMessage } from "../llm/types.js";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  isAssistantTextContentBlockType,
   normalizeAssistantPhase,
   parseAssistantTextSignature,
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import {
   applyTextFilters,
   createTextProjection,
@@ -41,14 +40,10 @@ function sanitizeAssistantText(
     text,
     assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      streaming && phase === "final_answer",
+      streaming,
       options,
     ),
   );
-}
-
-function isAssistantTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "input_text" || value === "output_text";
 }
 
 export function sanitizeAssistantVisibleStreamText(
@@ -62,14 +57,20 @@ export function sanitizeAssistantVisibleStreamText(
   });
 }
 
-export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
+export function createAssistantVisibleStreamText(
+  phase?: AssistantPhase,
+  options?: { preserveTrailingWhitespace?: boolean },
+) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      phase === "final_answer",
+      true,
+      options,
     ),
     ...userFacingTextFilters(false, true),
-    trimTextFilter("both", { preserveCodeIndentation: true }),
+    trimTextFilter(options?.preserveTrailingWhitespace ? "start" : "both", {
+      preserveCodeIndentation: true,
+    }),
   ]);
 }
 
@@ -79,11 +80,22 @@ function finalizeAssistantExtraction(errorContext: boolean, extracted: string): 
     : sanitizeUserFacingText(extracted);
 }
 
+export type AssistantTextSource = {
+  content?: unknown;
+  stopReason?: unknown;
+  phase?: unknown;
+};
+
 function prepareEmbeddedAssistantTextForPhase(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   requestedPhase: AssistantPhase,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): () => string {
+  // Replacement callbacks own their text; source snapshots project inside their callback.
+  const nativeToolMarkerBlocks =
+    requestedPhase === "final_answer" && !prepareText
+      ? findNativeToolMarkerTextBlocks(msg)
+      : undefined;
   const prepareRender = (selectedPhase: AssistantPhase | undefined, renderText: () => string) => {
     const errorContext = msg.stopReason === "error";
     return () => {
@@ -91,7 +103,7 @@ function prepareEmbeddedAssistantTextForPhase(
       return selectedPhase === "final_answer" && !extracted.trim() ? "" : extracted;
     };
   };
-  const messagePhase = normalizeAssistantPhase((msg as { phase?: unknown }).phase);
+  const messagePhase = normalizeAssistantPhase(msg.phase);
   if (typeof msg.content === "string") {
     const selectedPhase =
       requestedPhase === "final_answer" && messagePhase !== "final_answer"
@@ -156,10 +168,29 @@ function prepareEmbeddedAssistantTextForPhase(
       part.text = prepareText(part.text, index === parts.length - 1, part.phase, part.contentIndex);
     }
   }
+  // Adjacent blocks in the same phase share markup state; a phase boundary stays explicit.
+  const groupedParts: { text: string; phase?: AssistantPhase; contentIndex: number }[] = [];
+  for (const part of parts) {
+    const text = trimTextPreservingCode(part.text);
+    const previous = groupedParts.at(-1);
+    if (
+      previous &&
+      previous.phase === part.phase &&
+      previous.contentIndex + 1 === part.contentIndex
+    ) {
+      previous.contentIndex = part.contentIndex;
+      if (text) {
+        previous.text += `\n${text}`;
+      }
+    } else if (text) {
+      groupedParts.push({ text, phase: part.phase, contentIndex: part.contentIndex });
+    }
+  }
   return prepareRender(selectedPhase, () =>
-    // A native block boundary can divide markup; finalize only the selected snapshot.
-    parts
-      .map(({ text, phase }) => sanitizeAssistantText(text, phase))
+    groupedParts
+      .map(({ text, phase, contentIndex }) =>
+        nativeToolMarkerBlocks?.has(contentIndex) ? "" : sanitizeAssistantText(text, phase),
+      )
       .filter((text) => text.trim())
       .join("\n")
       .trimEnd(),
@@ -168,7 +199,7 @@ function prepareEmbeddedAssistantTextForPhase(
 
 /** Prepare selected source parts now; render their visible text only when requested. */
 export function prepareAssistantVisibleText(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   prepareText?: (
     text: string,
     final: boolean,
@@ -181,14 +212,17 @@ export function prepareAssistantVisibleText(
 
 /** Extract text intended for users, preferring explicit final-answer phase blocks. */
 export function extractAssistantVisibleText(
-  msg: AssistantMessage,
+  msg: AssistantTextSource,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
 ): string {
   return prepareAssistantVisibleText(msg, prepareText)();
 }
 
-export function extractAssistantCommentaryText(msg: AssistantMessage): string {
-  return prepareEmbeddedAssistantTextForPhase(msg, "commentary")();
+export function extractAssistantCommentaryText(
+  msg: AssistantMessage,
+  prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+): string {
+  return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText)();
 }
 
 export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
@@ -228,6 +262,86 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
   return blocks.join("\n");
 }
 
+/** Project native summaries incrementally while retaining snapshot replacement semantics. */
+export function createAssistantThinkingStream() {
+  let reasoningProjection = createTextProjection([trimTextFilter("both")]);
+  // Keep producer snapshots: comparing reconstructed prefixes would flatten each append.
+  let reasoningRaw: string | undefined;
+  const reasoningPrefixBlocks: string[] = [];
+  let reasoningPrefix = "";
+  let reasoningText = "";
+  return {
+    get text() {
+      return reasoningText;
+    },
+    update(input: string | AssistantMessage["content"], fallback?: string) {
+      let tail: ThinkingContent | undefined;
+      let prefixLength = 0;
+      let prefixUnchanged = typeof input !== "string" && reasoningRaw !== undefined;
+      if (Array.isArray(input)) {
+        for (const block of input) {
+          if (block?.type !== "thinking" || typeof block.thinking !== "string") {
+            continue;
+          }
+          if (tail) {
+            if (reasoningPrefixBlocks[prefixLength] !== tail.thinking) {
+              prefixUnchanged = false;
+              reasoningPrefixBlocks[prefixLength] = tail.thinking;
+            }
+            prefixLength++;
+          }
+          tail = block;
+        }
+      }
+      if (!prefixUnchanged || reasoningPrefixBlocks.length !== prefixLength) {
+        prefixUnchanged = false;
+        reasoningPrefixBlocks.length = prefixLength;
+        reasoningPrefix =
+          prefixLength === 0
+            ? ""
+            : reasoningPrefixBlocks
+                .map((raw) => raw.trim())
+                .filter(Boolean)
+                .join("\n");
+      }
+      const text = typeof input === "string" ? input : (tail?.thinking ?? "");
+      const append =
+        tail && reasoningRaw !== undefined
+          ? readAssistantThinkingAppend(tail, reasoningRaw)
+          : undefined;
+      const previousTail = reasoningProjection.text;
+      const projected =
+        text === reasoningRaw
+          ? { text: previousTail, delta: "" }
+          : append !== undefined
+            ? reasoningProjection.append(append)
+            : reasoningProjection.replace(text);
+      reasoningRaw = typeof input === "string" ? undefined : text;
+      // Only an unchanged prefix plus a producer-proven tail append can extend the
+      // combined summary. Snapshot corrections still replace the complete projection.
+      let delta = prefixUnchanged ? projected.delta : null;
+      if (delta !== null && !previousTail && projected.text && reasoningPrefix) {
+        delta = "\n" + delta;
+      }
+      reasoningText = !reasoningPrefix
+        ? projected.text
+        : delta !== null
+          ? reasoningText + delta
+          : reasoningPrefix + (projected.text ? "\n" : "") + projected.text;
+      if (!reasoningText && fallback?.trim()) {
+        reasoningText = fallback.trim();
+        delta = null;
+        reasoningRaw = undefined;
+        // A fallback is not part of the native snapshot's prefix.
+        reasoningProjection = createTextProjection([trimTextFilter("both")]);
+      }
+      projected.text = reasoningText;
+      projected.delta = delta;
+      return projected;
+    },
+  };
+}
+
 export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -253,7 +367,7 @@ const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "i",
 );
-export const THINKING_TAG_SCAN_RE = new RegExp(
+const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
@@ -270,6 +384,10 @@ export type ThinkingTagStreamState = {
   lastMatchEnd: number;
   lastTag?: { type: "open" | "close"; end: number };
 };
+
+export function createAssistantStreamBlockState() {
+  return { reasoningDepth: 0, final: false, inlineCode: createInlineCodeState() };
+}
 
 export function createThinkingTagStreamState(): ThinkingTagStreamState {
   return {

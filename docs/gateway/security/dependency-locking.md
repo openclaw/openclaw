@@ -31,7 +31,7 @@ Release automation reuses its existing standard `GH_TOKEN` only for GitHub API r
 
 ### Interpret coverage
 
-Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not comprehensive vulnerability clearance.
+Release artifacts and the GitHub Actions step summary show npm coverage as `checked`, upstream coverage as `checked` or `partial`, mapped package-version counts, checked repository counts, coverage issues, and upstream-only findings. Findings identify their source as `npm-bulk` or `github-repository`; upstream findings also record matched locked versions. Even `checked` coverage is limited to these advisory sources, not a guarantee that all vulnerabilities have been ruled out.
 
 The upstream scan has fixed bounds: 2,500 exact package versions, 4,000 HTTP requests, and five minutes per run. It uses four concurrent requests, up to five pages of 100 advisories per repository, and at most 10,000 advisories per run. Each response is limited to 2 MiB and each request to 15 seconds. It does not retry or reuse stale cached results.
 
@@ -53,11 +53,19 @@ Neither path publishes a lockfile:
 
 - root and plugin tarballs contain neither `npm-shrinkwrap.json` nor `package-lock.json`;
 - `pnpm-lock.yaml` remains the reviewed source dependency graph;
-- npm package locks exist only transiently while OpenClaw validates package graphs or runs `npm ci` to assemble a bundled plugin.
+- npm package locks exist transiently while OpenClaw validates package graphs, assembles a bundled plugin with `npm ci`, or prepares a cloud worker runtime install. Cloud worker project locks travel separately from the runtime tarball; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation).
+
+### Archive compression
+
+OpenClaw's runtime builds bundle `tar` so installed packages carry the same archive implementation as source builds. The pinned `minizlib` dependency is patched to let Node's zlib concatenate its output without temporarily replacing the global `Buffer.concat` function. This preserves gzip backup and artifact support in runtimes with read-only built-ins, and avoids a process-wide patch on Node and Bun.
+
+The `tar` patch selects its published unbundled entry points so its embedded copy of `minizlib` cannot bypass that repair. Remove both patches when an upstream release provides the same behavior; keep the runtime bundling until the published dependency also contains the fix.
 
 ## Validate npm dependency graphs
 
 The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It preserves `optional` metadata and verifies that every declared `os`, `cpu`, and `libc` constraint matches the pnpm lock. It does not write a lockfile into the checkout.
+
+When a registry mirror supplies only SHA1 metadata, the generator carries the unique SHA512 pin for the exact resolved package name and version from `pnpm-lock.yaml` into the temporary npm lock. Missing or ambiguous pins fail; conflicting strong hashes are not replaced. This preserves the expected archive hash for subsequent download validation, rather than treating the mirror's SHA1 metadata as proof of the archive bytes.
 
 ```bash
 # Root and every publishable package

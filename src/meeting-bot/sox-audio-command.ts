@@ -41,25 +41,17 @@ export function buildMeetingSoxAudioCommands(params: MeetingSoxAudioCommandParam
   outputCommand: string[];
 } {
   const wire = formatArgs(params.format);
-  if (!params.device) {
-    return {
-      inputCommand: withBuffer(params.inputExecutable ?? "rec", params.bufferBytes, wire),
-      outputCommand: withBuffer(params.outputExecutable ?? "play", params.bufferBytes, wire),
-    };
-  }
-  const deviceType = params.deviceType ?? "coreaudio";
+  const device = params.device ? ["-t", params.deviceType ?? "coreaudio", params.device] : [];
   return {
-    inputCommand: withBuffer(params.inputExecutable ?? "sox", params.bufferBytes, [
-      "-t",
-      deviceType,
-      params.device,
-      ...wire,
-    ]),
-    outputCommand: withBuffer(params.outputExecutable ?? "sox", params.bufferBytes, [
-      ...wire,
-      "-t",
-      deviceType,
-      params.device,
-    ]),
+    inputCommand: withBuffer(
+      params.inputExecutable ?? (params.device ? "sox" : "rec"),
+      params.bufferBytes,
+      [...device, ...wire],
+    ),
+    outputCommand: withBuffer(
+      params.outputExecutable ?? (params.device ? "sox" : "play"),
+      params.bufferBytes,
+      [...wire, ...device],
+    ),
   };
 }

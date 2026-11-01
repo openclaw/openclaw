@@ -8,6 +8,10 @@ import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_TURN_ADMISSION_METHOD,
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+} from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../../agents/prepared-tool-surface.js";
@@ -208,6 +212,26 @@ describe("dedicated worker websocket protocol", () => {
     },
   );
 
+  it.each([
+    { name: "admission", options: { admissionFailure: "environment-unavailable" as const } },
+    { name: "ownership", options: { validationFailure: "environment-unavailable" as const } },
+  ])(
+    "does not charge the admission budget for an unavailable environment ($name)",
+    async ({ options }) => {
+      const recordFailure = vi.fn();
+      const harness = attachHarness({
+        ...options,
+        rateLimiter: createRateLimiter({ recordFailure }),
+      });
+      harness.sendConnect();
+
+      await waitForWorkerProtocol(() => expect(harness.close).toHaveBeenCalled());
+      expect(harness.setCloseCause).toHaveBeenCalledWith("environment-unavailable");
+      expect(recordFailure).not.toHaveBeenCalled();
+      expect(harness.setClient).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects rate-limited public admission before credential verification", async () => {
     const rateLimiter = createRateLimiter({
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs: 12_000 })),
@@ -264,30 +288,6 @@ describe("dedicated worker websocket protocol", () => {
     expect(harness.setClient).not.toHaveBeenCalled();
   });
 
-  it.each([["health", {}]])("rejects legacy method %s", async (method, params) => {
-    const harness = attachHarness();
-    await admit(harness);
-    harness.sendRequest(method, params);
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
-    );
-    expect(harness.logGateway.warn).toHaveBeenCalledWith(
-      "worker protocol request rejected reason=method-not-allowed",
-    );
-  });
-
-  it("accepts heartbeat", async () => {
-    const valid = attachHarness();
-    await admit(valid);
-    valid.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" });
-    await waitForWorkerProtocol(() => expect(valid.responses).toHaveLength(2));
-    expect(valid.responses[1]).toMatchObject({
-      ok: true,
-      payload: { status: "ok", ownerEpoch: 1 },
-    });
-  });
-
   it("gates inference independently", async () => {
     const unsupported = attachHarness({
       identity: {
@@ -304,6 +304,49 @@ describe("dedicated worker websocket protocol", () => {
     );
     expect(unsupported.service.startInference).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "requires negotiated admission for prompt-sized frames (%s)",
+    async (supported) => {
+      vi.useFakeTimers();
+      const identity = {
+        ...ATTACHED_IDENTITY,
+        protocolFeatures: [
+          ...HANDSHAKE.protocolFeatures.filter(
+            (feature) => feature !== WORKER_INFERENCE_PROTOCOL_FEATURE,
+          ),
+          ...(supported ? [WORKER_TURN_ADMISSION_PROTOCOL_FEATURE] : []),
+        ],
+      };
+      const harness = attachHarness({ identity });
+      const admitTurn = vi.fn(async () => ({
+        ok: true as const,
+        result: { outcome: "allow" as const, baseLeafId: "entry-1" },
+      }));
+      Object.assign(harness.service, { admitTurn });
+      harness.sendConnect();
+      await vi.advanceTimersByTimeAsync(0);
+      const request = {
+        runEpoch: 1,
+        systemPrompt: supported ? "x".repeat(65_536) : "system",
+        prompt: "hello",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      };
+      harness.sendRequest(WORKER_TURN_ADMISSION_METHOD, request);
+      await vi.advanceTimersByTimeAsync(0);
+      if (supported) {
+        expect(harness.responses[1]).toMatchObject({
+          ok: true,
+          payload: { outcome: "allow", baseLeafId: "entry-1" },
+        });
+        expect(admitTurn).toHaveBeenCalledWith(identity, request);
+        expect(harness.close).not.toHaveBeenCalled();
+      } else {
+        expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed");
+        expect(admitTurn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("acknowledges inference before forwarding synchronous stream frames", async () => {
     const harness = attachHarness({
@@ -503,112 +546,149 @@ describe("dedicated worker websocket protocol", () => {
   });
 
   it.each([
-    { scenario: "an already-admitted unaudited worker", fence: "none", accepted: true },
-    { scenario: "a worker whose exact admitted run closed", fence: "run", accepted: false },
-    { scenario: "a worker whose exact placement closed", fence: "placement", accepted: false },
-    { scenario: "a worker during a restart signal", fence: "restart", accepted: false },
-  ] as const)("handles $scenario while suspension drains", async ({ fence, accepted }) => {
-    const templateClaim = ATTACHED_IDENTITY.turnClaim;
-    if (!templateClaim) {
-      throw new Error("expected attached worker turn claim");
-    }
-    const preparedRunAdmission = prepareSystemAgentRunAdmission(
-      {},
-      templateClaim.runId,
-      "main",
-      "test.worker-suspension",
-    );
-    const stateDir = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-suspension-"),
-    );
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-    const placements = createWorkerSessionPlacementStore({ database });
-    const session = {
-      sessionId: templateClaim.sessionId,
-      agentId: "main",
-      sessionKey: "agent:main:worker-suspension",
-    };
-    const active = await advancePlacementFixtureToActive(placements, database, session);
-    const claim = await placements.claimTurn({
-      ...session,
-      claimId: templateClaim.claimId,
-      runId: templateClaim.runId,
-      owner: placementTurnOwner(active),
-    });
-    const identity = {
-      ...ATTACHED_IDENTITY,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      turnClaim: claim,
-    };
-    const rootAdmission = tryBeginGatewayRootWorkAdmission();
-    if (!rootAdmission) {
-      throw new Error("expected parent worker turn root admission");
-    }
-    let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
-    let restartSignal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
-    try {
-      const { runtimeIdentity } = await rootAdmission.run(() =>
-        prepareWorkerAgentRuntimeIdentity({
-          agentId: session.agentId,
-          placements,
-          runtimeInstanceId: identity.environmentId,
-          sessionKey: session.sessionKey,
-          sessionTarget: {
-            ...session,
-            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-          },
-          promptCacheContext: { boundaryCount: 0 },
-          assertSourceCurrent: () => {},
-          turn: {
-            preparedRunAdmission,
-            runId: claim.runId,
-          } as SessionPlacementTurnParams,
-          turnClaim: claim,
-        }),
+    {
+      scenario: "an already-admitted unaudited worker",
+      phase: "draining",
+      fence: "none",
+      accepted: true,
+    },
+    {
+      scenario: "an already-admitted unaudited worker",
+      phase: "prepared",
+      fence: "none",
+      accepted: true,
+    },
+    {
+      scenario: "a worker whose exact admitted run closed",
+      phase: "draining",
+      fence: "run",
+      accepted: false,
+    },
+    {
+      scenario: "a worker whose exact placement closed",
+      phase: "draining",
+      fence: "placement",
+      accepted: false,
+    },
+    {
+      scenario: "a worker during a restart signal",
+      phase: "draining",
+      fence: "restart",
+      accepted: false,
+    },
+  ] as const)(
+    "handles $scenario while suspension is $phase",
+    async ({ phase, fence, accepted }) => {
+      const templateClaim = ATTACHED_IDENTITY.turnClaim;
+      if (!templateClaim) {
+        throw new Error("expected attached worker turn claim");
+      }
+      const preparedRunAdmission = prepareSystemAgentRunAdmission(
+        {},
+        templateClaim.runId,
+        "main",
+        "test.worker-suspension",
       );
-      expect(runtimeIdentity.executionIdentityToken).toBeUndefined();
-      const harness = attachHarness({ identity });
-      await admit(harness);
-      suspension = tryBeginGatewaySuspendAdmission(() => {});
-      expect(suspension?.drain()).toBe(true);
-      if (fence === "run") {
-        preparedRunAdmission.close();
-      } else if (fence === "placement") {
-        await placements.releaseTurn(claim);
-      } else if (fence === "restart") {
-        restartSignal = beginGatewayRestartSignalAdmission();
-        expect(restartSignal).not.toBeNull();
-      }
-
-      harness.sendRequest("worker.transcript.commit", {
-        ...TRANSCRIPT_COMMIT,
-        runEpoch: identity.ownerEpoch,
+      const stateDir = await fs.mkdtemp(
+        path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-suspension-"),
+      );
+      const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+      const placements = createWorkerSessionPlacementStore({ database });
+      const session = {
+        sessionId: templateClaim.sessionId,
+        agentId: "main",
+        sessionKey: "agent:main:worker-suspension",
+      };
+      const active = await advancePlacementFixtureToActive(placements, database, session);
+      const claim = await placements.claimTurn({
+        ...session,
+        claimId: templateClaim.claimId,
+        runId: templateClaim.runId,
+        owner: placementTurnOwner(active),
       });
+      const identity = {
+        ...ATTACHED_IDENTITY,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        turnClaim: claim,
+      };
+      const rootAdmission = tryBeginGatewayRootWorkAdmission();
+      if (!rootAdmission) {
+        throw new Error("expected parent worker turn root admission");
+      }
+      let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
+      let restartSignal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
+      try {
+        const { runtimeIdentity } = await rootAdmission.run(() =>
+          prepareWorkerAgentRuntimeIdentity({
+            agentId: session.agentId,
+            placements,
+            runtimeInstanceId: identity.environmentId,
+            sessionKey: session.sessionKey,
+            sessionTarget: {
+              ...session,
+              storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+            },
+            promptCacheContext: { boundaryCount: 0 },
+            assertSourceCurrent: () => {},
+            turn: {
+              preparedRunAdmission,
+              runId: claim.runId,
+            } as SessionPlacementTurnParams,
+            turnClaim: claim,
+          }),
+        );
+        expect(runtimeIdentity.executionIdentityToken).toBeUndefined();
+        const harness = attachHarness({ identity });
+        await admit(harness);
+        suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(phase === "prepared" ? suspension?.commit() : suspension?.drain()).toBe(true);
+        if (fence === "run") {
+          preparedRunAdmission.close();
+        } else if (fence === "placement") {
+          await placements.releaseTurn(claim);
+        } else if (fence === "restart") {
+          restartSignal = beginGatewayRestartSignalAdmission();
+          expect(restartSignal).not.toBeNull();
+        }
 
-      if (accepted) {
-        await waitForWorkerProtocol(() =>
-          expect(harness.service.commitTranscript).toHaveBeenCalledOnce(),
-        );
-        expect(harness.close).not.toHaveBeenCalled();
-        expect(harness.responses[1]).toMatchObject({ ok: true });
-      } else {
-        await waitForWorkerProtocol(() =>
-          expect(harness.close).toHaveBeenCalledWith(1013, "gateway-unavailable"),
-        );
-        expect(harness.service.commitTranscript).not.toHaveBeenCalled();
+        harness.sendRequest("worker.transcript.commit", {
+          ...TRANSCRIPT_COMMIT,
+          runEpoch: identity.ownerEpoch,
+        });
+
+        if (accepted) {
+          await waitForWorkerProtocol(() =>
+            expect(harness.service.commitTranscript).toHaveBeenCalledOnce(),
+          );
+          expect(harness.close).not.toHaveBeenCalled();
+          expect(harness.responses[1]).toMatchObject({ ok: true });
+          if (phase === "prepared") {
+            const newcomer = attachHarness();
+            newcomer.sendConnect();
+            await waitForWorkerProtocol(() =>
+              expect(newcomer.close).toHaveBeenCalledWith(1013, "gateway-unavailable"),
+            );
+            expect(newcomer.service.admitWorker).not.toHaveBeenCalled();
+          }
+        } else {
+          await waitForWorkerProtocol(() =>
+            expect(harness.close).toHaveBeenCalledWith(1013, "gateway-unavailable"),
+          );
+          expect(harness.service.commitTranscript).not.toHaveBeenCalled();
+        }
+      } finally {
+        restartSignal?.rollback();
+        suspension?.release();
+        if (placements.validateTurnClaim(claim)) {
+          await placements.releaseTurn(claim);
+        }
+        preparedRunAdmission.close();
+        rootAdmission.release();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        await fs.rm(stateDir, { recursive: true, force: true });
       }
-    } finally {
-      restartSignal?.rollback();
-      suspension?.release();
-      if (placements.validateTurnClaim(claim)) {
-        await placements.releaseTurn(claim);
-      }
-      preparedRunAdmission.close();
-      rootAdmission.release();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });

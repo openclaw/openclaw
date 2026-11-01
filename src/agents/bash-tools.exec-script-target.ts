@@ -1,4 +1,3 @@
-/** Parses direct Python and Node script targets from shell command text. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -103,10 +102,7 @@ function findFirstPythonScriptArg(tokens: string[]): string | null {
     if (token === "-") {
       return null;
     }
-    if (token === "-c" || token === "-m") {
-      return null;
-    }
-    if ((token.startsWith("-c") || token.startsWith("-m")) && token.length > 2) {
+    if (token.startsWith("-c") || token.startsWith("-m")) {
       return null;
     }
     if (optionsWithSeparateValue.has(token)) {
@@ -142,13 +138,12 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       break;
     }
     if (
-      token === "-e" ||
-      token === "-p" ||
+      token.startsWith("-e") ||
+      token.startsWith("-p") ||
       token === "--eval" ||
       token === "--print" ||
       token.startsWith("--eval=") ||
-      token.startsWith("--print=") ||
-      ((token.startsWith("-e") || token.startsWith("-p")) && token.length > 2)
+      token.startsWith("--print=")
     ) {
       hasInlineEvalOrPrint = true;
       if (token === "-e" || token === "-p" || token === "--eval" || token === "--print") {

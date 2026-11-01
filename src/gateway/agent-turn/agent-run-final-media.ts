@@ -26,8 +26,12 @@ import {
   enrichAssistantTranscriptMediaForRun,
   publishAssistantTranscriptRewrite,
 } from "../server-methods/chat-transcript-persistence.js";
+import { readCommittedSourceReplyContent } from "../server-methods/chat-transcript-source-reply-owner.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
-import { prepareSessionPlacementRead } from "../worker-environments/placement-turn-authority.js";
+import {
+  capturePlacementReplicaRead,
+  prepareSessionPlacementRead,
+} from "../worker-environments/placement-turn-authority.js";
 
 /** Materialize one visible agent final before its Gateway run releases custody. */
 export async function finalizeAgentRunMedia(
@@ -63,16 +67,24 @@ export async function finalizeAgentRunMedia(
   let releaseSource: (() => void) | undefined;
   let releasePlacement: (() => void) | undefined;
   let work: Promise<void> | undefined;
+  const release = () => {
+    active = false;
+    predicate?.release();
+    releaseSource?.();
+    releasePlacement?.();
+  };
   try {
     const state = captureOpenClawStateWorkerContext();
     const placement = await prepareSessionPlacementRead(
       state.admission.databasePath,
       reply.sessionId,
       async () => {
+        const publish = capturePlacementReplicaRead(state.admission.identity);
         const records = await executeOpenClawStateWorker(state, {
           type: "workerPlacements.read",
           input: { sessionIds: [reply.sessionId] },
         });
+        publish(records, [reply.sessionId]);
         return records[0];
       },
     );
@@ -123,6 +135,8 @@ export async function finalizeAgentRunMedia(
           ...scope,
           readSource: source,
           workspace: authority.workspace,
+          prepareRead: predicate.prepareRead,
+          release,
           assertCurrent: () => {
             assertCurrent();
             assertExistingDatabaseIdentity(source.path, databaseIdentity, source.databaseBirthtime);
@@ -145,14 +159,30 @@ export async function finalizeAgentRunMedia(
         sessionId: reply.sessionId,
         storePath: reply.storePath,
       };
-      const { persistedAssistantContent: content } = await prepareWebchatReplyMediaForDisplay({
-        scope: prepared,
-        storePath: scope.storePath,
-        inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
-        abortSignal: params.abortSignal,
-        includeSensitiveMedia: false,
-        includeSensitiveDisplay: false,
-      });
+      const committedSourceContent = await Promise.all(
+        plan.map(({ payload }) =>
+          readCommittedSourceReplyContent({
+            scope,
+            payload,
+            abortSignal: params.abortSignal,
+            assertCurrent: prepared.assertCurrent,
+          }),
+        ),
+      );
+      prepared.assertCurrent();
+      const uncommitted = plan.filter((_, index) => !committedSourceContent[index]);
+      if (!uncommitted.some(({ parts }) => parts.mediaUrls.length > 0)) {
+        return;
+      }
+      const { persistedAssistantContent: content, mediaBySource } =
+        await prepareWebchatReplyMediaForDisplay({
+          scope: prepared,
+          storePath: scope.storePath,
+          inputs: uncommitted.map((entry) => ({ kind: "prepared", plan: entry })),
+          abortSignal: params.abortSignal,
+          includeSensitiveMedia: false,
+          includeSensitiveDisplay: false,
+        });
       if (!content || !hasAssistantDisplayMediaContent(content)) {
         throw new Error("WebChat final media could not be prepared");
       }
@@ -168,7 +198,8 @@ export async function finalizeAgentRunMedia(
               runId,
               expectedLifecycleRevision: reply.lifecycleRevision ?? null,
               content,
-              mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
+              mediaBySource,
+              mediaUrls: uncommitted.flatMap((entry) => entry.parts.mediaUrls),
             }),
         );
         if (!rewritten) {
@@ -207,9 +238,6 @@ export async function finalizeAgentRunMedia(
     })();
     await work;
   } finally {
-    active = false;
-    predicate?.release();
-    releaseSource?.();
-    releasePlacement?.();
+    release();
   }
 }

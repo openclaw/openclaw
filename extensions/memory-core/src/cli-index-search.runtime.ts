@@ -1,5 +1,6 @@
 import path from "node:path";
-import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   defaultRuntime,
   formatErrorMessage,
@@ -8,14 +9,13 @@ import {
   shortenHomePath,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
-  resolveMemoryDreamingConfig,
   resolveMemoryDreamingWorkspace,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
 import {
   emitMemoryCoreSidecarNotice,
@@ -28,6 +28,7 @@ import {
   syncMemoryWithProgress,
   withMemoryCommand,
 } from "./cli-runtime-common.js";
+import { renderMemorySearch } from "./cli-search-output.js";
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
@@ -37,14 +38,13 @@ import type {
 } from "./cli.types.js";
 import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
-import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
+import { searchMemoryForCli } from "./memory-search-operation.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   rankShortTermPromotionCandidates,
-  recordShortTermRecalls,
   resolveShortTermRecallLockPath,
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
@@ -76,7 +76,7 @@ export async function runMemoryIndex(
       try {
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (opts.verbose) {
-          const status = manager.status();
+          const status = await readMemorySearchManagerStatus(manager);
           const label = (text: string) => muted(`${text}:`);
           const sourceLabels = (status.sources ?? []).map((source) =>
             formatSourceLabel(source, status.workspaceDir ?? ""),
@@ -87,16 +87,20 @@ export async function runMemoryIndex(
           const requestedProvider = status.requestedProvider ?? status.provider;
           const modelLabel = status.model ?? status.provider;
           const lines = [
-            `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
-            `${label("Provider")} ${info(status.provider)} ${muted(
-              `(requested: ${requestedProvider})`,
+            `${heading("Memory Index")} ${muted(terminalText`(${agentId})`)}`,
+            `${label("Provider")} ${info(terminalText`${status.provider}`)} ${muted(
+              terminalText`(requested: ${requestedProvider})`,
             )}`,
-            `${label("Model")} ${info(modelLabel)}`,
-            sourceLabels.length ? `${label("Sources")} ${info(sourceLabels.join(", "))}` : null,
-            extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
+            `${label("Model")} ${info(terminalText`${modelLabel}`)}`,
+            sourceLabels.length
+              ? `${label("Sources")} ${info(terminalText`${sourceLabels.join(", ")}`)}`
+              : null,
+            extraPaths.length
+              ? `${label("Extra paths")} ${info(terminalText`${extraPaths.join(", ")}`)}`
+              : null,
           ].filter(Boolean) as string[];
           if (status.fallback) {
-            lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
+            lines.push(`${label("Fallback")} ${warn(terminalText`${status.fallback.from}`)}`);
           }
           defaultRuntime.log(lines.join("\n"));
           defaultRuntime.log("");
@@ -106,7 +110,7 @@ export async function runMemoryIndex(
           return;
         }
         await syncMemoryWithProgress({ sync: syncFn, options: opts, elapsed: true });
-        let postIndexStatus = manager.status();
+        let postIndexStatus = await readMemorySearchManagerStatus(manager);
         const scan = await scanMemoryManagerSources(postIndexStatus);
         const outcome = formatMemoryIndexOutcome(postIndexStatus, scan, agentId);
         let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
@@ -120,7 +124,7 @@ export async function runMemoryIndex(
           typeof manager.probeVectorAvailability === "function"
         ) {
           semanticVectorAvailable = await manager.probeVectorAvailability();
-          postIndexStatus = manager.status();
+          postIndexStatus = await readMemorySearchManagerStatus(manager);
           semanticVectorAvailable =
             postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
         }
@@ -131,17 +135,17 @@ export async function runMemoryIndex(
           postIndexStatus.vector?.available ??
           postIndexStatus.vector?.storeAvailable;
         const vectorLoadErr = postIndexStatus.vector?.loadError;
-        defaultRuntime.log(outcome);
+        defaultRuntime.log(terminalText`${outcome}`);
         if (vectorEnabled && vectorAvailable === false) {
           // Indexing still persisted chunks/FTS state; keep the command successful but
           // emit a stderr warning so operators and scripts can detect degraded recall.
           defaultRuntime.error(
-            `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
+            terminalText`Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
           );
         }
       } catch (err) {
         const message = formatErrorMessage(err);
-        defaultRuntime.error(`Memory index failed (${agentId}): ${message}`);
+        defaultRuntime.error(terminalText`Memory index failed (${agentId}): ${message}`);
         process.exitCode = 1;
       }
     },
@@ -160,81 +164,22 @@ export async function runMemorySearch(
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
-      const dreamingEnabled = resolveMemoryDreamingConfig({
-        pluginConfig: memoryPluginConfig,
+      const result = await searchMemoryForCli({
+        manager,
         cfg,
-      }).enabled;
-      const dreaming = resolveMemoryDeepDreamingConfig({
-        pluginConfig: memoryPluginConfig,
-        cfg,
-      });
-      const sessionKey = buildAgentSessionKey({
         agentId,
-        channel: "cli",
-        peer: { kind: "direct", id: "memory-search" },
-        dmScope: "per-channel-peer",
+        query,
+        maxResults: opts.maxResults,
+        minScore: opts.minScore,
       });
-      let readRebuildWarning: () => string | undefined = () => undefined;
-      let results: Awaited<ReturnType<typeof manager.search>>;
-      try {
-        readRebuildWarning = captureMemoryRebuildNotice(manager.status());
-        results = await manager.search(query, {
-          maxResults: opts.maxResults,
-          minScore: opts.minScore,
-          sessionKey,
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        throw new Error(
-          [`Memory search failed: ${message}`, readRebuildWarning()].filter(Boolean).join(" "),
-          { cause: err },
-        );
-      }
-      const status = manager.status();
-      const staleness = resolveMemorySearchStaleness(status, agentId);
-      const warning = [staleness?.warning, readRebuildWarning()]
-        .filter((message): message is string => typeof message === "string")
-        .join(" ");
-      const workspaceDir = status.workspaceDir;
-      if (dreamingEnabled) {
-        await recordShortTermRecalls({
-          workspaceDir,
-          query,
-          results,
-          timezone: dreaming.timezone,
-        }).catch(() => {
-          // Persistence is best-effort, but the short-lived CLI must await it
-          // so process exit cannot discard an in-flight recall write.
-        });
-      }
-      if (opts.json) {
-        defaultRuntime.writeJson({ results, ...staleness, ...(warning ? { warning } : {}) });
-        return;
-      }
-      if (warning) {
-        defaultRuntime.error([warning, staleness?.action].filter(Boolean).join(" "));
-      }
-      if (results.length === 0) {
-        defaultRuntime.log("No matches.");
-        return;
-      }
-      const lines: string[] = [];
-      for (const result of results) {
-        lines.push(
-          `${success(result.score.toFixed(3))} ${accent(`${shortenHomePath(result.path)}:${result.startLine}-${result.endLine}`)}`,
-        );
-        lines.push(muted(result.snippet));
-        lines.push("");
-      }
-      defaultRuntime.log(lines.join("\n").trim());
+      renderMemorySearch(result, opts.json);
     },
   });
 }
 
 export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
   try {
-    const cfg = getRuntimeConfig({ skipPluginValidation: true });
+    const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
     const agentId = resolveMemoryAgent(cfg, opts.agent);
     const slotOwner = resolveForeignMemorySlotOwner(cfg);
     if (slotOwner) {
@@ -254,7 +199,7 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
       return;
     }
     const lines = [
-      `${heading(report.dryRun ? "Memory Deletion Preview" : "Memory Deletion")} ${muted(`(${agentId})`)}`,
+      `${heading(report.dryRun ? "Memory Deletion Preview" : "Memory Deletion")} ${muted(terminalText`(${agentId})`)}`,
       `${muted("Source sessions:")} ${report.sessionIds.length}`,
       `${muted("Source transcripts retained:")} ${report.sessionIds.length}`,
       `${muted("Deleted entries:")} ${report.entryKeys.length}`,
@@ -268,31 +213,35 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
       `${muted("Origin rows:")} ${report.artifacts.originRows}`,
     ];
     if (report.sessionIds.length > 0) {
-      lines.push(`${muted("Session IDs:")} ${report.sessionIds.join(", ")}`);
+      lines.push(`${muted("Session IDs:")} ${terminalText`${report.sessionIds.join(", ")}`}`);
     }
     for (const session of report.sessionResolutions) {
-      lines.push(`${muted("Session resolution:")} ${session.sessionId} (${session.source})`);
+      lines.push(
+        `${muted("Session resolution:")} ${terminalText`${session.sessionId} (${session.source})`}`,
+      );
     }
     for (const match of report.participantMatches) {
       lines.push(
-        `${muted("Raw participant selector:")} ${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`,
+        `${muted("Raw participant selector:")} ${terminalText`${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`}`,
       );
     }
     if (report.mixedLineageEntryKeys.length > 0) {
       lines.push(
-        `${muted("Mixed-lineage entry keys:")} ${report.mixedLineageEntryKeys.join(", ")}`,
+        `${muted("Mixed-lineage entry keys:")} ${terminalText`${report.mixedLineageEntryKeys.join(", ")}`}`,
       );
     }
     if (report.untargetableEntryKeys.length > 0) {
-      lines.push(`${muted("Untargetable entry keys:")} ${report.untargetableEntryKeys.join(", ")}`);
+      lines.push(
+        `${muted("Untargetable entry keys:")} ${terminalText`${report.untargetableEntryKeys.join(", ")}`}`,
+      );
     }
     for (const curatedWrite of report.curatedWrites) {
       lines.push(
-        `${muted("Curated write retained:")} ${curatedWrite.relativePath} (${new Date(curatedWrite.observedAt).toISOString()})`,
+        `${muted("Curated write retained:")} ${terminalText`${curatedWrite.relativePath} (${new Date(curatedWrite.observedAt).toISOString()})`}`,
       );
     }
     for (const refusal of report.refusals) {
-      lines.push(warn(`Refused: ${refusal}`));
+      lines.push(warn(terminalText`Refused: ${refusal}`));
     }
     if (report.dryRun) {
       lines.push(muted("Dry run: no memory files, index rows, or plugin state were changed."));
@@ -311,14 +260,14 @@ function matchesPromotionSelector(
   },
   selector: string,
 ): boolean {
-  const trimmed = selector.trim().toLowerCase();
+  const trimmed = selector.trim().toLowerCase().normalize("NFC");
   if (!trimmed) {
     return false;
   }
   return (
-    candidate.key.toLowerCase().includes(trimmed) ||
-    candidate.path.toLowerCase().includes(trimmed) ||
-    candidate.snippet.toLowerCase().includes(trimmed)
+    candidate.key.toLowerCase().normalize("NFC").includes(trimmed) ||
+    candidate.path.toLowerCase().normalize("NFC").includes(trimmed) ||
+    candidate.snippet.toLowerCase().normalize("NFC").includes(trimmed)
   );
 }
 async function runMemoryPromotion(
@@ -334,7 +283,7 @@ async function runMemoryPromotion(
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
-      const status = manager.status();
+      const status = await readMemorySearchManagerStatus(manager);
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: resolveMemoryPluginConfig(cfg),
@@ -393,12 +342,12 @@ async function runMemoryPromotion(
           return;
         }
         const lines = [
-          `${heading("Promotion Explain")} ${muted("(" + agentId + ")")}`,
-          accent(candidate.key),
+          `${heading("Promotion Explain")} ${muted(terminalText`(${agentId})`)}`,
+          accent(terminalText`${candidate.key}`),
           muted(
-            `${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
+            terminalText`${shortenHomePath(candidate.path)}:${String(candidate.startLine)}-${String(candidate.endLine)}`,
           ),
-          candidate.snippet,
+          terminalText`${candidate.snippet}`,
           muted(
             `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
           ),
@@ -410,7 +359,7 @@ async function runMemoryPromotion(
           ),
         ];
         if (candidate.conceptTags.length > 0) {
-          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
+          lines.push(muted(terminalText`concepts=${candidate.conceptTags.join(", ")}`));
         }
         defaultRuntime.log(lines.join("\n"));
         return;
@@ -425,6 +374,7 @@ async function runMemoryPromotion(
             agentId,
             workspaceAgentIds,
             workspaceDir,
+            workspaceFileMode: resolveAgentConfig(cfg, agentId)?.workspaceFileMode,
             candidates,
             limit: opts.limit,
             minScore: opts.minScore ?? dreaming.minScore,
@@ -486,21 +436,23 @@ async function runMemoryPromotion(
       }
       if (candidates.length === 0) {
         defaultRuntime.log("No short-term recall candidates.");
-        defaultRuntime.log(`Recall store: ${shortenHomePath(storePath)}`);
+        defaultRuntime.log(terminalText`Recall store: ${shortenHomePath(storePath)}`);
         if (audit.issues.length > 0) {
           for (const issue of audit.issues) {
-            defaultRuntime.log(issue.message);
+            defaultRuntime.log(terminalText`${issue.message}`);
           }
         }
         return;
       }
       const lines: string[] = [];
-      lines.push(`${heading("Short-Term Promotion Candidates")} ${muted(`(${agentId})`)}`);
-      lines.push(`${muted("Recall store:")} ${shortenHomePath(storePath)}`);
+      lines.push(
+        `${heading("Short-Term Promotion Candidates")} ${muted(terminalText`(${agentId})`)}`,
+      );
+      lines.push(`${muted("Recall store:")} ${terminalText`${shortenHomePath(storePath)}`}`);
       lines.push(muted(`Store health: ${formatAuditCounts(audit)}`));
       for (const candidate of outputCandidates) {
         lines.push(
-          `${success(candidate.score.toFixed(3))} ${accent(`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
+          `${success(candidate.score.toFixed(3))} ${accent(terminalText`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
         );
         lines.push(
           muted(
@@ -508,17 +460,17 @@ async function runMemoryPromotion(
           ),
         );
         if (candidate.conceptTags.length > 0) {
-          lines.push(muted(`concepts=${candidate.conceptTags.join(", ")}`));
+          lines.push(muted(terminalText`concepts=${candidate.conceptTags.join(", ")}`));
         }
         if (candidate.snippet) {
-          lines.push(muted(candidate.snippet));
+          lines.push(muted(terminalText`${candidate.snippet}`));
         }
         lines.push("");
       }
       if (audit.issues.length > 0) {
         lines.push(warn("Audit issues:"));
         for (const issue of audit.issues) {
-          lines.push((issue.severity === "error" ? warn : muted)(issue.message));
+          lines.push((issue.severity === "error" ? warn : muted)(terminalText`${issue.message}`));
         }
         lines.push("");
       }
@@ -526,12 +478,12 @@ async function runMemoryPromotion(
         for (const rejection of rejectedCandidates) {
           const candidate = rejection.candidate;
           const source = `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`;
-          lines.push(warn(`Skipped ${source}: ${rejection.reason}.`));
+          lines.push(warn(terminalText`Skipped ${source}: ${rejection.reason}.`));
         }
         if (applyResult.applied > 0) {
           lines.push(
             success(
-              `Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
+              terminalText`Processed ${applyResult.applied} candidate(s) for ${shortenHomePath(applyResult.memoryPath)}.`,
             ),
           );
           lines.push(

@@ -1,8 +1,8 @@
-// Completion runtime tests cover shell completion generation and runtime file writes.
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -10,6 +10,7 @@ import {
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
+  removeCompletionRegistrations,
   resolveCompletionCachePath,
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
@@ -17,687 +18,499 @@ import {
   usesSlowDynamicCompletion,
 } from "./completion-runtime.js";
 
-type PublishOutputFileAtomically =
-  typeof import("./output-file.runtime.js").publishOutputFileAtomically;
-
-const outputFileMocks = vi.hoisted(() => ({
-  publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
-}));
-
-vi.mock("./output-file.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
-    "./output-file.runtime.js",
-  );
-  outputFileMocks.publishOutputFileAtomically.mockImplementation(
-    actual.publishOutputFileAtomically,
-  );
-  return {
-    ...actual,
-    publishOutputFileAtomically: outputFileMocks.publishOutputFileAtomically,
-  };
-});
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+const windowsShells = {
+  core: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+  legacy: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+};
 
-async function withBashCompletionHome(
-  run: (paths: { homeDir: string; stateDir: string }) => Promise<void>,
-  stateDirPrefix = "openclaw-bash-completion-state-",
-): Promise<void> {
-  const homeDir = tempDirs.make("openclaw-bash-completion-home-");
-  const stateDir = tempDirs.make(stateDirPrefix);
-
-  await withEnvAsync(
-    {
-      HOME: homeDir,
-      USERPROFILE: homeDir,
-      OPENCLAW_STATE_DIR: stateDir,
-      XDG_CONFIG_HOME: undefined,
-      ZDOTDIR: undefined,
-    },
-    async () => {
-      await run({ homeDir, stateDir });
-    },
-  );
-}
-
-async function writeCompletionCache(shell: CompletionShell, content: string) {
-  const cachePath = resolveCompletionCachePath(shell, "openclaw");
-  await fs.mkdir(path.dirname(cachePath), { recursive: true });
-  await fs.writeFile(cachePath, content, "utf8");
-  return cachePath;
-}
-
-function expectAvailableShellToSucceed(
-  shellName: "bash" | "zsh",
-  result: SpawnSyncReturns<string>,
-): void {
-  if (result.error) {
-    if (
-      shellName === "zsh" &&
-      "code" in result.error &&
-      (result.error.code === "ENOENT" || result.error.code === "EACCES")
-    ) {
-      return;
-    }
-    throw result.error;
-  }
-  expect(result.stderr).toBe("");
-  expect(result.status).toBe(0);
-}
-
-describe("completion-runtime", () => {
-  it("preserves zsh's set-but-empty startup directory contract", () => {
-    expect(
-      resolveCompletionProfilePath("zsh", {
-        env: { HOME: "/tmp/openclaw-home", ZDOTDIR: "" },
-        homeDir: () => "/tmp/openclaw-home",
-      }),
-    ).toBe(path.join(path.sep, ".zshrc"));
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "preserves Zsh and Fish symlink traversal before parent path components",
-    async () => {
-      for (const testCase of [
-        { shell: "zsh" as const, variable: "ZDOTDIR", profileName: ".zshrc" },
-        {
-          shell: "fish" as const,
-          variable: "XDG_CONFIG_HOME",
-          profileName: path.join("fish", "config.fish"),
-        },
-      ]) {
-        await withBashCompletionHome(async ({ homeDir }) => {
-          const profileParent = tempDirs.make(`openclaw-${testCase.shell}-symlink-profiles-`);
-          const nestedProfiles = path.join(profileParent, "nested");
-          const linkedProfiles = path.join(homeDir, "linked-profiles");
-          await fs.mkdir(nestedProfiles, { recursive: true });
-          await fs.symlink(nestedProfiles, linkedProfiles, "dir");
-
-          await withEnvAsync(
-            { [testCase.variable]: `${linkedProfiles}${path.sep}..` },
-            async () => {
-              const cachePath = await writeCompletionCache(
-                testCase.shell,
-                "OPENCLAW_COMPLETION_LOADED=ready\n",
-              );
-
-              await installCompletion(testCase.shell, true, "openclaw");
-
-              const profilePath = path.join(profileParent, testCase.profileName);
-              await expect(fs.readFile(profilePath, "utf8")).resolves.toContain(cachePath);
-              expect(resolveCompletionProfileHint(testCase.shell)).toBe(
-                `~${path.sep}linked-profiles${path.sep}..${path.sep}${testCase.profileName}`,
-              );
-            },
-          );
-        });
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "preserves every shell's default profile traversal through a symlinked HOME",
-    async () => {
-      const fixtureRoot = tempDirs.make("openclaw-completion-home-symlink-");
-      const realHome = path.join(fixtureRoot, "real-home");
-      const nestedHome = path.join(realHome, "nested");
-      const linkedHome = path.join(fixtureRoot, "linked-home");
-      await fs.mkdir(nestedHome, { recursive: true });
-      await fs.symlink(nestedHome, linkedHome, "dir");
-
-      for (const testCase of [
-        { shell: "zsh" as const, profileName: ".zshrc" },
-        { shell: "bash" as const, profileName: ".bash_profile" },
-        { shell: "fish" as const, profileName: path.join(".config", "fish", "config.fish") },
-        {
-          shell: "powershell" as const,
-          profileName: path.join(".config", "powershell", "Microsoft.PowerShell_profile.ps1"),
-        },
-      ]) {
-        const stateDir = tempDirs.make(`openclaw-${testCase.shell}-home-symlink-state-`);
+const completionTest = (portable = false, statePrefix = "openclaw-completion-state-") =>
+  baseIt.extend<{ homeDir: string; stateDir: string }>({
+    homeDir: async ({ task }, use) => use(tempDirs.make(`openclaw-home-${task.id}-`)),
+    stateDir: [
+      async ({ homeDir }, use) => {
+        const stateDir = portable ? path.join(homeDir, ".openclaw") : tempDirs.make(statePrefix);
         await withEnvAsync(
           {
-            HOME: `${linkedHome}${path.sep}..`,
-            USERPROFILE: `${linkedHome}${path.sep}..`,
+            HOME: homeDir,
+            USERPROFILE: homeDir,
             OPENCLAW_STATE_DIR: stateDir,
             XDG_CONFIG_HOME: undefined,
             ZDOTDIR: undefined,
           },
-          async () => {
-            const cachePath = resolveCompletionCachePath(testCase.shell, "openclaw");
-            await fs.mkdir(path.dirname(cachePath), { recursive: true });
-            await fs.writeFile(cachePath, `# cached ${testCase.shell} completion\n`, "utf8");
-
-            await installCompletion(testCase.shell, true, "openclaw");
-
-            const actualStartupProfile = path.join(realHome, testCase.profileName);
-            await expect(fs.readFile(actualStartupProfile, "utf8")).resolves.toContain(cachePath);
-            expect(resolveCompletionProfileHint(testCase.shell)).toBe(
-              testCase.shell === "powershell"
-                ? `${linkedHome}${path.sep}..${path.sep}${testCase.profileName}`
-                : `~/${testCase.profileName}`,
-            );
-          },
+          () => use(stateDir),
         );
-      }
-    },
-  );
-
-  it.each(["~/literal startup", "../startup"])(
-    "keeps relative Zsh profile hints literal: %s",
-    async (profileRoot) => {
-      await withEnvAsync({ HOME: "/tmp/openclaw-home", ZDOTDIR: profileRoot }, async () => {
-        const profilePath = path.join(profileRoot, ".zshrc");
-        const expected = profilePath.startsWith(`..${path.sep}`)
-          ? profilePath
-          : `.${path.sep}${profilePath}`;
-        expect(resolveCompletionProfileHint("zsh")).toBe(expected);
-      });
-    },
-  );
-
-  it.each(["literal$dollar Ada's !42"])(
-    "loads cached Bash completion from a %s path through the login profile",
-    async (stateName) => {
-      await withBashCompletionHome(async ({ homeDir }) => {
-        await writeCompletionCache("bash", "complete -W 'status' openclaw\n");
-
-        const profilePath = path.join(homeDir, ".bash_profile");
-        await fs.writeFile(profilePath, "export COMPLETION_PROOF=value\\ \n", "utf8");
-        await installCompletion("bash", true, "openclaw");
-
-        await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
-        await expect(usesSlowDynamicCompletion("bash", "openclaw")).resolves.toBe(false);
-
-        const shell = spawnSync(
-          "bash",
-          [
-            "--noprofile",
-            "--norc",
-            "-c",
-            'source "$1"; complete -p openclaw; printf "<%s>\\n" "$COMPLETION_PROOF"',
-            "openclaw",
-            profilePath,
-          ],
-          { encoding: "utf8" },
-        );
-        expect(shell.stderr).toBe("");
-        expect(shell.status).toBe(0);
-        expect(shell.stdout).toContain("complete -W 'status' openclaw");
-        expect(shell.stdout).toContain("<value >\n");
-      }, `openclaw-completion-${stateName}-`);
-    },
-  );
-
-  it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      await writeCompletionCache("zsh", "# completion\n");
-      await fs.writeFile(path.join(homeDir, ".zshrc"), "", "utf8");
-      await fs.chmod(path.join(homeDir, ".zshrc"), 0o640);
-      const log = vi.spyOn(console, "log").mockImplementation(() => {});
-
-      try {
-        await installCompletion("zsh", false, "openclaw");
-        expect(log).toHaveBeenCalledWith(
-          "Completion installed. Restart your shell or run: source ~/.zshrc",
-        );
-        if (process.platform !== "win32") {
-          expect((await fs.stat(path.join(homeDir, ".zshrc"))).mode & 0o777).toBe(0o640);
-        }
-      } finally {
-        log.mockRestore();
-      }
-    });
+      },
+      { auto: true },
+    ],
   });
+const it = completionTest();
+const portableIt = completionTest(true);
+const literalIt = completionTest(false, "completion-$dollar Ada's !42-$state's-");
 
-  it("preserves an existing profile when atomic publication fails", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-      const profilePath = path.join(homeDir, ".zshrc");
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "# completion\n", "utf8");
-      await fs.writeFile(profilePath, "export IMPORTANT=keep\n", "utf8");
-      await fs.chmod(profilePath, 0o640);
-      const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
-        "./output-file.runtime.js",
-      );
-      outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
-        return await actual.publishOutputFileAtomically({
-          ...params,
-          writeTemp: async (tempPath) => {
-            await params.writeTemp(tempPath);
-            await fs.truncate(tempPath, 1);
-            throw new Error("injected completion profile write failure");
-          },
-        });
-      });
+async function writeText(filePath: string, content: string) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content, "utf8");
+  return filePath;
+}
+const writeCompletionCache = (shell: CompletionShell, content = "# completion\n") =>
+  writeText(resolveCompletionCachePath(shell, "openclaw"), content);
+const writeProfile = (shell: CompletionShell, content: string) =>
+  writeText(resolveCompletionProfilePath(shell), content);
 
-      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
-        "Failed to install completion: injected completion profile write failure",
-      );
+const readProfile = (profilePath: string) => fs.readFile(profilePath, "utf8");
+const removeSelectedCompletion = (stateDir: string, assertCurrent = () => {}) =>
+  removeCompletionRegistrations({ stateDirs: [stateDir], preservePaths: [], assertCurrent });
 
-      await expect(fs.readFile(profilePath, "utf8")).resolves.toBe("export IMPORTANT=keep\n");
-      if (process.platform !== "win32") {
-        expect((await fs.stat(profilePath)).mode & 0o777).toBe(0o640);
-      }
-      expect(await fs.readdir(homeDir)).toEqual([".zshrc"]);
-    });
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "preserves a symlinked profile while replacing its target atomically",
-    async () => {
-      await withBashCompletionHome(async ({ homeDir }) => {
-        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-        const targetDir = tempDirs.make("openclaw-completion-profile-target-");
-        const targetPath = path.join(targetDir, "zshrc");
-        const profilePath = path.join(homeDir, ".zshrc");
-        await fs.mkdir(path.dirname(cachePath), { recursive: true });
-        await fs.writeFile(cachePath, "# completion\n", "utf8");
-        await fs.writeFile(targetPath, "export IMPORTANT=keep\n", "utf8");
-        await fs.symlink(targetPath, profilePath);
-
-        await installCompletion("zsh", true, "openclaw");
-
-        expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
-        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain("export IMPORTANT=keep\n");
-        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain(cachePath);
-      });
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "preserves a dangling relative profile symlink while creating its target",
-    async () => {
-      await withBashCompletionHome(async ({ homeDir }) => {
-        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
-        const managedDir = path.join(homeDir, "managed");
-        const targetPath = path.join(managedDir, "zshrc");
-        const profilePath = path.join(homeDir, ".zshrc");
-        await fs.mkdir(path.dirname(cachePath), { recursive: true });
-        await fs.mkdir(managedDir, { recursive: true });
-        await fs.writeFile(cachePath, "# completion\n", "utf8");
-        await fs.symlink(path.join("managed", "zshrc"), profilePath);
-
-        await installCompletion("zsh", true, "openclaw");
-
-        expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
-        expect(await fs.readlink(profilePath)).toBe(path.join("managed", "zshrc"));
-        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain("# OpenClaw Completion");
-      });
-    },
-  );
-
-  it("recognizes an installed profile when its completion cache has been removed", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("bash", "openclaw");
-      await fs.writeFile(
-        path.join(homeDir, ".bash_profile"),
-        `# OpenClaw Completion\n[ -f "${cachePath}" ] && source "${cachePath}"\n`,
-        "utf-8",
-      );
-
-      await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
-    });
-  });
-
-  it("replaces the current fish source after the literal state directory changes", async () => {
-    const shell = "fish";
-    await withBashCompletionHome(async () => {
-      const previousStateDir = tempDirs.make(
-        `openclaw-completion-previous-${process.platform === "win32" ? "" : '"'}$state's ‘quoted’-`,
-      );
-      const profilePath = resolveCompletionProfilePath(shell);
-      await withEnvAsync({ OPENCLAW_STATE_DIR: previousStateDir }, async () => {
-        const previousCachePath = resolveCompletionCachePath(shell, "openclaw");
-        await fs.mkdir(path.dirname(previousCachePath), { recursive: true });
-        await fs.writeFile(previousCachePath, "# previous completion\n", "utf-8");
-        await installCompletion(shell, true, "openclaw");
-      });
-      const previousSource = (await fs.readFile(profilePath, "utf8")).trim().split("\n").at(-1)!;
-
-      const currentCachePath = resolveCompletionCachePath(shell, "openclaw");
-      await fs.mkdir(path.dirname(currentCachePath), { recursive: true });
-      await fs.writeFile(currentCachePath, "# current completion\n", "utf-8");
-      await installCompletion(shell, true, "openclaw");
-
-      const profile = await fs.readFile(profilePath, "utf-8");
-      expect(profile).not.toContain(previousSource);
-      expect(profile.match(/^# OpenClaw Completion$/gm)).toHaveLength(1);
-      await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
-      await installCompletion(shell, true, "openclaw");
-      await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(profile);
-    }, "openclaw-completion-current-$state's-");
-  });
-
-  it("preserves unrelated generated-looking sources that are not owned by its profile marker", async () => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("bash", "openclaw");
-      const profilePath = path.join(homeDir, ".bash_profile");
-      const unrelatedSource = 'source "/opt/tools/completions/openclaw.zsh"';
-      const unmarkedPriorSource = 'source "/opt/tools/completions/openclaw.bash"';
-      const markedUserSources = [
-        "source '/opt/tools/not-completions/openclaw.bash'",
-        "source '/opt/tools/completions/openclaw.zsh'",
-        "[ -f '/other/completions/openclaw.bash' ] && source '/opt/tools/completions/openclaw.bash'",
-        '[ -f "/opt/tools/completions/openclaw.bash" ] && source "/opt/tools/completions/openclaw.bash"; export IMPORTANT=keep',
-        "source '/opt/tools/completions/openclaw.bash'; export IMPORTANT=keep",
-        'source "/old/completions/openclaw.bash"; printf "%s" "/other/completions/openclaw.bash"',
-        "source '/opt/tools/completions/openclaw.bash",
-        '. "/opt/tools/completions/openclaw.bash"',
-      ];
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "# current completion\n", "utf-8");
-      await fs.writeFile(
-        profilePath,
-        [
-          unrelatedSource,
-          unmarkedPriorSource,
-          ...markedUserSources.flatMap((source) => ["# OpenClaw Completion", source]),
-          "",
-        ].join("\n"),
-        "utf-8",
-      );
-
-      await installCompletion("bash", true, "openclaw");
-
-      const profile = await fs.readFile(profilePath, "utf-8");
-      for (const source of [unrelatedSource, unmarkedPriorSource, ...markedUserSources]) {
-        expect(profile).toContain(`${source}\n`);
-      }
-      expect(profile).toContain(cachePath);
-    });
-  });
-
-  it.each(['source <(openclaw completion --shell bash >"$HOME/completion.log")'])(
-    "preserves compound user-owned Bash profile statements: %s",
-    async (compoundLine) => {
-      await withBashCompletionHome(async ({ homeDir }) => {
-        const cachePath = resolveCompletionCachePath("bash", "openclaw");
-        const profilePath = path.join(homeDir, ".bash_profile");
-        await fs.mkdir(path.dirname(cachePath), { recursive: true });
-        await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
-        await fs.writeFile(profilePath, `${compoundLine}\n`, "utf-8");
-
-        await installCompletion("bash", true, "openclaw");
-
-        const profile = await fs.readFile(profilePath, "utf-8");
-        expect(profile).toContain(`${compoundLine}\n`);
-        await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
-      });
-    },
-  );
-
-  it.each([
-    {
-      name: "eval command substitution",
-      sourceLine: 'eval "$(openclaw completion --shell bash)"',
-    },
-  ])("replaces $name without deleting unrelated aliases", async ({ sourceLine }) => {
-    await withBashCompletionHome(async ({ homeDir }) => {
-      const cachePath = resolveCompletionCachePath("bash", "openclaw");
-      const profilePath = path.join(homeDir, ".bash_profile");
-      const refreshAlias = "alias refresh_openclaw='openclaw completion --write-state'";
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
-      await fs.writeFile(profilePath, `${sourceLine}\n${refreshAlias}\n`, "utf-8");
-
-      await installCompletion("bash", true, "openclaw");
-
-      const profile = await fs.readFile(profilePath, "utf-8");
-      expect(profile).not.toContain(sourceLine);
-      expect(profile).toContain(`${refreshAlias}\n`);
-      expect(profile).toContain(cachePath);
-    });
-  });
-
-  it("replaces PowerShell dynamic pipelines without deleting unrelated command strings", async () => {
-    await withBashCompletionHome(async () => {
-      const cachePath = resolveCompletionCachePath("powershell", "openclaw");
-      const profilePath = resolveCompletionProfilePath("powershell");
-      const dynamicLine = "openclaw completion --shell powershell | Out-String | Invoke-Expression";
-      const refreshCommand = '$refresh = "openclaw completion --write-state"';
-      await fs.mkdir(path.dirname(cachePath), { recursive: true });
-      await fs.writeFile(cachePath, "# PowerShell completion\n", "utf-8");
-      await fs.mkdir(path.dirname(profilePath), { recursive: true });
-      await fs.writeFile(profilePath, `${dynamicLine}\n${refreshCommand}\n`, "utf-8");
-
-      await expect(usesSlowDynamicCompletion("powershell", "openclaw")).resolves.toBe(true);
-      await installCompletion("powershell", true, "openclaw");
-
-      const profile = await fs.readFile(profilePath, "utf-8");
-      expect(profile).not.toContain(dynamicLine);
-      expect(profile).toContain(`${refreshCommand}\n`);
-      expect(profile).toContain(cachePath);
-    });
-  });
-
-  it.each([{ profile: "C:\\Users\\Ada\\profile.ps1", command: ". 'C:\\Users\\Ada\\profile.ps1'" }])(
-    "formats a literal PowerShell reload command for $profile",
-    ({ profile, command }) => {
-      expect(formatCompletionReloadCommand("powershell", profile)).toBe(command);
-    },
-  );
-
-  it.each(["zsh"] as const)(
-    "reloads a %s profile when its absolute path contains spaces",
-    async (shellName) => {
-      const profileDir = tempDirs.make(`openclaw ${shellName} Ada's !42 reload profile-`);
-      const profilePath = path.join(profileDir, ".shellrc");
-      await fs.writeFile(profilePath, "OPENCLAW_COMPLETION_LOADED=ready\n", "utf-8");
-
-      const reloadCommand = formatCompletionReloadCommand(shellName, profilePath);
-      expect(reloadCommand).toBe(`source '${profilePath.replaceAll("'", "'\\''")}'`);
-      const shell = spawnSync(
-        shellName,
-        ["-c", `${reloadCommand}; [ "$OPENCLAW_COMPLETION_LOADED" = ready ]`],
-        {
-          encoding: "utf8",
-        },
-      );
-      expectAvailableShellToSucceed(shellName, shell);
-    },
-  );
-
-  it.each(["bash"] as const)(
-    "preserves tilde expansion while quoting %s profile paths",
-    (shellName) => {
-      expect(formatCompletionReloadCommand(shellName, "~/Ada's !42 profile/.shellrc")).toBe(
-        "source ~/'Ada'\\''s !42 profile/.shellrc'",
-      );
-    },
-  );
-
-  it.each([
-    {
-      name: "native Windows with an unknown SHELL",
-      env: { SHELL: "C:\\Windows\\System32\\cmd.exe" },
-      platform: "win32" as const,
-      expected: "powershell",
-    },
-    {
-      name: "PowerShell Core from a Windows path",
-      env: { SHELL: "C:\\Program Files\\PowerShell\\7\\pwsh.exe" },
-      platform: "win32" as const,
-      expected: "powershell",
-    },
-    {
-      name: "Windows PowerShell from a Windows path",
-      env: { SHELL: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" },
-      platform: "win32" as const,
-      expected: "powershell",
-    },
-    {
-      name: "non-Windows without SHELL",
-      env: {},
-      platform: "linux" as const,
-      expected: "zsh",
-    },
-  ])("detects $name", ({ env, platform, expected }) => {
-    expect(resolveShellFromEnv(env, platform)).toBe(expected);
-  });
-
-  it("resolves Windows PowerShell and pwsh profile directories", () => {
-    expect(
-      resolveCompletionProfilePath("powershell", {
-        env: {
-          SHELL: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
-          USERPROFILE: "C:\\Users\\Ada",
-        },
-        homeDir: () => "C:\\Users\\Ada",
-        platform: "win32",
-      }),
-    ).toBe(
-      path.win32.join(
-        "C:\\Users\\Ada",
-        "Documents",
-        "PowerShell",
-        "Microsoft.PowerShell_profile.ps1",
-      ),
+it.skipIf(process.platform === "win32")(
+  "escapes terminal controls in installation messages without changing profile paths",
+  async ({ homeDir }) => {
+    const profileDir = path.join(
+      homeDir,
+      "profiles-café\u001b[31m\noperator-forged\tend\rrow\u0007",
     );
-    expect(
-      resolveCompletionProfilePath("powershell", {
-        env: {
-          SHELL: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-          USERPROFILE: "C:\\Users\\Ada",
-        },
-        homeDir: () => "C:\\Users\\Ada",
-        platform: "win32",
-      }),
-    ).toBe(
-      path.win32.join(
-        "C:\\Users\\Ada",
-        "Documents",
-        "WindowsPowerShell",
-        "Microsoft.PowerShell_profile.ps1",
-      ),
-    );
-  });
+    vi.stubEnv("ZDOTDIR", profileDir);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cachePath = await writeCompletionCache("zsh");
 
-  it("rejects install when the completion cache is missing", async () => {
-    await withBashCompletionHome(async () => {
-      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
-        "Completion cache not found",
-      );
-    });
-  });
+    await installCompletion("zsh", false);
+    const profilePath = path.join(profileDir, ".zshrc");
+    const installed = await readProfile(profilePath);
+    expect(installed).toContain(cachePath);
+    await installCompletion("zsh", false);
+    expect(await readProfile(profilePath)).toBe(installed);
 
-  it
-    .skipIf(process.platform === "win32")
-    .each([
-      '# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
-    ])(
-    "preserves a managed portable Bash hook byte-for-byte across installs: %s",
-    async (portableHook) => {
-      const homeDir = tempDirs.make("openclaw-bash-portable-home-");
-      const stateDir = path.join(homeDir, ".openclaw");
-      await withEnvAsync(
-        {
-          HOME: homeDir,
-          USERPROFILE: homeDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          XDG_CONFIG_HOME: undefined,
-          ZDOTDIR: undefined,
-        },
-        async () => {
-          const profilePath = path.join(homeDir, ".bashrc");
-          const cachePath = resolveCompletionCachePath("bash", "openclaw");
-          expect(cachePath).toBe(path.join(stateDir, "completions", "openclaw.bash"));
-          await fs.mkdir(path.dirname(cachePath), { recursive: true });
-          await fs.writeFile(cachePath, "complete -W 'completion doctor' openclaw\n", "utf-8");
-          await fs.writeFile(profilePath, `${portableHook}\n`, "utf-8");
+    const messages = [...warn.mock.calls, ...log.mock.calls].map((args) => args.join(" "));
+    expect(messages.some((message) => message.includes("Profile not found"))).toBe(true);
+    expect(messages.some((message) => message.includes("Installing completion"))).toBe(true);
+    expect(messages).toContain("Completion installed. Restart your shell to load it.");
+    expect(messages.some((message) => message.includes("already installed"))).toBe(true);
+    for (const message of messages) {
+      expect(message).not.toMatch(/\p{Cc}/u);
+    }
+    expect(messages.join("\n")).toContain("profiles-café\\noperator-forged\\tend\\rrow");
+  },
+);
 
-          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+it.skipIf(process.platform === "win32").for([false, true])(
+  "rejects non-regular profiles without replacing them (FIFO=%s)",
+  async (fifo, { homeDir }) => {
+    await writeCompletionCache("zsh");
+    const profilePath = path.join(homeDir, ".zshrc");
+    await (fifo ? execFileSync("mkfifo", [profilePath]) : fs.symlink("/dev/null", profilePath));
+    await expect(isCompletionInstalled("zsh")).rejects.toThrow(/regular file/);
+    await expect(usesSlowDynamicCompletion("zsh")).rejects.toThrow(/regular file/);
+    await expect(installCompletion("zsh", true)).rejects.toThrow(/regular file/);
+    if (fifo) {
+      expect((await fs.lstat(profilePath)).isFIFO()).toBe(true);
+    }
+  },
+);
 
-          await installCompletion("bash", true, "openclaw");
-          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(`${portableHook}\n`);
+function expectProfileMode(profilePath: string) {
+  return process.platform === "win32"
+    ? Promise.resolve()
+    : fs.stat(profilePath).then((stat) => expect(stat.mode & 0o777).toBe(0o640));
+}
 
-          await installCompletion("bash", true, "openclaw");
-          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(`${portableHook}\n`);
+it.skipIf(process.platform === "win32").for([
+  ["zsh", "ZDOTDIR", ".zshrc"],
+  ["fish", "XDG_CONFIG_HOME", "fish/config.fish"],
+  ["zsh", "HOME", ".zshrc"],
+  ["bash", "HOME", ".bash_profile"],
+  ["fish", "HOME", ".config/fish/config.fish"],
+  ["powershell", "HOME", ".config/powershell/Microsoft.PowerShell_profile.ps1"],
+] as const)(
+  "preserves %s profile traversal through symlinked %s before parent components",
+  async ([shell, variable, profileName], { homeDir }) => {
+    const profileParent = tempDirs.make(`openclaw-${shell}-symlink-profiles-`);
+    const nestedProfiles = path.join(profileParent, "nested");
+    const linkedProfiles = path.join(homeDir, "linked-profiles");
+    await fs.mkdir(nestedProfiles, { recursive: true });
+    await fs.symlink(nestedProfiles, linkedProfiles, "dir");
+    const startupDir = `${linkedProfiles}${path.sep}..`;
+    vi.stubEnv(variable, startupDir);
+    const cachePath = await writeCompletionCache(shell, "OPENCLAW_COMPLETION_LOADED=ready\n");
+    await installCompletion(shell, true, "openclaw");
+    await expect(readProfile(path.join(profileParent, profileName))).resolves.toContain(cachePath);
+    const hintRoot =
+      variable !== "HOME" ? "~/linked-profiles/.." : shell === "powershell" ? startupDir : "~";
+    expect(resolveCompletionProfileHint(shell)).toBe(`${hintRoot}/${profileName}`);
+  },
+);
 
-          const freshBash = spawnSync(
-            "bash",
-            ["-c", `source "${profilePath}" && complete -p openclaw`],
-            { encoding: "utf8" },
-          );
-          expect(freshBash.stderr).toBe("");
-          expect(freshBash.status).toBe(0);
-          expect(freshBash.stdout).toContain("openclaw");
-        },
-      );
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "preserves a managed portable Fish hook without appending a literal block",
-    async () => {
-      const homeDir = tempDirs.make("openclaw-fish-portable-home-");
-      const stateDir = path.join(homeDir, ".openclaw");
-      await withEnvAsync(
-        {
-          HOME: homeDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          XDG_CONFIG_HOME: undefined,
-          ZDOTDIR: undefined,
-        },
-        async () => {
-          const portableHook =
-            'test -f "$HOME/.openclaw/completions/openclaw.fish"; and source "$HOME/.openclaw/completions/openclaw.fish"';
-          const profilePath = path.join(homeDir, ".config", "fish", "config.fish");
-          const cachePath = resolveCompletionCachePath("fish", "openclaw");
-          await fs.mkdir(path.dirname(cachePath), { recursive: true });
-          await fs.writeFile(cachePath, "# cached fish completion\n", "utf-8");
-          await fs.mkdir(path.dirname(profilePath), { recursive: true });
-          await fs.writeFile(profilePath, `${portableHook}\n`, "utf-8");
-
-          await expect(isCompletionInstalled("fish", "openclaw")).resolves.toBe(true);
-          await installCompletion("fish", true, "openclaw");
-          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(`${portableHook}\n`);
-        },
-      );
-    },
-  );
-
-  it.skipIf(process.platform === "win32").each([
-    {
-      brokenHook:
-        '[ -f "$HOME/.other/completions/openclaw.bash" ] && source "$HOME/.other/completions/openclaw.bash"',
-      marked: true,
-    },
-  ])(
-    "preserves unrecognized portable hooks across literal installs (marked=$marked): $brokenHook",
-    async ({ brokenHook, marked }) => {
-      const homeDir = tempDirs.make("openclaw-bash-broken-guard-literal-home-");
-      const stateDir = path.join(homeDir, ".openclaw");
-      await withEnvAsync(
-        {
-          HOME: homeDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          XDG_CONFIG_HOME: undefined,
-          ZDOTDIR: undefined,
-        },
-        async () => {
-          const profilePath = path.join(homeDir, ".bashrc");
-          const cachePath = resolveCompletionCachePath("bash", "openclaw");
-          await fs.mkdir(path.dirname(cachePath), { recursive: true });
-          await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
-          await fs.writeFile(
-            profilePath,
-            `${marked ? "# OpenClaw Completion\n" : ""}${brokenHook}\n`,
-            "utf-8",
-          );
-          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(false);
-          await installCompletion("bash", true, "openclaw");
-          const first = await fs.readFile(profilePath, "utf8");
-          expect(first).toContain(`${brokenHook}\n`);
-          expect(first).toContain("# OpenClaw Completion");
-          expect(first).toContain(cachePath);
-          await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
-
-          await installCompletion("bash", true, "openclaw");
-          await expect(fs.readFile(profilePath, "utf8")).resolves.toBe(first);
-        },
-      );
-    },
-  );
+it.each([
+  ["", "/.zshrc"],
+  ["~/literal startup", "./~/literal startup/.zshrc"],
+  ["../startup", "../startup/.zshrc"],
+])("preserves literal and set-but-empty Zsh startup directories: %s", (root, expected) => {
+  vi.stubEnv("ZDOTDIR", root);
+  const resolve = root === "" ? resolveCompletionProfilePath : resolveCompletionProfileHint;
+  expect(resolve("zsh")).toBe(expected.replaceAll("/", path.sep));
 });
+
+literalIt.for(["bash", "zsh"] as const)(
+  "loads literal %s profiles with spaces and quotes",
+  async (shell) => {
+    const bash = shell === "bash";
+    const profilePath = bash
+      ? resolveCompletionProfilePath(shell)
+      : path.join(tempDirs.make("openclaw zsh Ada's !42 reload profile-"), ".shellrc");
+    await fs.writeFile(
+      profilePath,
+      bash ? "export COMPLETION_PROOF=value\\ \n" : "OPENCLAW_COMPLETION_LOADED=ready\n",
+    );
+    if (bash) {
+      await writeCompletionCache(shell, "complete -W 'status' openclaw\n");
+      await installCompletion(shell, true, "openclaw");
+      await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
+      await expect(usesSlowDynamicCompletion(shell, "openclaw")).resolves.toBe(false);
+    }
+    const reloadCommand = formatCompletionReloadCommand(shell, profilePath);
+    if (!bash) {
+      expect(reloadCommand).toBe(`source '${profilePath.replaceAll("'", "'\\''")}'`);
+    }
+    const probe = bash
+      ? 'complete -p openclaw; printf "<%s>\\n" "$COMPLETION_PROOF"'
+      : '[ "$OPENCLAW_COMPLETION_LOADED" = ready ]';
+    const result = spawnSync(
+      shell,
+      [...(bash ? ["--noprofile", "--norc"] : []), "-c", `${reloadCommand}; ${probe}`],
+      { encoding: "utf8" },
+    );
+    if (bash) {
+      expect(result).toMatchObject({ stderr: "", status: 0 });
+      expect(result.stdout).toBe("complete -W 'status' openclaw\n<value >\n");
+    } else if (result.error) {
+      expect(result.error).toHaveProperty("code", expect.stringMatching(/^(ENOENT|EACCES)$/));
+    } else {
+      expect(result).toMatchObject({ stderr: "", status: 0 });
+    }
+  },
+);
+
+it.for([
+  ["install", "Failed to install completion: injected completion profile write failure"],
+  ["remove", "injected completion profile write failure"],
+  ["invalidate", "completion ownership invalidated"],
+  ["concurrent", "Completion profile changed during cleanup"],
+] as const)(
+  "preserves an existing profile when atomic publication fails: %s",
+  async ([operation, error], { homeDir, stateDir }) => {
+    const cachePath = await writeCompletionCache("zsh");
+    const original =
+      "export IMPORTANT=keep\n" + (operation === "install" ? "" : `source "${cachePath}"\n`);
+    const profilePath = await writeProfile("zsh", original);
+    const edit = operation === "concurrent" ? "export CONCURRENT=keep\n" : "";
+    await fs.chmod(profilePath, 0o640);
+    const open = fs.open;
+    let current = true;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      const sync = handle.sync.bind(handle);
+      vi.spyOn(handle, "sync").mockImplementation(async () => {
+        await sync();
+        if (operation === "invalidate") {
+          current = false;
+        } else if (edit) {
+          await fs.appendFile(profilePath, edit);
+        } else {
+          await handle.truncate(1);
+          throw new Error("injected completion profile write failure");
+        }
+      });
+      return handle;
+    });
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("completion ownership invalidated");
+      }
+    };
+    await expect(
+      operation === "install"
+        ? installCompletion("zsh", true, "openclaw")
+        : removeSelectedCompletion(stateDir, assertCurrent),
+    ).rejects.toThrow(error);
+    await expect(readProfile(profilePath)).resolves.toBe(original + edit);
+    await expectProfileMode(profilePath);
+    expect(await fs.readdir(homeDir)).toEqual([".zshrc"]);
+  },
+);
+
+it.skipIf(process.platform === "win32").for([false, true])(
+  "preserves a profile symlink while writing its target (dangling=%s)",
+  async (dangling, { homeDir, stateDir }) => {
+    const cachePath = await writeCompletionCache("zsh");
+    const targetDir = dangling
+      ? path.join(homeDir, "managed")
+      : tempDirs.make("completion-target-");
+    const targetPath = path.join(targetDir, "zshrc");
+    const profilePath = path.join(homeDir, ".zshrc");
+    await fs.mkdir(targetDir, { recursive: true });
+    if (!dangling) {
+      await fs.writeFile(targetPath, "export IMPORTANT=keep\n", "utf8");
+    }
+    await fs.symlink(dangling ? path.join("managed", "zshrc") : targetPath, profilePath);
+    await installCompletion("zsh", true, "openclaw");
+    expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
+    const profile = await readProfile(targetPath);
+    if (dangling) {
+      expect(await fs.readlink(profilePath)).toBe(path.join("managed", "zshrc"));
+      expect(profile).toContain("# OpenClaw Completion");
+    } else {
+      expect(profile).toContain("export IMPORTANT=keep\n");
+      expect(profile).toContain(cachePath);
+    }
+    const alias = path.join(homeDir, ".bashrc");
+    await fs.symlink(targetPath, alias);
+    await expect(removeSelectedCompletion(stateDir)).resolves.toEqual([profilePath]);
+    await expect(readProfile(targetPath)).resolves.toBe(
+      dangling ? "" : "export IMPORTANT=keep\n\n",
+    );
+    expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(alias)).toBe(targetPath);
+  },
+);
+
+literalIt(
+  "replaces the current fish source after the literal state directory changes",
+  async ({ stateDir }) => {
+    const shell = "fish";
+    const previousStateDir = tempDirs.make(
+      `openclaw-completion-previous-${process.platform === "win32" ? "" : '"'}$state's ‘quoted’-`,
+    );
+    const profilePath = resolveCompletionProfilePath(shell);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: previousStateDir }, async () => {
+      await writeCompletionCache(shell, "# previous completion\n");
+      await installCompletion(shell, true, "openclaw");
+    });
+    const previousSource = (await readProfile(profilePath)).trim().split("\n").at(-1)!;
+
+    await writeCompletionCache(shell, "# current completion\n");
+    await installCompletion(shell, true, "openclaw");
+
+    const profile = await readProfile(profilePath);
+    expect(profile).not.toContain(previousSource);
+    expect(profile.match(/^# OpenClaw Completion$/gm)).toHaveLength(1);
+    await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
+    await installCompletion(shell, true, "openclaw");
+    await expect(readProfile(profilePath)).resolves.toBe(profile);
+    await expect(removeSelectedCompletion(stateDir)).resolves.toEqual([profilePath]);
+    await expect(readProfile(profilePath)).resolves.toBe("");
+  },
+);
+
+it("preserves unrelated sources during installation and selected-state removal", async ({
+  homeDir,
+  stateDir: root,
+}) => {
+  const stateDir = path.join(root, process.platform === "win32" ? "state" : "literal\nstate");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const cachePath = await writeCompletionCache("bash", "# current completion\n");
+  const unrelatedSource = 'source "/opt/tools/completions/openclaw.zsh"';
+  const unmarkedPriorSource = 'source "/opt/tools/completions/openclaw.bash"';
+  const markedUserSources = [
+    "source '/opt/tools/not-completions/openclaw.bash'",
+    "source '/opt/tools/completions/openclaw.zsh'",
+    "[ -f '/other/completions/openclaw.bash' ] && source '/opt/tools/completions/openclaw.bash'",
+    '[ -f "/opt/tools/completions/openclaw.bash" ] && source "/opt/tools/completions/openclaw.bash"; export IMPORTANT=keep',
+    "source '/opt/tools/completions/openclaw.bash'; export IMPORTANT=keep",
+    'source "/old/completions/openclaw.bash"; printf "%s" "/other/completions/openclaw.bash"',
+    "source '/opt/tools/completions/openclaw.bash",
+    '. "/opt/tools/completions/openclaw.bash"',
+  ];
+  const profilePath = await writeProfile(
+    "bash",
+    [
+      unrelatedSource,
+      unmarkedPriorSource,
+      ...markedUserSources.flatMap((source) => ["# OpenClaw Completion", source]),
+      "",
+    ].join("\n"),
+  );
+
+  await installCompletion("bash", true, "openclaw");
+
+  const profile = await readProfile(profilePath);
+  for (const source of [unrelatedSource, unmarkedPriorSource, ...markedUserSources]) {
+    expect(profile).toContain(`${source}\n`);
+  }
+  expect(profile).toContain(cachePath);
+
+  const keptState = path.join(stateDir, "kept");
+  const keptCache = resolveCompletionCachePath("bash", "openclaw", keptState);
+  const retained =
+    [unrelatedSource, unmarkedPriorSource, ...markedUserSources].join("\n") +
+    `\n# OpenClaw Completion\r\nexport IMPORTANT=keep\n# OpenClaw Completion\nsource "${keptCache}"\r\nsource "${cachePath}"; export COMPOUND=keep\r\nsource <(openclaw completion --shell bash)\n`;
+  const content = Buffer.from(
+    `# OpenClaw Completion\r\n[ -f "${cachePath}" ] && source "${cachePath}"\n${retained}source "${cachePath}"`,
+  );
+  const expected = Buffer.from(retained);
+  expected[0] = 0xff;
+  content[content.indexOf(retained)] = 0xff;
+  const profiles = [path.join(homeDir, ".bashrc"), profilePath];
+  for (const file of profiles) {
+    await fs.writeFile(file, content);
+    await fs.chmod(file, 0o640);
+  }
+  const opts = { stateDirs: [stateDir, keptState], preservePaths: [keptState] };
+  const tree = await fs.readdir(homeDir);
+  for (const removal of [{ dryRun: true }, { assertCurrent: () => {} }] as const) {
+    await expect(removeCompletionRegistrations({ ...opts, ...removal })).resolves.toEqual(profiles);
+    for (const file of profiles) {
+      await expect(fs.readFile(file)).resolves.toEqual("dryRun" in removal ? content : expected);
+      await expectProfileMode(file);
+    }
+    expect(await fs.readdir(homeDir)).toEqual(tree);
+  }
+});
+
+it.each([
+  ["bash", undefined, 'source <(openclaw completion --shell bash >"$HOME/completion.log")'],
+  [
+    "bash",
+    'eval "$(openclaw completion --shell bash)"',
+    "alias refresh_openclaw='openclaw completion --write-state'",
+  ],
+  [
+    "powershell",
+    "openclaw completion --shell powershell | Out-String | Invoke-Expression",
+    '$refresh = "openclaw completion --write-state"',
+  ],
+] as const)(
+  "migrates %s completion without deleting user commands: %s",
+  async (shell, replaced, retained) => {
+    const cachePath = await writeCompletionCache(shell);
+    const profilePath = await writeProfile(
+      shell,
+      [replaced, retained, ""].filter((line) => line !== undefined).join("\n"),
+    );
+    if (shell === "powershell") {
+      await expect(usesSlowDynamicCompletion(shell, "openclaw")).resolves.toBe(true);
+    }
+    await installCompletion(shell, true, "openclaw");
+    const profile = await readProfile(profilePath);
+    expect(profile).toContain(retained + "\n");
+    if (replaced) {
+      expect(profile).not.toContain(replaced);
+      expect(profile).toContain(cachePath);
+    } else {
+      await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
+    }
+  },
+);
+
+it.each([
+  ["powershell", "C:\\Users\\Ada\\profile.ps1", ". 'C:\\Users\\Ada\\profile.ps1'"],
+  ["bash", "~/Ada's !42 profile/.shellrc", "source ~/'Ada'\\''s !42 profile/.shellrc'"],
+] as const)("quotes literal %s reload paths with native expansion", (shell, profile, expected) => {
+  expect(formatCompletionReloadCommand(shell, profile)).toBe(expected);
+});
+
+it.each([
+  ["C:\\Windows\\System32\\cmd.exe", "win32", "powershell", "PowerShell"],
+  [windowsShells.core, "win32", "powershell", "PowerShell"],
+  [windowsShells.legacy, "win32", "powershell", "WindowsPowerShell"],
+  [undefined, "linux", "zsh", undefined],
+] as const)("detects %s on %s and resolves its profile", (shell, platform, expected, directory) => {
+  const home = "C:\\Users\\Ada";
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  vi.spyOn(os, "homedir").mockReturnValue(home);
+  vi.stubEnv("HOME", undefined);
+  vi.stubEnv("USERPROFILE", home);
+  vi.stubEnv("SHELL", shell);
+  expect(resolveShellFromEnv()).toBe(expected);
+  if (directory) {
+    expect(resolveCompletionProfilePath("powershell")).toBe(
+      path.win32.join(home, "Documents", directory, "Microsoft.PowerShell_profile.ps1"),
+    );
+  }
+});
+
+it("rejects missing-cache installation and leaves an empty home untouched by removal dry-run", async ({
+  homeDir,
+  stateDir,
+}) => {
+  await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
+    "Completion cache not found",
+  );
+  await expect(
+    removeCompletionRegistrations({ stateDirs: [stateDir], preservePaths: [], dryRun: true }),
+  ).resolves.toEqual([]);
+  expect(await fs.readdir(homeDir)).toEqual([]);
+  const cachePath = resolveCompletionCachePath("bash", "openclaw");
+  await writeProfile(
+    "bash",
+    `# OpenClaw Completion\n[ -f "${cachePath}" ] && source "${cachePath}"\n`,
+  );
+  await expect(isCompletionInstalled("bash", "openclaw")).resolves.toBe(true);
+});
+
+portableIt.skipIf(process.platform === "win32").for([
+  [
+    "bash",
+    '# User text 合法 � 😀\n# OpenClaw Completion\n[[ -f "${HOME}/.openclaw/completions/openclaw.bash" ]] && source "${HOME}/.openclaw/completions/openclaw.bash"',
+    true,
+  ],
+  [
+    "fish",
+    'test -f "$HOME/.openclaw/completions/openclaw.fish"; and source "$HOME/.openclaw/completions/openclaw.fish"',
+    true,
+  ],
+  [
+    "bash",
+    '# OpenClaw Completion\n[ -f "$HOME/.other/completions/openclaw.bash" ] && source "$HOME/.other/completions/openclaw.bash"',
+    false,
+  ],
+] as const)(
+  "preserves %s hook %s (recognized=%s)",
+  async ([shell, hook, recognized], { homeDir, stateDir }) => {
+    const profilePath = path.join(
+      homeDir,
+      shell === "bash" ? ".bashrc" : ".config/fish/config.fish",
+    );
+    const cachePath = await writeCompletionCache(
+      shell,
+      shell === "bash"
+        ? "complete -W 'completion doctor' openclaw\n"
+        : "# cached fish completion\n",
+    );
+    if (shell === "bash" && recognized) {
+      expect(cachePath).toBe(path.join(stateDir, "completions", "openclaw.bash"));
+    }
+    await writeText(profilePath, hook + "\n");
+    await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(recognized);
+    await installCompletion(shell, true, "openclaw");
+    const first = await readProfile(profilePath);
+    if (recognized) {
+      expect(first).toBe(hook + "\n");
+    } else {
+      expect(first).toContain(hook.split("\n")[1] + "\n");
+      expect(first).toContain("# OpenClaw Completion");
+      expect(first).toContain(cachePath);
+      await expect(isCompletionInstalled(shell, "openclaw")).resolves.toBe(true);
+    }
+    await installCompletion(shell, true, "openclaw");
+    await expect(readProfile(profilePath)).resolves.toBe(first);
+    if (shell === "bash" && recognized) {
+      const freshBash = spawnSync(
+        "bash",
+        ["-c", `source "${profilePath}" && complete -p openclaw`],
+        { encoding: "utf8" },
+      );
+      expect(freshBash).toMatchObject({ stderr: "", status: 0 });
+      expect(freshBash.stdout).toContain("openclaw");
+    }
+    await expect(removeSelectedCompletion(stateDir)).resolves.toEqual(
+      recognized ? [] : [profilePath],
+    );
+    await expect(readProfile(profilePath)).resolves.toBe(
+      recognized ? hook + "\n" : hook.split("\n")[1] + "\n\n",
+    );
+  },
+);

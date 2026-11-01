@@ -4,6 +4,7 @@ import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
+import * as autoRun from "./update-startup-auto-run.js";
 import { runGatewayUpdateCheck } from "./update-startup.js";
 import {
   getUpdateAvailable,
@@ -17,14 +18,16 @@ const mocks = vi.hoisted(() => ({
   runAutoUpdate: vi.fn(),
 }));
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: mocks.telemetry }));
-vi.mock("../state/config-machine-state.js", () => ({ readConfigMachineState: () => null }));
-vi.mock("../state/config-machine-state-write.js", () => ({
-  writeConfigMachineState: mocks.writeState,
+// mock-isolation: Update selection uses synthetic machine state without opening SQLite.
+vi.mock("../state/config-machine-state-async.js", () => ({
+  readConfigMachineStateAsync: async () => null,
+  writeConfigMachineStateAsync: mocks.writeState,
 }));
 
 let lifecycle: UpdateCheckLifecycle;
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(autoRun, "runAutoUpdateCommand").mockImplementation(mocks.runAutoUpdate);
   vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "");
   resetUpdateStatusState();
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
@@ -32,6 +35,7 @@ beforeEach(() => {
 afterEach(async () => {
   await lifecycle.stop();
   await lifecycle.scheduler.stop();
+  vi.restoreAllMocks();
   resetUpdateStatusState();
   vi.unstubAllEnvs();
 });
@@ -62,7 +66,6 @@ it.each(["stable", "dev"] as const)(
         log: { info: vi.fn() },
         isNixMode: false,
         allowInTests: true,
-        runAutoUpdate: mocks.runAutoUpdate,
       },
       lifecycle,
     );

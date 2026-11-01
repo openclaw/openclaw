@@ -312,11 +312,10 @@ export function requestTalkVoiceChange(params: {
     completion,
     timer: setTimeout(() => {
       cancelChange(change, new Error("Voice change timed out before the replacement connected"));
-    }, TALK_VOICE_CHANGE_TIMEOUT_MS),
+    }, TALK_VOICE_CHANGE_TIMEOUT_MS).unref(),
     claimed: false,
     clientReady: false,
   };
-  change.timer.unref?.();
   changes.set(id, change);
   trackConnection(params.requesterConnId);
   try {
@@ -349,8 +348,11 @@ export function prepareTalkVoiceReplacement(params: {
   assertChangeCurrent(change);
   change.claimed = true;
   return {
-    ...change.original.launch,
-    voice: change.voice,
+    launch: {
+      provider: change.original.launch.provider,
+      model: change.original.launch.model,
+      voice: change.voice,
+    },
     assertCurrent: (target?: PreparedTalkSessionTarget) => {
       assertChangeCurrent(change);
       if (target) {

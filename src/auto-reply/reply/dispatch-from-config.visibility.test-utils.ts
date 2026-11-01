@@ -3,18 +3,15 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  createDispatcher,
-  hookMocks,
-  sessionStoreMocks,
-} from "./dispatch-from-config.shared.test-harness.js";
+import { createDispatcher, hookMocks } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticGroupReplyConfig,
   dispatchReplyFromConfig,
   setNoAbort,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
+import { createDispatchVerboseSession } from "./dispatch-from-config.verbose-session.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -26,21 +23,22 @@ describe("reply dispatch live visibility contracts", () => {
     "reports live %s verbose progress visibility to the channel",
     async (mode) => {
       setNoAbort();
-      sessionStoreMocks.currentEntry = { verboseLevel: "on" };
       const cfg = automaticGroupReplyConfig;
       const dispatcher = createDispatcher();
+      const sessionKey = "agent:main:whatsapp:group:123@g.us";
       const ctx = buildTestCtx({
         ChatType: "group",
         From: "whatsapp:group:123@g.us",
-        SessionKey: "agent:main:whatsapp:group:123@g.us",
+        SessionKey: sessionKey,
       });
 
+      await using session = await createDispatchVerboseSession(sessionKey, "on");
       let isActive: (() => boolean | Promise<boolean>) | undefined;
       let activeDuringRun: boolean | undefined;
       let activeAfterLevelChange: boolean | undefined;
       const replyResolver = async () => {
         activeDuringRun = await isActive?.();
-        sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+        session.writeLevel("off");
         activeAfterLevelChange = await isActive?.();
         return { text: "done" } satisfies ReplyPayload;
       };
@@ -67,7 +65,6 @@ describe("reply dispatch live visibility contracts", () => {
       expect(activeDuringRun).toBe(true);
       expect(activeAfterLevelChange).toBe(false);
 
-      sessionStoreMocks.currentEntry = { verboseLevel: "off" };
       let isActiveOff: (() => boolean | Promise<boolean>) | undefined;
       let activeDuringOffRun: boolean | undefined;
       await dispatchReplyFromConfig({
@@ -102,15 +99,16 @@ describe("reply dispatch live visibility contracts", () => {
       // Group policy needs the loaded fixture's conversation grammar.
       setActivePluginRegistry(createSessionConversationTestRegistry());
       setNoAbort();
-      sessionStoreMocks.currentEntry = { verboseLevel: "off" };
       const dispatcher = createDispatcher();
+      const sessionKey = "agent:main:matrix:group:!room:test";
       const ctx = buildTestCtx({
         Provider: "matrix",
         Surface: "matrix",
         ChatType: "group",
         From: "matrix:!room:test",
-        SessionKey: "agent:main:matrix:group:!room:test",
+        SessionKey: sessionKey,
       });
+      await using session = await createDispatchVerboseSession(sessionKey, "off");
       let initialHookState: boolean | undefined;
       let updatedHookState: boolean | undefined;
       hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event: unknown) => {
@@ -122,7 +120,7 @@ describe("reply dispatch live visibility contracts", () => {
           mode === "async"
             ? await replyDispatchEvent.shouldSendToolSummariesAsync()
             : replyDispatchEvent.shouldSendToolSummaries;
-        sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+        session.writeLevel("on");
         updatedHookState =
           mode === "async"
             ? await replyDispatchEvent.shouldSendToolSummariesAsync()

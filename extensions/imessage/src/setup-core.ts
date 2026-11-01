@@ -145,7 +145,7 @@ export const imessageCompletionNote = {
     `Update imsg after imsg fixes or missing-capability errors: ${IMESSAGE_UPDATE_COMMAND}`,
     "Private API mode is strongly encouraged for replies, tapbacks, effects, polls, attachments, and group actions.",
     "After Private API setup, run `imsg launch`, then `openclaw channels status --probe`.",
-    "Ensure OpenClaw has Full Disk Access to Messages DB.",
+    "Give OpenClaw Full Disk Access to the Messages database.",
     "Grant Automation permission for Messages when prompted.",
     "List chats with: imsg chats --limit 20",
     `Docs: ${formatDocsLink("/imessage", "imessage")}`,

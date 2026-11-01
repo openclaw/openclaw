@@ -8,6 +8,7 @@ import {
   probeTreeClone,
   readCloneFileMetadata,
 } from "@openclaw/fs-safe/copy";
+import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
 import type {
   FsSafeCopyRead,
   FsSafeCopyReply,
@@ -39,7 +40,13 @@ if (parentPort) {
     try {
       switch (command.type) {
         case "probe":
-          return { type: "probe", backend: probeTreeClone(command.parent) };
+          return {
+            type: "probe",
+            backend: probeTreeClone(command.parent),
+            nativeMode: getFsSafeNativeConfig().mode,
+          };
+        case "acl":
+          return { type: "acl", acl: inspectDarwinAcl(command.path) };
         case "metadata":
           return { type: "metadata", entries: await readCloneFileMetadata(command.paths) };
         default:

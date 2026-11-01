@@ -40,7 +40,14 @@ type ManagedProcessGroupChild = {
   pid?: number;
   signalCode?: string | null;
 };
+type ManagedProcessGroupObservation = {
+  pid: number;
+  error: string;
+  census?: { status: number | null; signal?: string | null; error?: string; rows: string };
+  recheck?: string;
+};
 type ManagedProcessGroupOptions = {
+  onIndeterminate?: (observation: ManagedProcessGroupObservation) => void;
   deadlineAt?: number;
   errorPolicy: ManagedProcessGroupErrorPolicy;
   inspectLeaderWhenNoGroup?: boolean;
@@ -84,6 +91,14 @@ type ManagedCommandOptions = {
   comSpec?: string;
 };
 
+export type ManagedCommandTimeoutObservation = {
+  elapsedMs: number;
+  /** An observed leader exit, not proof that descendants have exited. */
+  exit: { code: number | null; signal: NodeJS.Signals | null; elapsedMs: number } | null;
+  stdout: { bytes: number; lastDataElapsedMs: number | null; closed: boolean } | null;
+  stderr: { bytes: number; lastDataElapsedMs: number | null; closed: boolean } | null;
+};
+
 export type RunManagedCommandOptions = ManagedCommandOptions & {
   memoryLimitBytes?: number;
   onMemoryScope?: (unit: string) => void;
@@ -94,10 +109,14 @@ export type RunManagedCommandOptions = ManagedCommandOptions & {
   requireProcessTreeExit?: boolean;
   runTaskkill?: TaskkillRunner;
   onReady?: (child: ChildProcess) => void;
+  /** Synchronous, scalar-only observation before timeout cancellation. Consumes piped output. */
+  onTimeout?: (observation: ManagedCommandTimeoutObservation) => void;
   signal?: AbortSignal;
   abortKillGraceMs?: number;
   cleanupDrainTimeoutMs?: number;
   onSignal?: (signal: NodeJS.Signals) => void;
+  /** For callers that immediately terminate themselves after receiving the result. */
+  waitForCleanupRelease?: boolean;
 };
 
 type ManagedCommandOutcome =
@@ -374,6 +393,7 @@ export function inspectManagedProcessGroup(
     deadlineAt,
     errorPolicy,
     inspectLeaderWhenNoGroup = false,
+    onIndeterminate,
     platform = process.platform,
     useProcessGroup = platform !== "win32",
   }: ManagedProcessGroupOptions,
@@ -408,12 +428,18 @@ export function inspectManagedProcessGroup(
     if (isMissingProcessError(error)) {
       return "dead";
     }
-    if (isExitedDarwinGroup(child, platform, error, deadlineAt)) {
+    const observation: ManagedProcessGroupObservation = {
+      pid,
+      error: processErrorCode(error) ?? "UNKNOWN",
+    };
+    if (isExitedDarwinGroup(child, platform, error, deadlineAt, observation)) {
       return "dead";
     }
-    return errorPolicy === "alive-on-eperm" && hasProcessErrorCode(error, "EPERM")
-      ? "live"
-      : "indeterminate";
+    if (errorPolicy === "alive-on-eperm" && hasProcessErrorCode(error, "EPERM")) {
+      return "live";
+    }
+    onIndeterminate?.(observation);
+    return "indeterminate";
   }
 }
 
@@ -421,7 +447,8 @@ function isExitedDarwinGroup(
   child: ManagedProcessGroupChild,
   platform: NodeJS.Platform,
   error: unknown,
-  deadlineAt?: number,
+  deadlineAt: number | undefined,
+  observation?: ManagedProcessGroupObservation,
 ): boolean {
   if (
     platform !== "darwin" ||
@@ -433,12 +460,18 @@ function isExitedDarwinGroup(
   }
   // XNU killpg skips zombies and returns EPERM when none are signalable.
   // Require a zombie-only census or kernel-confirmed disappearance during ps.
-  if (isZombieProcessGroup(child.pid, platform, deadlineAt)) {
+  if (isZombieProcessGroup(child.pid, platform, deadlineAt, observation)) {
     return true;
   }
   try {
     process.kill(-child.pid, 0);
+    if (observation) {
+      observation.recheck = "live";
+    }
   } catch (probeError) {
+    if (observation) {
+      observation.recheck = processErrorCode(probeError) ?? "UNKNOWN";
+    }
     return isMissingProcessError(probeError);
   }
   return false;
@@ -448,6 +481,7 @@ function isZombieProcessGroup(
   pid: number,
   platform: NodeJS.Platform,
   deadlineAt?: number,
+  observation?: ManagedProcessGroupObservation,
 ): boolean {
   const timeout =
     deadlineAt === undefined
@@ -456,6 +490,9 @@ function isZombieProcessGroup(
   // Snapshot work shares its owner's deadline. Exhaustion is not death, and
   // timeout: 0 would silently remove Node's subprocess timeout.
   if (timeout <= 0) {
+    if (observation) {
+      observation.census = { status: null, error: "DEADLINE_EXHAUSTED", rows: "" };
+    }
     return false;
   }
   // Detached children lead their own session. Linux kill(0) includes zombies,
@@ -469,6 +506,15 @@ function isZombieProcessGroup(
     timeout,
     killSignal: "SIGKILL",
   });
+  if (observation) {
+    // Only PGID/state rows are requested. Bound failure evidence without recording argv.
+    observation.census = {
+      status: result.status,
+      signal: result.signal,
+      error: processErrorCode(result.error),
+      rows: result.stdout?.slice(0, 1024) ?? "",
+    };
+  }
   // BSD ps appends flags (for example ZN for a niced zombie); Linux state is one letter.
   const state = platform === "darwin" ? "Z[+<>AELNSsVWX]*" : "Z";
   const zombie = new RegExp(`^\\s*${pid}\\s+${state}\\s*$`, "u");
@@ -528,7 +574,10 @@ export async function waitForManagedProcessGroupExit(
 }
 
 /** Run a child command while forwarding termination signals to its process group. */
-export async function runManagedCommand(options: RunManagedCommandOptions): Promise<number> {
+export async function runManagedCommand({
+  waitForCleanupRelease = false,
+  ...options
+}: RunManagedCommandOptions): Promise<number> {
   const command = {
     ...options,
     args: options.args?.slice(),
@@ -542,11 +591,14 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
   command.signal?.throwIfAborted();
   let receivedSignal: NodeJS.Signals | undefined;
   let childStarted = false;
+  let settling = false;
   const admission = new AbortController();
   const rememberSignal = (received: NodeJS.Signals) => {
     receivedSignal ??= received;
-    if (!childStarted) {
+    if (!childStarted || settling) {
       command.onSignal?.(received);
+    }
+    if (!childStarted) {
       admission.abort();
     }
   };
@@ -577,8 +629,12 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
     joined = !hasUnjoinedWork(error);
     outcome = { error };
   }
+  settling = true;
   try {
-    releaseCleanup?.(joined);
+    const released = releaseCleanup?.(joined, waitForCleanupRelease);
+    if (waitForCleanupRelease) {
+      await released;
+    }
   } finally {
     managedChildren.delete(rememberSignal);
     removeSignalHandlersIfIdle();
@@ -591,7 +647,9 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
       }
       return signalExitCode(receivedSignal ?? error.signal);
     }
-    if (receivedSignal && hasProcessErrorCode(error, "ABORT_ERR")) {
+    // A caller can abort in its own OS signal handler. Preserve its cancellation
+    // result instead of treating the same signal as an unhandled interruption.
+    if (receivedSignal && !command.signal?.aborted && hasProcessErrorCode(error, "ABORT_ERR")) {
       return signalExitCode(receivedSignal);
     }
     throw error;
@@ -693,6 +751,7 @@ async function runManagedCommandInner(
     requireProcessTreeExit = false,
     runTaskkill = spawnSync,
     onReady,
+    onTimeout,
     signal,
     abortKillGraceMs,
     cleanupDrainTimeoutMs,
@@ -754,6 +813,7 @@ async function runManagedCommandInner(
   // Register before spawn: a child can become ready before spawn returns.
   installSignalHandlers();
   let child: ChildProcess;
+  const startedAt = onTimeout ? Date.now() : 0;
   try {
     child = spawnManagedChild(spawnSpec.command, spawnSpec.args, spawnSpec.options);
   } catch (error) {
@@ -761,6 +821,11 @@ async function runManagedCommandInner(
     releaseOwnership();
     throw error;
   }
+  let childClosed = false;
+  child.once("close", () => {
+    childClosed = true;
+    clearTimeout(timeoutTimer);
+  });
   const cleanupHandoff = handoff.attach(child);
   if (cleanupHandoff) {
     cleanupHandoffs.set(child, cleanupHandoff);
@@ -776,6 +841,31 @@ async function runManagedCommandInner(
     pipe.once("close", onClose);
     return () => pipe.off("close", onClose);
   });
+  let observedExit: ManagedCommandTimeoutObservation["exit"] = null;
+  const observeExit = (code: number | null, received: NodeJS.Signals | null) => {
+    observedExit = { code, signal: received, elapsedMs: Date.now() - startedAt };
+  };
+  const outputProgress = onTimeout
+    ? [child.stdout, child.stderr].map((pipe) => {
+        if (!pipe) {
+          return null;
+        }
+        let bytes = 0;
+        let lastDataElapsedMs: number | null = null;
+        const observeData = (data: Buffer | string) => {
+          bytes += Buffer.byteLength(data);
+          lastDataElapsedMs = Date.now() - startedAt;
+        };
+        pipe.on("data", observeData);
+        return {
+          snapshot: () => ({ bytes, lastDataElapsedMs, closed: !pendingOutputCloses.has(pipe) }),
+          remove: () => pipe.off("data", observeData),
+        };
+      })
+    : [];
+  if (onTimeout) {
+    child.once("exit", observeExit);
+  }
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   let finalization: Promise<{ type: "failed"; error: unknown } | undefined> | undefined;
   const stopController = new AbortController();
@@ -807,6 +897,7 @@ async function runManagedCommandInner(
       forceKillOnLeaderExit,
       drainTimeoutMs: cleanupDrainTimeoutMs,
       areOutputPipesClosed: () => pendingOutputCloses.size === 0,
+      isChildClosed: () => childClosed,
       onTerminated: releaseOwnership,
       stopControl,
     }).then(
@@ -839,7 +930,6 @@ async function runManagedCommandInner(
       }
     });
     // The wall deadline includes output drainage, but not group verification after close.
-    child.once("close", () => clearTimeout(timeoutTimer));
     // Tree owners must start cleanup at exit: descendants can hold output
     // open indefinitely. Finalization still joins the group and output pipes.
     child.once(ownsProcessTree ? "exit" : "close", (status, received) => {
@@ -850,6 +940,16 @@ async function runManagedCommandInner(
     });
     if (timeoutMs !== undefined) {
       timeoutTimer = setTimeout(() => {
+        try {
+          onTimeout?.({
+            elapsedMs: Date.now() - startedAt,
+            exit: observedExit,
+            stdout: outputProgress[0]?.snapshot() ?? null,
+            stderr: outputProgress[1]?.snapshot() ?? null,
+          });
+        } catch {
+          // Diagnostics must not replace the timeout or prevent joined cleanup.
+        }
         void stop({ type: "timeout" }, "SIGTERM", timeoutKillGraceMs, timeoutForceKillOnLeaderExit);
       }, timeoutMs);
     }
@@ -918,6 +1018,10 @@ async function runManagedCommandInner(
     for (const removeListener of removeOutputCloseListeners) {
       removeListener();
     }
+    child.off("exit", observeExit);
+    for (const progress of outputProgress) {
+      progress?.remove();
+    }
     clearTimeout(timeoutTimer);
     signal?.removeEventListener("abort", abort);
     managedChildren.delete(forwardSignal);
@@ -939,6 +1043,7 @@ export async function finalizeManagedChild(
     drainTimeoutMs = PROCESS_GROUP_DRAIN_TIMEOUT_MS,
     retainOutputOnFailure = false,
     areOutputPipesClosed,
+    isChildClosed = () => true,
     onTerminated = () => {},
     stopControl,
   }: {
@@ -949,6 +1054,7 @@ export async function finalizeManagedChild(
     drainTimeoutMs?: number;
     retainOutputOnFailure?: boolean;
     areOutputPipesClosed?: () => boolean;
+    isChildClosed?: () => boolean;
     onTerminated?: () => void;
     stopControl?: ManagedChildStopControl;
   },
@@ -1156,6 +1262,7 @@ export async function finalizeManagedChild(
       if (
         groupState === "dead" &&
         exited &&
+        isChildClosed() &&
         outputClosed() &&
         cleanupHandoff?.settled() !== false
       ) {
@@ -1407,6 +1514,11 @@ function isMissingProcessError(error: unknown) {
   return hasProcessErrorCode(error, "ESRCH");
 }
 
+function processErrorCode(error: unknown): string | undefined {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/u.test(code) ? code : undefined;
+}
+
 function hasProcessErrorCode(error: unknown, code: string) {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
+  return processErrorCode(error) === code;
 }

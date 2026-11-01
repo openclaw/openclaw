@@ -6,20 +6,23 @@ import type {
   SessionTypingEvent,
   TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasMultiplePresenceIdentities, projectPresencePayload } from "../../lib/presence-users.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   resolveUiConversationIdentity,
   scopedSessionArtifactKey,
+  uiConversationMatches,
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
+import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
@@ -28,7 +31,10 @@ import {
   type ChatTypingActorView,
   type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
-import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { canManageChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
+
+registerChatSessionEnglish();
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;
@@ -40,28 +46,55 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   // The existing actor/timer owner also owns this bounded presentation cache.
   // Every mutation below refreshes it; reconnect, route, and teardown clear it.
   private readonly typingActiveIds = new Set<string>();
-  private typingViews: ChatTypingActorView[] = [];
-  protected typingOverflow?: ChatTypingOverflow;
   private typingRequestTimer?: number;
   private typingRequestSentAt?: number;
   private pendingTypingRequest?: () => void;
 
+  protected invalidateSessionSharing(payload: unknown): void {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const event = readSessionChangedEvent(payload);
+    const states = new Map(this.collaboration.sharingStates);
+    for (const cacheKey of states.keys()) {
+      const [agentId, sessionKey] = cacheKey.split("\0");
+      if (event && !uiConversationMatches(state, sessionKey, event.key, event.agentId, agentId)) {
+        continue;
+      }
+      // Removing the request slot also fences reads started before the change.
+      states.delete(cacheKey);
+      this.sessionSharingHydrationTargets.delete(cacheKey);
+    }
+    this.collaboration.sharingStates = states;
+  }
+
   protected syncSelectedSessionSharing(session: GatewaySessionRow | undefined): void {
     const sessionId = session?.sessionId?.trim();
-    if (!session || !sessionId || !this.presented || !canManageChatSessionSharing(session)) {
+    if (
+      !session ||
+      !sessionId ||
+      !this.presented ||
+      !canManageChatSessionSharing(session) ||
+      !readSessionMethodAccess(this.context.gateway.snapshot, {
+        method: "session.members.listEvidence",
+        requiredScope: "operator.read",
+      }).allowed
+    ) {
       return;
     }
     const cacheKey = this.sessionSharingCacheKey(session.key);
     if (
       this.sessionSharingHydrationTargets.get(cacheKey) === sessionId &&
-      this.sessionSharingStates.has(cacheKey)
+      this.collaboration.sharingStates.has(cacheKey)
     ) {
       return;
     }
     this.sessionSharingHydrationTargets.set(cacheKey, sessionId);
-    const states = new Map(this.sessionSharingStates);
-    states.delete(cacheKey);
-    this.sessionSharingStates = states;
+    const states = new Map(this.collaboration.sharingStates);
+    if (states.delete(cacheKey)) {
+      this.collaboration.sharingStates = states;
+    }
     // Selecting a new generation under the same key must supersede an older
     // in-flight read. loadSessionSharing owns the connection and instance guards.
     void this.loadSessionSharing(session, true);
@@ -86,17 +119,17 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   }
 
   protected hasMultipleIdentities(): boolean {
-    return hasMultiplePresenceIdentities(this.presencePayload);
+    return hasMultiplePresenceIdentities(this.presence.snapshot);
   }
 
   protected resetSessionSuggestions(): void {
     this.sessionSuggestionsRequestVersion += 1;
     this.sessionSuggestionsRefreshQueued = false;
-    this.sessionSuggestions = [];
-    this.sessionSuggestionRole = undefined;
-    this.sessionSuggestionBusyIds.clear();
-    this.sessionSuggestionAddOperation = undefined;
-    this.sessionSuggestionEditOperation = undefined;
+    this.collaboration.suggestions = [];
+    this.collaboration.role = undefined;
+    this.collaboration.busyIds = new Set();
+    this.collaboration.addOperation = undefined;
+    this.collaboration.editOperation = undefined;
   }
 
   protected syncSessionSuggestionTarget(
@@ -104,7 +137,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     session: GatewaySessionRow | undefined,
   ): void {
     const signature = session
-      ? `${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
+      ? `${this.connectionGeneration}\0${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
       : "";
     if (signature === this.sessionSuggestionTargetSignature) {
       return;
@@ -152,9 +185,8 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       !this.hasMultipleIdentities() ||
       !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "session.suggestions.list")
     ) {
-      this.sessionSuggestions = [];
-      this.sessionSuggestionRole = undefined;
-      this.requestUpdate();
+      this.collaboration.suggestions = [];
+      this.collaboration.role = undefined;
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -175,17 +207,15 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ) {
         return;
       }
-      this.sessionSuggestions = result.suggestions;
-      this.sessionSuggestionRole = result.role;
-      this.requestUpdate();
+      this.collaboration.suggestions = result.suggestions;
+      this.collaboration.role = result.role;
     } catch {
       if (
         requestVersion === this.sessionSuggestionsRequestVersion &&
         targetSignature === this.sessionSuggestionTargetSignature
       ) {
-        this.sessionSuggestions = [];
-        this.sessionSuggestionRole = undefined;
-        this.requestUpdate();
+        this.collaboration.suggestions = [];
+        this.collaboration.role = undefined;
       }
     }
   }
@@ -195,31 +225,30 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       return;
     }
     const shouldRefresh =
-      this.sessionSuggestionsRefreshPromise !== undefined ||
-      this.sessionSuggestionRole !== undefined;
+      this.sessionSuggestionsRefreshPromise !== undefined || this.collaboration.role !== undefined;
     this.sessionSuggestionsRequestVersion += 1;
     const selfId = this.context.gateway.snapshot.selfUser?.id;
-    if (this.sessionSuggestionRole === "viewer" && event.suggestion.author.id !== selfId) {
+    if (this.collaboration.role === "viewer" && event.suggestion.author.id !== selfId) {
       return;
     }
     if (event.action === "added") {
-      this.sessionSuggestions = [
-        ...this.sessionSuggestions.filter((item) => item.id !== event.suggestion.id),
+      this.collaboration.suggestions = [
+        ...this.collaboration.suggestions.filter((item) => item.id !== event.suggestion.id),
         event.suggestion,
       ].toSorted(
         (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
       );
     } else if (event.suggestion.author.id === selfId) {
-      this.sessionSuggestions = this.sessionSuggestions.map((item) =>
+      this.collaboration.suggestions = this.collaboration.suggestions.map((item) =>
         item.id === event.suggestion.id ? event.suggestion : item,
       );
     } else {
-      this.sessionSuggestions = this.sessionSuggestions.filter(
+      this.collaboration.suggestions = this.collaboration.suggestions.filter(
         (item) => item.id !== event.suggestion.id,
       );
     }
-    this.sessionSuggestionBusyIds.delete(event.suggestion.id);
-    this.requestUpdate();
+    this.collaboration.busyIds.delete(event.suggestion.id);
+    this.collaboration.busyIds = new Set(this.collaboration.busyIds);
     if (shouldRefresh) {
       void this.refreshSessionSuggestions();
     }
@@ -231,7 +260,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (
       !scope ||
       !text.trim() ||
-      this.sessionSuggestionAddOperation ||
+      this.collaboration.addOperation ||
       !this.hasMultipleIdentities()
     ) {
       return;
@@ -243,13 +272,11 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
           : "chat.sessionSuggestions.attachmentsUnsupported",
       );
       scope.state.lastError = scope.state.chatError;
-      scope.state.requestUpdate?.();
       return;
     }
     const sessionKey = scope.state.sessionKey;
     const operation = Symbol("session-suggestion-add");
-    this.sessionSuggestionAddOperation = operation;
-    this.requestUpdate();
+    this.collaboration.addOperation = operation;
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
         "session.suggestions.add",
@@ -260,7 +287,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         },
       );
       if (
-        this.sessionSuggestionAddOperation !== operation ||
+        this.collaboration.addOperation !== operation ||
         !this.isConnectionScopeCurrent(scope) ||
         scope.state.sessionKey !== sessionKey
       ) {
@@ -269,22 +296,18 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       if (scope.state.chatMessage === text && !scope.state.chatMentions?.length) {
         scope.state.handleChatDraftChange("", []);
       }
-      this.sessionSuggestions = [
-        ...this.sessionSuggestions.filter((item) => item.id !== result.suggestion.id),
+      this.collaboration.suggestions = [
+        ...this.collaboration.suggestions.filter((item) => item.id !== result.suggestion.id),
         result.suggestion,
       ];
     } catch (error) {
-      if (
-        this.sessionSuggestionAddOperation === operation &&
-        this.isConnectionScopeCurrent(scope)
-      ) {
+      if (this.collaboration.addOperation === operation && this.isConnectionScopeCurrent(scope)) {
         scope.state.chatError = formatUiError(error);
         scope.state.lastError = scope.state.chatError;
       }
     } finally {
-      if (this.sessionSuggestionAddOperation === operation) {
-        this.sessionSuggestionAddOperation = undefined;
-        this.requestUpdate();
+      if (this.collaboration.addOperation === operation) {
+        this.collaboration.addOperation = undefined;
       }
     }
   }
@@ -296,8 +319,8 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      this.sessionSuggestionBusyIds.has(suggestion.id) ||
-      (resolution === "edit" && this.sessionSuggestionEditOperation !== undefined) ||
+      this.collaboration.busyIds.has(suggestion.id) ||
+      (resolution === "edit" && this.collaboration.editOperation !== undefined) ||
       !this.suggestionMatchesCurrentSession(suggestion)
     ) {
       return;
@@ -320,18 +343,18 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         : undefined;
     const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
     if (editOperation) {
-      this.sessionSuggestionEditOperation = editOperation;
+      this.collaboration.editOperation = editOperation;
     }
-    this.sessionSuggestionBusyIds.add(suggestion.id);
+    this.collaboration.busyIds = new Set(this.collaboration.busyIds).add(suggestion.id);
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
+      // The native pane hands focus to the composer renderer after publishing the draft.
       queueMicrotask(() =>
-        this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+        getChatComposerState(this.presentationId).composerTextarea?.focus({
           preventScroll: true,
         }),
       );
     }
-    this.requestUpdate();
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
         "session.suggestions.resolve",
@@ -345,8 +368,8 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       if (!isCurrentTarget()) {
         return;
       }
-      const remaining = this.sessionSuggestions.filter((item) => item.id !== suggestion.id);
-      this.sessionSuggestions =
+      const remaining = this.collaboration.suggestions.filter((item) => item.id !== suggestion.id);
+      this.collaboration.suggestions =
         result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id
           ? [...remaining, result.suggestion].toSorted(
               (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
@@ -371,11 +394,11 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       }
     } finally {
       if (isCurrentTarget()) {
-        if (this.sessionSuggestionEditOperation === editOperation) {
-          this.sessionSuggestionEditOperation = undefined;
+        if (this.collaboration.editOperation === editOperation) {
+          this.collaboration.editOperation = undefined;
         }
-        this.sessionSuggestionBusyIds.delete(suggestion.id);
-        this.requestUpdate();
+        this.collaboration.busyIds.delete(suggestion.id);
+        this.collaboration.busyIds = new Set(this.collaboration.busyIds);
       }
     }
   }
@@ -399,7 +422,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const identity = resolveUiConversationIdentity(state, state.sessionKey);
     const watchedKey = scopedSessionArtifactKey(identity.sessionKey, identity.agentId);
     const viewers = new Set(
-      projectPresencePayload(this.presencePayload).users.flatMap((user) =>
+      projectPresencePayload(this.presence.snapshot).users.flatMap((user) =>
         user.identity?.type === "profile" && user.watchedSessions.includes(watchedKey)
           ? [user.identity.id]
           : [],
@@ -571,9 +594,9 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const overflow: ChatTypingOverflow | undefined =
       activeOverflow > 5 ? { several: true } : undefined;
     if (
-      views.length === this.typingViews.length &&
+      views.length === this.collaboration.typingViews.length &&
       views.every((view, index) => {
-        const previous = this.typingViews[index];
+        const previous = this.collaboration.typingViews[index];
         return (
           previous?.id === view.id &&
           previous.label === view.label &&
@@ -583,17 +606,12 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
           previous.exitDurationMs === view.exitDurationMs
         );
       }) &&
-      overflow?.several === this.typingOverflow?.several
+      overflow?.several === this.collaboration.typingOverflow?.several
     ) {
       return;
     }
-    this.typingViews = views;
-    this.typingOverflow = overflow;
-    this.requestUpdate();
-  }
-
-  protected typingActorViews(): ChatTypingActorView[] {
-    return this.typingViews;
+    this.collaboration.typingViews = views;
+    this.collaboration.typingOverflow = overflow;
   }
 
   protected sendTypingState(typing: boolean, preview?: string, cursor?: number): void {

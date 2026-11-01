@@ -57,11 +57,17 @@ internal enum class WearLaunchTarget(
   }
 }
 
-internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget = WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
+// Launched as the watch's default assistant: open the live Talk page.
+internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget =
+  when (intent?.action) {
+    Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND -> WearLaunchTarget.Voice
+    else -> WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
+  }
 
 internal fun consumeWearLaunchTarget(intent: Intent?): WearLaunchTarget =
   parseWearLaunchTarget(intent).also {
     intent?.removeExtra(extraWearLaunchTarget)
+    if (intent?.action == Intent.ACTION_ASSIST || intent?.action == Intent.ACTION_VOICE_COMMAND) intent.action = Intent.ACTION_MAIN
   }
 
 internal data class WearNavigationRequest(
@@ -206,20 +212,23 @@ internal fun OpenClawWearApp(
 
   fun submitMessage(rawMessage: String) {
     val message = rawMessage.trim()
-    val sessionId = snapshot?.activeSessionId
+    // System input can return after the composition that registered its callback.
+    val currentState = viewModel.state.value
+    val currentSnapshot = currentState.toConversationSnapshot()
+    val sessionId = currentSnapshot?.activeSessionId
     if (message.isEmpty()) {
       interaction = WearInteractionState.READY
       return
     }
     if (
-      !state.canSubmitReply || !state.connected || sessionId == null ||
+      !currentState.canSubmitReply || !currentState.connected || sessionId == null ||
       !viewModel.sendReply(message) { awaitingReplyRunId = it }
     ) {
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return
     }
-    expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
+    expectedAssistantKey = currentSnapshot.latestAssistantMessage()?.stableKey()
     awaitingReplySessionId = sessionId
     interaction = WearInteractionState.SENDING
     speaker.stop()
@@ -288,6 +297,13 @@ internal fun OpenClawWearApp(
       }
     lifecycleOwner.lifecycle.addObserver(observer)
     onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
+  // Screen-off stops the activity, and ON_STOP suspends Talk; hold the screen while the mic is live.
+  val realtimeLive = state.realtimeTalk.active || state.realtimeCapturing
+  DisposableEffect(view, realtimeLive) {
+    view.keepScreenOn = realtimeLive
+    onDispose { view.keepScreenOn = false }
   }
 
   fun toggleRealtimeTalk() {

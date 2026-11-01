@@ -8,7 +8,8 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveEnvVars } from "./config.js";
+import { resolveDefaultDbPath, resolveEnvVars } from "./config.js";
+import { acquireMemoryTableUsage } from "./lancedb-custody.js";
 import {
   hasAgentScopeColumn,
   memoryAgentPredicate,
@@ -105,11 +106,12 @@ function resolveConfiguredDbPath(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   pluginRoot: string,
+  stateDir: string,
 ): string {
   const pluginConfig = asOptionalRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
   const configured = typeof pluginConfig?.dbPath === "string" ? pluginConfig.dbPath.trim() : "";
   if (!configured) {
-    return path.join(resolveHome(env), ".openclaw", "memory", "lancedb");
+    return resolveDefaultDbPath(stateDir);
   }
   if (configured.includes("://")) {
     return configured;
@@ -144,25 +146,35 @@ async function openMemoryTable(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   pluginRoot: string;
+  stateDir: string;
 }): Promise<{
   connection: LanceDbConnection | null;
   table: LanceDbTable | null;
   dbPath: string;
+  usage?: Awaited<ReturnType<typeof acquireMemoryTableUsage>>;
 }> {
-  const dbPath = resolveConfiguredDbPath(params.config, params.env, params.pluginRoot);
+  const dbPath = resolveConfiguredDbPath(
+    params.config,
+    params.env,
+    params.pluginRoot,
+    params.stateDir,
+  );
   if (!dbPath.includes("://") && !fs.existsSync(dbPath)) {
     return { connection: null, table: null, dbPath };
   }
-  const lancedb = await import("@lancedb/lancedb");
-  const storageOptions = resolveStorageOptions(params.config, params.env);
-  const connection = await lancedb.connect(dbPath, storageOptions ? { storageOptions } : {});
+  const usage = await acquireMemoryTableUsage(dbPath);
+  let connection: LanceDbConnection | null = null;
   try {
+    const lancedb = await import("@lancedb/lancedb");
+    const storageOptions = resolveStorageOptions(params.config, params.env);
+    connection = await lancedb.connect(dbPath, storageOptions ? { storageOptions } : {});
     const table = (await connection.tableNames()).includes(MEMORY_TABLE_NAME)
       ? await connection.openTable(MEMORY_TABLE_NAME)
       : null;
-    return { connection, table, dbPath };
+    return { connection, table, dbPath, usage };
   } catch (error) {
-    connection.close();
+    connection?.close();
+    await usage?.release();
     throw error;
   }
 }
@@ -179,6 +191,7 @@ async function withMemoryTable<T>(
   } finally {
     opened.table?.close();
     opened.connection?.close();
+    await opened.usage?.release();
   }
 }
 

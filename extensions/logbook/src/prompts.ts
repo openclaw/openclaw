@@ -115,7 +115,7 @@ export function buildCardsPrompt(params: {
     "",
     `CATEGORY: one of ${CARD_CATEGORIES.join(", ")}.`,
     "",
-    'APP SITES: identify the main app or site per card as a canonical lower-case domain (figma.com, docs.google.com, github.com). Use "terminal" for terminals. Omit secondary when unclear. Never invent brands.',
+    'APP SITES: identify the main app or site per card as a lowercase domain (figma.com, docs.google.com, github.com). Use "terminal" for terminals. Omit secondary when unclear. Never invent brands.',
     "",
     "REVISION CONTRACT:",
     "\"Previous cards\" is a draft you are revising and extending with the new observations. Your output must cover the union of the previous cards' time range and the new observations' range; you may restructure freely inside it, but do not drop covered time. The final card may be shorter than the minimum.",

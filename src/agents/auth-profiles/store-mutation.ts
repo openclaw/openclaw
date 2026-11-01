@@ -1,7 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  prepareAuthProfileAuthorizationWrite,
+  copyAuthProfileAuthorizationIntent,
+  copyAuthProfileAuthorizationInheritance,
+} from "./authorization-lifetime.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
 import { runtimeAuthMetadataState } from "./runtime-snapshot-owner.js";
 import { buildPersistedAuthProfileState, coerceAuthProfileState } from "./state.js";
@@ -48,10 +52,12 @@ function preserveLegacyOAuthRefsOnSave(params: {
     // Preserve legacy oauthRef ownership when current save data did not replace
     // inline OAuth material; otherwise older credential references would be lost.
     nextProfiles ??= { ...params.payload.profiles };
+    copyAuthProfileAuthorizationInheritance(params.payload.profiles, nextProfiles);
     nextProfiles[profileId] = {
       ...credential,
       oauthRef: existingCredential.oauthRef,
     };
+    copyAuthProfileAuthorizationIntent(credential, nextProfiles[profileId]);
   }
   return nextProfiles ? { ...params.payload, profiles: nextProfiles } : params.payload;
 }
@@ -64,10 +70,13 @@ export function prepareAuthProfileStoreMutation(params: {
   selectionProfiles: AuthProfileStore["profiles"];
 }) {
   const { existingRaw, existingState, store, selectionProfiles } = params;
-  const payload = preserveLegacyOAuthRefsOnSave({
-    payload: buildPersistedAuthProfileSecretsStore(store),
+  const payload = prepareAuthProfileAuthorizationWrite(
     existingRaw,
-  });
+    preserveLegacyOAuthRefsOnSave({
+      payload: buildPersistedAuthProfileSecretsStore(store),
+      existingRaw,
+    }),
+  );
   const existingProfiles =
     isRecord(existingRaw) && isRecord(existingRaw.profiles) ? existingRaw.profiles : {};
   const changedProfileIds = [
@@ -79,24 +88,23 @@ export function prepareAuthProfileStoreMutation(params: {
     (profileId) =>
       Object.hasOwn(existingProfiles, profileId) !== Object.hasOwn(payload.profiles, profileId),
   );
-  const { statePayload, stateChanged, selectionChanged } = prepareAuthProfileStateMutation({
-    existingState,
-    store,
-    selectionProfiles,
-  });
+  const { statePayload, stateChanged, selectionChanged, availabilityOnly } =
+    prepareAuthProfileStateMutation({
+      existingState,
+      store,
+      selectionProfiles,
+    });
+  const credentialsChanged = !isDeepStrictEqual(existingRaw, payload);
   return {
     payload,
     statePayload,
     publication: {
       profileIds: changedProfileIds,
       profileSetChanged,
-      credentialsChanged: !isDeepStrictEqual(existingRaw, payload),
+      credentialsChanged,
+      availabilityOnly: !credentialsChanged && availabilityOnly,
       stateChanged,
       selectionChanged,
-      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-        payload.profiles,
-        changedProfileIds,
-      ),
     },
   };
 }
@@ -120,5 +128,8 @@ export function prepareAuthProfileStateMutation(params: {
     });
   const selectionChanged =
     stateChanged && !isDeepStrictEqual(metadata(previousState), metadata(statePayload));
-  return { statePayload, stateChanged, selectionChanged };
+  // Rotation bookkeeping shares the availability path; only explicit order changes affect catalog identity.
+  const availabilityOnly =
+    stateChanged && isDeepStrictEqual(previousState?.order, statePayload?.order);
+  return { statePayload, stateChanged, selectionChanged, availabilityOnly };
 }

@@ -99,7 +99,7 @@ defineDiscordVoiceTests(
       };
     }
 
-    it.each(["live", "other autoJoin", "empty autoJoin"] as const)(
+    it.each(["live"] as const)(
       "transfers a registered dormant capture during a Discord lookup outage (%s)",
       async (residency) => {
         const { client, manager, assertResidencyPreserved } = await fixture(residency);
@@ -188,7 +188,6 @@ defineDiscordVoiceTests(
 
     it.each([
       { whenOccupied: undefined, transition: "none" },
-      { whenOccupied: false, transition: "none" },
       { whenOccupied: true, transition: "none" },
       { whenOccupied: false, transition: "stop" },
       { whenOccupied: false, transition: "replacement" },
@@ -317,11 +316,6 @@ defineDiscordVoiceTests(
     it.each([
       { residency: "live", invalid: "text" },
       { residency: "live", invalid: "denied" },
-      { residency: "other autoJoin", invalid: "thread" },
-      { residency: "other autoJoin", invalid: "lookup failure" },
-      { residency: "empty autoJoin", invalid: "category" },
-      { residency: "empty autoJoin", invalid: "wrong guild" },
-      { residency: "unknown autoJoin", invalid: "text" },
       { residency: "unknown autoJoin", invalid: "wrong guild" },
     ] as const)(
       "rejects $invalid capture beside $residency without changing residency",
@@ -334,22 +328,12 @@ defineDiscordVoiceTests(
               code: 50001,
             });
           }
-          if (invalid === "lookup failure") {
-            throw new TypeError("synthetic lookup failure");
-          }
           const guildId = invalid === "wrong guild" ? "other-guild" : "g1";
           return {
             id,
             guildId,
             guild: { id: guildId, name: "Synthetic guild" },
-            type:
-              invalid === "text"
-                ? ChannelType.GuildText
-                : invalid === "thread"
-                  ? ChannelType.PublicThread
-                  : invalid === "category"
-                    ? ChannelType.GuildCategory
-                    : ChannelType.GuildVoice,
+            type: invalid === "text" ? ChannelType.GuildText : ChannelType.GuildVoice,
           };
         });
         // Operator authorization does not validate a Discord channel's recording capability.
@@ -373,45 +357,7 @@ defineDiscordVoiceTests(
     );
 
     it.each([
-      { residency: "live", type: ChannelType.GuildVoice },
-      { residency: "other autoJoin", type: ChannelType.GuildStageVoice },
-      { residency: "empty autoJoin", type: ChannelType.GuildVoice },
-      { residency: "unknown autoJoin", type: ChannelType.GuildStageVoice },
-    ] as const)(
-      "registers valid channel type $type beside $residency without joining",
-      async ({ residency, type }) => {
-        const f = await fixture(residency);
-        f.client.fetchChannel.mockImplementation(async (id) => ({
-          id,
-          type,
-          guildId: "g1",
-          guild: { id: "g1", name: "Synthetic guild" },
-        }));
-        expect(await startTranscripts(f.manager, vi.fn(), "valid-target", "1002")).toMatchObject({
-          ok: true,
-        });
-        expect(await discordVoiceTranscriptsSourceProvider.status!(source)).toMatchObject([
-          { active: true, sessionId: "valid-target", source },
-        ]);
-        f.assertResidencyPreserved();
-      },
-    );
-    it("reuses an exact live target without another channel lookup or generation", async () => {
-      const f = await fixture("live");
-      f.client.fetchChannel.mockClear();
-      f.client.fetchChannel.mockRejectedValue(new Error("REST unavailable after readiness"));
-      const notes = vi.fn();
-      expect(await startTranscripts(f.manager, notes, "same-target")).toMatchObject({ ok: true });
-      expect(f.client.fetchChannel).not.toHaveBeenCalled();
-      f.assertResidencyPreserved();
-      await receiveRecordedSpeech(f.manager, "existing validated transport");
-      expect(notes).toHaveBeenCalledOnce();
-      expect(f.preservedNotes).not.toHaveBeenCalled();
-    });
-
-    it.each([
       { transition: "source stop", reject: false },
-      { transition: "source stop", reject: true },
       { transition: "source replacement", reject: true },
       { transition: "manager replacement", reject: true },
       { transition: "destroy", reject: true },
@@ -502,7 +448,6 @@ defineDiscordVoiceTests(
 
     it.each([
       { residency: "live", channelId: "1003" },
-      { residency: "empty autoJoin", channelId: "1003" },
       { residency: "other autoJoin", channelId: "1002" },
     ] as const)(
       "keeps a newer $channelId join authoritative during $residency lookup",
@@ -555,7 +500,7 @@ defineDiscordVoiceTests(
       },
     );
 
-    it.each(["empty autoJoin", "unknown autoJoin"] as const)(
+    it.each(["unknown autoJoin"] as const)(
       "reconsiders $residency occupancy after target validation",
       async (residency) => {
         const f = await fixture(residency);

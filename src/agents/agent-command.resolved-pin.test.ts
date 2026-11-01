@@ -13,87 +13,51 @@ import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 vi.mock("./harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
-vi.mock("./command/runtime-loaders.js", () => ({
-  loadTranscriptResolveRuntime: async () => ({
-    resolveSessionTranscriptFile: async ({ sessionEntry }: { sessionEntry?: SessionEntry }) => ({
-      sessionEntry,
-      sessionFile: "synthetic-transcript",
-    }),
-  }),
-}));
 vi.mock("./command/attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry: SessionEntry }) => entry,
 }));
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
+const aliases = { latest: "middle", middle: "final" };
+const modelIdNormalization = { providers: { custom: { aliases } } };
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "fixture",
-      providers: ["custom"],
-      modelIdNormalization: {
-        providers: { custom: { aliases: { latest: "middle", middle: "final" } } },
-      },
-    },
-  ],
+  plugins: [{ id: "fixture", providers: ["custom"], modelIdNormalization }],
 });
 
+const collidingPolicy = ["custom/default", "custom/model"];
+const wildcardPolicy = ["custom/default", "custom/custom/*"];
 it.each([
-  { name: "legacy raw alias once", pin: "latest", expected: "middle", raw: true },
-  {
-    name: "configured default retained by an exact-only policy",
-    pin: "latest",
-    expected: "middle",
-    use: "default",
-    allow: ["custom/other"],
-  },
-  { name: "explicit alias once", pin: "latest", expected: "middle", use: "explicit" },
-  {
-    name: "resolved prefix rejected by colliding policy",
-    pin: "custom/model",
-    expected: "default",
-    allow: ["custom/default", "custom/model"],
-  },
-  {
-    name: "resolved prefix allowed by namespace wildcard",
-    pin: "custom/model",
-    expected: "custom/model",
-    allow: ["custom/default", "custom/custom/*"],
-  },
-  {
-    name: "locked resolved prefix",
-    pin: "custom/model",
-    expected: "custom/model",
-    allow: ["custom/default", "custom/model"],
-    locked: true,
-  },
-])("preserves $name through command selection", async (fixture) => {
-  await withStateDirEnv("command-resolved-pin-", async ({ stateDir }) => {
+  ["latest", "middle", "raw", undefined],
+  ["latest", "middle", "default", ["custom/other"]],
+  ["latest", "middle", "explicit", undefined],
+  ["custom/model", "default", "collision", collidingPolicy],
+  ["custom/model", "custom/model", "wildcard", wildcardPolicy],
+  ["custom/model", "custom/model", "locked", collidingPolicy],
+] as const)("selects %s to %s (%s)", (pin, expected, mode, allow) =>
+  withStateDirEnv("command-resolved-pin-", async ({ stateDir }) => {
     const cfg: OpenClawConfig = {
       plugins: { enabled: false },
       agents: {
         entries: { main: {} },
         defaults: {
-          model: fixture.use === "default" ? "custom/latest" : "custom/default",
+          model: mode === "default" ? "custom/latest" : "custom/default",
           thinkingDefault: "off",
-          ...(fixture.allow ? { modelPolicy: { allow: fixture.allow } } : {}),
+          ...(allow ? { modelPolicy: { allow: [...allow] } } : {}),
         },
       },
     };
     const sessionEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
-    if (!fixture.use) {
+    if (mode !== "default" && mode !== "explicit") {
       applyModelOverrideToSessionEntry({
         entry: sessionEntry,
-        selection: { provider: "custom", model: fixture.pin },
+        selection: { provider: "custom", model: pin },
       });
     }
-    if (fixture.raw) {
+    if (mode === "raw") {
       delete sessionEntry.modelOverrideRouteResolution;
     }
-    if (fixture.locked) {
-      sessionEntry.modelSelectionLocked = true;
-    }
+    sessionEntry.modelSelectionLocked = mode === "locked";
     const sessionKey = "agent:main:resolved-pin";
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
@@ -102,9 +66,7 @@ it.each([
           cfg,
           opts: {
             message: "hello",
-            ...(fixture.use === "explicit"
-              ? { model: "custom/latest", allowModelOverride: true }
-              : {}),
+            ...(mode === "explicit" ? { model: "custom/latest", allowModelOverride: true } : {}),
           },
           sessionEntry,
           sessionStore: { [sessionKey]: sessionEntry },
@@ -120,8 +82,8 @@ it.each([
           suppressVisibleSessionEffects: false,
           runContext: { messageChannel: "internal" },
         });
-        expect(selection).toMatchObject({ provider: "custom", model: fixture.expected });
+        expect(selection).toMatchObject({ provider: "custom", model: expected });
       },
     );
-  });
-});
+  }),
+);

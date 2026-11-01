@@ -6,10 +6,15 @@ They do not add an engine binary, container layer, or npm dependency to OpenClaw
 
 ## License boundary
 
-OpenClaw's adapter is MIT-licensed. Lightpanda 0.4.1 is
-**AGPL-3.0-or-later**, as stated in its
-[source header](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/src/main.zig#L1)
-and [license](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/LICENSE).
+OpenClaw's adapter is MIT-licensed. Lightpanda 1.0.2 is **AGPL**, with an
+upstream declaration inconsistency at its selected source commit: its
+[licensing document](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/LICENSING.md)
+says `AGPL-3.0-only`, while its
+[source header](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/src/main.zig#L1)
+allows version 3 or later. Preserve both declarations during redistribution
+review; neither makes the engine permissively licensed. The
+[license text](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/LICENSE)
+is AGPL version 3.
 The engine is independently installed and communicates with OpenClaw over CDP;
 OpenClaw does not link, vendor, or relicense its implementation. This is not an
 MIT-only stack or a certification that every deployment is legally compliant.
@@ -24,39 +29,70 @@ work; see the [GNU aggregation guidance](https://www.gnu.org/licenses/gpl-faq.ht
 
 ## Artifact integrity
 
-Reviewed on **2026-09-21**:
+Updated on **2026-10-23**:
 
-- [Release 0.4.1](https://github.com/lightpanda-io/browser/releases/tag/0.4.1)
-  resolves to source commit `614c1640af8065b1972559abef7ca4cea06f8ba3`.
+- [Release 1.0.2](https://github.com/lightpanda-io/browser/releases/tag/1.0.2)
+  was published on **2026-10-23 at 09:01:02 UTC** and resolves to source commit
+  `c5f7bb29b127040c899d4e181b5709f76fc71a6f`.
 - [SHA256SUMS](SHA256SUMS) records all four official Linux/macOS x86-64/ARM64
-  binary digests. Each matched the corresponding release API digest.
+  binary digests from the release API. The downloaded Linux x86-64 binary also
+  matched its checksum before execution and reported version 1.0.2.
 - [compose.yaml](compose.yaml) pins the official multi-platform image index,
-  rather than relying on the version tag alone.
+  rather than relying on the version tag alone. The index bytes matched the
+  registry's content digest; its platform configurations were created on
+  **2026-10-23 at 09:04:39 UTC** (amd64) and **09:04:40 UTC** (arm64).
 
 | OCI object           | SHA-256 digest                                                     |
 | -------------------- | ------------------------------------------------------------------ |
-| Image index          | `73f67d2dc0bc243f3a8c87065c9871c98b121197baf7b650df5da91b33b98f02` |
-| Linux amd64 manifest | `a20e5d4671a3c5d4af42eb41c1c451e0aa684b0ea9cfe5fa18901ad82dc9ad88` |
-| Linux arm64 manifest | `c7b93852d3f40693826209e2763327199bafe50d376fa9b805d90954f8a06de3` |
+| Image index          | `5d1d724c476957d8c2f8393a51fd089477523b0e5aa9c783c48688785d934fb9` |
+| Linux amd64 manifest | `0fd590f7072f15ff8f681b546bdda231a9f1d65360da27376c02cb72b2a0413e` |
+| Linux arm64 manifest | `94b7a6c97648a68a0905ea6f225b7ee36ba75b51bc6c6d5427f523f803f8e572` |
 
-Both image engine layers were downloaded and hashed without execution. Their
-`usr/bin/lightpanda` contents matched the corresponding Linux binary checksums
-in `SHA256SUMS`. The attached SLSA provenance identifies
-[browser-docker commit `844bcb2e3df1aac108f7301edb97f8859edd7e35`](https://github.com/lightpanda-io/browser-docker/blob/844bcb2e3df1aac108f7301edb97f8859edd7e35/Dockerfile)
-and build argument `TAG=0.4.1`. Neither architecture's attestation manifest
-included an SPDX or CycloneDX SBOM. This observation is not signature verification
-or proof of a reproducible build.
+The amd64 image's attached SLSA provenance identifies
+[browser-docker commit `4b9d558e5598f825b4e5fe469370c4ff6a3adb46`](https://github.com/lightpanda-io/browser-docker/blob/4b9d558e5598f825b4e5fe469370c4ff6a3adb46/Dockerfile)
+and build argument `TAG=1.0.2`. This inspection is not signature verification,
+proof of a reproducible build, or a complete binary SBOM review.
 
 That Dockerfile's final stage copies the engine, CA bundle, and Tini; it does not
-explicitly copy Lightpanda's license, source, or third-party notices. Its engine
-layers contain only the executable. The sample pulls upstream artifacts directly;
+explicitly copy Lightpanda's license, source, or third-party notices.
+The sample pulls upstream artifacts directly;
 it does not establish that mirroring or repackaging them satisfies redistribution
 obligations.
 
+## Adapter verification
+
+The unmodified `extensions/browser/scripts/bench-lightweight.ts` fixture passed
+with the checksum-verified 1.0.2 Linux x86-64 binary and the repository-pinned
+Playwright 1.64.0 client: one initial task and two warm tasks covered navigation,
+efficient AI snapshots with references, typing, clicking, exactly-once form
+submission, waiting, and text extraction. Unsupported capabilities still
+returned 501, a second page was rejected, and disconnecting invalidated the old
+target. No adapter or browser security policy changes were needed. The engine's
+default CORS enforcement remains enabled.
+
+A separate local fixture moved the Save button into an open shadow root. Its
+reference resolved, but the OpenClaw click failed in Playwright's hit-target
+check with `root.elementsFromPoint is not a function`. Lightpanda 1.0.2's
+upstream mouse-event improvements therefore do not establish shadow-DOM click
+support with this client. No forced click, page polyfill, or action replay was
+used to bypass the failure. Keep Chromium for affected sites.
+
+All runtime checks used isolated state and engine processes, not an existing
+browser, Gateway, profile, or user state. Docker route execution, Windows,
+Linux ARM64, and both macOS architectures remain unverified by this update.
+The other three native binary pins were checked against release API digests,
+without download or execution.
+
+The retained adapter observations above do not qualify this version's Compose
+WebSocket-readiness probe, independent probe-session close, crash restart, or
+SIGTERM/stop-grace behavior. Those container-specific checks require execution
+against the exact pinned image; historical 0.4.1 results are not proof for the selected image.
+
 ## Existing JavaScript clients
 
-The adapter reuses these pre-existing dependencies without changing package
-manifests or the lockfile:
+The following client inspection records the **2026-09-21** audit. Current client
+versions and integrity are owned by the package manifests and lockfile; selecting
+the external engine does not add a JavaScript dependency:
 
 | Package                                                              | Version | License    | Verified npm tarball integrity                                                                    |
 | -------------------------------------------------------------------- | ------- | ---------- | ------------------------------------------------------------------------------------------------- |
@@ -72,7 +108,18 @@ Permissive dependencies can accompany an MIT project without becoming MIT-only.
 
 ## Engine dependency scope
 
-The pinned [Zig dependency manifest](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/build.zig.zon)
+The 1.0.2 [Zig dependency manifest](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/build.zig.zon),
+[build-tool versions](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/.github/actions/install/action.yml),
+and [Rust lockfile](https://github.com/lightpanda-io/browser/blob/c5f7bb29b127040c899d4e181b5709f76fc71a6f/src/rust/Cargo.lock)
+identify the current source dependencies. The Rust lockfile contains 105 registry
+packages. The source pins V8 15.5.35.13, nghttp2 1.70.0, curl 8.23.0, zstd 1.5.7,
+PCRE2 commit `9ad4a2e956876747a5022bf04614c7e39e71d4ec`, and several other
+source-pinned components. The older license inventory below is
+historical evidence, not a renewed review of this release's dependency closure.
+
+### Historical 0.4.1 dependency audit
+
+The previously inspected [Zig dependency manifest](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/build.zig.zon)
 and [build-tool versions](https://github.com/lightpanda-io/browser/blob/614c1640af8065b1972559abef7ca4cea06f8ba3/.github/actions/install/action.yml)
 identify these components. This table is a source-level inventory, not a complete
 binary SBOM or a replacement for their notices.

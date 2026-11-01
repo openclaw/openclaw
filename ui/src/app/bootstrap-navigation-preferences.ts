@@ -1,3 +1,4 @@
+import { serializeSidebarEntry } from "../app-navigation.ts";
 import type {
   ApplicationNavigationPreferences,
   ApplicationNavigationPreferencesSnapshot,
@@ -13,6 +14,7 @@ export function createApplicationNavigationPreferences(
     navCollapsed,
     navWidth: preferences.settings.navWidth,
     sidebarEntries: preferences.settings.sidebarEntries,
+    personalSessionGroups: preferences.settings.personalSessionGroups ?? [],
     pinnedAgentIds: preferences.settings.pinnedAgentIds ?? [],
   });
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -36,6 +38,9 @@ export function createApplicationNavigationPreferences(
       if (patch.sidebarEntries !== undefined) {
         persisted.sidebarEntries = [...patch.sidebarEntries];
       }
+      if (patch.personalSessionGroups !== undefined) {
+        persisted.personalSessionGroups = [...patch.personalSessionGroups];
+      }
       if (patch.pinnedAgentIds !== undefined) {
         persisted.pinnedAgentIds = [...patch.pinnedAgentIds];
       }
@@ -50,6 +55,7 @@ export function createApplicationNavigationPreferences(
     },
     subscribe(listener) {
       listeners.add(listener);
+      // Forward persisted preferences through the synchronous navigation owner.
       const stopPreferences = preferences.subscribe(() => listener(snapshot()));
       return () => {
         listeners.delete(listener);
@@ -66,4 +72,18 @@ export function togglePinnedAgent(navigation: ApplicationNavigationPreferences, 
     ? pinned.filter((id) => id !== agentId)
     : [...pinned, agentId];
   navigation.update({ pinnedAgentIds: next });
+}
+
+/** Menu surfaces share the personal reference owner instead of patching session metadata. */
+export function togglePinnedSession(
+  navigation: ApplicationNavigationPreferences,
+  sessionKey: string,
+) {
+  const entry = serializeSidebarEntry({ type: "session", key: sessionKey });
+  const entries = navigation.snapshot.sidebarEntries;
+  navigation.update({
+    sidebarEntries: entries.includes(entry)
+      ? entries.filter((candidate) => candidate !== entry)
+      : [...entries, entry],
+  });
 }

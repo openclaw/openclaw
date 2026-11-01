@@ -129,6 +129,10 @@ async function planDreamingCronRepair(
   return { changes, warnings, enabled };
 }
 
+function deferredCronInspection(error: unknown): string {
+  return `Dreaming cron inspection remains pending; existing cron rows were retained. Retry with "openclaw doctor --fix". ${String(error)}`;
+}
+
 export const dreamingCronMigration: PluginDoctorStateMigration = {
   id: "memory-core-dreaming-cron",
   label: "memory-core dreaming cron ownership",
@@ -140,7 +144,15 @@ export const dreamingCronMigration: PluginDoctorStateMigration = {
     if (!context.inspectCronJobs) {
       return null;
     }
-    const plan = await planDreamingCronRepair(await context.inspectCronJobs(), config);
+    let inventory: PluginDoctorCronInventory;
+    try {
+      inventory = await context.inspectCronJobs();
+    } catch (error) {
+      // Optional ownership metadata must not prevent the core update or Gateway recovery.
+      // Keep a plan so the host cannot certify this plugin's outstanding work as completed.
+      return { preview: [deferredCronInspection(error)] };
+    }
+    const plan = await planDreamingCronRepair(inventory, config);
     const preview = [
       ...(plan.changes.length
         ? [
@@ -161,7 +173,16 @@ export const dreamingCronMigration: PluginDoctorStateMigration = {
         warningDisposition: "recoverable",
       };
     }
-    const inventory = await context.inspectCronJobs();
+    let inventory: PluginDoctorCronInventory;
+    try {
+      inventory = await context.inspectCronJobs();
+    } catch (error) {
+      return {
+        changes: [],
+        warnings: [deferredCronInspection(error)],
+        warningDisposition: "recoverable",
+      };
+    }
     const plan = await planDreamingCronRepair(inventory, config);
     if (!plan.changes.length) {
       return { changes: [], warnings: plan.warnings, warningDisposition: "recoverable" };

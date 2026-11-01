@@ -1,14 +1,15 @@
-import { constants, type Stats } from "node:fs";
+import { constants, type BigIntStats, type Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import type { HeaderData } from "tar";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 
 /** Open sources before emitting headers so a vanished name cannot leave a partial entry. */
 export async function* walkBackupTar(params: {
   tar: Pick<typeof import("tar"), "Header" | "Pax">;
   paths: readonly string[];
+  signal?: AbortSignal;
   skip: (sourcePath: string) => boolean;
   filter: (sourcePath: string, stat: Stats) => boolean;
   onEntry: (sourcePath: string, header: HeaderData) => void;
@@ -16,24 +17,28 @@ export async function* walkBackupTar(params: {
   onProgress: (sourcePath: string, bytes?: number) => void;
 }): AsyncGenerator<Buffer> {
   const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
-  type Directory = { sourcePath: string; stat: Stats };
-  const assertDirectory = async ({ sourcePath, stat }: Directory) => {
-    const current = await fs.lstat(sourcePath);
-    if (!current.isDirectory() || !sameFileIdentity(stat, current)) {
+  const nonBlocking = process.platform === "win32" ? 0 : constants.O_NONBLOCK;
+  type Directory = { sourcePath: string; identity: BigIntStats };
+  const assertDirectory = async ({ sourcePath, identity }: Directory) => {
+    const current = await fs.lstat(sourcePath, { bigint: true });
+    if (!current.isDirectory() || !sameFileIdentity(identity, current)) {
       throw new Error(`Backup directory changed during traversal: ${sourcePath}`);
     }
   };
   async function* visit(sourcePath: string, parent?: Directory): AsyncGenerator<Buffer> {
+    params.signal?.throwIfAborted();
     params.onProgress(sourcePath);
     if (params.skip(sourcePath)) {
       return;
     }
     let handle: FileHandle | undefined;
     let stat: Stats;
+    let identity: BigIntStats;
     let names: string[] | undefined;
     let linkpath: string | undefined;
     try {
       try {
+        identity = await fs.lstat(sourcePath, { bigint: true });
         stat = await fs.lstat(sourcePath);
         if (parent) {
           await assertDirectory(parent);
@@ -43,7 +48,7 @@ export async function* walkBackupTar(params: {
         }
         if (stat.isDirectory()) {
           names = await fs.readdir(sourcePath);
-          await assertDirectory({ sourcePath, stat });
+          await assertDirectory({ sourcePath, identity });
         } else if (stat.isSymbolicLink()) {
           linkpath = await fs.readlink(sourcePath);
           // Match tar's Windows reader before the manifest and header share this target.
@@ -51,7 +56,10 @@ export async function* walkBackupTar(params: {
             linkpath = linkpath.replaceAll("\\", "/");
           }
         } else if (stat.isFile()) {
-          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow);
+          // A regular source can become a FIFO after lstat. Open without waiting
+          // for a writer so the descriptor check below can reject that change.
+          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow | nonBlocking);
+          const openedIdentity = await handle.stat({ bigint: true });
           const opened = await handle.stat();
           if (!opened.isFile()) {
             throw new Error(`Backup source changed while opening: ${sourcePath}`);
@@ -59,18 +67,13 @@ export async function* walkBackupTar(params: {
           // The kernel binds a no-follow open; later renames cannot invalidate its bytes.
           // Without that support, bind the descriptor to a regular-file observation.
           if (!noFollow) {
-            const current = await fs.lstat(sourcePath).catch((error: unknown) => {
-              if (hasErrnoCode(error, "ENOENT")) {
-                return undefined;
-              }
-              throw error;
-            });
+            const current = await fs.lstat(sourcePath, { bigint: true }).catch(ignoreMissingPath);
             if (current?.isSymbolicLink()) {
               throw new Error(`Backup source became a symbolic link while opening: ${sourcePath}`);
             }
             if (
-              !sameFileIdentity(stat, opened) &&
-              (!current?.isFile() || !sameFileIdentity(current, opened))
+              !sameFileIdentity(identity, openedIdentity) &&
+              (!current?.isFile() || !sameFileIdentity(current, openedIdentity))
             ) {
               throw new Error(`Backup source identity changed while opening: ${sourcePath}`);
             }
@@ -84,12 +87,11 @@ export async function* walkBackupTar(params: {
           await assertDirectory(parent);
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         params.onVanished(sourcePath);
         return;
       }
+      params.signal?.throwIfAborted();
       const directory = stat.isDirectory();
       let mode = ((stat.mode & 0o7777) | 0o600) & ~0o22;
       if (directory) {
@@ -115,8 +117,10 @@ export async function* walkBackupTar(params: {
       if (handle) {
         let position = 0;
         while (position < stat.size) {
+          params.signal?.throwIfAborted();
           const buffer = Buffer.allocUnsafe(Math.min(1024 * 1024, stat.size - position));
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
+          params.signal?.throwIfAborted();
           if (!bytesRead) {
             throw Object.assign(new Error("encountered unexpected EOF"), {
               code: "EOF",
@@ -136,10 +140,10 @@ export async function* walkBackupTar(params: {
       await handle?.close();
     }
     for (const name of names ?? []) {
-      yield* visit(path.join(sourcePath, name), { sourcePath, stat });
+      yield* visit(path.join(sourcePath, name), { sourcePath, identity });
     }
     if (names && !parent) {
-      await assertDirectory({ sourcePath, stat });
+      await assertDirectory({ sourcePath, identity });
     }
   }
   for (const sourcePath of params.paths) {

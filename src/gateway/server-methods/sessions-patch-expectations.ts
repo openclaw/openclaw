@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import type {
-  ErrorShape,
-  SessionsPatchParams,
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+  type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -89,51 +91,29 @@ export function resolveSessionPatchTargetError(
   return changed ? sessionChangedError(target.key) : undefined;
 }
 
-export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
-  return {
-    key: patch.key,
-    ...(patch.agentId ? { agentId: patch.agentId } : {}),
-    ...(patch.expectedSessionId !== undefined
-      ? { expectedSessionId: patch.expectedSessionId }
-      : {}),
-    ...(patch.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: patch.expectedLifecycleRevision }
-      : {}),
-    ...(patch.expectedPermissionMode !== undefined
-      ? { expectedPermissionMode: patch.expectedPermissionMode }
-      : {}),
-    ...(patch.expectedSandboxMode !== undefined
-      ? { expectedSandboxMode: patch.expectedSandboxMode }
-      : {}),
-    ...(patch.expectedNativeRuntimeConsent !== undefined
-      ? { expectedNativeRuntimeConsent: patch.expectedNativeRuntimeConsent }
-      : {}),
-    ...(patch.expectedToolOverrides !== undefined
-      ? { expectedToolOverrides: patch.expectedToolOverrides }
-      : {}),
-    ...(patch.expectedSidebarRoot !== undefined
-      ? { expectedSidebarRoot: patch.expectedSidebarRoot }
-      : {}),
-    ...(patch.expectedCategory !== undefined ? { expectedCategory: patch.expectedCategory } : {}),
-    ...(patch.expectedArchived !== undefined ? { expectedArchived: patch.expectedArchived } : {}),
-    ...(patch.expectedSidebarAncestors !== undefined
-      ? { expectedSidebarAncestors: patch.expectedSidebarAncestors }
-      : {}),
-    expectedMarkedUnreadAt: patch.expectedMarkedUnreadAt,
-  };
-}
-
 /** Prepare original writers and bind their facts before patch projection can acquire admission. */
 export async function prepareSessionPatchTargets(params: {
   cfg: OpenClawConfig;
   getCurrentConfig: () => OpenClawConfig;
   prepared: readonly PreparedPatchTarget[];
-  mutationTargets: MutationTarget[];
+  targets: readonly MutationTarget[];
+  placementChecks: ReadonlyMap<number, { validate: () => string | undefined }>;
   outcomes: Array<MutationOutcome | undefined>;
-  originalCommitGuards: readonly (() => ErrorShape | undefined)[];
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   personalModelSelection: UserModelAccountSelection | undefined;
 }) {
+  const mutationTargets = params.targets.map((target, index) => ({
+    ...target,
+    commitGuard: () => {
+      const error = target.commitGuard();
+      if (error) {
+        return error;
+      }
+      const placementError = params.placementChecks.get(index)?.validate();
+      return placementError ? errorShape(ErrorCodes.INVALID_REQUEST, placementError) : undefined;
+    },
+  }));
+  const originalCommitGuards = mutationTargets.map((target) => target.commitGuard);
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   const ready = params.operatorAuthority
     ? params.operatorAuthority.then((captured) => {
@@ -153,7 +133,7 @@ export async function prepareSessionPatchTargets(params: {
       assertCurrent: () => {
         assertSessionPatchCommitAllowed({
           personalModelSelection: params.personalModelSelection,
-          guards: [params.originalCommitGuards[target.index]!],
+          guards: [originalCommitGuards[target.index]!],
           archiveTransitions: [],
         });
         operatorAuthority?.assertCurrent();
@@ -224,7 +204,7 @@ export async function prepareSessionPatchTargets(params: {
         (facts) => ({ facts }),
         (error: unknown) => ({ error }),
       );
-      const originalGuard = params.originalCommitGuards[target.index]!;
+      const originalGuard = originalCommitGuards[target.index]!;
       const guard = () => {
         try {
           assertSessionPatchCommitAllowed({
@@ -245,7 +225,7 @@ export async function prepareSessionPatchTargets(params: {
           return unexpectedPatchError(target.key, error);
         }
       };
-      params.mutationTargets[target.index]!.commitGuard = guard;
+      mutationTargets[target.index]!.commitGuard = guard;
       if ("error" in result) {
         // Original caller errors retain precedence; failed preparation never reaches a fallback open.
         params.outcomes[target.index] = {
@@ -259,7 +239,7 @@ export async function prepareSessionPatchTargets(params: {
       if (!ancestors?.length || params.outcomes[target.index] !== undefined) {
         continue;
       }
-      const originalGuard = params.mutationTargets[target.index]!.commitGuard;
+      const originalGuard = mutationTargets[target.index]!.commitGuard;
       try {
         const read = await prepareSessionPatchSidebarAncestors({
           cfg: params.cfg,
@@ -271,7 +251,7 @@ export async function prepareSessionPatchTargets(params: {
             assertSessionPatchCommitAllowed({ guards: [originalGuard], archiveTransitions: [] }),
         });
         ancestorReads.push(read);
-        params.mutationTargets[target.index]!.commitGuard = () => {
+        mutationTargets[target.index]!.commitGuard = () => {
           try {
             read.assertCurrent();
             return undefined;
@@ -287,6 +267,8 @@ export async function prepareSessionPatchTargets(params: {
       }
     }
     return {
+      mutationTargets,
+      originalCommitGuards,
       operatorAuthority,
       prepared: params.prepared.filter((target) => params.outcomes[target.index] === undefined),
       storage,

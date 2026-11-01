@@ -1,6 +1,7 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
   msTeamsApprovalControls,
@@ -44,7 +45,9 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     ignored("unknown or expired card token");
     return true;
   }
-  if (binding.accountId !== DEFAULT_ACCOUNT_ID) {
+  // A card is valid only on the bot instance that issued it. Without this
+  // receiver check, another account's listener could resolve the approval.
+  if (normalizeAccountId(binding.accountId) !== normalizeAccountId(deps.accountId)) {
     ignored("card token account mismatch");
     return true;
   }
@@ -64,10 +67,16 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
     return true;
   }
 
+  const cfg = deps.readConfig?.() ?? deps.cfg;
+  const account = resolveMSTeamsAccountConfig(cfg, binding.accountId);
+  if (account.appId && account.appId !== deps.appId) {
+    ignored("issuing account is no longer active");
+    return true;
+  }
   const senderId = context.activity.from?.aadObjectId;
   const authorization = msTeamsApprovalAuth.authorizeActorAction?.({
-    cfg: deps.cfg,
-    accountId: DEFAULT_ACCOUNT_ID,
+    cfg,
+    accountId: binding.accountId,
     senderId,
     action: "approve",
     approvalKind: binding.approvalKind,
@@ -79,12 +88,12 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
 
   const outcome = await msTeamsApprovalControls.settle(token, async (consumed) => {
     const result = await resolveApprovalOverGateway({
-      cfg: deps.cfg,
+      cfg,
       approvalId: consumed.approvalId,
       approvalKind: consumed.approvalKind,
       decision: consumed.decision,
       channel: "msteams",
-      accountId: DEFAULT_ACCOUNT_ID,
+      accountId: consumed.accountId,
       senderId,
     });
     await context.updateActivity({

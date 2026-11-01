@@ -87,7 +87,7 @@ outbound host generic and use the messaging adapter surface for provider rules:
   input should skip straight to id-like resolution instead of directory search.
 - `messaging.targetResolver.reservedLiterals` lists bare words that are
   channel/session references for that provider. Resolution preserves configured
-  directory entries before rejecting reserved literals, then fails closed on a
+  directory entries before rejecting reserved literals, then rejects unresolved targets on a
   directory miss.
 - `messaging.targetResolver.resolveTarget(...)` is the plugin fallback when
   core needs a final provider-owned resolution after normalization or after a

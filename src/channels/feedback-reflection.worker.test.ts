@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -14,14 +15,16 @@ it("persists channel feedback through its real entry without caller-thread SQL",
       sessionKey: "agent:main:feedback",
       env,
     };
-    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const storePath = openOpenClawAgentDatabase(scope).path;
+    const cfg = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const event = { type: "feedback", id: "feedback", value: "negative" };
     const sql = observeHostDataSql();
     try {
       await expect(
         recordChannelFeedbackEvent({
-          cfg: { session: { store: storePath } },
+          cfg,
           agentId: scope.agentId,
           sessionKey: scope.sessionKey,
           event,
@@ -35,7 +38,7 @@ it("persists channel feedback through its real entry without caller-thread SQL",
     expect(loadTranscriptEventsSync({ ...scope, storePath })).toContainEqual(event);
     await expect(
       recordChannelFeedbackEvent({
-        cfg: { session: { store: storePath } },
+        cfg,
         agentId: scope.agentId,
         sessionKey: "agent:main:missing-feedback-session",
         event,

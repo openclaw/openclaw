@@ -58,7 +58,7 @@ pnpm test:changed
 ```
 
 For plugin install, uninstall, dependency, or package-inventory changes, also
-run the focused tests that cover the edited seam:
+run the focused tests that cover the edited interface:
 
 ```bash
 pnpm test src/plugins/uninstall.test.ts src/infra/package-dist-inventory.test.ts test/scripts/package-acceptance-workflow.test.ts
@@ -182,6 +182,45 @@ Important lanes:
   postinstall must remove package-local debris while update and Doctor preserve
   the shared runtime roots.
 
+### Native systemd update matrix
+
+The maintained Published driver update workflow also runs the survivor harness's
+native `systemd` flow against published `2026.10.9`, reusing its checksum-verified
+candidate tarball. Manual container flows keep their existing migration coverage.
+The native planner accepts exact stable and extended-stable baselines and runs
+them sequentially on one disposable Linux guest:
+
+```bash
+node scripts/e2e/lib/upgrade-survivor/native-systemd.mjs --plan 2026.10.9 2026.9.36
+```
+
+For development, use a Linux Crabbox lease with a running systemd user manager,
+Node, npm, and passwordless sudo. Build once with the canonical
+`node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog`
+packager on that guest, then run the synced harness there as root:
+
+```bash
+sudo "$(command -v node)" scripts/e2e/lib/upgrade-survivor/native-systemd.mjs \
+  /tmp/candidate.tgz /tmp/native-systemd-proof 2026.10.9 2026.9.36
+```
+
+Each baseline gets a new guest account and canonical home/state, the published
+package's actual user service, and the shared survivor state and approval seeds.
+The installed baseline's Doctor prepares the legacy seed before service startup.
+Before updating, the flow requires native unit/cgroup ownership, health,
+readiness, and authenticated baseline RPC build identity. It invokes the installed
+updater with restart enabled, selecting `--channel stable` when leaving an
+extended-stable baseline for the stable/main candidate. Success requires the
+updater's terminal success and recorded verification, a changed native MainPID,
+exact candidate RPC build identity, health/readiness, and preserved survivor state.
+The harness never starts the service after invoking update.
+
+The artifact directory retains the plan, package checksum/build identities,
+command outputs, update JSON/history, native unit facts, journal, and failure
+summary. The harness stops each owned service on success or failure. Collect
+artifacts and release the lease after the matrix; never run this root fixture on
+an operator host or against an existing account.
+
 Set `OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS` to a whitespace-separated list of
 model refs to run one `openclaw agent --local` marker turn per model after the
 update. Anthropic uses `ANTHROPIC_API_KEY`, Google uses `GEMINI_API_KEY`, and
@@ -295,12 +334,12 @@ twice. It checks stored rows, schema, sentinels, and read-only snapshot cleanup.
 `projects-startup-migration` prepares two independent project/worktree specimens
 through the published owners using local Git. Each has a verified backup and
 synthetic legacy session JSON/JSONL imported through published Doctor. The update
-must repair the first specimen's canonical workspace through candidate Doctor.
+must repair the first specimen's stored workspace through candidate Doctor.
 The second state stays outside that update's discovery. Before startup, the
 candidate's Doctor schema owner runs under its maintenance lock to upgrade that
 database while preserving the legacy workspace fields and exact session/transcript
 bytes. Its first normal Gateway startup must preserve that state. After
-clean shutdown, an explicit `doctor --fix --non-interactive` repairs its canonical
+clean shutdown, an explicit `doctor --fix --non-interactive` repairs its stored
 workspace; a second startup must leave the repaired state unchanged. These are
 supported legacy-format imports, not historical runtime-generated sessions.
 Both Gateway runs must become ready and report clean shutdown before persisted
@@ -335,7 +374,7 @@ candidate package version and integrity, `plugins list` entry, and clean
 A mock OpenAI server verifies a real agent turn
 before and after the update without provider credentials. After the update,
 the lane checks approvals and legacy-file retirement, effective cron owners,
-the candidate plugin artifact, the candidate state schema, an idempotent update,
+the candidate plugin artifact, the candidate state schema, a repeat update that makes no further changes,
 and Gateway health. Assertions run before a standalone Doctor can conceal an
 incomplete update migration.
 
@@ -409,7 +448,7 @@ allowlists, plus workspace identity, instructions, and memory files. It verifies
 exact JSONL-to-SQLite and cron migration, legacy archival, database integrity,
 account isolation, and workspace contents immediately after the update, before
 any standalone Doctor repair can hide an incomplete migration. It then reads
-sampled conversations through Gateway RPC, runs an idempotent Doctor pass, and
+sampled conversations through Gateway RPC, reruns Doctor to check that it makes no further changes, and
 repeats the history and preservation checks after a Gateway restart.
 
 This is a package-update test inside Docker. It does not prove container image
@@ -433,7 +472,7 @@ the Doctor owner tests.
 
 Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION`, and
-`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. Before the idempotent Doctor pass,
+`OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. Before the repeat Doctor pass,
 the harness counts persisted sessions, transcript events, cron jobs, and distinct
 enabled plugin roots. Its budget is 60 seconds of fixed overhead plus 80 ms per
 session, 2 ms per event, 20 ms per cron job, and 20 seconds per plugin root,
@@ -538,7 +577,7 @@ fixture; it does not automatically enable frozen-target scenario omissions.
 See [release qualification](/ci/release-validation#suite-profiles) for the exact
 boundary. The candidate remains the selected package-under-test tarball. The per-PR
 `docker-seed-e2e` tripwire stays limited to `latest` and `legacy-operator-state`
-and also runs on every canonical `main` push that runs CI. Docs-only pushes
+and also runs on every upstream `main` push that runs CI. Docs-only pushes
 matching `**/*.md` and `docs/**` skip CI; mixed docs and code pushes still run it.
 
 For manual historical coverage, `last-stable-4` selects four recent stable

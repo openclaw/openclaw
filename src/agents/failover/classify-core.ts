@@ -1,11 +1,11 @@
 /** Classifies prepared error facts without resolving provider runtime. */
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
-import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { matchesContextOverflowMessage } from "../../../packages/ai/src/utils/overflow.js";
+import { inspectTlsCertificateError } from "../../infra/tls-certificate-errors.js";
 import {
   extractLeadingHttpStatus,
   isGenericProviderInternalError,
@@ -116,9 +116,7 @@ const GENERAL_MESSAGE_CLASSIFIERS: ReadonlyArray<
 ];
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
   return (
-    status === 408 ||
-    status === 499 ||
-    (typeof status === "number" && status >= 500 && status < 600)
+    status === 408 || status === 499 || (status !== undefined && status >= 500 && status < 600)
   );
 }
 function classifyFailoverClassificationFromMessage(
@@ -154,9 +152,7 @@ function classifyFailoverClassificationFromMessage(
   }
   const generalReason = GENERAL_MESSAGE_CLASSIFIERS.find(([matches]) => matches(raw))?.[1];
   if (generalReason) {
-    return generalReason === "context_overflow"
-      ? { kind: "context_overflow" }
-      : toReasonClassification(generalReason);
+    return toPluginClassification(generalReason);
   }
   // Inspect raw and SDK-preserved types before the generic HTTP fallback, but
   // after more-specific text so invalid-request wrappers cannot hide an outage.
@@ -196,13 +192,11 @@ function mergeMessageAndDetailClassification(
   if (messageClassification.kind === "context_overflow") {
     return messageClassification;
   }
-  if (detailClassification.kind === "context_overflow") {
-    return detailClassification;
-  }
-  if (detailClassification.reason === "billing" && messageClassification.reason === "rate_limit") {
-    return detailClassification;
-  }
-  return messageClassification.reason === "format" ? detailClassification : messageClassification;
+  return detailClassification.kind === "context_overflow" ||
+    (detailClassification.reason === "billing" && messageClassification.reason === "rate_limit") ||
+    messageClassification.reason === "format"
+    ? detailClassification
+    : messageClassification;
 }
 
 function hasIndependentTransientMessage(
@@ -236,8 +230,7 @@ export function classifyFailoverSignalCore(
     return null;
   }
   const inferredStatus = inferSignalStatus(signal);
-  const explicitStatus =
-    typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
+  const explicitStatus = Number.isFinite(signal.status) ? signal.status : undefined;
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider, signal.errorType)
     : null;
@@ -260,7 +253,7 @@ export function classifyFailoverSignalCore(
   // context-shaped, and otherwise-unclassified signals still consult the
   // provider once; its result remains authoritative over the prepared tables.
   const hasProviderHookSignal = Boolean(
-    signal.message || signal.code || signal.errorType || typeof inferredStatus === "number",
+    signal.message || signal.code || signal.errorType || inferredStatus !== undefined,
   );
   const hasStructuredDescriptor =
     providerHookStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined;
@@ -280,6 +273,17 @@ export function classifyFailoverSignalCore(
       errorType: signal.errorType,
     };
     providerPluginReason = classifyProviderError?.(context) ?? null;
+    // Native transports can keep provider prose only in the bounded body
+    // details. Let the same owner interpret it before generic HTTP policy.
+    if (!providerPluginReason) {
+      for (const detail of signal.details ?? []) {
+        providerPluginReason =
+          classifyProviderError?.({ ...context, errorMessage: detail }) ?? null;
+        if (providerPluginReason) {
+          break;
+        }
+      }
+    }
   }
   const tlsCertificateError = inspectTlsCertificateError(signal);
   if (!providerPluginReason && tlsCertificateError && inferredStatus === undefined) {

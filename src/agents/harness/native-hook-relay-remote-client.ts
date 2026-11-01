@@ -55,12 +55,22 @@ export async function invokeRemoteNativeHookRelay(
   signal.throwIfAborted();
   const body = JSON.stringify(params);
   return await new Promise((resolve, reject) => {
+    let outcome:
+      | { ok: true; value: NativeHookRelayProcessResponse }
+      | { ok: false; error: Error }
+      | undefined;
+    const fail = (message: string) => {
+      outcome ??= { ok: false, error: new Error(message) };
+      req.destroy();
+    };
     // Node's HTTPS client verifies certificates, honors NODE_EXTRA_CA_CERTS, and
     // does not follow redirects. A relay credential never leaves this endpoint.
     const req = request(
       url,
       {
         method: "POST",
+        // The cold relay owns this socket through close, never an idle pooled connection.
+        agent: false,
         signal,
         headers: {
           authorization: `Bearer ${credential.token}`,
@@ -69,9 +79,9 @@ export async function invokeRemoteNativeHookRelay(
         },
       },
       (res) => {
+        res.on("error", () => fail("Native hook callback response failed"));
         if (res.statusCode !== 200) {
-          res.destroy();
-          reject(new Error(`Native hook callback rejected (${res.statusCode ?? 0})`));
+          fail(`Native hook callback rejected (${res.statusCode ?? 0})`);
           return;
         }
         const chunks: Buffer[] = [];
@@ -79,13 +89,11 @@ export async function invokeRemoteNativeHookRelay(
         res.on("data", (chunk: Buffer) => {
           size += chunk.length;
           if (size > MAX_RESPONSE_BYTES) {
-            reject(new Error("Native hook callback response too large"));
-            res.destroy();
+            fail("Native hook callback response too large");
             return;
           }
           chunks.push(chunk);
         });
-        res.on("error", () => reject(new Error("Native hook callback response failed")));
         res.on("end", () => {
           try {
             const decoded = JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -99,15 +107,23 @@ export async function invokeRemoteNativeHookRelay(
             ) {
               throw new Error("Invalid response");
             }
-            resolve(result);
+            outcome ??= { ok: true, value: result };
           } catch {
-            reject(new Error("Invalid native hook callback response"));
+            fail("Invalid native hook callback response");
           }
         });
       },
     );
     // Do not surface URLs, headers, or a server-supplied error containing secrets.
-    req.on("error", () => reject(new Error("Native hook callback connection failed")));
+    req.on("error", () => fail("Native hook callback connection failed"));
+    // An error or response end does not yet prove the owned socket closed.
+    req.once("close", () => {
+      if (outcome?.ok) {
+        resolve(outcome.value);
+      } else {
+        reject(outcome?.error ?? new Error("Native hook callback connection failed"));
+      }
+    });
     req.end(body);
   });
 }

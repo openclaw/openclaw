@@ -1,12 +1,14 @@
 import { warnSessionPersistenceDeprecation } from "../../agents/sessions/session-persistence-deprecation.js";
 import { pluginInstanceInvocation } from "../plugin-instance-invocation.js";
 
-/** One warning budget for the legacy transcript transaction contract per plugin. */
-export function warnSessionTranscriptPreparationDeprecation(): void {
+/** Share the per-method warning budget across legacy transcript adapters. */
+export function warnSessionTranscriptPreparationDeprecation(
+  method: string,
+  replacement: string,
+): void {
   const pluginId = pluginInstanceInvocation.getStore()?.instance.pluginId;
-  warnSessionPersistenceDeprecation(
-    "Transcript transaction callbacks and withSessionTranscriptWriteLock",
-    "withSessionTranscriptWrite with preparation.prepareMessage / preparation.source",
-    pluginId === undefined ? undefined : { pluginId },
-  );
+  warnSessionPersistenceDeprecation(method, replacement, {
+    pluginId,
+    family: "session-transcript",
+  });
 }

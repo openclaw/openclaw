@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import {
@@ -69,12 +70,11 @@ function prepareCleanupHarnessOwners(config: OpenClawConfig, workspaceDir: strin
 function warnUnavailableCleanupOwners(
   owners: ReturnType<typeof prepareCleanupHarnessOwners>,
   result: CleanupRunResult,
+  preview: CleanupRunResult["previewResults"][number] | undefined,
   runtime: RuntimeEnv,
 ): void {
   const summary = result.appliedSummaries[0];
-  const preview = result.previewResults[0];
   if (
-    owners.excludedOwners.length === 0 ||
     !summary ||
     !preview ||
     summary.missing +
@@ -111,7 +111,7 @@ function warnUnavailableCleanupOwners(
   );
   if (excluded.length > 0) {
     runtime.error(
-      `Warning: native session resources were not cleaned for unavailable harness owners: ${excluded
+      terminalText`Warning: native session resources were not cleaned for unavailable harness owners: ${excluded
         .map((plugin) => plugin.id)
         .toSorted()
         .join(", ")}. ` +
@@ -137,12 +137,27 @@ export async function runLocalSessionsCleanup(
         ownersByWorkspace.set(workspaceDir, owners);
       }
       let result: CleanupRunResult;
+      let preview: CleanupRunResult["previewResults"][number] | undefined;
       try {
-        result = await withPluginRuntimeRegistryScope(owners.registry, () =>
+        result = await withPluginRuntimeRegistryScope(owners.registry, async () => {
+          // Only unavailable-owner diagnostics need planned entry identities offline.
+          if (owners.excludedOwners.length > 0 && !params.opts.dryRun) {
+            preview = (
+              await runSessionsCleanup({
+                ...params,
+                opts: { ...params.opts, dryRun: true },
+                targets: [target],
+              })
+            ).previewResults[0];
+          }
           // Reuse the CLI's admitted handle instead of rescanning the whole database
           // on a fresh reclamation Worker connection for every historical session.
-          runSessionsCleanup({ ...params, targets: [target], reclamationMode: "in-process" }),
-        );
+          return runSessionsCleanup({
+            ...params,
+            targets: [target],
+            reclamationMode: "in-process",
+          });
+        });
       } catch (cause) {
         // The local runner changes plugin scope per store, so it owns combining
         // earlier results with the same partial outcome as the cleanup service.
@@ -155,7 +170,7 @@ export async function runLocalSessionsCleanup(
             : createSessionsCleanupFailure(target, cause, false);
         break;
       }
-      warnUnavailableCleanupOwners(owners, result, runtime);
+      warnUnavailableCleanupOwners(owners, result, preview, runtime);
       results.push(result);
       if (result.failure) {
         failure = result.failure;
@@ -216,5 +231,9 @@ export async function runLocalSessionsCleanup(
 
 function cleanupOwnerRefusal(owner: string): ExpectedCliError {
   const message = `Cannot run local sessions cleanup: ${owner} owns this state; run Gateway-delegated cleanup without --store, or stop the Gateway and other owners first.`;
-  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+  return new ExpectedCliError({
+    message,
+    humanOutput: terminalText`${message}`,
+    machineOutput: message,
+  });
 }

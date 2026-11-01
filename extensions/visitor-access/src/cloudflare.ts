@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
 import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";
@@ -272,14 +273,11 @@ export class VisitorPolicyClient {
         `Cloudflare request failed (HTTP ${response.status}); check the token's Access policy permissions and retry.`,
       );
     }
-    let data: unknown;
-    try {
-      data = await response.json();
-    } catch {
+    const data = await readProviderJsonResponse<unknown>(response, "Cloudflare").catch(() => {
       throw new VisitorAccessError(
         "Cloudflare returned an unreadable response; retry and inspect the visitor policy.",
       );
-    }
+    });
     const parsed = responseSchema.safeParse(data);
     if (!parsed.success) {
       throw new VisitorAccessError(

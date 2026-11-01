@@ -4,22 +4,17 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../../helpers/fixture-receipts.js";
+import type { FixtureReceiptChannel } from "../../../helpers/fixture-receipts.js";
 import { connectGatewayStatusClient } from "../../../helpers/gateway-e2e-harness.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../helpers/openclaw-test-instance.js";
+import type { OpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import {
+  createCodexProductInstance,
+  createCodexReceiptClient,
+} from "./codex-product.test-support.js";
 
 /** Listed by the account only; absent from every static OpenAI route list. */
 const ACCOUNT_ONLY_MODEL = "gpt-account-only-fixture";
@@ -53,15 +48,9 @@ let receiptClientUrl: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-  const clientPath = path.join(tempDirs.make("codex-route-receipts-"), "client.mjs");
-  await fs.writeFile(
-    clientPath,
-    `${fixtureReceiptClientSource(receipts.endpoint)}
-export { sendReceipt };
-`,
-  );
-  receiptClientUrl = pathToFileURL(clientPath).href;
+  ({ receipts, receiptClientUrl } = await createCodexReceiptClient(
+    tempDirs.make("codex-route-receipts-"),
+  ));
 });
 
 afterAll(async () => {
@@ -120,9 +109,6 @@ async function startModelListFixture() {
 }
 
 async function startRouteGateway(credentials: Credentials) {
-  const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
-    CODEX_APP_SERVER_VERSION: string;
-  }>({ pluginId: "codex", artifactBasename: "test-api.js" });
   const modelLists = await startModelListFixture();
   const root = tempDirs.make("codex-route-");
   const clockFile = path.join(root, "clock-offset");
@@ -133,50 +119,14 @@ async function startRouteGateway(credentials: Credentials) {
   preload.searchParams.set("clock", clockFile);
   preload.searchParams.set("catalog", "1");
   preload.searchParams.set("platformCatalog", "1");
-  const appServerFixture = fileURLToPath(
-    new URL("./codex-auth-app-server.fixture.mjs", import.meta.url),
-  );
-  const gateway = await createOpenClawTestInstance({
+  const gateway = await createCodexProductInstance({
     name: `qa-codex-account-model-route-${credentials.replace("+", "-")}`,
+    receiptClientUrl,
+    model: `openai/${DUAL_ROUTE_MODEL}`,
+    openaiCatalog: true,
     gatewayCommandPrefix: [process.execPath, "--import", preload.href],
     startTimeoutMs: 120_000,
-    env: {
-      OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
-      OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
-      OPENCLAW_QA_CODEX_AUTH_APP_SERVER_MODELS: ACCOUNT_MODELS.join(","),
-      OPENCLAW_SKIP_PROVIDERS: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-    },
-    config: {
-      plugins: {
-        enabled: true,
-        allow: ["codex", "openai"],
-        entries: {
-          openai: { enabled: true },
-          codex: {
-            enabled: true,
-            config: {
-              appServer: {
-                mode: "yolo",
-                command: process.execPath,
-                args: [appServerFixture, receiptClientUrl],
-                requestTimeoutMs: REQUEST_TIMEOUT_MS,
-              },
-            },
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          // No agentRuntime override: these turns take the default runtime.
-          model: { primary: `openai/${DUAL_ROUTE_MODEL}`, fallbacks: [] },
-          workspace: "~/workspace",
-          skipBootstrap: true,
-          timeoutSeconds: 60,
-          sandbox: { mode: "off" },
-        },
-      },
-    },
+    env: { OPENCLAW_QA_CODEX_AUTH_APP_SERVER_MODELS: ACCOUNT_MODELS.join(",") },
   });
   instance = gateway;
   const stopModelLists = modelLists.close;

@@ -2,7 +2,7 @@ import { isMainThread } from "node:worker_threads";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureAgentDeletionDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
@@ -13,14 +13,13 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   captureNativeSessionWorkerDeletion,
-  preparedSessionDeletionRequiresNativeTransaction,
   runSqliteSessionDeletionTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   prepareCommittedSessionEntryRemovals,
-  publishCommittedSessionIdentity,
+  createSessionIdentityResultPublisher,
 } from "./session-accessor.sqlite-identity.js";
 import {
   applySessionEntryMaintenance,
@@ -66,7 +65,7 @@ export async function purgeDeletedAgentSessionEntries(
   const database = { ...toDatabaseOptions(resolved), path: resolved.path };
   const execution =
     isMainThread && supportsOpenClawAgentDatabaseExecution(database)
-      ? captureOpenClawAgentDatabaseExecution(database)
+      ? await captureAgentDeletionDatabaseExecution(database)
       : undefined;
   const selection = {
     cfg: structuredClone(params.cfg),
@@ -109,9 +108,10 @@ export async function purgeDeletedAgentSessionEntries(
       resolved,
       entries,
       async (assertSourceCurrent) => {
-        const native = !execution || preparedSessionDeletionRequiresNativeTransaction();
+        const native = !execution;
         const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
           native,
+          env: resolved.env,
         });
         const assertCurrent = () => {
           execution?.assertCurrent();
@@ -167,7 +167,6 @@ export async function purgeDeletedAgentSessionEntries(
               preservation: sentPreservation,
               storePath: params.storePath,
             },
-            maintenanceRunBasis: preservation.subagentRunBasis,
           };
           const operation: Omit<
             Parameters<
@@ -185,25 +184,14 @@ export async function purgeDeletedAgentSessionEntries(
             assertPrepared: () => {
               preservation.capture();
             },
-            assertCandidate: (candidate) =>
+            assertCandidate: (candidate, retained) =>
               assertMaintenancePreservationCompatible(
                 sentPreservation,
-                preservation.capture(),
+                preservation.capture(retained),
                 candidate.result.maintenancePlans,
               ),
             candidateKind: "session-agent-purge",
-            onCommitted(candidate, published, identity) {
-              if (published) {
-                publishCommittedSessionIdentity(
-                  resolved.agentId,
-                  identity,
-                  published.previous,
-                  published.current,
-                  published.prepared,
-                );
-              }
-              return candidate.result;
-            },
+            onCommitted: createSessionIdentityResultPublisher(resolved),
           };
           const captured = captureNativeSessionWorkerDeletion(entries);
           return captured

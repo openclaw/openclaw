@@ -11,6 +11,15 @@ import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
 const QR_DATA_URL_MAX_LENGTH = 16_384;
 
+class WhatsAppToolInputError extends Error {
+  readonly status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolInputError";
+  }
+}
+
 export function createWhatsAppLoginTool(
   context: OpenClawPluginToolContext,
 ): ChannelAgentTool | null {
@@ -62,7 +71,13 @@ export function createWhatsAppLoginTool(
         });
       };
 
-      const action = (args as { action?: string })?.action ?? "start";
+      const rawAction = (args as { action?: unknown })?.action;
+      const action = rawAction === undefined ? "start" : rawAction;
+      if (action !== "start" && action !== "wait") {
+        throw new WhatsAppToolInputError(
+          'Unknown WhatsApp login action. Expected "start" or "wait".',
+        );
+      }
       const accountId = readNonBlankString((args as { accountId?: unknown }).accountId);
       const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");
       if (action === "wait") {

@@ -3,7 +3,7 @@ import {
   assertRequiredWorkerMove,
   RequiredWorkerProfileError,
 } from "../../config/required-worker-profile.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,

@@ -6,7 +6,6 @@ import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import type { NewSessionPreference } from "./preferences.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 export function createRepositoryFixture(
   options: {
@@ -17,13 +16,16 @@ export function createRepositoryFixture(
     cloudProfiles?: DraftGatewayState["cloudProfiles"];
   } = {},
 ) {
-  const requestUpdate = vi.fn();
+  const changed = vi.fn();
   const persistPreference = vi.fn();
   const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
-  const request = vi.fn<(method: string) => Promise<unknown>>(async (method) =>
-    method === "fs.listDir"
-      ? { path: "/plain", entries: [] }
-      : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
+  const request = vi.fn<(method: string, params?: Record<string, unknown>) => Promise<unknown>>(
+    async (method) =>
+      method === "projects.checkoutOptions"
+        ? { current: !options.unavailable, worktree: !options.unavailable }
+        : method === "fs.listDir"
+          ? { path: "/plain", entries: [] }
+          : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
   );
   const context = {
     gateway: {
@@ -33,13 +35,16 @@ export function createRepositoryFixture(
       snapshot: {
         phase: "connected",
         client: {
-          request: async (method: string) =>
-            method === "models.list" ? { models: options.models ?? [] } : request(method),
+          request: (method: string, params?: Record<string, unknown>) =>
+            method === "models.list"
+              ? Promise.resolve({ models: options.models ?? [] })
+              : request(method, params),
         },
         hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
       },
     },
     agents: {
+      subscribe: () => () => undefined,
       state: {
         agentsList: {
           defaultId: "main",
@@ -49,7 +54,8 @@ export function createRepositoryFixture(
         },
       },
     },
-    sessions: { state: { result: null } },
+    sessions: { subscribe: () => () => undefined, state: { result: null } },
+    config: { subscribe: () => () => undefined, current: {} },
   } as unknown as ApplicationContext;
   const gateway = {
     cloudProfiles: options.cloudProfiles ?? [{ id: "aws", providerId: "crabbox" }],
@@ -66,25 +72,19 @@ export function createRepositoryFixture(
     persistPreference,
     readPreference,
   } as unknown as DraftGatewayState;
-  const browser = new DraftPlaceBrowser(
-    new TestReactiveControllerHost(),
-    gateway,
-    () => ({ context, isAdmin: true }),
-    {
-      requestUpdate,
-      onProjectMissing: vi.fn(),
-      onSelectProject: vi.fn(),
-      onApprovedListing: vi.fn(),
-      querySelector: () => null,
-      activeElement: () => null,
-      body: () => null,
-    },
-  );
+  const browser = new DraftPlaceBrowser(gateway, () => ({ context, isAdmin: true }), {
+    changed,
+    updateComplete: () => Promise.resolve(),
+    onProjectMissing: vi.fn(),
+    onSelectProject: vi.fn(),
+    onApprovedListing: vi.fn(),
+    activeElement: () => null,
+  });
   const state = new DraftPlaceState(
     gateway,
     browser,
     () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
-    { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
+    { changed, onError: vi.fn(), onClearError: vi.fn() },
   );
   return {
     state,
@@ -94,6 +94,6 @@ export function createRepositoryFixture(
     persistPreference,
     readPreference,
     request,
-    requestUpdate,
+    changed,
   };
 }

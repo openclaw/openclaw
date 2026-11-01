@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
+import * as fixtureConfig from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,26 +14,41 @@ import {
   createPluginModuleLoader,
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
+import { tryNativeRequireModule } from "./native-module-require.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginInstance } from "./plugin-instance.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { preparePluginLoaderAliases } from "./sdk-alias.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const memorySource = path.join(repository, "extensions/memory-core/index.ts");
-const loadHost = createPluginModuleLoader({
-  devSourceRoot: repository,
-  pluginSdkResolution: "src",
-});
+const loaderOptions = { devSourceRoot: repository, pluginSdkResolution: "src" as const };
+const pluginSource = {
+  origin: "bundled" as const,
+  source: memorySource,
+  rootDir: path.dirname(memorySource),
+};
+const loadHost = createPluginModuleLoader(loaderOptions);
 const { createOpenClawTestState } = loadHost(
   path.join(repository, "src/test-utils/openclaw-test-state.ts"),
 ) as typeof import("../test-utils/openclaw-test-state.js");
 const { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } = loadHost(
   path.join(repository, "src/plugin-sdk/memory-core-host-status.ts"),
 ) as typeof import("../plugin-sdk/memory-core-host-status.js");
+
+// The SDK reads config through the native host, outside the transformed fixture graph.
+const configRuntime = tryNativeRequireModule(path.join(repository, "src/config/io.ts"), {
+  aliasMap: preparePluginLoaderAliases({
+    modulePath: memorySource,
+    ...loaderOptions,
+  }).resolveAlias,
+});
+assert(configRuntime.ok, "Expected the native config runtime fixture");
+const nativeConfig = configRuntime.moduleExport as typeof fixtureConfig;
 
 it("keeps successor sweeps and diary publication owned after another registration retires", async () => {
   const state = await createOpenClawTestState({ label: "memory-dreaming-reload" });
@@ -44,10 +60,16 @@ it("keeps successor sweeps and diary publication owned after another registratio
     agents: { entries: { main: { workspace: state.workspaceDir } } },
   };
   await state.writeConfig(config);
+  // Facade and native SDK imports have distinct config graphs; initialize both.
+  nativeConfig.setRuntimeConfigSnapshot(config, config);
+  fixtureConfig.setRuntimeConfigSnapshot(config, config);
+  await nativeConfig.captureRuntimeConfigAsyncReader()();
+  await fixtureConfig.captureRuntimeConfigAsyncReader()();
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const load = () => {
     const subagent = {
       complete: vi.fn(() => completion.promise),
+      forkSession: vi.fn(async () => ({ text: "" })),
       run: vi.fn(async () => ({ runId: "unused" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
@@ -55,18 +77,12 @@ it("keeps successor sweeps and diary publication owned after another registratio
     } satisfies PluginRuntime["subagent"];
     const host = createPluginRegistry({
       logger,
-      runtime: createLazyPluginRuntime({
-        devSourceRoot: repository,
-        pluginSdkResolution: "src",
-        runtimeOptions: { subagent },
-      }),
+      runtime: createLazyPluginRuntime({ ...loaderOptions, runtimeOptions: { subagent } }),
       activateGlobalSideEffects: false,
     });
     const record = createPluginRecord({
       id: "memory-core",
-      origin: "bundled",
-      source: memorySource,
-      rootDir: path.dirname(memorySource),
+      ...pluginSource,
       kind: "memory",
       memorySlotSelected: true,
     });
@@ -74,14 +90,7 @@ it("keeps successor sweeps and diary publication owned after another registratio
     const api = host.createApi(record, { config });
     const instance = getPluginInstance(record) as PluginInstance;
     instances.push(instance);
-    bindPluginInstanceModuleLoader({
-      instance,
-      origin: "bundled",
-      source: memorySource,
-      rootDir: path.dirname(memorySource),
-      devSourceRoot: repository,
-      pluginSdkResolution: "src",
-    });
+    bindPluginInstanceModuleLoader({ instance, ...pluginSource, ...loaderOptions });
     const module = instance.loadModule(memorySource) as { default: OpenClawPluginDefinition };
     assert(module.default.register);
     runPluginRegisterSyncInRegistry(module.default.register, api, host.registry, record.id);
@@ -152,19 +161,21 @@ it("keeps successor sweeps and diary publication owned after another registratio
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(stopped).toBe(false);
-    completion.resolve({ text: "The violet telescope gathered constellations above the library." });
+    const text = "The violet telescope gathered constellations above the library.";
+    completion.resolve({ text });
     await stopping;
     stops.pop();
     await expect(successor.instance.dispose()).resolves.toEqual({ errors: [] });
-    expect(await fs.readFile(path.join(state.workspaceDir, "DREAMS.md"), "utf8")).toContain(
-      "The violet telescope gathered constellations above the library.",
-    );
+    expect(await fs.readFile(path.join(state.workspaceDir, "DREAMS.md"), "utf8")).toContain(text);
     expect(logger.error.mock.calls).toEqual([]);
   } finally {
     completion.resolve({ text: "settled" });
     await Promise.all(stops.map((stop) => stop()));
     await Promise.all(instances.map((instance) => instance.dispose()));
     vi.useRealTimers();
-    await state.cleanup();
+    await state.cleanup().finally(() => {
+      nativeConfig.clearRuntimeConfigSnapshot();
+      fixtureConfig.clearRuntimeConfigSnapshot();
+    });
   }
 });

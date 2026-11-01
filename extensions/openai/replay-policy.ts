@@ -9,9 +9,6 @@ const RESPONSES_FAMILY_APIS = new Set([
   "azure-openai-responses",
 ]);
 
-/**
- * Returns the provider-owned replay policy for OpenAI-family transports.
- */
 export function buildOpenAIReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
   const isResponsesFamily = RESPONSES_FAMILY_APIS.has(ctx.modelApi ?? "");
   return {
@@ -30,6 +27,7 @@ export function buildOpenAIReplayPolicy(ctx: ProviderReplayPolicyContext): Provi
       ? {
           sanitizeToolCallIds: true,
           toolCallIdMode: "strict" as const,
+          duplicateToolCallIdStyle: "openai" as const,
         }
       : {
           sanitizeToolCallIds: false,

@@ -1,7 +1,7 @@
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { t } from "../i18n/index.ts";
 
-export function askBrandLabel(): string {
+export function askBrandLabel(translate: typeof t = t): string {
   const brand = currentThemeBranding().brandName;
-  return brand === "OpenClaw" ? t("nav.askOpenClaw") : t("nav.askBrand", { brand });
+  return brand === "OpenClaw" ? translate("nav.askOpenClaw") : translate("nav.askBrand", { brand });
 }

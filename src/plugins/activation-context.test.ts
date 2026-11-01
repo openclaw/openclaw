@@ -1,5 +1,4 @@
-// Covers plugin activation context construction and lazy boundaries.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -16,180 +15,79 @@ const applyPluginAutoEnableMock = vi.hoisted(() =>
     autoEnabledReasons: {},
   })),
 );
-const withBundledPluginEnablementCompatMock = vi.hoisted(() =>
-  vi.fn((params: { config?: OpenClawConfig }) => params.config),
-);
-
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
+// mock-isolation: keep activation input tests independent of bundled discovery.
 vi.mock("./bundled-compat.js", () => ({
-  withBundledPluginEnablementCompat: withBundledPluginEnablementCompatMock,
+  withBundledPluginEnablementCompat: (params: { config?: OpenClawConfig }) => params.config,
 }));
 
 import {
-  resolveBundledCompatActivationInputs,
+  resolveBundledCompatActivationInputs as resolveInputs,
   withActivatedPluginIds,
 } from "./activation-context.js";
 
+const workspaceDir = "/tmp/openclaw-activation-workspace";
+const configWithAllow = (...allow: string[]): OpenClawConfig => ({ plugins: { allow } });
+const resolveActivation = (params: Partial<Parameters<typeof resolveInputs>[0]>) =>
+  resolveInputs({
+    applyAutoEnable: true,
+    resolveBundledPluginIds: () => [],
+    ...params,
+  });
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   applyPluginAutoEnableMock.mockClear();
-  withBundledPluginEnablementCompatMock.mockClear();
 });
 
-describe("withActivatedPluginIds", () => {
-  it("preserves global and explicit plugin disablement", () => {
-    const config = {
-      plugins: {
-        enabled: false,
-        allow: ["owner"],
-        entries: { owner: { enabled: false } },
-      },
-    };
-    const projected = withActivatedPluginIds({ config, pluginIds: ["owner"] });
-    expect(projected?.plugins?.enabled).toBe(false);
-    expect(projected?.plugins?.entries?.owner?.enabled).toBe(false);
-    expect(config.plugins.enabled).toBe(false);
-    expect(config.plugins.entries.owner.enabled).toBe(false);
-  });
+it.each<[string[], NonNullable<OpenClawConfig["plugins"]>]>([
+  [["owner"], { enabled: false, allow: ["owner"], entries: { owner: { enabled: false } } }],
+  [
+    ["openai", "blocked", "disabled"],
+    {
+      allow: ["memory-core"],
+      deny: ["blocked"],
+      entries: { disabled: { enabled: false } },
+    },
+  ],
+])("preserves activation restrictions for %j without mutation", (pluginIds, plugins) => {
+  const config = { plugins };
+  const expected = structuredClone(config);
+  expect(withActivatedPluginIds({ config, pluginIds })).toEqual(expected);
+  expect(config).toEqual(expected);
+});
+it("passes the current manifest registry into activation auto-enable", () => {
+  const manifestRegistry = makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]);
+  const context = { config: {}, workspaceDir };
+  setCurrentPluginMetadataSnapshot(
+    createPluginMetadataSnapshot({ ...context, manifestRegistry }),
+    context,
+  );
 
-  it("keeps omitted plugin ids outside restrictive allowlists", () => {
-    expect(
-      withActivatedPluginIds({
-        config: {
-          plugins: {
-            allow: ["memory-core"],
-            deny: ["blocked"],
-            entries: {
-              disabled: { enabled: false },
-            },
-          },
-        },
-        pluginIds: ["openai", "blocked", "disabled"],
-      }),
-    ).toEqual({
-      plugins: {
-        allow: ["memory-core"],
-        deny: ["blocked"],
-        entries: {
-          disabled: { enabled: false },
-        },
-      },
-    });
-  });
+  resolveActivation({ rawConfig: configWithAllow("openai"), workspaceDir });
+
+  expect(applyPluginAutoEnableMock.mock.lastCall?.[0]).toMatchObject({ manifestRegistry });
 });
 
-describe("plugin activation inputs", () => {
-  it("passes the current manifest registry into activation auto-enable", () => {
-    const manifestRegistry = makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]);
-    const workspaceDir = "/tmp/openclaw-activation-workspace";
-    setCurrentPluginMetadataSnapshot(
-      createPluginMetadataSnapshot({
-        config: {},
-        manifestRegistry,
-        workspaceDir,
-      }),
-      {
-        config: {},
-        workspaceDir,
-      },
-    );
-
-    resolveBundledCompatActivationInputs({
-      rawConfig: { plugins: { allow: ["openai"] } },
-      workspaceDir,
-      applyAutoEnable: true,
-      resolveBundledPluginIds: () => [],
-    });
-
-    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-      config: { plugins: { allow: ["openai"] } },
-      env: process.env,
-      manifestRegistry,
-    });
-  });
-
-  it("uses the caller's exact metadata generation across lifecycle replacement", () => {
-    const firstManifestRegistry = makeRegistry([
-      { id: "first", channels: [], providers: ["first"] },
-    ]);
-    const secondManifestRegistry = makeRegistry([
-      { id: "second", channels: [], providers: ["second"] },
-    ]);
-    const firstDiscovery = { plugins: [], diagnostics: [] } as unknown as PluginDiscoveryResult;
-    const secondDiscovery = { plugins: [], diagnostics: [] } as unknown as PluginDiscoveryResult;
-
-    for (const [manifestRegistry, discovery] of [
-      [firstManifestRegistry, firstDiscovery],
-      [secondManifestRegistry, secondDiscovery],
-    ] as const) {
-      resolveBundledCompatActivationInputs({
-        rawConfig: { plugins: { allow: [manifestRegistry.plugins[0]!.id] } },
-        manifestRegistry,
-        discovery,
-        applyAutoEnable: true,
-        resolveBundledPluginIds: () => [],
-      });
-    }
-
-    expect(applyPluginAutoEnableMock).toHaveBeenNthCalledWith(1, {
-      config: { plugins: { allow: ["first"] } },
-      env: process.env,
-      manifestRegistry: firstManifestRegistry,
-      discovery: firstDiscovery,
-    });
-    expect(applyPluginAutoEnableMock).toHaveBeenNthCalledWith(2, {
-      config: { plugins: { allow: ["second"] } },
-      env: process.env,
-      manifestRegistry: secondManifestRegistry,
-      discovery: secondDiscovery,
-    });
-  });
-
-  it("applies bundled enablement once after canonical auto-enable", () => {
-    const rawConfig = { plugins: { allow: ["openai"] } } satisfies OpenClawConfig;
-    const autoEnabledConfig = {
-      plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
-    } satisfies OpenClawConfig;
-    const compatConfig = {
-      plugins: {
-        allow: ["openai", "anthropic"],
-        entries: { openai: { enabled: true }, anthropic: { enabled: true } },
-      },
-    } satisfies OpenClawConfig;
-    const resolveBundledPluginIds = vi.fn(() => ["anthropic"]);
-    applyPluginAutoEnableMock.mockReturnValueOnce({
-      config: autoEnabledConfig,
-      changes: [],
-      autoEnabledReasons: { openai: ["configured"] },
-    });
-    withBundledPluginEnablementCompatMock.mockReturnValueOnce(compatConfig);
-
-    const activation = resolveBundledCompatActivationInputs({
-      rawConfig,
-      env: process.env,
-      workspaceDir: "/tmp/openclaw-activation-workspace",
-      onlyPluginIds: ["anthropic"],
-      applyAutoEnable: true,
-      resolveBundledPluginIds,
-    });
-
-    expect(resolveBundledPluginIds).toHaveBeenCalledWith({
-      config: autoEnabledConfig,
-      workspaceDir: "/tmp/openclaw-activation-workspace",
-      env: process.env,
-      onlyPluginIds: ["anthropic"],
-    });
-    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledOnce();
-    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
-      config: autoEnabledConfig,
-      pluginIds: ["anthropic"],
-      env: process.env,
-    });
-    expect(activation.config).toBe(compatConfig);
-    expect(activation.normalized.entries.anthropic?.enabled).toBe(true);
+it("uses the caller's exact metadata generation across lifecycle replacement", () => {
+  for (const id of ["first", "second"]) {
+    const manifestRegistry = makeRegistry([{ id, channels: [], providers: [id] }]);
+    const discovery = { candidates: [], diagnostics: [] } satisfies PluginDiscoveryResult;
+    const rawConfig = configWithAllow(id);
+    const config = { plugins: { allow: [id], entries: { [id]: { enabled: true } } } };
+    const autoEnabledReasons = { [id]: ["configured"] };
+    applyPluginAutoEnableMock.mockReturnValueOnce({ config, changes: [], autoEnabledReasons });
+    const activation = resolveActivation({ rawConfig, manifestRegistry, discovery });
+    expect(activation.config).toBe(config);
     expect(activation.activationSourceConfig).toBe(rawConfig);
-    expect(activation.autoEnabledReasons).toEqual({ openai: ["configured"] });
-  });
+    expect(activation.normalized.entries[id]?.enabled).toBe(true);
+    expect(activation.autoEnabledReasons).toEqual(autoEnabledReasons);
+    expect(applyPluginAutoEnableMock).toHaveBeenLastCalledWith({
+      config: rawConfig,
+      manifestRegistry,
+      discovery,
+      env: process.env,
+    });
+  }
 });

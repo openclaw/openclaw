@@ -172,7 +172,11 @@ core recovery inputs:
 Core verifies the plugin workflow's identity, trusted-main ancestry, and exact
 candidate binding. Record both workflows' actual tooling SHAs and run IDs in
 the release handoff. Each direct human dispatch requires its `npm-release`
-approval job before publishing in `npm-publish`. Immutable artifact checks,
-and registry readback still apply; extended-stable token bootstrap is prohibited.
+approval job before publishing in `npm-publish`. Immutable artifact checks
+still apply; extended-stable token bootstrap is prohibited. Core child success
+confirms publication, not registry convergence. The shared parent owns readback
+and reporting for every npm channel; for this standalone recovery, complete the
+trusted postpublish verifier in step 8 above and confirm that both the exact
+version and `openclaw@extended-stable` resolve to the candidate before closeout.
 Reuse already-published versions and verified bytes. If only core failed, retain
 the successful plugin run instead of dispatching plugin publication again.

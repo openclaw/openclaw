@@ -30,6 +30,7 @@ export function createCodexNativeHookRemoteCredential(params: {
   timeoutMs: number;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }) {
   const credentialPath = codexNativeHookRemoteCredentialPath(
     params.config,
@@ -68,6 +69,11 @@ export function createCodexNativeHookRemoteCredential(params: {
               timeoutMs: params.timeoutMs,
               signal: params.signal,
               assertCurrent: params.assertCurrent,
+              withCurrent: async (write) => {
+                await params.assertCurrentAsync?.();
+                params.assertCurrent();
+                write();
+              },
             },
           );
         } catch {

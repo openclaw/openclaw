@@ -24,12 +24,20 @@ const replies = [
 type ProviderRequest = {
   model: string;
 };
+type HistoryPayload = { deltaCursor?: string; messages?: unknown[] };
 type HistoryFrame = {
   type: string;
   id?: string;
   method?: string;
-  params?: { sessionKey?: string; cursor?: string };
-  payload?: { deltaCursor?: string; messages?: unknown[] };
+  params?: {
+    key?: string;
+    sessionKey?: string;
+    cursor?: string;
+    initialHistory?: { cursor?: string };
+  };
+  payload?: HistoryPayload & {
+    initialHistory?: { ok?: boolean; payload?: HistoryPayload };
+  };
 };
 
 function speechWav() {
@@ -258,24 +266,32 @@ suite.define(() => {
               let historyConnection = 0;
               const history: Array<{
                 connection: number;
-                frame: HistoryFrame;
+                payload: HistoryPayload;
                 consumedAfterResponse: boolean;
               }> = [];
               page.on("websocket", (socket) => {
                 const connection = ++historyConnection;
-                const historyRequests = new Set<string>();
+                const historyRequests = new Map<string, boolean>();
                 socket.on("framesent", ({ payload }) => {
                   const frame: HistoryFrame = JSON.parse(payload.toString());
+                  const initialHistory =
+                    frame.method === "sessions.messages.subscribe" &&
+                    frame.params?.key === sessionKey &&
+                    frame.params.initialHistory !== undefined;
                   if (
                     frame.id &&
-                    ["chat.history", "chat.startup"].includes(frame.method ?? "") &&
-                    frame.params?.sessionKey === sessionKey
+                    (initialHistory ||
+                      (["chat.history", "chat.startup"].includes(frame.method ?? "") &&
+                        frame.params?.sessionKey === sessionKey))
                   ) {
-                    historyRequests.add(frame.id);
+                    historyRequests.set(frame.id, initialHistory);
+                    const cursor = initialHistory
+                      ? frame.params?.initialHistory?.cursor
+                      : frame.params?.cursor;
                     for (const response of history) {
                       if (
                         response.connection === connection &&
-                        response.frame.payload?.deltaCursor === frame.params.cursor
+                        response.payload.deltaCursor === cursor
                       ) {
                         response.consumedAfterResponse = true;
                       }
@@ -284,8 +300,20 @@ suite.define(() => {
                 });
                 socket.on("framereceived", ({ payload }) => {
                   const frame: HistoryFrame = JSON.parse(payload.toString());
-                  if (frame.id && historyRequests.has(frame.id) && frame.payload?.deltaCursor) {
-                    history.push({ connection, frame, consumedAfterResponse: false });
+                  if (!frame.id || !historyRequests.has(frame.id)) {
+                    return;
+                  }
+                  const historyPayload = historyRequests.get(frame.id)
+                    ? frame.payload?.initialHistory?.ok === true
+                      ? frame.payload.initialHistory.payload
+                      : undefined
+                    : frame.payload;
+                  if (historyPayload?.deltaCursor) {
+                    history.push({
+                      connection,
+                      payload: historyPayload,
+                      consumedAfterResponse: false,
+                    });
                   }
                 });
               });
@@ -317,13 +345,15 @@ suite.define(() => {
                   element.load();
                 });
                 await expect
-                  .poll(() =>
-                    audio.evaluate(
-                      (element) =>
-                        element instanceof HTMLAudioElement &&
-                        element.readyState >= 2 &&
-                        element.duration > 0,
-                    ),
+                  .poll(
+                    () =>
+                      audio.evaluate(
+                        (element) =>
+                          element instanceof HTMLAudioElement &&
+                          element.readyState >= 2 &&
+                          element.duration > 0,
+                      ),
+                    { message: "The speech attachment must have decoded audio" },
                   )
                   .toBe(true);
                 await audio.evaluate(async (element) => {
@@ -345,7 +375,11 @@ suite.define(() => {
               await page.locator(".chat-bubble").getByText("TTS enabled for this chat.").waitFor();
               for (const [index, text] of replies.slice(0, 2).entries()) {
                 await send(`Please give spoken answer ${index + 1}.`);
-                await answer(text).waitFor();
+                await expect
+                  .poll(() => answer(text).isVisible(), {
+                    message: "The spoken answer must be visible before speech is released",
+                  })
+                  .toBe(true);
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
                 if (index === 1) {
                   // The first turn covers live delivery; this turn covers speech after hydration.
@@ -363,78 +397,84 @@ suite.define(() => {
                   await page.reload();
                   await waitForControlUiGatewayReady(page);
                   await expect
-                    .poll(async () => {
-                      // A hydrated answer can be validated by an empty history delta.
-                      const hydrationResponses = history.filter(
-                        ({ connection }) => connection > previousConnection,
-                      );
-                      if (hydrationResponses.length === 0) {
-                        return false;
-                      }
-                      const cursors = hydrationResponses.flatMap(({ frame }) =>
-                        frame.payload?.deltaCursor ? [frame.payload.deltaCursor] : [],
-                      );
-                      const snapshotHost = await page.evaluate(() => {
-                        const state = document.querySelector<
-                          HTMLElement & { state?: ChatPageHost }
-                        >(".chat-pane-cache__pane--active")?.state;
-                        if (!state?.client?.recoveryScopeReady || !state.client.recoveryScope) {
-                          return null;
+                    .poll(
+                      async () => {
+                        // A hydrated answer can be validated by an empty history delta.
+                        const hydrationResponses = history.filter(
+                          ({ connection }) => connection > previousConnection,
+                        );
+                        if (hydrationResponses.length === 0) {
+                          return false;
                         }
-                        return {
-                          settings: { gatewayUrl: state.settings.gatewayUrl },
-                          client: {
-                            recoveryScopeReady: true,
-                            recoveryScope: state.client.recoveryScope,
-                          },
-                          agentsList: state.agentsList,
-                          hello: state.hello,
-                          assistantAgentId: state.assistantAgentId,
-                        };
-                      });
-                      if (!snapshotHost) {
-                        return false;
-                      }
-                      const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey });
-                      return page.evaluate(
-                        ({
-                          sessionKey: expectedSessionKey,
-                          snapshotKey: expectedSnapshotKey,
-                          gatewayUrl: expectedGatewayUrl,
-                          recoveryScope: expectedRecoveryScope,
-                          text: expectedText,
-                          cursors: hydrationCursors,
-                          consumedAfterResponse,
-                        }) => {
+                        const cursors = hydrationResponses.flatMap(({ payload }) =>
+                          payload.deltaCursor ? [payload.deltaCursor] : [],
+                        );
+                        const snapshotHost = await page.evaluate(() => {
                           const state = document.querySelector<
                             HTMLElement & { state?: ChatPageHost }
                           >(".chat-pane-cache__pane--active")?.state;
-                          const snapshot =
-                            state?.chatMessagesBySession?.get(expectedSnapshotKey)?.snapshot;
-                          return (
-                            state?.sessionKey === expectedSessionKey &&
-                            state.settings.gatewayUrl === expectedGatewayUrl &&
-                            state.client?.recoveryScopeReady === true &&
-                            state.client.recoveryScope === expectedRecoveryScope &&
-                            !state.chatLoading &&
-                            (hydrationCursors.includes(snapshot?.deltaCursor ?? "") ||
-                              consumedAfterResponse) &&
-                            JSON.stringify(snapshot?.messages ?? []).includes(expectedText)
-                          );
-                        },
-                        {
-                          sessionKey,
-                          snapshotKey,
-                          gatewayUrl: snapshotHost.settings.gatewayUrl,
-                          recoveryScope: snapshotHost.client.recoveryScope,
-                          text,
-                          cursors,
-                          consumedAfterResponse: hydrationResponses.some(
-                            (response) => response.consumedAfterResponse,
-                          ),
-                        },
-                      );
-                    })
+                          if (!state?.client?.recoveryScopeReady || !state.client.recoveryScope) {
+                            return null;
+                          }
+                          return {
+                            settings: { gatewayUrl: state.settings.gatewayUrl },
+                            client: {
+                              recoveryScopeReady: true,
+                              recoveryScope: state.client.recoveryScope,
+                            },
+                            agentsList: state.agentsList,
+                            hello: state.hello,
+                            assistantAgentId: state.assistantAgentId,
+                          };
+                        });
+                        if (!snapshotHost) {
+                          return false;
+                        }
+                        const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey });
+                        return page.evaluate(
+                          ({
+                            sessionKey: expectedSessionKey,
+                            snapshotKey: expectedSnapshotKey,
+                            gatewayUrl: expectedGatewayUrl,
+                            recoveryScope: expectedRecoveryScope,
+                            text: expectedText,
+                            cursors: hydrationCursors,
+                            consumedAfterResponse,
+                          }) => {
+                            const state = document.querySelector<
+                              HTMLElement & { state?: ChatPageHost }
+                            >(".chat-pane-cache__pane--active")?.state;
+                            const snapshot =
+                              state?.chatMessagesBySession?.get(expectedSnapshotKey)?.snapshot;
+                            return (
+                              state?.sessionKey === expectedSessionKey &&
+                              state.settings.gatewayUrl === expectedGatewayUrl &&
+                              state.client?.recoveryScopeReady === true &&
+                              state.client.recoveryScope === expectedRecoveryScope &&
+                              !state.chatLoading &&
+                              (hydrationCursors.includes(snapshot?.deltaCursor ?? "") ||
+                                consumedAfterResponse) &&
+                              JSON.stringify(snapshot?.messages ?? []).includes(expectedText)
+                            );
+                          },
+                          {
+                            sessionKey,
+                            snapshotKey,
+                            gatewayUrl: snapshotHost.settings.gatewayUrl,
+                            recoveryScope: snapshotHost.client.recoveryScope,
+                            text,
+                            cursors,
+                            consumedAfterResponse: hydrationResponses.some(
+                              (response) => response.consumedAfterResponse,
+                            ),
+                          },
+                        );
+                      },
+                      {
+                        message:
+                          "Reload must hydrate the original answer before speech is released",
+                      },
+                    )
                     .toBe(true);
                 }
                 provider.release(index);
@@ -449,10 +489,12 @@ suite.define(() => {
               await send("/tts chat off");
               await page.locator(".chat-bubble").getByText("TTS disabled for this chat.").waitFor();
               await send("Please give a text-only answer.");
-              await answer(replies[2]).waitFor();
+              await expect.poll(() => answer(replies[2]).count()).toBe(1);
               await page
                 .getByRole("button", { name: "Stop generating", exact: true })
                 .waitFor({ state: "detached" });
+              await expect.poll(() => answer(replies[2]).count()).toBe(1);
+              await answer(replies[2]).waitFor();
               expect(await answer(replies[2]).locator("audio").count()).toBe(0);
               expect(await page.locator(".chat-bubble audio").count()).toBe(2);
               expect(provider.speech).toHaveLength(2);

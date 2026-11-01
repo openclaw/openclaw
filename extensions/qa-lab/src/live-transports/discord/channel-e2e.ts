@@ -224,7 +224,6 @@ export function createDiscordChannelE2eSession(params: {
   }
 
   const driver: QaChannelE2eDriver = {
-    signal,
     assertActive,
     async doctor() {
       const inspection = await inspectDiscordE2eReadiness({

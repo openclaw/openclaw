@@ -5,6 +5,7 @@ import {
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
+import { runWithReplyNativeSubagents } from "./dispatch-native-subagent.js";
 
 export function runReplyDispatchHook(
   state: PrepareDispatchOperationReadyState,
@@ -64,14 +65,20 @@ export function runReplyDispatchHook(
                 abortSignal: state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                 onReplyStart: params.replyOptions?.onReplyStart,
                 onAgentRunStart: params.replyOptions?.onAgentRunStart,
+                onPreparedAgentRunStart: params.replyOptions?.onPreparedAgentRunStart,
+                turnAdoption: state.turnAdoption,
                 userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                 prepareAssistantTranscriptMessage:
                   params.replyOptions?.prepareAssistantTranscriptMessage,
                 recordProcessed: state.recordProcessed,
                 markIdle: state.markIdle,
               },
-              options.isTailDispatch ? undefined : { prepare: state.assertCurrentBindingRoute },
+              {
+                ...(!options.isTailDispatch ? { prepare: state.assertCurrentBindingRoute } : {}),
+                assertCurrent: state.turnAdoption?.assertCurrent,
+              },
             ),
+            (invoke) => runWithReplyNativeSubagents(state, invoke),
           );
         },
         state.trackDispatchLifecycleWork,

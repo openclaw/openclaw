@@ -12,14 +12,22 @@ import {
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { recoverPendingWorktrees } from "./pending-slots.js";
+import {
+  startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
+} from "./preparation-timing.js";
 import { captureWorktreeRunEndContext, retainWorktreeRunEndFailure } from "./run-end-lifecycle.js";
-import type { WorktreeLeaseSet, WorktreeWorkerAuthority } from "./types.js";
+import type {
+  WorktreeLeaseSet,
+  WorktreeSourceCurrent,
+  WorktreeSourceStage,
+  WorktreeWaitBudget,
+  WorktreeWorkerAuthority,
+} from "./types.js";
 
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 // A dependency install can take 15 minutes; contenders also wait for checkout and cleanup.
 export const WORKTREE_CREATE_LEASE_WAIT_MS = 30 * 60_000;
-
-export type WorktreeWaitBudget = { remainingMs: number };
 
 export type WorktreeAllocationGuard = WorktreeFilesystemOptions & {
   rollbackGuard: () => void;
@@ -43,12 +51,14 @@ export async function withWorktreeAllocationLease<T>(
   params: WorktreeLeaseParams,
   run: (guard: WorktreeAllocationGuard) => Promise<T>,
 ): Promise<T> {
-  return await withWorktreeLease(params, WORKTREE_CREATE_LEASE_SCOPE, "capacity", async (guard) => {
-    await recoverPendingWorktrees(params.env, guard.workerAuthority);
-    return params.id
-      ? withWorktreeMutationLease({ ...params, ...guard, id: params.id }, run)
-      : run(guard);
-  });
+  return await withWorktreeLease(params, WORKTREE_CREATE_LEASE_SCOPE, "capacity", (guard) =>
+    timeWorktreePreparationPhase("reservation", async () => {
+      await recoverPendingWorktrees(params.env, guard.workerAuthority);
+      return params.id
+        ? withWorktreeMutationLease({ ...params, ...guard, id: params.id }, run)
+        : run(guard);
+    }),
+  );
 }
 
 /** Registered retirement owns only its checkout; disk admission accounts for concurrent writes. */
@@ -65,6 +75,7 @@ export async function waitForWorktreeCapacity(
 ): Promise<void> {
   params.commitGuard?.();
   const waiting = startWorktreeWait(params.waitBudget);
+  const finishWait = startWorktreePreparationPhase("capacityWait");
   try {
     await withOpenClawStateLeaseAsync(
       {
@@ -79,6 +90,7 @@ export async function waitForWorktreeCapacity(
       captureWorktreeRunEndContext(params.env),
       async () => {
         waiting.end();
+        finishWait();
         params.commitGuard?.();
       },
     );
@@ -87,10 +99,11 @@ export async function waitForWorktreeCapacity(
     throw acquisitionError;
   } finally {
     waiting.end();
+    finishWait();
   }
 }
 
-function startWorktreeWait(budget?: WorktreeWaitBudget) {
+export function startWorktreeWait(budget?: WorktreeWaitBudget) {
   const startedAt = performance.now();
   let active = true;
   return {
@@ -117,6 +130,34 @@ function startWorktreeWait(budget?: WorktreeWaitBudget) {
   };
 }
 
+/** Charge source acquisition once, ending before any protected work starts. */
+export async function withWorktreeSourceWait<T>(
+  withSource: WorktreeSourceStage,
+  budget: WorktreeWaitBudget | undefined,
+  run: (source: WorktreeSourceCurrent) => T | Promise<T>,
+  acquisition?: { waitMs?: number },
+): Promise<T> {
+  if (!budget || acquisition?.waitMs !== undefined) {
+    // Immediate reservation refusal must retain its typed busy outcome for safe re-entry.
+    return await withSource(run, acquisition);
+  }
+  const waiting = startWorktreeWait(budget);
+  try {
+    return await withSource(
+      (source) => {
+        waiting.end();
+        return run(source);
+      },
+      { waitMs: waiting.waitMs },
+    );
+  } catch (error) {
+    waiting.end(error);
+    throw error;
+  } finally {
+    waiting.end();
+  }
+}
+
 async function withWorktreeLease<T>(
   params: WorktreeLeaseParams,
   scope: string,
@@ -130,6 +171,10 @@ async function withWorktreeLease<T>(
     abortAcquisition();
   }
   const waiting = startWorktreeWait(params.waitBudget);
+  const finishWait = startWorktreePreparationPhase(
+    scope === WORKTREE_CREATE_LEASE_SCOPE ? "allocationWait" : "mutationWait",
+  );
+  let finishRelease: (() => void) | undefined;
   try {
     params.commitGuard?.();
     const captured = captureWorktreeRunEndContext(params.env);
@@ -164,6 +209,7 @@ async function withWorktreeLease<T>(
           leaseSet.leases,
           context,
           async (authority) => {
+            finishWait();
             // Caller cancellation stops new work; ownership survives through native settlement.
             params.signal?.removeEventListener("abort", abortAcquisition);
             const signal = params.signal
@@ -224,6 +270,7 @@ async function withWorktreeLease<T>(
               }
               throw error;
             } finally {
+              finishRelease = startWorktreePreparationPhase("leaseRelease");
               if (releaseCapacity) {
                 await capacity.release();
               }
@@ -237,6 +284,8 @@ async function withWorktreeLease<T>(
     throw error;
   } finally {
     waiting.end();
+    finishWait();
+    finishRelease?.();
     params.signal?.removeEventListener("abort", abortAcquisition);
   }
 }

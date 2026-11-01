@@ -1,8 +1,14 @@
 // Owns queued delivery execution, custody transitions, and terminal cleanup.
 import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
+import {
+  isAmbiguousDeliveryTransportError,
+  isProvenDeliveryNotSentError,
+} from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type {
@@ -46,7 +52,6 @@ import {
   emitOutboundAuditLifecycle,
   emitOutboundAuditTerminals,
   failedOutboundAuditTerminals,
-  uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 
@@ -91,7 +96,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     await settleDurableDelivery(
       params.deliveryCompletion,
-      result ? { result } : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
+      result
+        ? { result, batch: { results: deliveredResults, payloadCount, payloadOutcomes } }
+        : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
       platformQueueStateDir,
       params.deliveryQueueStateContext,
       params.conversationDeliveryTarget,
@@ -130,8 +137,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   const failAfterPlatformSend = async (
     owner: QueuedDeliveryOwner,
     error: string,
+    ambiguousTransportError?: true,
   ): Promise<void> => {
-    await owner.fail(failDeliveryAfterPlatformSend, error);
+    await owner.fail(failDeliveryAfterPlatformSend, error, ambiguousTransportError);
     queuedPostSendState = "failed";
   };
   const emitTerminals = (
@@ -175,50 +183,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       await finishAck(() => terminals);
     }
   };
-  let releaseCancelledPreparation: (() => Promise<void>) | undefined;
-  let cancelledPreparationRetirement: Promise<void> | undefined;
-  const cancelBeforeSend = (): void => {
-    if (
-      !queueOwner ||
-      platformSendStarted ||
-      queuedPostSendState !== undefined ||
-      cancelledPreparationRetirement
-    ) {
-      return;
-    }
-    cancelledPreparationRetirement = (async () => {
-      await producerLease?.stop();
-      try {
-        releaseCancelledPreparation = await queueOwner.retireUnsent();
-        if (releaseCancelledPreparation) {
-          // Preparation stays attached until its late token and resources settle.
-          queuedPostSendState = "acked";
-          emitTerminals(() =>
-            uniformOutboundAuditTerminals(payloadCount, {
-              outcome: "failed",
-              failureStage: "queue",
-            }),
-          );
-        }
-      } catch (error) {
-        log.warn(`failed to retire cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
-      }
-    })();
-    void cancelledPreparationRetirement.catch((error: unknown) => {
-      log.warn(`failed to stop cancelled delivery ${queueId}: ${formatErrorMessage(error)}`);
-    });
-  };
   let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  let writer: Awaited<ReturnType<typeof prepareSessionWriterDeliveryAuthority>> | undefined;
   const assertPlatformSendAuthorized = (): void => {
     throwIfAborted(params.abortSignal);
-    assertSessionWriterDeliveryAuthorized(
-      params.deliveryCompletion?.kind === "pending-final"
-        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-        : undefined,
-    );
+    assertSessionWriterDeliveryAuthorized(writer?.authority);
   };
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
+    transcriptDeliveryId: platformQueueId,
+    transcriptStateDir: params.deliveryQueueStateDir,
     // A provider marker can represent the whole durable intent only when one payload owns it.
     // Adapters must narrow further when one payload can fan out into multiple platform sends.
     ...(exactReconciliationRequired && params.payloads.length === 1
@@ -343,11 +317,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let platformResultsReturned = false;
 
   try {
-    params.abortSignal?.addEventListener("abort", cancelBeforeSend, { once: true });
-    if (params.abortSignal?.aborted) {
-      cancelBeforeSend();
-    }
     throwIfProducerLeaseLost();
+    writer = await prepareSessionWriterDeliveryAuthority(
+      params.deliveryCompletion?.kind === "pending-final"
+        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+        : undefined,
+    );
     if (params.sessionGeneration !== undefined) {
       generation = await prepareOutboundDeliveryGeneration(params.sessionGeneration);
       throwIfProducerLeaseLost();
@@ -374,11 +349,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       throwIfProducerLeaseLost();
     }
     const results = await deliverOutboundPayloadsCore(wrappedParams);
-    params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
-    await cancelledPreparationRetirement;
-    if (releaseCancelledPreparation) {
-      throwIfAborted(params.abortSignal);
-    }
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;
     const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
@@ -523,13 +493,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   } catch (caughtError) {
     let err = caughtError;
     try {
-      params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
-      await cancelledPreparationRetirement;
       throwIfProducerLeaseLost();
-      if (releaseCancelledPreparation) {
-        flushMessageSentEvents();
-        throw err;
-      }
       if (isOutboundDeliveryAdmissionClosedError(err)) {
         throw err;
       }
@@ -591,8 +555,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             await finishAck(() => failedTerminals("queue"));
           }
         } else if (!platformResultsReturned) {
+          const ambiguousFinalTransport =
+            params.retryAmbiguousFinalText === true &&
+            platformSendStarted &&
+            deliveredResults.length === 0 &&
+            isAmbiguousDeliveryTransportError(err);
           const sendEvidence =
             deliveredResults.length > 0 ||
+            ambiguousFinalTransport ||
             (!failureIsProvenNotSent &&
               (platformDispatchedPayloads.size > 0 ||
                 (err instanceof OutboundDeliveryError && err.sentBeforeError)));
@@ -600,7 +570,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             try {
               queuedPostSendState ??= await persistPostSendState(queueOwner);
               if (queuedPostSendState === "marked") {
-                await failAfterPlatformSend(queueOwner, formatErrorMessage(err));
+                await failAfterPlatformSend(
+                  queueOwner,
+                  formatErrorMessage(err),
+                  ambiguousFinalTransport ? true : undefined,
+                );
               }
             } catch (persistErr: unknown) {
               // Do not convert concrete send evidence back into a generic retry.
@@ -680,17 +654,12 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         : error;
     }
   } finally {
+    writer?.release();
     generation?.release();
-    params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
-    // Both result and error exits already joined cancellation, including a failed stop.
-    if (!cancelledPreparationRetirement) {
-      await producerLease?.stop();
-    }
     for (const outcome of payloadOutcomes) {
       if (outcome.status === "failed" && params.deliveryQueueOwner) {
         outcome.error = params.deliveryQueueOwner.project(outcome.error);
       }
     }
-    await releaseCancelledPreparation?.();
   }
 }

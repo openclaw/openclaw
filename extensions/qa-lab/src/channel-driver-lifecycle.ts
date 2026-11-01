@@ -44,18 +44,6 @@ export function createQaChannelDriverLifecycle(
   const createAdapter = deps.createAdapter ?? createQaTransportAdapter;
   const discoverAdapterFactories = deps.listAdapterFactories ?? listAdapterFactories;
   let state: QaChannelDriverLifecycleState = { status: "stopped" };
-  let transition = Promise.resolve();
-
-  // Serialize adapter ownership so overlapping lifecycle calls cannot leak a
-  // late-started runtime or clean the same live transport twice.
-  const enqueueTransition = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = transition.then(operation);
-    transition = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  };
 
   const startRuntime = async (): Promise<QaChannelDriverRuntime> => {
     if (state.status === "running") {
@@ -80,25 +68,18 @@ export function createQaChannelDriverLifecycle(
     state = { status: "stopped" };
   };
 
-  const lifecycle = {
+  // QA scenario drivers await each transition; overlapping calls are best effort.
+  return {
     get state() {
       return state;
     },
-    restart() {
-      return enqueueTransition(async () => {
-        await stopRuntime();
-        return await startRuntime();
-      });
+    async restart() {
+      await stopRuntime();
+      return await startRuntime();
     },
-    start() {
-      return enqueueTransition(startRuntime);
-    },
-    stop() {
-      return enqueueTransition(stopRuntime);
-    },
+    start: startRuntime,
+    stop: stopRuntime,
   };
-
-  return lifecycle;
 }
 
 export async function runQaChannelDriverLifecycleScenarios(params: {

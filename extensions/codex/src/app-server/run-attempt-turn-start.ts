@@ -1,7 +1,6 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
@@ -12,7 +11,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   isCodexActiveCompactTurnError,
   clearCodexBindingAfterInvalidImagePayload,
@@ -24,16 +23,14 @@ import type {
 } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
-import { isCodexContextRestartSelectionChangedError } from "./thread-lifecycle-errors.js";
 import {
-  CodexUsageLimitPromptError,
-  formatCodexTurnStartUsageLimitError,
+  resolveCodexTurnStartError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
 export async function startCodexAttemptTurn(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
@@ -54,15 +51,13 @@ export async function startCodexAttemptTurn(
   } = connection;
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
-  const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent } =
-    requestRuntime;
+  const { codexModelCallDiagnostics, startCodexTurn, buildLlmOutputEvent } = requestRuntime;
   let started: CodexStartedTurn | undefined;
   // From this point, failure may include an accepted native write. Never return
   // the warm claim idle merely because active-turn setup did not complete.
   resourceState.turnStartAttempted = true;
   try {
     codexModelCallDiagnostics.emitStarted();
-    runAgentHarnessLlmInputHook({ event: buildLlmInputEvent(), ctx: hookContext, hookRunner });
     started = await startCodexTurn();
   } catch (error) {
     let turnStartError = error;
@@ -132,7 +127,7 @@ export async function startCodexAttemptTurn(
       }
     }
     if (started === undefined) {
-      const usageLimitError = await formatCodexTurnStartUsageLimitError({
+      const startupFailure = await resolveCodexTurnStartError({
         client: resourceState.client,
         error: turnStartError,
         errorNotification: state.latestStartupErrorNotification,
@@ -140,7 +135,7 @@ export async function startCodexAttemptTurn(
         timeoutMs: appServer.requestTimeoutMs,
         signal: runAbortController.signal,
       });
-      const message = usageLimitError?.message ?? formatErrorMessage(turnStartError);
+      const message = startupFailure?.message ?? formatErrorMessage(turnStartError);
       if (!params.providerReviewAcknowledgment && isInvalidCodexImagePayloadError(message)) {
         await clearCodexBindingAfterInvalidImagePayload(
           bindingStore,
@@ -198,33 +193,23 @@ export async function startCodexAttemptTurn(
         ctx: hookContext,
         hookRunner,
       });
-      if (usageLimitError) {
-        await markCodexAuthProfileBlockedFromRateLimits({
-          params,
-          authProfileId: startupAuthProfileId,
-          rateLimits: usageLimitError.rateLimitsForProfile,
-        });
-      } else if (!isCodexContextRestartSelectionChangedError(turnStartError)) {
+      if (!startupFailure) {
         throw turnStartError;
       }
-      const result = buildCodexTurnStartFailureResult({
+      await markCodexAuthProfileBlockedFromRateLimits({
         params,
-        message,
-        ...(usageLimitError
-          ? { promptError: new CodexUsageLimitPromptError(usageLimitError.message) }
-          : {}),
-        messagesSnapshot,
-        systemPromptReport,
+        authProfileId: startupAuthProfileId,
+        rateLimits: startupFailure.rateLimitsForProfile,
       });
-      if (!usageLimitError) {
-        result.codexAppServerFailure = {
-          kind: "client_closed_before_turn_completed",
-          transport: appServer.start.transport,
-          threadId: resourceState.thread.threadId,
-          replaySafe: true,
-        };
-      }
-      return { result };
+      return {
+        result: buildCodexTurnStartFailureResult({
+          params,
+          message,
+          promptError: startupFailure.promptError,
+          messagesSnapshot,
+          systemPromptReport,
+        }),
+      };
     }
   }
   if (!started) {

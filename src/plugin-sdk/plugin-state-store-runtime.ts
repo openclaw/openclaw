@@ -9,5 +9,6 @@
 
 export {
   createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";

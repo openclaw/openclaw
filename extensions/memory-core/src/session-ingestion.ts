@@ -5,10 +5,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  loadMemorySessionMetadataBatch,
+  loadMemorySessionMetadataBatchAsync,
   matchesSessionEntryPrefixHash,
   sessionPathForFile,
-  statSessionEntrySync,
+  statSessionEntry,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
@@ -16,7 +16,11 @@ import {
   formatMemoryDreamingDay,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import {
+  appendRegularFile,
+  assertNoSymlinkParentsSync,
+  root,
+} from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   normalizeTrimmedStringList,
@@ -27,6 +31,7 @@ import {
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
 import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
@@ -191,11 +196,11 @@ export function resolveAdmissionPolicy(
   return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
 }
 
-export function sessionExclusionReasons(
+export async function sessionExclusionReasons(
   sources: readonly SessionIngestionSource[],
   policy: SessionAdmissionPolicy | undefined,
   forgottenSessionIds: ReadonlySet<string>,
-): ReadonlyMap<SessionIngestionSource, string> {
+): Promise<ReadonlyMap<SessionIngestionSource, string>> {
   const reasons = new Map<SessionIngestionSource, string>();
   const scopes = new Map<
     string,
@@ -230,14 +235,16 @@ export function sessionExclusionReasons(
   if (!policy) {
     return reasons;
   }
-  // Keep the whole decision synchronous after corpus and tombstone preparation.
+  // Resolve each store as one batch before applying its exclusion policy.
   for (const scope of scopes.values()) {
     const metadata = new Map(
-      loadMemorySessionMetadataBatch({
-        agentId: scope.agentId,
-        storePath: scope.storePath,
-        sessions: scope.sessions.map(({ sessionId, sessionKey }) => ({ sessionId, sessionKey })),
-      }).map((entry) => [entry.sessionId, entry]),
+      (
+        await loadMemorySessionMetadataBatchAsync({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessions: scope.sessions.map(({ sessionId, sessionKey }) => ({ sessionId, sessionKey })),
+        })
+      ).map((entry) => [entry.sessionId, entry]),
     );
     for (const { source, sessionId, sessionKey } of scope.sessions) {
       const entry = metadata.get(sessionId);
@@ -293,7 +300,7 @@ function hashSessionMessageId(value: string): string {
 async function statSessionSource(source: SessionIngestionSource) {
   if (source.buildOptions.agentId && source.buildOptions.storePath) {
     try {
-      const stat = statSessionEntrySync(source.absolutePath, source.buildOptions);
+      const stat = await statSessionEntry(source.absolutePath, source.buildOptions);
       return stat
         ? {
             mtimeMs: Math.floor(Math.max(0, stat.revisionMs ?? stat.mtimeMs)),
@@ -492,8 +499,10 @@ export async function appendSessionCorpusLines(params: {
   );
   const content = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
   const files = getMemoryWorkspaceMaintenance(params.workspaceDir);
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   const existingLines = files
-    ? await files.appendCorpus(absolutePath, content)
+    ? await files.appendCorpus(absolutePath, content, assertCurrent)
     : await appendSessionCorpusText(absolutePath, content);
   return params.lines.map((entry, index) => ({
     path: relativePath,
@@ -509,6 +518,8 @@ export async function appendSessionCorpusLines(params: {
 
 /** Native file append; session admission and checkpoints stay with the caller. */
 export async function appendSessionCorpusText(filePath: string, content: string): Promise<number> {
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const existing = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -520,10 +531,31 @@ export async function appendSessionCorpusText(filePath: string, content: string)
   const existingLines = normalized
     ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
     : 0;
-  await appendRegularFile({
-    filePath,
-    content,
-    rejectSymlinkParents: true,
-  });
+  if (assertCurrent) {
+    const assertAppendCurrent = () => {
+      assertCurrent();
+      assertNoSymlinkParentsSync({
+        rootDir: path.parse(path.resolve(filePath)).root,
+        targetPath: path.dirname(filePath),
+        allowMissing: false,
+        allowRootChildSymlink: true,
+        requireDirectories: true,
+        messagePrefix: "Refusing to append under",
+      });
+    };
+    assertAppendCurrent();
+    const directory = await root(path.dirname(filePath), {
+      hardlinks: "reject",
+      symlinks: "reject",
+      mode: 0o600,
+      assertBeforeMutation: assertAppendCurrent,
+    });
+    await directory.append(path.basename(filePath), content, {
+      assertBeforeMutation: assertAppendCurrent,
+      durable: false,
+    });
+  } else {
+    await appendRegularFile({ filePath, content, rejectSymlinkParents: true });
+  }
   return existingLines;
 }

@@ -26,7 +26,7 @@ export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "
 export type OpenClawStateLeaseWorkerAuthority = {
   signal?: AbortSignal;
   assertCurrent(this: void): void;
-  /** Live authority for the first transaction grant, separate from transport preparation. */
+  /** Live authority for the first write grant, separate from transport preparation. */
   beforeTransaction?(this: void): void;
   beforeCommit?(this: void): void;
 };
@@ -42,6 +42,7 @@ type WorkerLeasesScope = Omit<WorkerLeaseScope, "identity"> & {
 type RetainedLeaseScope = {
   identity: OpenClawStateLeaseIdentity;
   databasePath: string;
+  sourceIdentity?: DatabasePathIdentity;
   assertCurrent(this: void): void;
   retainSettlement(settled: Promise<SqliteWorkerOperationSettlement>): void;
   settleNative(
@@ -87,28 +88,12 @@ function assertSynchronousAuthority(assertion: (() => void) | undefined): void {
   }
 }
 
-function captureLeaseWorkerSource(context: OpenClawStateWorkerContext, databasePath: string) {
-  const { admission, maintenanceScope, runInCapturedSchemaScope, existingSchemaPath, environment } =
-    context;
-  const sourceEnvironment = { ...environment };
+function captureLeaseWorkerSource(context: OpenClawStateWorkerContext) {
+  const { admission, maintenanceScope } = context;
   const assertAdmission = admission.assertCurrent;
   const assertMaintenance = maintenanceScope?.assertAdmission;
-  const assertMaintenanceOwner = maintenanceScope?.assertOwnerCurrent;
   return () => {
-    if (
-      context.admission !== admission ||
-      admission.databasePath !== databasePath ||
-      admission.assertCurrent !== assertAdmission ||
-      context.maintenanceScope !== maintenanceScope ||
-      maintenanceScope?.assertAdmission !== assertMaintenance ||
-      maintenanceScope?.assertOwnerCurrent !== assertMaintenanceOwner ||
-      context.runInCapturedSchemaScope !== runInCapturedSchemaScope ||
-      context.existingSchemaPath !== existingSchemaPath ||
-      context.environment !== environment ||
-      !isDeepStrictEqual(environment, sourceEnvironment)
-    ) {
-      throw new Error("State lease worker source binding was replaced");
-    }
+    // Internal callers keep this context immutable; retain the actual authority, not its fields.
     assertMaintenance?.();
     assertAdmission();
   };
@@ -141,12 +126,19 @@ function createLeaseAdmissionFactory(
         scope.settleNative(retained.settled, outcome);
       }
     });
-    let writeStage: "waiting" | "transaction" | "commit" = "waiting";
-    let lifecycleStage: "transaction" | "commit" | "settled" = "transaction";
-    const lifecycleWrite = purpose === "acquire" || purpose === "renew" || purpose === "release";
+    let prepareTransaction = options.beforeTransaction;
     const expiryRequired = purpose === "write" || purpose === "verify" || purpose === "renew";
     return {
       nativeLocations: [...new Set(scopes.map((scope) => scope.databasePath))],
+      ...(firstScope.sourceIdentity?.key.startsWith("file:")
+        ? {
+            databaseIdentity: {
+              databasePath: firstScope.databasePath,
+              key: firstScope.sourceIdentity.key,
+              birthtime: firstScope.sourceIdentity.birthtime,
+            },
+          }
+        : {}),
       admission: createSqliteWorkerOperationAdmission(
         (request, grant) => {
           assertCurrent();
@@ -156,18 +148,7 @@ function createLeaseAdmissionFactory(
             : purpose === "write"
               ? "state-lease"
               : `state-lease-${purpose}`;
-          if (
-            (purpose === "write"
-              ? writeStage === "commit" ||
-                (options.plural && request.stage === "transaction" && writeStage !== "waiting") ||
-                (request.stage !== "transaction" &&
-                  !(request.stage === "commit" && writeStage === "transaction"))
-              : lifecycleWrite
-                ? request.stage !== lifecycleStage
-                : request.stage !== "transaction") ||
-            !isRecord(facts) ||
-            facts.kind !== kind
-          ) {
+          if (!isRecord(facts) || facts.kind !== kind) {
             ownershipRefused();
           }
           const members: unknown = options.plural ? facts.leases : [facts];
@@ -191,30 +172,20 @@ function createLeaseAdmissionFactory(
             }
           };
           assertFacts();
-          if (
-            purpose === "write" &&
-            request.stage === "transaction" &&
-            writeStage === "waiting" &&
-            options.beforeTransaction
-          ) {
-            assertSynchronousAuthority(options.beforeTransaction);
+          if (purpose === "write" && prepareTransaction) {
+            assertSynchronousAuthority(prepareTransaction);
+            prepareTransaction = undefined;
             assertCurrent();
             assertFacts();
           }
           if (purpose === "write" && request.stage === "commit") {
-            writeStage = "commit";
             assertSynchronousAuthority(beforeCommit);
             assertCurrent();
             // Synchronous host work can consume the worker's remaining lease lifetime.
             assertFacts();
           }
-          if (grant()) {
-            if (lifecycleWrite) {
-              lifecycleStage = lifecycleStage === "transaction" ? "commit" : "settled";
-            } else if (purpose === "write" && request.stage === "transaction") {
-              writeStage = "transaction";
-            }
-          }
+          // The native transaction owns ordering; every grant still checks live authority.
+          grant();
         },
         options.expiryObservation &&
           (purpose === "acquire" || purpose === "verify" || purpose === "renew")
@@ -267,8 +238,9 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
   assertCurrent(purpose: OpenClawStateLeaseWorkerPurpose): void;
 }) {
   const assertSourceCurrent = params.sourceContext
-    ? captureLeaseWorkerSource(params.sourceContext, params.databasePath)
+    ? captureLeaseWorkerSource(params.sourceContext)
     : undefined;
+  const sourceIdentity = params.sourceIdentity && Object.freeze({ ...params.sourceIdentity });
   const pending = new Set<Promise<unknown>>();
   const settlements = new Set<Promise<unknown>>();
   let accepting = true;
@@ -319,9 +291,10 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
   };
   const owner: WorkerLeaseOwner = {
     identity: params.identity,
-    sourceIdentity: params.sourceIdentity
-      ? Object.freeze({ ...params.sourceIdentity })
-      : params.sourceContext && Object.freeze({ ...params.sourceContext.admission.identity }),
+    get sourceIdentity() {
+      // First creation publishes its physical file through the original retained admission.
+      return sourceIdentity ?? params.sourceContext?.admission.identity;
+    },
     sourceContext: params.sourceContext,
     assertSourceCurrent() {
       if (!assertSourceCurrent) {
@@ -344,6 +317,7 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
       return {
         identity: params.identity,
         databasePath: params.databasePath,
+        sourceIdentity: owner.sourceIdentity,
         assertCurrent() {
           assertCurrent(purpose);
           assertCaller?.();
@@ -401,6 +375,13 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
     await Promise.allSettled(settlements);
   };
   return {
+    // Draining stops new effects; retained scopes still own their native settlement.
+    assertCurrent(this: void) {
+      assertCurrent("write");
+      if (!accepting) {
+        throw new Error("State lease worker operation differs from its live owner");
+      }
+    },
     bind(lease: OpenClawStateWorkerLeaseContext) {
       if (closed || boundLease) {
         throw new Error("State lease worker owner is already bound or closed");

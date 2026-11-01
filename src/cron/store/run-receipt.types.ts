@@ -1,34 +1,4 @@
-import type { CronAuthenticatedChannelRequester } from "../../gateway/cron-creator-authority-grant.types.js";
-import type {
-  CronScheduledToolCallerOrigin,
-  CronScheduledToolPolicy,
-} from "../scheduled-tool-policy.js";
 import type { CronAgentScope } from "../types-shared.js";
-import type { CronJobGenerationReadRow } from "./schema.js";
-
-export type CronReceiptAuthorityJobFacts = CronAgentScope & {
-  id: string;
-  enabled: boolean;
-  hasCanonicalDeliveryMode: boolean;
-  configRevision: string;
-  grantDefinitionRevision: string;
-  messageToolAuthorityInputs: { policy: CronScheduledToolPolicy } | undefined;
-  messageActionAuthorityInputs:
-    | {
-        policy: CronScheduledToolPolicy;
-        callerOrigin?: CronScheduledToolCallerOrigin;
-        channelRequester?: CronAuthenticatedChannelRequester;
-        executableRevision?: string;
-      }
-    | undefined;
-  grantDefinitionProjection?: {
-    revision: CronJobGenerationReadRow["grant_definition_revision"];
-    generation: CronJobGenerationReadRow["grant_definition_generation"];
-    updatedAtMs: CronJobGenerationReadRow["grant_definition_updated_at"];
-    jobUpdatedAtMs: CronJobGenerationReadRow["updated_at"];
-  };
-};
-
 export type CronRunReceiptStatus =
   | "running"
   | "ok"
@@ -50,6 +20,7 @@ export type CronRunReceipt = {
   startedAtMs: number;
   finishedAtMs: number | null;
   error?: string;
+  deliveryNotStarted?: true;
 };
 
 export type CronRunReceiptHandle = Pick<
@@ -77,22 +48,17 @@ export type CronRunReceiptCurrentReadCommand = {
 
 export type CronRunReceiptCurrentFacts = {
   receipt: CronRunReceiptHandle | undefined;
-  job: CronReceiptAuthorityJobFacts | undefined;
+  job: (CronAgentScope & { hasCanonicalDeliveryMode: boolean }) | undefined;
   deletionBlocked: boolean;
 };
 
-export type CronRunReceiptOwnerObservation = Pick<
-  CronRunReceipt,
-  "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs"
->;
-
-export type PreparedCronRunReceiptAdjudication = {
-  storeKey: string;
-  observed?: CronRunReceiptOwnerObservation;
-  observedStale: boolean;
-};
-
-export type PreparedCronRunReceiptClaim = PreparedCronRunReceiptAdjudication & {
-  handle: CronRunReceiptHandle;
-  requestRunId?: string;
-};
+export class CronRunReceiptRevisionError extends Error {
+  constructor(
+    readonly receiptId: string,
+    message = "cron run configuration changed",
+    readonly reason: "revision-changed" | "owner-unavailable" = "revision-changed",
+  ) {
+    super(message);
+    this.name = "CronRunReceiptRevisionError";
+  }
+}

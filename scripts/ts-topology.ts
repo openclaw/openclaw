@@ -10,15 +10,13 @@ import {
   createFilesystemPublicSurfaceScope,
   createPluginSdkScope,
 } from "./lib/ts-topology/scope.js";
-import type { TopologyReportName, TopologyScope } from "./lib/ts-topology/types.js";
+import {
+  TOPOLOGY_REPORT_NAMES,
+  type TopologyReportName,
+  type TopologyScope,
+} from "./lib/ts-topology/types.js";
 
-const VALID_REPORTS = new Set<TopologyReportName>([
-  "public-surface-usage",
-  "owner-map",
-  "single-owner-shared",
-  "unused-public-surface",
-  "consumer-topology",
-]);
+const VALID_REPORTS = new Set<TopologyReportName>(TOPOLOGY_REPORT_NAMES);
 
 type IoLike = {
   stdout: { write: (chunk: string) => void };

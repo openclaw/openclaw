@@ -9,6 +9,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
+  isMediaKind,
   readPersistedMediaFacts,
   type MediaFact,
   type MediaFactInput,
@@ -23,21 +24,7 @@ import type {
 } from "./user-turn-transcript.types.js";
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
-const STRUCTURED_MEDIA_KINDS = new Set<string>([
-  "image",
-  "audio",
-  "video",
-  "document",
-  "sticker",
-  "unknown",
-]);
 const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;
-
-function isStructuredMediaKind(
-  kind: string | undefined,
-): kind is NonNullable<MediaFactInput["kind"]> {
-  return kind !== undefined && STRUCTURED_MEDIA_KINDS.has(kind);
-}
 
 function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
   // Relative staged media paths are anchored to the media workspace; absolute
@@ -55,7 +42,7 @@ function normalizeStructuredMediaEntryForTranscript(
   const mediaPath = normalizeOptionalString(media.path);
   const mediaUrl = normalizeOptionalString(media.url);
   const legacyKind = normalizeOptionalString(media.kind);
-  const kind = isStructuredMediaKind(legacyKind) ? legacyKind : undefined;
+  const kind = isMediaKind(legacyKind) ? legacyKind : undefined;
   const messageId = normalizeOptionalString(media.messageId);
   const contentType =
     normalizeOptionalString(media.contentType) ??
@@ -103,33 +90,20 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     const media: PersistedUserTurnMediaInput = {
       contentType: fact.contentType ?? mimeTypeFromFilePath(mediaPath ?? url),
     };
-    if (mediaPath) {
-      media.path = mediaPath;
-    }
-    if (url) {
-      media.url = url;
-    }
-    if (fact.kind) {
-      media.kind = fact.kind;
-    }
-    if (fact.fileName) {
-      media.fileName = fact.fileName;
-    }
-    if (fact.origin) {
-      media.origin = fact.origin;
-    }
-    if (fact.sizeBytes !== undefined) {
-      media.sizeBytes = fact.sizeBytes;
-    }
-    if (fact.durationMs !== undefined) {
-      media.durationMs = fact.durationMs;
-    }
-    if (fact.width !== undefined) {
-      media.width = fact.width;
-    }
-    if (fact.height !== undefined) {
-      media.height = fact.height;
-    }
+    const set = <K extends keyof typeof media>(key: K, value: (typeof media)[K]) => {
+      if (value !== undefined) {
+        media[key] = value;
+      }
+    };
+    set("path", mediaPath);
+    set("url", url);
+    set("kind", fact.kind);
+    set("fileName", fact.fileName);
+    set("origin", fact.origin);
+    set("sizeBytes", fact.sizeBytes);
+    set("durationMs", fact.durationMs);
+    set("width", fact.width);
+    set("height", fact.height);
     return media;
   });
   return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
@@ -171,6 +145,37 @@ export function readModelPromptProjection(message: unknown): string | undefined 
   return projection.text;
 }
 
+export function prepareModelPromptProjection(
+  message: unknown,
+  text: string,
+): PersistedUserTurnMessage | undefined {
+  if (!isUserMessage(message)) {
+    throw new Error("Model prompt projection lost its canonical user turn");
+  }
+  const existing = readModelPromptProjection(message);
+  if (existing !== undefined) {
+    if (existing !== text) {
+      throw new Error("A captured user-turn model prompt projection cannot be changed");
+    }
+    return undefined;
+  }
+  return {
+    ...message,
+    __openclaw: {
+      ...message["__openclaw"],
+      modelPromptProjection: { version: 1, text },
+    },
+  };
+}
+
+export function projectRecordedModelPrompt(
+  message: PersistedUserTurnMessage,
+  transcript?: AgentMessage,
+): PersistedUserTurnMessage;
+export function projectRecordedModelPrompt(
+  message: AgentMessage,
+  transcript?: AgentMessage,
+): AgentMessage;
 export function projectRecordedModelPrompt(
   message: AgentMessage,
   transcript?: AgentMessage,

@@ -33,11 +33,10 @@ export function createSyntheticPluginRuntimeClient(
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
       | "cronRunContinuation"
-      | "internalDeliveryMediaUrls"
       | "runtimeContextFragments"
-      | "internalDeliverySuppressText"
       | "internalDeliverySuppressErrors"
       | "pluginRuntimeOwnerId"
+      | "pluginApprovalRequestOwnerId"
       | "nodeInvokeApprovalSessionKey"
       | "pluginSubagentRequester"
       | "runtimePluginToolGrant"
@@ -80,17 +79,14 @@ export function createSyntheticPluginRuntimeClient(
       ...(params?.runtimeContextFragments
         ? { runtimeContextFragments: params.runtimeContextFragments }
         : {}),
-      ...(params?.internalDeliveryMediaUrls
-        ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
-        : {}),
-      ...(params?.internalDeliverySuppressText === true
-        ? { internalDeliverySuppressText: true }
-        : {}),
       ...(params?.internalDeliverySuppressErrors === true
         ? { internalDeliverySuppressErrors: true }
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.pluginApprovalRequestOwnerId
+        ? { pluginApprovalRequestOwnerId: params.pluginApprovalRequestOwnerId }
+        : {}),
       ...(params?.nodeInvokeApprovalSessionKey
         ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }
         : {}),

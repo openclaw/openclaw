@@ -1,11 +1,21 @@
+import { isDeepStrictEqual } from "node:util";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  resolveSandboxContext,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveAgentConfig,
   tryResolveDefaultAgentId,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
-import { getSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolvePreparedSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
+import {
+  captureSessionEntryCurrentCheckAsync,
+  composeSessionEntryCommitGuards,
+  type PreparedSessionSourceAssertion,
+} from "openclaw/plugin-sdk/session-binding-runtime";
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 
 type ExecHost = "sandbox" | "gateway" | "node";
 type ExecTarget = "auto" | ExecHost;
@@ -18,11 +28,170 @@ type ExecHostOverride = {
 /** Effective execution-host policy for the Codex app-server native tool surface. */
 export type CodexNativeExecutionPolicy = {
   nativeToolSurfaceAllowed: boolean;
+  sandboxed: boolean;
   requestedExecHost: ExecTarget;
   effectiveExecHost: ExecHost;
   node?: string;
   blockReason?: string;
 };
+
+export type PreparedCodexNativeExecutionPolicy = {
+  policy: CodexNativeExecutionPolicy;
+  assertCurrent: () => Promise<void>;
+  admit: (write: () => void, withCurrent: (write: () => void) => Promise<void>) => Promise<void>;
+  source?: PreparedSessionSourceAssertion;
+  retain: () => () => void;
+  release: () => void;
+};
+
+type RunPolicyOptions = {
+  agentId?: string;
+  runtimeSessionKey?: string;
+  sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>;
+};
+
+function resolveRunPolicyParams(params: EmbeddedRunAttemptParams, options: RunPolicyOptions) {
+  return {
+    config: params.config,
+    requesterFacts: params.preparedWebSearchPolicy?.requesterFacts,
+    sessionKey:
+      options.runtimeSessionKey?.trim() ||
+      params.sandboxSessionKey?.trim() ||
+      params.sessionKey?.trim() ||
+      params.sessionId,
+    sessionId: params.sessionId,
+    agentId: options.agentId,
+    sessionTarget: params.sessionTarget,
+    execOverrides: params.execOverrides,
+    // A resolved null sandbox is absence; undefined still requests runtime discovery.
+    sandboxAvailable: options.sandbox === null ? false : options.sandbox?.enabled,
+    readRuntimeSessionEntry: true,
+  };
+}
+
+export function prepareCodexNativeExecutionPolicyForRun(
+  params: EmbeddedRunAttemptParams,
+  options: RunPolicyOptions = {},
+): Promise<PreparedCodexNativeExecutionPolicy> {
+  return prepareCodexNativeExecutionPolicy(resolveRunPolicyParams(params, options));
+}
+
+/** Prepare the selected row once; retained checks use its exact execution policy. */
+export async function prepareCodexNativeExecutionPolicy(
+  params: Omit<Parameters<typeof resolveCodexNativeExecutionPolicy>[0], "sessionEntry"> & {
+    sessionEntry?: SessionEntry | null;
+    requesterFacts?: NonNullable<
+      EmbeddedRunAttemptParams["preparedWebSearchPolicy"]
+    >["requesterFacts"];
+  },
+): Promise<PreparedCodexNativeExecutionPolicy> {
+  const captured = {
+    ...params,
+    execOverrides: params.execOverrides && { ...params.execOverrides },
+    sessionTarget: params.sessionTarget && { ...params.sessionTarget },
+  };
+  const { sourceAgentId, sourceSessionKey, canReadSessionEntry } =
+    resolveSessionSelection(captured);
+  const sources: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>>[] = [];
+  const changed = () => {
+    throw new Error("Codex requester policy changed; retry the turn to prepare current policy.");
+  };
+  try {
+    const selected =
+      canReadSessionEntry && sourceAgentId && sourceSessionKey
+        ? await captureSessionEntryCurrentCheckAsync({
+            agentId: sourceAgentId,
+            sessionKey: sourceSessionKey,
+            storePath: captured.sessionTarget?.storePath ?? captured.storePath,
+            fields: [
+              "sessionId",
+              "lifecycleRevision",
+              "execHost",
+              "execNode",
+              "sandbox",
+              "sandboxMode",
+              "createdVia",
+              "spawnedBy",
+              "spawnDepth",
+              "completionOwnerSessionKey",
+              "subagentRole",
+              "subagentControlScope",
+              "inheritedToolPolicyVersion",
+              "inheritedToolPolicySource",
+              "inheritedToolAllow",
+              "inheritedToolDeny",
+              "delegatedToolPolicy",
+            ],
+            errorMessage: "Codex session execution policy changed; prepare the operation again.",
+          })
+        : undefined;
+    if (selected) {
+      sources.push(selected);
+    }
+    for (const snapshot of captured.requesterFacts ?? []) {
+      const { query, facts } = snapshot;
+      const matches = (entry: SessionEntry | undefined) =>
+        facts === undefined
+          ? entry === undefined
+          : entry !== undefined &&
+            facts.every(({ field, value }) => isDeepStrictEqual(entry[field], value));
+      const source = await captureSessionEntryCurrentCheckAsync({
+        ...query,
+        fields: facts?.map(({ field }) => field) ?? [],
+        errorMessage: "Codex requester policy changed; retry the turn to prepare current policy.",
+      });
+      sources.push(source);
+      if (!matches(source.entry)) {
+        changed();
+      }
+    }
+    const assertCurrent = async () => {
+      for (const source of sources) {
+        await source.assertCurrent();
+      }
+    };
+    await assertCurrent();
+    let owners = 0;
+    // Late relay callbacks and the attempt share the same prepared policy.
+    const retain = () => {
+      owners++;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        if (--owners === 0) {
+          for (const source of sources) {
+            source.release();
+          }
+        }
+      };
+    };
+    return {
+      policy: resolveCodexNativeExecutionPolicy({
+        ...captured,
+        sessionEntry: selected?.entry ?? captured.sessionEntry ?? null,
+        readRuntimeSessionEntry: false,
+      }),
+      assertCurrent,
+      async admit(write, withCurrent) {
+        await assertCurrent();
+        await withCurrent(write);
+      },
+      source: sources.length
+        ? composeSessionEntryCommitGuards(sources.map(({ source }) => source))
+        : undefined,
+      retain,
+      release: retain(),
+    };
+  } catch (error) {
+    for (const source of sources) {
+      source.release();
+    }
+    throw error;
+  }
+}
 
 /** Projects node execution ownership into the runtime tool factory options. */
 export function resolveCodexNodeExecToolOverrides(
@@ -38,44 +207,34 @@ export function resolveCodexNodeExecToolOverrides(
 /** Resolves node/gateway/sandbox execution ownership from overrides, session, agent, and config. */
 export function resolveCodexNativeExecutionPolicy(params: {
   config?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  /** Null carries acknowledged absence from an already selected physical source. */
+  sessionEntry: SessionEntry | null;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  storePath?: string;
+  sessionTarget?: { agentId?: string; sessionKey?: string; storePath?: string };
   execOverrides?: ExecHostOverride;
   sandboxAvailable?: boolean;
   readRuntimeSessionEntry?: boolean;
 }): CodexNativeExecutionPolicy {
   const config = params.config ?? {};
-  const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
-  const agentId =
-    normalizeAgentIdOrDefault(params.agentId) ??
-    parseAgentIdFromSessionKey(sessionKey) ??
-    tryResolveDefaultAgentId(config);
-  const canReadSessionEntry =
-    agentId &&
-    sessionKey &&
-    params.readRuntimeSessionEntry &&
-    (parseAgentIdFromSessionKey(sessionKey) ?? tryResolveDefaultAgentId(config)) === agentId;
-  let sessionEntry = params.sessionEntry ?? undefined;
-  if (sessionEntry === undefined && canReadSessionEntry && sessionKey && agentId) {
-    try {
-      sessionEntry = getSessionEntry({ sessionKey, agentId, hydrateSkillPromptRefs: false });
-    } catch {
-      sessionEntry = undefined;
-    }
-  }
+  const { agentId, sessionKey } = resolveSessionSelection(params);
+  const sessionEntry = params.sessionEntry;
   const sandboxAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? agentId;
-  const sandboxAvailable =
-    params.sandboxAvailable ??
+  // Stored overrides follow the captured source; main/non-main classification keeps its run key.
+  const sandboxed =
+    params.sandboxAvailable === true ||
     (sessionKey && sandboxAgentId
-      ? resolveSandboxRuntimeStatus({
+      ? resolvePreparedSandboxRuntimeStatus({
           cfg: config,
           sessionKey,
           agentId: sandboxAgentId,
           classificationAgentId: sandboxAgentId,
+          preparedSessionEntry: sessionEntry,
         }).sandboxed
       : false);
+  const sandboxAvailable = params.sandboxAvailable ?? sandboxed;
   const agentExec = agentId ? resolveAgentConfig(config, agentId)?.tools?.exec : undefined;
   const globalExec = config.tools?.exec;
   const requestedExecHost =
@@ -90,6 +249,7 @@ export function resolveCodexNativeExecutionPolicy(params: {
     params.execOverrides?.node ?? sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node;
   return {
     nativeToolSurfaceAllowed: effectiveExecHost !== "node",
+    sandboxed,
     requestedExecHost,
     effectiveExecHost,
     node,
@@ -99,6 +259,30 @@ export function resolveCodexNativeExecutionPolicy(params: {
             "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
         }
       : {}),
+  };
+}
+
+function resolveSessionSelection(
+  params: Omit<Parameters<typeof resolveCodexNativeExecutionPolicy>[0], "sessionEntry"> & {
+    sessionEntry?: SessionEntry | null;
+  },
+) {
+  const config = params.config ?? {};
+  const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
+  const agentId =
+    normalizeAgentIdOrDefault(params.agentId) ??
+    parseAgentIdFromSessionKey(sessionKey) ??
+    tryResolveDefaultAgentId(config);
+  return {
+    sessionKey,
+    agentId,
+    sourceSessionKey: params.sessionTarget?.sessionKey ?? sessionKey,
+    sourceAgentId: params.sessionTarget?.agentId ?? agentId,
+    canReadSessionEntry:
+      params.sessionEntry === undefined &&
+      params.readRuntimeSessionEntry &&
+      (params.sessionTarget !== undefined ||
+        (parseAgentIdFromSessionKey(sessionKey) ?? tryResolveDefaultAgentId(config)) === agentId),
   };
 }
 

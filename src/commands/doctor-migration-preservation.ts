@@ -5,6 +5,7 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { withVerifiedUpdateRecoveryBackup } from "../infra/update-recovery-backup-reader.js";
 import type { UpdateRecoveryBaselineRef } from "../infra/update-recovery-baseline-capture.js";
 import { resolveCapturedRegistryPath } from "../infra/update-recovery-path.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   captureOpenClawMigrationWitness,
   assertOpenClawMigrationWitnessPreserved,
@@ -26,6 +27,7 @@ function readWitness(
   const pathname = path.join(ref.directory, entry.archivePath);
   const db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(pathname), { readOnly: true });
   try {
+    // sqlite-allow-raw: disable schema-defined functions while inspecting an immutable backup.
     db.exec("PRAGMA trusted_schema = OFF;");
     assertSqliteIntegrity(db, entry.sourcePath);
     return captureOpenClawMigrationWitness(db, owner, registry);
@@ -119,11 +121,11 @@ export async function inspectDoctorMigrationPreservation(params: {
         const afterWitness = readWitness(params.candidate, after, owner);
         assertOpenClawMigrationWitnessPreserved(beforeWitness, afterWitness);
         agentPairs.set(entry.sourcePath, { before: beforeWitness, after: afterWitness });
-        if (afterWitness.schemaVersion === 25) {
+        if (afterWitness.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
           migratingAgents.push({
             agentId: owner.agentId,
             path: owner.path,
-            requireRegistration: beforeWitness.schemaVersion === 24,
+            requireRegistration: beforeWitness.schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION,
           });
         }
       }

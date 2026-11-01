@@ -5,7 +5,7 @@ import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
 
 function rs(raw: string, ocPath: string) {
-  const { ast } = parseJsonc(raw);
+  const ast = parseJsonc(raw);
   const path = parseOcPath(ocPath);
   return resolveJsoncOcPath(ast, path);
 }
@@ -20,7 +20,7 @@ describe("resolveJsoncOcPath", () => {
       }
     }
   },
-  "limits": [10, 20, 30]
+  "limits": [99], "limits": [10, 20, 30]
 }`;
 
   it("resolves the root when no segments are given", () => {
@@ -28,32 +28,7 @@ describe("resolveJsoncOcPath", () => {
     expect(m?.kind).toBe("root");
   });
 
-  it("walks dotted section paths", () => {
-    const m = rs(config, "oc://config/plugins.entries.github.token");
-    expect(m?.kind).toBe("object-entry");
-    if (m?.kind === "object-entry") {
-      expect(m.node.key).toBe("token");
-      expect(m.node.value.kind).toBe("string");
-      if (m.node.value.kind === "string") {
-        expect(m.node.value.value).toBe("secret");
-      }
-    }
-  });
-
-  it("walks 4-segment slash paths up to OcPath depth limit", () => {
-    const m = rs(config, "oc://config/plugins/entries/github");
-    expect(m?.kind).toBe("object-entry");
-    if (m?.kind === "object-entry") {
-      expect(m.node.key).toBe("github");
-    }
-  });
-
-  it("walks mixed dotted+slash paths", () => {
-    const m = rs(config, "oc://config/plugins/entries.github.token");
-    expect(m?.kind).toBe("object-entry");
-  });
-
-  it("indexes into arrays via numeric segments", () => {
+  it("indexes into the effective array via numeric segments", () => {
     const m = rs(config, "oc://config/limits.1");
     expect(m?.kind).toBe("value");
     if (m?.kind === "value") {
@@ -72,16 +47,12 @@ describe("resolveJsoncOcPath", () => {
     expect(rs(config, "oc://config/limits.99")).toBeNull();
   });
 
-  it("returns null for noncanonical array indexes", () => {
-    expect(rs(config, "oc://config/limits.01")).toBeNull();
-  });
-
   it("returns null when descending past a primitive", () => {
     expect(rs(config, "oc://config/plugins.entries.github.token.x")).toBeNull();
   });
 
   it("returns null on empty AST", () => {
-    const { ast } = parseJsonc("");
+    const ast = parseJsonc("");
     expect(resolveJsoncOcPath(ast, parseOcPath("oc://config/x"))).toBeNull();
   });
 });

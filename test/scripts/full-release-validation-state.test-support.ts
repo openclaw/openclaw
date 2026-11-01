@@ -7,18 +7,60 @@ import {
   createPublicationSourceFact,
   publicationDispatchEnvelope,
   publicationSourceRequest,
+  type PublicationSelection,
   type PublicationSourceRequest,
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
+import {
+  fullReleaseCandidateBindingFixture,
+  fullReleaseCandidateRequestInput,
+} from "../helpers/full-release-candidate.js";
 
 export const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
 export const SHA = "a".repeat(40);
 export const TARGET_SHA = "b".repeat(40);
 export const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
+const WORKFLOW = { workflowRef: "release-ci/tooling", workflowSha: SHA };
+
+export function publicationSelectionFixture(): PublicationSelection {
+  return {
+    route: "normal",
+    npmDistTag: "latest",
+    publishOpenclawNpm: true,
+    pluginPublishScope: "all-publishable",
+    plugins: [],
+  };
+}
+
+export function publicationSourceEnv(
+  inputs: Record<string, unknown> = {},
+  env: NodeJS.ProcessEnv = {},
+) {
+  return {
+    PUBLICATION_INPUTS_JSON: JSON.stringify({
+      ref: TARGET_SHA,
+      release_profile: "stable",
+      rerun_group: "all",
+      trusted_workflow_json: publicationDispatchEnvelope(null, {
+        validationPurpose: "publish",
+        publicationSelection: publicationSelectionFixture(),
+      }),
+      ...inputs,
+    }),
+    PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
+    PUBLICATION_TOOLING_JSON: JSON.stringify(TRUSTED_MAIN),
+    PUBLICATION_TARGET_SHA: TARGET_SHA,
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_REF: "refs/heads/release-ci/tooling",
+    GITHUB_SHA: SHA,
+    GITHUB_RUN_ID: "77",
+    GITHUB_RUN_ATTEMPT: "1",
+    ...env,
+  };
+}
 
 export function collectorEnv(overrides: NodeJS.ProcessEnv) {
   return {
@@ -44,21 +86,12 @@ export function runCollector(mode: string, overrides: NodeJS.ProcessEnv) {
 }
 
 export function candidateRequestInput(overrides: Record<string, unknown> = {}) {
-  return {
-    repository: "openclaw/openclaw",
+  return fullReleaseCandidateRequestInput({
     targetSha: TARGET_SHA,
     toolingSha: SHA,
-    releaseProfile: "stable",
-    releaseSoak: true,
     upgradeSurvivorBaseline: "openclaw@latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "reported-issues",
-    allowFrozenTargetScenarioOmissions: false,
-    allowUnreleasedChangelog: false,
-    packagePublished: false,
-    sharedImagePolicy: "no-push-artifact",
     ...overrides,
-  };
+  });
 }
 
 export function canonicalCandidateRequest(overrides: Record<string, unknown> = {}) {
@@ -66,10 +99,7 @@ export function canonicalCandidateRequest(overrides: Record<string, unknown> = {
 }
 
 export function candidateBinding(requestOverrides: Record<string, unknown> = {}) {
-  return fullReleaseCandidateBindingFixture({
-    ...candidateRequestInput(requestOverrides),
-    ...requestOverrides,
-  });
+  return fullReleaseCandidateBindingFixture(candidateRequestInput(requestOverrides));
 }
 
 export function evidenceManifest() {
@@ -100,12 +130,12 @@ export function generatedManifest(planArtifact: Record<string, any>): Record<str
     sourceParentRunAttempt: 1,
     targetRef: "main",
     targetSha: TARGET_SHA,
+    validationInputs: { targetVersion: planArtifact.targetVersion },
     version: 3,
     workflowFullRef: "refs/heads/release-ci/tooling",
     workflowName: "Full Release Validation",
-    workflowRef: "release-ci/tooling",
+    ...WORKFLOW,
     workflowRefType: "branch",
-    workflowSha: SHA,
   };
 }
 
@@ -126,8 +156,7 @@ export function child(key: string, overrides: Record<string, unknown> = {}) {
     status: "in_progress",
     url: "https://example.invalid/runs/101",
     workflow: "ci.yml",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...overrides,
   };
 }
@@ -162,14 +191,18 @@ export function plan(overrides: Record<string, unknown> = {}) {
       releaseChecks: { result: "success", runAttempt: 1, runId: "303" },
     },
     dockerPreflightResult: "success",
+    dockerPreparationResult: "success",
     evidenceReuse: false,
+    npmPreparationResult: "success",
+    npmQualificationResult: "success",
     parentRunAttempt: 2,
     parentRunId: "77",
     candidateBindingResult: "success",
+    pluginNpmPreflightRequired: false,
+    pluginNpmPreparationResult: "skipped",
     rerunGroup: "all",
     resolveTargetResult: "success",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...overrides,
   });
 }
@@ -188,8 +221,7 @@ export function executionPlan(
     parentRunId: "77",
     repository: "openclaw/openclaw",
     targetSha: TARGET_SHA,
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...(candidateRequest === undefined ? {} : { candidateRequest }),
     ...(expectedOverrides as Record<string, unknown> | undefined),
   };
@@ -224,31 +256,7 @@ export function reusedEvidenceChildren() {
 
 export function sourceFact(overrides: Partial<PublicationSourceRequest> = {}) {
   const request = {
-    ...publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: TARGET_SHA,
-        release_profile: "stable",
-        rerun_group: "all",
-        trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: {
-            route: "normal",
-            npmDistTag: "latest",
-            publishOpenclawNpm: true,
-            pluginPublishScope: "all-publishable",
-            plugins: [],
-          },
-        }),
-      }),
-      PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
-      PUBLICATION_TOOLING_JSON: JSON.stringify(TRUSTED_MAIN),
-      PUBLICATION_TARGET_SHA: TARGET_SHA,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/release-ci/tooling",
-      GITHUB_SHA: SHA,
-      GITHUB_RUN_ID: "77",
-      GITHUB_RUN_ATTEMPT: "1",
-    }),
+    ...publicationSourceRequest(publicationSourceEnv()),
     ...overrides,
   };
   return createPublicationSourceFact(

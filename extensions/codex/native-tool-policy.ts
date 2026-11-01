@@ -20,7 +20,6 @@ export const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "canvas",
   "show_widget",
   "message",
-  "heartbeat_respond",
   "automations",
   "gateway",
   // OpenClaw admin/status tools have no native counterpart. Session and

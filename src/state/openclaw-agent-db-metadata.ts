@@ -1,15 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  getSqliteReadScopeRevision,
-} from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { classifySqliteTableReadError, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export type ExistingAgentSchemaMeta = {
@@ -18,9 +15,10 @@ export type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
-const metadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
+export const agentSchemaMetadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
   // Fixed ownership is reusable until tracked DDL can remove or rebuild its storage.
   name: "agent.schema-metadata",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -42,15 +40,15 @@ const metadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
 function schemaMetadataKey(
   admissionId: string,
 ): SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> {
-  return { name: `agent.schema-metadata:${admissionId}`, read: metadataKey.read };
+  return { name: `agent.schema-metadata:${admissionId}`, read: agentSchemaMetadataKey.read };
 }
 
 /** The metadata writer publishes its committed format facts without a readback. */
 export function publishAgentSchemaMetadata(
-  db: DatabaseSync,
+  db: EngineConnection,
   metadata: ExistingAgentSchemaMeta,
 ): void {
-  publishSqliteDatabaseAdmission(db, metadataKey, metadata);
+  publishSqliteDatabaseAdmission(db, agentSchemaMetadataKey, metadata);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
     publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
@@ -58,7 +56,7 @@ export function publishAgentSchemaMetadata(
 }
 
 /** Read ownership metadata without loading runtime schema or migration owners. */
-export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null {
+export function readExistingAgentSchemaMeta(db: EngineConnection): ExistingAgentSchemaMeta | null {
   const schema = getAdmittedSqliteSchemaFacts(db);
   const historical =
     schema && getSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId));
@@ -67,7 +65,7 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
   }
   const admitted =
     !schema || getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
-      ? getSqliteDatabaseAdmission(db, metadataKey)
+      ? getSqliteDatabaseAdmission(db, agentSchemaMetadataKey)
       : undefined;
   if (admitted) {
     if (schema) {
@@ -78,7 +76,6 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
   if (!tableExists(db, "schema_meta")) {
     return null;
   }
-  const revision = getSqliteReadScopeRevision(db);
   // Unknown DDL can recreate the same table without its row; catalog text cannot carry this proof.
   let row;
   try {
@@ -101,12 +98,15 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
     role: typeof row.role === "string" ? row.role : null,
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };
+  const schemaStillCurrent = schema && getAdmittedSqliteSchemaFacts(db) === schema;
   if (
-    schema &&
-    (!revision || getSqliteReadScopeRevision(db) === revision) &&
-    getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
+    isPostgresSqlConnection(db) ||
+    (schemaStillCurrent &&
+      getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId)
   ) {
     publishAgentSchemaMetadata(db, metadata);
+  } else if (schemaStillCurrent) {
+    publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
   }
   return metadata;
 }

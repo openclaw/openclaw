@@ -228,7 +228,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
   };
   try {
     const fixtureIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(temporaryRoot, "state", "openclaw.sqlite"),
+      env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
       identityKey: "hot-reload-fixture",
     });
     await stage(fixtureIdentity, false);
@@ -271,7 +271,7 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
       const connections: HotReloadConnection[] = [];
       const identity = () =>
         loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state", "openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: `hot-reload-${randomUUID()}`,
         });
       const list = () => params.operator.request<PairingList>("device.pair.list", {});

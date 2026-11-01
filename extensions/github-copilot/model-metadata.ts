@@ -1,4 +1,3 @@
-// Github Copilot plugin module implements model metadata behavior.
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -6,11 +5,6 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type CopilotRuntimeApi = "anthropic-messages" | "openai-completions" | "openai-responses";
-type CopilotReasoningCompat = {
-  supportsReasoningEffort?: boolean;
-  supportedReasoningEfforts?: readonly string[] | null;
-};
-
 // Provider-owned general-purpose preference. Setup verifies it against the
 // authenticated live catalog instead of assuming every account can use it.
 export const DEFAULT_COPILOT_MODEL = "github-copilot/claude-sonnet-5";
@@ -35,6 +29,7 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
     "claude-opus-4.6-1m",
     {
       name: "Claude Opus 4.6 (1M context)",
+      family: "anthropic",
       api: "anthropic-messages",
       reasoning: true,
       contextWindow: 1_000_000,
@@ -47,6 +42,7 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
     "claude-opus-4.7-1m-internal",
     {
       name: "Claude Opus 4.7 (1M context)",
+      family: "anthropic",
       api: "anthropic-messages",
       reasoning: true,
       contextWindow: 1_000_000,
@@ -78,15 +74,16 @@ export function resolveCopilotTransportApi(modelId: string): CopilotRuntimeApi {
 
 export function resolveCopilotModelCompat(
   modelId: string,
-  api: CopilotRuntimeApi = resolveCopilotTransportApi(modelId),
+  api?: CopilotRuntimeApi,
 ): ModelDefinitionConfig["compat"] | undefined {
   const normalized = normalizeOptionalLowercaseString(modelId) ?? "";
-  if (api === "openai-completions") {
+  const runtimeApi = api ?? resolveCopilotTransportApi(normalized);
+  if (runtimeApi === "openai-completions") {
     return { ...COPILOT_CHAT_COMPLETIONS_COMPAT };
   }
   // Copilot's Claude 4.5 endpoints reject Anthropic's eager tool extension,
   // while current Claude 4.6+ endpoints accept it.
-  if (isCopilotClaude45ModelId(normalized)) {
+  if (runtimeApi === "anthropic-messages" && isCopilotClaude45ModelId(normalized)) {
     return { supportsEagerToolInputStreaming: false };
   }
   return undefined;
@@ -94,7 +91,10 @@ export function resolveCopilotModelCompat(
 
 export function resolveCopilotThinkingLevelMap(
   modelId: string,
-  compat?: CopilotReasoningCompat | null,
+  compat?: {
+    supportsReasoningEffort?: boolean;
+    supportedReasoningEfforts?: readonly string[] | null;
+  } | null,
   api?: string | null,
   params?: Record<string, unknown>,
 ): ModelDefinitionConfig["thinkingLevelMap"] | undefined {

@@ -164,25 +164,16 @@ export type McpAppFileOpenEventDetail = {
 };
 
 function isSupportedMcpAppContent(block: ContentBlock): boolean {
+  // AppBridge validates wire shapes; this filter selects the advertised modalities.
   switch (block.type) {
     case "text":
-      return typeof block.text === "string" && block.text.trim().length > 0;
+      return block.text.trim().length > 0;
     case "image":
-      return typeof block.data === "string" && Boolean(block.mimeType);
+      return Boolean(block.mimeType);
     case "resource_link":
-      return (
-        typeof block.uri === "string" &&
-        Boolean(block.uri) &&
-        typeof block.name === "string" &&
-        Boolean(block.name)
-      );
+      return Boolean(block.uri) && Boolean(block.name);
     case "resource":
-      return (
-        Boolean(block.resource) &&
-        typeof block.resource.uri === "string" &&
-        (("text" in block.resource && typeof block.resource.text === "string") ||
-          ("blob" in block.resource && typeof block.resource.blob === "string"))
-      );
+      return true;
     default:
       return false;
   }

@@ -48,6 +48,12 @@ A file sent with a caption, or multiple files in one message, arrives as a
 rich-text `post` with a top-level `files[]` array. OpenClaw downloads those
 files through the same inbound attachment path as a standalone `file` message.
 
+Merged-forward messages include each child's original sender and UTC timestamp
+when available. Sender names use the account's `resolveSenderNames` setting;
+if a name cannot be resolved or lookups are disabled, the sender ID is preserved.
+Child mentions remain attached to the original message. Name lookups are limited
+to the first 50 children in chronological order, matching the rendered history.
+
 Inbound Feishu/Lark audio messages are normalized as media placeholders instead
 of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
 downloads the voice-note resource and runs shared audio transcription before the
@@ -68,6 +74,10 @@ resource payload.
 - ✅ Stickers previously received by the same bot (requires `actions.sticker`)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
+Message creation and replies retry transient network and server failures up to twice,
+reusing the same UUID to prevent duplicate messages. Uploads and streaming-card
+entity creation do not retry ambiguous failures.
+
 Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
 Ogg/Opus upload media (`file_type: "opus"`). Existing `.opus` and `.ogg` media
 is sent directly as native audio. MP3/WAV/M4A and other likely audio formats are
@@ -75,6 +85,10 @@ transcoded to 48kHz Ogg/Opus with `ffmpeg` only when the reply requests voice
 delivery (`audioAsVoice` / message tool `asVoice`, including TTS voice-note
 replies). Ordinary MP3 attachments stay regular files. If `ffmpeg` is missing or
 conversion fails, OpenClaw falls back to a file attachment and logs the reason.
+
+Outgoing videos get a preview cover when `ffmpeg` can extract a frame and Feishu
+accepts the image upload. If cover preparation fails or times out, OpenClaw sends
+the video as a file attachment instead.
 
 ### Sticker replies
 
@@ -162,7 +176,7 @@ by the result limit or output budget. Narrow the query to find other matches.
 
 Limits: 32 bot sets, 256 stickers per set, and 1–8 keywords per sticker.
 Store keywords without leading or trailing whitespace; each must be nonempty
-and at most 64 Unicode characters. File keys must be canonical received keys,
+and at most 64 Unicode characters. File keys must be the exact keys received from Feishu,
 at most 512 Unicode characters. Each key appears only once in its bot's map.
 Queries are nonempty and at most 128 Unicode characters. `limit` defaults to 5
 and accepts integers from 1 through 10; search results are also capped at
@@ -174,6 +188,10 @@ sticker database or cache is created.
 - ✅ Inline replies
 - ✅ Thread replies
 - ✅ Media replies stay thread-aware when replying to a thread message
+
+Reply anchors use native Feishu `om_...` message IDs. Background-task completion
+IDs are not reply anchors; completions retain the existing topic root when one
+is available.
 
 Topic-group session routing is covered under
 [Group session scope and topic threads](/channels/feishu/advanced-configuration#group-session-scope-and-topic-threads).

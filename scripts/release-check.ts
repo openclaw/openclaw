@@ -27,13 +27,14 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { collectPackUnpackedSizeFindings } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
-import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
+import { collectBundledPluginPackageDependencyErrors } from "./lib/plugin-package-dependencies.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
@@ -65,18 +66,18 @@ type ReleaseCheckCommandInvocation = {
 };
 
 const forbiddenPrivateQaContentMarkers = [
-  "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
-const forbiddenPrivatePluginSdkDeclarationMarkers = [
-  "//#region src/agents/test-helpers/",
-  "//#region src/plugin-sdk/test-helpers/",
-  "//#region src/test-helpers/",
-  "//#region src/test-utils/",
+const forbiddenPrivateSourcePrefixes = [
+  "extensions/qa-lab/",
+  "src/agents/test-helpers/",
+  "src/plugin-sdk/test-helpers/",
+  "src/test-helpers/",
+  "src/test-utils/",
 ] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const appcastPath = resolve("appcast.xml");
@@ -259,20 +260,9 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  const bundledPackageDependencySpecs = collectBundledPluginPackageDependencySpecs(
-    resolve("extensions"),
-  );
-  const dependencyConflictErrors = [...bundledPackageDependencySpecs.entries()]
-    .flatMap(([dependencyName, record]) =>
-      record.conflicts.map(
-        (conflict) =>
-          `bundled plugin package dependency '${dependencyName}' has conflicting specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
-      ),
-    )
-    .toSorted((left, right) => left.localeCompare(right));
   checkValidationErrors("bundled extension manifest", [
     ...manifestErrors,
-    ...dependencyConflictErrors,
+    ...collectBundledPluginPackageDependencyErrors(resolve("extensions")),
   ]);
 }
 
@@ -321,8 +311,6 @@ async function packRootPackage(packDestination: string): Promise<string> {
       new URL("./openclaw-prepack.ts", import.meta.url).href,
       import.meta.url,
     )) as typeof OpenClawPrepack;
-  // The canonical packer skips package hooks; retain prepared prepack's compatibility gate.
-  execPnpm(["update:compat:check"], { encoding: "utf8", stdio: "inherit" });
   const errors = collectPreparedPrepackErrorsFromDisk();
   if (errors.length > 0) {
     throw new Error(
@@ -1022,7 +1010,11 @@ export function collectForbiddenPackContentPaths(
       }
       return (
         forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker)) ||
-        forbiddenPrivatePluginSdkDeclarationMarkers.some((marker) => content.includes(marker))
+        // Preserve literal historical metadata scans as well as current module labels.
+        forbiddenPrivateSourcePrefixes.some((prefix) => content.includes(`//#region ${prefix}`)) ||
+        [...bundledModuleRegions(content)].some((match) =>
+          forbiddenPrivateSourcePrefixes.some((prefix) => match[1]?.startsWith(prefix)),
+        )
       );
     })
     .toSorted((left, right) => left.localeCompare(right));

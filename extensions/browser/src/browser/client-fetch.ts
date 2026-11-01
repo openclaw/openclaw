@@ -5,21 +5,17 @@
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
-import {
-  extractErrorCode,
-  formatErrorMessage,
-  toErrorObject,
-} from "openclaw/plugin-sdk/error-runtime";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { withTimeout } from "../sdk-node-runtime.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
@@ -39,7 +35,6 @@ import { getBrowserRequestScope } from "./request-scope.js";
 export class BrowserServiceError extends Error {
   readonly status?: number;
   readonly code?: BrowserActErrorCode;
-  readonly unrecognizedCode?: true;
   readonly reason?: BrowserErrorMetadata["reason"];
   readonly details?: BrowserNoDisplayErrorDetails;
 
@@ -48,7 +43,6 @@ export class BrowserServiceError extends Error {
     this.name = "BrowserServiceError";
     this.status = status;
     this.code = metadata?.code;
-    this.unrecognizedCode = metadata?.unrecognizedCode;
     this.reason = metadata && "reason" in metadata ? metadata.reason : undefined;
     this.details = metadata && "details" in metadata ? metadata.details : undefined;
   }
@@ -76,10 +70,6 @@ function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
 
-function isLoopbackHttpUrl(url: string): boolean {
-  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
-}
-
 function withLoopbackBrowserAuth(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
@@ -88,7 +78,7 @@ function withLoopbackBrowserAuth(
   if (
     headers.has("authorization") ||
     headers.has("x-openclaw-password") ||
-    !isLoopbackHttpUrl(url)
+    !isLoopbackHost(URL.parse(url)?.hostname ?? "")
   ) {
     return { ...init, headers };
   }
@@ -148,7 +138,7 @@ function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): str
 
 function resolveBrowserFetchOperatorHint(url: string): string {
   if (isAbsoluteHttp(url)) {
-    return "If this is a sandboxed session, ensure the sandbox browser is running.";
+    return "If this is a sandboxed session, check that the sandbox browser is running.";
   }
   try {
     const cfg = getRuntimeConfig();
@@ -284,24 +274,11 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   return new Error(message, err instanceof Error ? { cause: err } : undefined);
 }
 
-function createBrowserRequestAbort(timeoutMs: number, upstreamSignal?: AbortSignal | null) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(new Error("timed out")), timeoutMs);
-  return {
-    signal: upstreamSignal
-      ? AbortSignal.any([upstreamSignal, controller.signal])
-      : controller.signal,
-    dispose: () => clearTimeout(timer),
-  };
-}
-
 async function fetchHttpJson<T>(
   url: string,
   init: RequestInit & { timeoutMs: number },
 ): Promise<T> {
   const { timeoutMs } = init;
-  const abort = createBrowserRequestAbort(timeoutMs, init.signal);
-  const { signal } = abort;
   let release: (() => Promise<void>) | undefined;
   try {
     const guarded = await fetchWithSsrFGuard({
@@ -311,7 +288,6 @@ async function fetchHttpJson<T>(
       // forward the resolved budget so a hung control peer fails closed via the
       // guarded dispatcher instead of waiting on OS timeouts.
       timeoutMs,
-      signal,
       policy: { allowPrivateNetwork: true },
       auditContext: "browser-control-client",
     });
@@ -346,7 +322,6 @@ async function fetchHttpJson<T>(
     });
     return JSON.parse(decodeBrowserControlResponseUtf8(body, res.status)) as T;
   } finally {
-    abort.dispose();
     await release?.();
   }
 }
@@ -361,7 +336,7 @@ export async function fetchBrowserJson<T>(
   let isDispatcherPath = false;
   try {
     if (isAbsoluteHttp(url)) {
-      if (scope) {
+      if (scope?.managedOnly) {
         throw new Error("Dashboard browser requests must stay on the local managed browser");
       }
       const httpInit = withLoopbackBrowserAuth(url, init);
@@ -374,7 +349,7 @@ export async function fetchBrowserJson<T>(
     for (const [key, value] of parsed.searchParams.entries()) {
       query[key] = value;
     }
-    if (scope) {
+    if (scope?.managedOnly) {
       query.managedOnly = true;
     }
     let body = init?.body;
@@ -386,26 +361,25 @@ export async function fetchBrowserJson<T>(
       }
     }
 
-    const abort = createBrowserRequestAbort(timeoutMs, init?.signal);
-    const { signal } = abort;
-
-    const dispatchPromise = dispatchBrowserControlRequest({
-      method:
-        init?.method?.toUpperCase() === "DELETE"
-          ? "DELETE"
-          : init?.method?.toUpperCase() === "POST"
-            ? "POST"
-            : "GET",
-      path: parsed.pathname,
-      query,
-      body,
-      signal,
-      ...(scope ? { assertCurrent: scope.assertCurrent } : {}),
-    });
-
-    const result = await racePromiseWithAbortSignal(dispatchPromise, signal, ({ reason }) =>
-      toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
-    ).finally(abort.dispose);
+    const result = await withTimeout(
+      (signal) =>
+        dispatchBrowserControlRequest({
+          method:
+            init?.method?.toUpperCase() === "DELETE"
+              ? "DELETE"
+              : init?.method?.toUpperCase() === "POST"
+                ? "POST"
+                : "GET",
+          path: parsed.pathname,
+          query,
+          body,
+          signal,
+          ...(scope ? { assertCurrent: scope.assertCurrent } : {}),
+        }),
+      timeoutMs,
+      "Browser request",
+      init?.signal,
+    );
 
     if (result.status >= 400) {
       if (result.status === 429) {

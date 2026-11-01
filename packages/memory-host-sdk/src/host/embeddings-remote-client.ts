@@ -1,8 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "./openclaw-runtime-auth.js";
-import type { SsrFPolicy } from "./openclaw-runtime-network.js";
-import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
+import {
+  resolveProviderRequestPolicyConfig,
+  resolveProviderTransportSsrFPolicy,
+  type SsrFPolicy,
+} from "./openclaw-runtime-network.js";
+import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
 
 // Builds authenticated remote embedding HTTP clients from agent memory config.
@@ -108,7 +112,12 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   capability?: string;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
-}): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
+}): Promise<{
+  baseUrl: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  resolveRequestHeaders?: RemoteEmbeddingRequestAuth;
+}> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
     value: remote?.apiKey,
@@ -143,29 +152,30 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
     },
   );
   const hasExplicitAuthorization = headerOverrides.has("authorization");
+  const resolveAuth = (forceRefresh: boolean, signal?: AbortSignal) =>
+    resolveApiKeyForProvider({
+      provider: params.provider,
+      capability: params.capability,
+      modelBaseUrl: baseUrl,
+      cfg: params.options.config,
+      agentDir: params.options.agentDir,
+      forceRefresh,
+      signal,
+    });
+  const auth =
+    !hasExplicitAuthorization && !remoteApiKey && providerOwnsDestination
+      ? await resolveAuth(false)
+      : undefined;
   const apiKey = hasExplicitAuthorization
     ? undefined
-    : remoteApiKey
-      ? remoteApiKey
-      : providerOwnsDestination
-        ? requireApiKey(
-            await resolveApiKeyForProvider({
-              provider: params.provider,
-              capability: params.capability,
-              modelBaseUrl: baseUrl,
-              cfg: params.options.config,
-              agentDir: params.options.agentDir,
-            }),
-            params.provider,
-          )
-        : undefined;
+    : remoteApiKey || (auth ? requireApiKey(auth, params.provider) : undefined);
   if (!apiKey && !hasExplicitAuthorization) {
     throw new Error(
       `${params.provider} embedding credentials are not configured for ${baseUrl}. Set memory.search.remote.apiKey or an Authorization header for this destination.`,
     );
   }
   const entries: Array<[string, string]> = [["Content-Type", "application/json"]];
-  if (apiKey) {
+  if (apiKey && auth?.mode !== "oauth") {
     entries.push(["Authorization", `Bearer ${apiKey}`]);
   }
   entries.push(...headerOverrides.values());
@@ -177,5 +187,43 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   const headers = Object.fromEntries(
     new Map(entries.map((entry) => [entry[0].toLowerCase(), entry])).values(),
   );
-  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
+  const resolveRequestHeaders: RemoteEmbeddingRequestAuth | undefined =
+    auth?.mode === "oauth"
+      ? async ({ forceRefresh, signal }) => ({
+          Authorization: `Bearer ${requireApiKey(await resolveAuth(forceRefresh, signal), params.provider)}`,
+        })
+      : undefined;
+  return {
+    baseUrl,
+    headers,
+    ...(resolveRequestHeaders ? { resolveRequestHeaders } : {}),
+    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+      provider: params.provider,
+      api: providerConfig?.api ?? "openai-completions",
+      baseUrl,
+      allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
+    }),
+  };
+}
+
+/** Embedding adapters share inference's endpoint classification and explicit network policy. */
+export function resolveEmbeddingProviderSsrFPolicy(params: {
+  provider: string;
+  api?: string;
+  baseUrl: string;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  const policy = resolveProviderRequestPolicyConfig({
+    provider: params.provider,
+    api: params.api,
+    baseUrl: params.baseUrl,
+    capability: "other",
+    request: { allowPrivateNetwork: params.allowPrivateNetwork },
+  });
+  return resolveProviderTransportSsrFPolicy({
+    baseUrl: params.baseUrl,
+    url: params.baseUrl,
+    allowPrivateNetwork: policy.allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin: policy.trustConfiguredBaseUrlOrigin,
+  });
 }

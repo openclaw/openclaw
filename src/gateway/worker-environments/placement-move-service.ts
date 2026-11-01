@@ -10,7 +10,7 @@ import type {
 import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
-} from "./placement-move-intent.js";
+} from "./placement-move-intent.types.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import type { WorkerReclaimPlacement } from "./placement-reclaim-contract.js";
 import {
@@ -20,10 +20,7 @@ import {
   reportPlacementTransition,
   type WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
-import {
-  isFailedWorkerPlacementEnvironmentGone,
-  matchesWorkerPlacementTarget,
-} from "./placement-target.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
@@ -282,31 +279,46 @@ export function createWorkerPlacementMoveService(options: {
         return;
       } else if (placement.state === "draining") {
         assertDestination();
-        const local = await options.reclaimSource(identity, intent, assertDestination);
-        if (local.state === "reclaimed") {
-          return;
+        const environment = options.environments.get(placement.environmentId);
+        if (!placement.turnClaim && environment && environment.destroyRequestedAtMs !== null) {
+          // Cleanup acceptance can precede result release and reconciliation in separate
+          // transactions. Do not try to recapture a source already handed off and stopped.
+          if (intent.target.kind === "gateway") {
+            await options.prepareGatewayMove?.({ ...identity, assertCurrent: assertDestination });
+          }
+          assertDestination();
+          const reconciling = await options.placements.startReconcile({
+            sessionId: placement.sessionId,
+            environmentId: placement.environmentId,
+            ownerEpoch: placement.activeOwnerEpoch,
+            expectedGeneration: placement.generation,
+          });
+          placement = await options.placements.completePlacementMoveSourceToLocal(
+            {
+              operationId: intent.operationId,
+              sessionId: intent.sessionId,
+              expectedGeneration: reconciling.generation,
+            },
+            { assertCurrent: assertDestination },
+          );
+        } else {
+          const local = await options.reclaimSource(identity, intent, assertDestination);
+          if (local.state === "reclaimed") {
+            return;
+          }
+          if (local.state !== "local") {
+            throw new Error(
+              "Session " + identity.sessionKey + " move recovery did not return local",
+            );
+          }
+          placement = local;
         }
-        if (local.state !== "local") {
-          throw new Error(`Session ${identity.sessionKey} move recovery did not return local`);
-        }
-        placement = local;
       } else if (placement.state === "reconciling") {
         const environment = options.environments.get(placement.environmentId);
         if (environment && !isTerminalWorkerEnvironmentState(environment.state)) {
           return;
         }
-        const source = placement;
-        const assertCurrent = () => {
-          assertDestination();
-          const { placement: current, move: currentMove } =
-            options.placements.readCurrentMoveAuthority(intent.sessionId);
-          if (
-            !matchesWorkerPlacementTarget(current, source) ||
-            currentMove?.operationId !== intent.operationId
-          ) {
-            throw new Error(`Session ${identity.sessionKey} move recovery lost its source owner`);
-          }
-        };
+        const assertCurrent = assertDestination;
         assertCurrent();
         if (intent.target.kind === "gateway") {
           // Teardown can survive a restart before the source checkout is materialized.

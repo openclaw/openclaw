@@ -6,7 +6,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -22,72 +21,50 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
   createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
 
-export function expectDeferredSubagentAnnouncement(
-  entry: SubagentRunRecord | undefined,
-  runId: string,
-) {
-  expect(entry, "deferred announcement committed").toMatchObject({
-    cleanupHandled: false,
-    delivery: { status: "pending", attemptCount: 1, payload: { childRunId: runId } },
+/** Seed the requester identity for completion bookkeeping. */
+export async function prepareSubagentRequesterFixture(
+  run: SubagentRunRecord,
+  fixture: { stateDir?: string; entries?: Record<string, SessionEntry>; storePath?: string },
+): Promise<void> {
+  const { resolveSessionStorePathCore } = await import("../../../config/sessions.js");
+  const requester = fixture.entries?.[run.requesterSessionKey];
+  const sessionId = requester?.sessionId ?? "requester-session";
+  const lifecycleRevision = requester?.lifecycleRevision ?? "requester-revision";
+  const agentId = run.requesterAgentId ?? "main";
+  const storePath = fixture.stateDir
+    ? await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId,
+        sessionKey: run.requesterSessionKey,
+        defaultSessionId: sessionId,
+        lifecycleRevision,
+      })
+    : (fixture.storePath ?? resolveSessionStorePathCore(undefined, { agentId }));
+  if (fixture.entries) {
+    const entry: SessionEntry = {
+      ...requester,
+      sessionId,
+      lifecycleRevision,
+      updatedAt: Date.now(),
+    };
+    fixture.entries[run.requesterSessionKey] = entry;
+    if (fixture.storePath) {
+      await replaceSessionEntry({ storePath, sessionKey: run.requesterSessionKey }, entry);
+    }
+  }
+  Object.assign(run, {
+    requesterAgentId: agentId,
+    requesterStorePath: storePath,
+    completionRequesterSessionId: sessionId,
+    completionRequesterLifecycleRevision: lifecycleRevision,
   });
-  expect(entry?.cleanupCompletedAt, "deferred cleanup remains unfinished").toBeUndefined();
-  expect(Number.isFinite(entry?.delivery?.nextAttemptAt), "durable retry deadline").toBe(true);
-}
-
-/** Hold the real lazy settlement dependency without replacing its completion policy. */
-export function gateSubagentRequesterSettlement(
-  settle: typeof maybeWakeRequesterAfterAllChildrenSettled,
-) {
-  const released = createDeferred();
-  let pending: Promise<boolean> | undefined;
-  const calls = observeSubagentRequesterWake((params) => {
-    pending = (async () => {
-      await released.promise;
-      return await settle(params);
-    })();
-    return pending;
-  });
-  return {
-    ...calls,
-    async release() {
-      released.resolve();
-      await pending;
-    },
-  };
-}
-
-/** Observe admission after real worker IO without racing a fake-clock polling deadline. */
-export function observeSubagentRequesterWake(
-  wake: typeof maybeWakeRequesterAfterAllChildrenSettled,
-) {
-  let calls = 0;
-  const admitted = new Map<number, ReturnType<typeof createDeferred<void>>>();
-  return {
-    run: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>((params) => {
-      admitted.get(++calls)?.resolve();
-      return wake(params);
-    }),
-    waitForCalls(this: void, count: number): Promise<void> {
-      if (calls >= count) {
-        return Promise.resolve();
-      }
-      let waiter = admitted.get(count);
-      if (!waiter) {
-        waiter = createDeferred();
-        admitted.set(count, waiter);
-      }
-      return waiter.promise;
-    },
-  };
 }
 
 /** Gates owned by a test must be released before waiting for imports and detached tails. */
@@ -222,27 +199,6 @@ export async function removeSubagentSessionEntry(params: {
   return storePath;
 }
 
-export function createDeliveredWake(
-  runId: string,
-  requesterSettleWake?: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
-  overrides: Partial<SubagentRunRecordOverrides> = {},
-): SubagentRunRecord {
-  const endedAt = overrides.endedAt ?? Date.now();
-  return createSubagentRunRecord({
-    runId,
-    childSessionKey: `agent:main:subagent:${runId}`,
-    endedAt,
-    outcome: { status: "ok" },
-    expectsCompletionMessage: true,
-    completion: { required: true, resultText: "done", capturedAt: endedAt },
-    delivery: { status: "delivered", deliveredAt: endedAt },
-    cleanupHandled: true,
-    cleanupCompletedAt: endedAt,
-    requesterSettleWake,
-    ...overrides,
-  });
-}
-
 export function writeChildSession(
   stateDir: string,
   sessionKey: string,
@@ -269,6 +225,7 @@ export function createOrphanedRequiredDelivery(
     runId,
     childSessionKey,
     task: "deliver after restart",
+    childSessionIdentity: { sessionId: `sess-${runId}` },
     cleanup: "delete",
     createdAt: now - 100,
     expectsCompletionMessage: true,
@@ -313,7 +270,7 @@ export function registerSubagentRegistrationPersistenceTests({
   getRegistry: () => SubagentRegistryHarness;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "callGateway" | "persistRegistryRows"
+    "callGateway" | "persistRegistryRows" | "entries"
   >;
   mockPendingAgentWait: () => void;
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
@@ -352,7 +309,7 @@ export function registerSubagentRegistrationPersistenceTests({
       queued,
     });
 
-    expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(queued ? 2 : 1);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
     expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [runId]);
   });
 
@@ -362,6 +319,7 @@ export function registerSubagentRegistrationPersistenceTests({
     await mod.registerSubagentRun({
       runId: "run-replacement-persist-old",
       childSessionKey: "agent:main:subagent:replacement-persist",
+      sessionEntry: { sessionId: "sess-replacement-persist" },
       task: "keep live successor tracked",
     });
     mocks.persistRegistryRows.mockClear();
@@ -411,6 +369,7 @@ export function registerSubagentRegistrationPersistenceTests({
     await mod.addSubagentRunForTests({
       runId: "run-registration-rollback-old",
       childSessionKey,
+      childSessionIdentity: { sessionId: "sess-registration-rollback" },
       task: "preserve old ownership",
       createdAt: Date.now() - 1_000,
       endedAt: Date.now() - 500,
@@ -426,6 +385,7 @@ export function registerSubagentRegistrationPersistenceTests({
       mod.registerSubagentRun({
         runId: "run-registration-rollback-new",
         childSessionKey,
+        sessionEntry: { sessionId: "sess-registration-rollback" },
         task: "new generation",
       }),
     ).rejects.toThrowError("disk full");
@@ -443,9 +403,16 @@ export function registerSubagentRegistrationPersistenceTests({
     const mod = getRegistry();
     mockPendingAgentWait();
     const runId = "run-kill-persist-failure";
+    const sessionEntry = {
+      sessionId: "sess-kill-persist-failure",
+      lifecycleRevision: "revision-kill-persist-failure",
+      updatedAt: 1,
+    };
+    mocks.entries["agent:main:subagent:kill-persist-failure"] = sessionEntry;
     await mod.registerSubagentRun({
       runId,
       childSessionKey: "agent:main:subagent:kill-persist-failure",
+      sessionEntry,
       task: "keep kill state atomic",
     });
     mocks.persistRegistryRows.mockImplementationOnce(() => {
@@ -459,37 +426,5 @@ export function registerSubagentRegistrationPersistenceTests({
     const run = findRequesterRun(runId);
     expect(run?.execution.endedAt).toBeUndefined();
     expect(run?.endedReason).toBeUndefined();
-  });
-}
-
-export function createRestoredRequesterWakeRuns(params: {
-  activationSettlement: boolean;
-  requesterYielded?: true;
-  endedAt: number;
-}): SubagentRunRecord[] {
-  const { activationSettlement, requesterYielded, endedAt } = params;
-  return Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
-    const runId = `run-restored-wake-${index}`;
-    return createDeliveredWake(
-      runId,
-      requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
-      {
-        childSessionKey: `agent:main:subagent:restored-wake-${index}`,
-        requesterSessionKey: `agent:main:requester-${index}`,
-        requesterDisplayKey: `requester-${index}`,
-        task: "resume a durable requester wake",
-        createdAt: endedAt - 1_000,
-        endedReason: "subagent-complete",
-        startedAt: endedAt - 500,
-        endedAt,
-        ...(activationSettlement
-          ? {
-              requesterTurnRunId: `requester-turn-${index}`,
-              requesterTurnYielded: requesterYielded ?? undefined,
-              taskRunId: runId,
-            }
-          : {}),
-      },
-    );
   });
 }

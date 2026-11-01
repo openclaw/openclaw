@@ -1,5 +1,5 @@
 import { resolveAuthProfileDisplayLabel } from "../agents/auth-profiles.js";
-import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { resolveModelAuthLabelAsync } from "../agents/model-auth-label.js";
 import { prepareModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { getPreparedModelRuntimeAuthStore } from "../agents/prepared-model-runtime-auth.js";
@@ -8,8 +8,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
-
-type StatusModelResolution = { authLabel?: string; endpoint?: string };
 
 /** Status borrows the account and route selected by the prepared model owner. */
 export function createStatusModelResolver(params: {
@@ -50,7 +48,7 @@ export function createStatusModelResolver(params: {
     runtimeId?: string;
     acceptedProviderIds: readonly string[];
     authLabelOverride?: string;
-  }): Promise<StatusModelResolution> => {
+  }): Promise<{ authLabel?: string; endpoint?: string }> => {
     const decisions = await preparation;
     const { provider, model, runtimeId } = selection;
     // Preserve SDK and built-in auth diagnostics; route display only borrows an
@@ -65,7 +63,7 @@ export function createStatusModelResolver(params: {
     const authLabel = hasAuthOverride
       ? selection.authLabelOverride
       : usesHostAuth
-        ? resolveModelAuthLabel({
+        ? await resolveModelAuthLabelAsync({
             provider,
             acceptedProviderIds: selection.acceptedProviderIds,
             cfg: params.cfg,
@@ -73,6 +71,7 @@ export function createStatusModelResolver(params: {
             agentDir: params.agentDir,
             workspaceDir: params.workspaceDir,
             includeExternalProfiles: false,
+            authStore,
           })
         : "unknown";
     if (!decisions?.isCurrent() || !authStore) {
@@ -97,24 +96,28 @@ export function createStatusModelResolver(params: {
     const endpoint = evaluation.selectedRoute?.baseUrl
       ? formatModelEndpointUrl(evaluation.selectedRoute.baseUrl)
       : undefined;
-    // A selected route and its auth must describe the same decision. Provider-wide
-    // labels can prefer another stored credential over an explicitly configured key.
-    if (hasAuthOverride || (usesHostAuth && !evaluation.selectedRoute)) {
+    // Prepared auth remains authoritative without a route; provider-wide labels
+    // can prefer another stored credential over an explicitly configured key.
+    if (hasAuthOverride || (usesHostAuth && !evaluation.selectedCredential)) {
       return { authLabel, endpoint };
     }
     const mode =
       evaluation.selectedAuthMode === "api_key" ? "api-key" : evaluation.selectedAuthMode;
     const profileId = evaluation.selectedProfileId;
-    if (profileId) {
-      const label = isUserModelAuthProfileId(profileId)
+    const label = profileId
+      ? isUserModelAuthProfileId(profileId)
         ? "personal account"
-        : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store: authStore, profileId });
-      return { authLabel: mode ? mode + (label ? " (" + label + ")" : "") : "unknown", endpoint };
-    }
+        : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store: authStore, profileId })
+      : evaluation.runtimeAuth
+        ? runtimeId
+        : evaluation.evidence === "provider-config"
+          ? "models.json"
+          : evaluation.evidence === "environment"
+            ? "environment"
+            : undefined;
     return {
-      authLabel: evaluation.runtimeAuth
-        ? (mode ?? "native") + " (" + runtimeId + ")"
-        : (mode ?? "unknown"),
+      authLabel:
+        (mode ?? (evaluation.runtimeAuth ? "native" : "unknown")) + (label ? ` (${label})` : ""),
       endpoint,
     };
   };

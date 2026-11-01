@@ -14,45 +14,6 @@ import { resolveChannelAuthorization } from "./authorization.js";
 import { fetchThreadRootAuthor } from "./history.js";
 import { isBotMentioned } from "./utils.js";
 
-function resolveTlonGroupMentionDecision(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  wasMentioned: boolean;
-  botParticipatedInThread: boolean;
-  isBotOwnedThread?: boolean;
-  requireMentionInBotThreads?: boolean;
-}) {
-  const implicitMentions = resolveChannelImplicitMentions({
-    cfg: params.cfg,
-    channel: "tlon",
-    accountId: params.accountId,
-  });
-  const threadPolicy = resolveBotThreadMentionPolicy({
-    isBotOwnedThread: params.isBotOwnedThread === true,
-    requireMentionInBotThreads: params.requireMentionInBotThreads,
-    requireMention: true,
-    implicitMentionKinds: implicitMentionKindWhen(
-      "bot_thread_participant",
-      params.botParticipatedInThread,
-    ),
-  });
-  return resolveInboundMentionDecision({
-    facts: {
-      canDetectMention: true,
-      wasMentioned: params.wasMentioned,
-      implicitMentionKinds: threadPolicy.implicitMentionKinds,
-    },
-    policy: {
-      isGroup: true,
-      requireMention: threadPolicy.requireMention,
-      implicitMentions,
-      allowTextCommands: false,
-      hasControlCommand: false,
-      commandAuthorized: false,
-    },
-  });
-}
-
 export async function prepareTlonGroupAdmission(params: {
   cfg: OpenClawConfig;
   account: Pick<TlonResolvedAccount, "accountId" | "requireMentionInBotThreads">;
@@ -94,21 +55,44 @@ export async function prepareTlonGroupAdmission(params: {
   );
   const resolveCurrentAdmission = () => {
     const authorization = resolveChannelAuthorization(cfg, channelNest, params.getSettings());
+    const senderAllowed =
+      params.isOwner(params.senderShip) ||
+      authorization.mode === "open" ||
+      authorization.allowedShips.some((ship) => normalizeShip(ship) === params.senderShip);
+    const implicitMentions = resolveChannelImplicitMentions({
+      cfg,
+      channel: "tlon",
+      accountId: account.accountId,
+    });
+    const threadPolicy = resolveBotThreadMentionPolicy({
+      isBotOwnedThread,
+      requireMentionInBotThreads:
+        authorization.requireMentionInBotThreads ?? account.requireMentionInBotThreads,
+      requireMention: true,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        botParticipatedInThread,
+      ),
+    });
+    const decision = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: mentioned,
+        implicitMentionKinds: threadPolicy.implicitMentionKinds,
+      },
+      policy: {
+        isGroup: true,
+        requireMention: threadPolicy.requireMention,
+        implicitMentions,
+        allowTextCommands: false,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
     return {
       ...authorization,
-      senderAllowed:
-        params.isOwner(params.senderShip) ||
-        authorization.mode === "open" ||
-        authorization.allowedShips.some((ship) => normalizeShip(ship) === params.senderShip),
-      mentionDecision: resolveTlonGroupMentionDecision({
-        cfg,
-        accountId: account.accountId,
-        wasMentioned: mentioned,
-        botParticipatedInThread,
-        isBotOwnedThread,
-        requireMentionInBotThreads:
-          authorization.requireMentionInBotThreads ?? account.requireMentionInBotThreads,
-      }),
+      senderAllowed,
+      mentionDecision: decision,
     };
   };
   const admission = resolveCurrentAdmission();

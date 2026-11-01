@@ -23,6 +23,7 @@ import { isPathInside } from "./path-guards.js";
 import { prepareSqliteRollbackRecovery } from "./sqlite-rollback-recovery.js";
 import {
   sealImmutableGeneration,
+  assertImmutableGenerationControlVersion,
   verifyImmutableGeneration,
 } from "./update-immutable-generation.js";
 import type {
@@ -143,6 +144,7 @@ export async function prepareImmutableRecoveryRuntime(params: {
     throw new Error("Run immutable activation from its sealed current or prepared generation.");
   }
   const sourceFacts = await verifyImmutableGeneration(source, generation.sha);
+  await assertImmutableGenerationControlVersion(source, descriptor.version);
   assertCurrent();
   if (
     sourceFacts.identity !== generation.identity ||
@@ -204,6 +206,7 @@ export async function prepareImmutableRecoveryRuntime(params: {
     }
   }
   const facts = await verifyImmutableGeneration(destination, generation.sha);
+  await assertImmutableGenerationControlVersion(destination, descriptor.version);
   assertOwner();
   if (facts.buildDigest !== generation.buildDigest) {
     throw new Error("Existing immutable recovery runtime differs; it was preserved.");
@@ -285,6 +288,7 @@ export async function verifyImmutableRecoveryRuntime(params: {
   };
   assertHelper();
   const facts = await verifyImmutableGeneration(reference.path, reference.sha);
+  await assertImmutableGenerationControlVersion(reference.path, descriptor.version);
   assertHelper();
   if (facts.identity !== reference.identity || facts.buildDigest !== reference.buildDigest) {
     throw new Error("Immutable recovery runtime no longer matches its recorded artifact.");

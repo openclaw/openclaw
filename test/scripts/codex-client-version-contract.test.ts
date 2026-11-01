@@ -1,4 +1,5 @@
-// Codex Client Version Contract tests cover cross-plugin managed version alignment.
+// Codex Client Version Contract tests: ChatGPT model discovery reports the
+// version of the Codex binary that runs turns (#113615).
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
