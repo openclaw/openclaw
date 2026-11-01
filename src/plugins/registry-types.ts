@@ -74,7 +74,6 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   factory: import("./types.js").OpenClawPluginToolFactory;
   /** Explicitly registered required-authority context, never inferred from plugin identity. */
   contextVersion?: 2;
-  declarations?: readonly import("./tool-types.js").OpenClawPluginToolDeclaration[];
   names: string[];
   declaredNames?: ReadonlySet<string>;
   optional: boolean;

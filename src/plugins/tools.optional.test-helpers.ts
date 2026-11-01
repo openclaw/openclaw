@@ -8,12 +8,7 @@ import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-bi
 import { resolvePluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
-import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
-import type {
-  OpenClawPluginToolContext,
-  OpenClawPluginToolDeclaration,
-  OpenClawPluginToolFactory,
-} from "./tool-types.js";
+import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 export type MockRegistryToolEntry = {
   pluginId: string;
@@ -22,8 +17,6 @@ export type MockRegistryToolEntry = {
   source: string;
   names: string[];
   declaredNames?: string[];
-  contextVersion?: 2;
-  declarations?: readonly OpenClawPluginToolDeclaration[];
   factory: (ctx: OpenClawPluginToolContext) => unknown;
 };
 
@@ -153,21 +146,6 @@ export function createToolRegistry(
     runPluginRegisterSyncInRegistry(() => {}, api, builder.registry, entry.pluginId);
     const instance = getPluginInstance(record);
     assert(instance, "expected the registry API's plugin instance");
-    if (entry.declarations) {
-      record.contracts = { tools: entry.declaredNames ?? entry.names };
-      api.registerTool(
-        {
-          contextVersion: 2,
-          declarations: entry.declarations,
-          // Fixtures deliberately include malformed factory results for runtime quarantine.
-          create: (ctx) => entry.factory(ctx) as ReturnType<OpenClawPluginToolFactory>,
-        },
-        { names: entry.names, optional: entry.optional },
-      );
-      const admitted = builder.registry.tools.at(-1);
-      assert(admitted, "expected passive declaration registration");
-      return admitted;
-    }
     instance.admitFactory(entry.factory, "tool");
     const { declaredNames, ...registration } = entry;
     return {
@@ -177,31 +155,4 @@ export function createToolRegistry(
     };
   });
   return registry;
-}
-
-export function createResolveToolsParams(params?: {
-  context?: ReturnType<typeof createOptionalToolContext> & Record<string, unknown>;
-  clientCaps?: string[];
-  toolAllowlist?: readonly string[];
-  toolDenylist?: readonly string[];
-  existingToolNames?: Set<string>;
-  env?: NodeJS.ProcessEnv;
-  suppressNameConflicts?: boolean;
-  allowGatewaySubagentBinding?: boolean;
-  runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
-}) {
-  const toolAllowlist = appendRuntimePluginToolGrant(
-    [...(params?.toolAllowlist ?? [])],
-    params?.runtimePluginToolGrant,
-  );
-  return {
-    context: (params?.context ?? createOptionalToolContext()) as never,
-    ...(params?.clientCaps ? { clientCaps: params.clientCaps } : {}),
-    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
-    ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
-    ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
-    ...(params?.env ? { env: params.env } : {}),
-    ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
-    ...(params?.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-  };
 }

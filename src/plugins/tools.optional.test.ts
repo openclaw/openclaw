@@ -23,10 +23,9 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-import { registerPluginDeclarationCases } from "./tools.declarations.cases.js";
+import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import {
   createNamedToolEntry,
-  createResolveToolsParams,
   createOptionalToolManifest as createToolManifest,
   createOptionalToolContext as createContext,
   createConfiguredFeishuToolContext,
@@ -109,6 +108,33 @@ let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecyc
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
+
+function createResolveToolsParams(params?: {
+  context?: ReturnType<typeof createContext> & Record<string, unknown>;
+  clientCaps?: string[];
+  toolAllowlist?: readonly string[];
+  toolDenylist?: readonly string[];
+  existingToolNames?: Set<string>;
+  env?: NodeJS.ProcessEnv;
+  suppressNameConflicts?: boolean;
+  allowGatewaySubagentBinding?: boolean;
+  runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
+}) {
+  const toolAllowlist = appendRuntimePluginToolGrant(
+    [...(params?.toolAllowlist ?? [])],
+    params?.runtimePluginToolGrant,
+  );
+  return {
+    context: (params?.context ?? createContext()) as never,
+    ...(params?.clientCaps ? { clientCaps: params.clientCaps } : {}),
+    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+    ...(params?.toolDenylist ? { toolDenylist: [...params.toolDenylist] } : {}),
+    ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
+    ...(params?.env ? { env: params.env } : {}),
+    ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
+    ...(params?.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+  };
+}
 
 function setRegistry(
   entries: MockRegistryToolEntry[],
@@ -302,11 +328,6 @@ function expectSingleDiagnosticMessage(
 }
 
 describe("resolvePluginTools optional tools", () => {
-  registerPluginDeclarationCases({
-    setRegistry,
-    resolvePluginTools: (params) => resolvePluginTools(params),
-  });
-
   beforeAll(async () => {
     ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
     ({ getPluginToolMeta } = await import("./tool-metadata.js"));

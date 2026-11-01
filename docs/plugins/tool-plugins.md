@@ -294,8 +294,7 @@ Concrete tools can provide `prepareArguments(args)` to normalize input before
 schema validation. The native agent loop also honors
 `executionMode: "sequential"` when tool calls must run one at a time. These
 runtime properties, schemas, and display metadata come from the current factory
-context whenever tools are assembled, unless the version-2 factory supplies passive
-declarations as described below. Argument preparation and execution use the
+context whenever tools are assembled. Argument preparation and execution use the
 same instance. Retained tools stop working when their owning plugin registry is
 retired.
 
@@ -360,63 +359,6 @@ transient activity out of channel progress drafts. Lifecycle events and the
 final tool result still flow normally. OpenClaw preserves the current factory's
 flag when normalizing its schema; omitted or `false` leaves normal progress
 behavior in place. See [Progress drafts](/concepts/progress-drafts).
-
-### Passive declarations
-
-A version-2 factory can opt into stable presentation with a readonly `declarations`
-array on the existing `OpenClawPluginToolFactory<2>` contract. The registration
-context supplies its type; no separate SDK entrypoint or export is needed.
-
-```typescript
-const declaration = {
-  name: "my_privileged_tool",
-  label: "My operation",
-  description: "Perform the configured operation.",
-  parameters: Type.Object({ value: Type.String() }),
-};
-
-api.registerTool({
-  contextVersion: 2,
-  declarations: [declaration],
-  create(context) {
-    if (context.senderIsOwner !== true) return null;
-    return {
-      ...declaration,
-      async execute(_toolCallId, args) {
-        context.assertInvocationCurrent();
-        return performOperation(args, context.assertInvocationCurrent);
-      },
-    };
-  },
-});
-```
-
-Declarations contain `name`, `label`, `description`, and `parameters`, plus optional
-`outputSchema`, `displaySummary`, `catalogMode`, `requiredClientCaps`, and `async`.
-They must be acyclic plain data without accessors, proxies, or callbacks. Supply
-`declarations` as an own data property on an ordinary descriptor; proxy descriptors
-and inherited declarations retain legacy factory behavior. Registration snapshots and
-freezes the passive data; later plugin mutations do not alter the admitted declarations.
-Names must be unique, owned by the manifest's `contracts.tools`,
-and match registration `name`/`names` options when supplied.
-
-Only use this opt-in when the declaration is appropriate for every conversation
-that can discover the registered tool. Static descriptions, schemas, defaults, and
-examples must not disclose private resources or depend on current sender grants.
-Configuration changes require a new registration through the plugin lifecycle;
-there is no declaration callback or retained executor grant.
-
-OpenClaw uses these declarations for presentation even when the current factory
-returns `null` or fails. Calls without a current matching executor fail as unavailable;
-factory errors remain diagnostic errors. Duplicate or undeclared executor names and
-executor client capabilities absent from the declaration also fail closed. Matching
-executors retain their current execution callbacks and must enforce current operation
-permissions and the final-effect guard. A declaration never grants authority.
-
-Configured deny rules, manifest availability, optional-tool allowlists, client
-capabilities, and plugin/invocation lifetime fences still apply. This opt-in does not
-guarantee continuity across a real configuration, schema, or discovery-audience change.
-Registrations without `declarations` keep their existing behavior.
 
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools

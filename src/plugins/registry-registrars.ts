@@ -41,7 +41,6 @@ import type {
 } from "./registry-types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
-import { tryAdmitPluginToolDeclarations } from "./tool-declarations.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import { inspectOpenDictionaryToolSchemas } from "./tool-schema-diagnostics.js";
 import {
@@ -454,10 +453,6 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
     const versioned = typeof tool !== "function" && "contextVersion" in tool;
-    const admitted = tryAdmitPluginToolDeclarations(versioned ? tool : undefined, names);
-    if (admitted.error) {
-      return reportRegistrationError(record, admitted.error);
-    }
     if (versioned && (tool.contextVersion !== 2 || typeof tool.create !== "function")) {
       reportRegistrationError(record, "unsupported plugin tool context version");
       return;
@@ -547,7 +542,6 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       }),
       // Host-owned membership must not re-enter the callable wrapper's graph walk.
       declaredNames,
-      ...(admitted.declarations ? { declarations: admitted.declarations } : {}),
     });
   };
 
