@@ -7,10 +7,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginHookAgentEndEvent } from "../../plugins/hook-types.js";
 import { isExpectedRunCancellation } from "../../process/expected-run-cancellation.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
-import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 
 /** Model iterations a session accumulates across turns before a review is due. */
@@ -27,11 +27,10 @@ const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set(["acp", "cron", "hook
 
 const log = createSubsystemLogger("skills/workshop");
 
-type ExperienceReviewAgentEndEvent = {
-  messages: unknown[];
-  success: boolean;
-  error?: string;
-};
+type ExperienceReviewAgentEndEvent = Pick<
+  PluginHookAgentEndEvent,
+  "messages" | "success" | "error" | "modelIterations" | "skillsUsed"
+>;
 
 type ExperienceReviewAgentContext = {
   runId?: string;
@@ -40,15 +39,13 @@ type ExperienceReviewAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   authProfileId?: string;
-  modelIterations?: number;
-  skillWorkshopAvailable?: boolean;
+  toolNames?: readonly string[];
   foregroundPromptContext: EmbeddedForegroundPromptContext;
 };
 
 export type SkillExperienceReviewParams = {
   event: ExperienceReviewAgentEndEvent;
   ctx: ExperienceReviewAgentContext;
-  usedSkills?: readonly RunSkillUsage[];
   config: OpenClawConfig;
   source?: TranscriptEntryAnchor;
   /** The foreground turn itself changed a Workshop skill, so its learning is already saved. */
@@ -63,7 +60,7 @@ export type ExperienceReviewCandidate = {
   };
   config: OpenClawConfig;
   source: TranscriptEntryAnchor;
-  usedSkills?: readonly RunSkillUsage[];
+  usedSkills?: ExperienceReviewAgentEndEvent["skillsUsed"];
   turnAborted?: boolean;
 };
 
@@ -78,9 +75,13 @@ type PendingExperienceReview = {
 };
 
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
-  // Only harnesses that report both the resolved model and actual host-side
-  // Workshop availability may schedule. Other runtimes fail closed here.
-  if (ctx.skillWorkshopAvailable !== true || !ctx.modelProviderId?.trim() || !ctx.modelId?.trim()) {
+  // Only harnesses that report both the resolved model and the turn's tool names may
+  // schedule. Other runtimes fail closed here.
+  if (
+    !ctx.toolNames?.includes("skill_workshop") ||
+    !ctx.modelProviderId?.trim() ||
+    !ctx.modelId?.trim()
+  ) {
     return false;
   }
   const trigger = ctx.foregroundPromptContext.trigger?.trim().toLowerCase();
@@ -107,7 +108,7 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
  * threads do not emit.
  */
 function resolveTurnModelIterations(params: SkillExperienceReviewParams): number {
-  const reported = params.ctx.modelIterations;
+  const reported = params.event.modelIterations;
   if (reported !== undefined && Number.isSafeInteger(reported) && reported > 0) {
     return reported;
   }
@@ -352,7 +353,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         },
         config: params.config,
         source: { ...source },
-        usedSkills: params.usedSkills ? [...params.usedSkills] : undefined,
+        usedSkills: params.event.skillsUsed ? [...params.event.skillsUsed] : undefined,
         turnAborted: !params.event.success,
       };
       const pending = existing ?? { candidate };

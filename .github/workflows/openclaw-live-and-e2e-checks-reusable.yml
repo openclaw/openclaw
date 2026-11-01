@@ -1639,7 +1639,7 @@ jobs:
           enabled = true
           [openshell.drivers.docker]
           sandbox_label = "$gateway_name"
-          grpc_endpoint = "https://host.openshell.internal:$gateway_port"
+          grpc_endpoint = "https://127.0.0.1:$gateway_port"
           TOML
           RUST_LOG=info openshell-gateway --config "$fixture_root/gateway.toml" \
             --bind-address 0.0.0.0 --port "$gateway_port" \

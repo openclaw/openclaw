@@ -425,6 +425,9 @@ div.chat-thread:where(.chat-thread--annotations) {
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__identity-actions {
   display: flex;
   flex: 0 0 auto;
+  /* Reserve the native menu's hit area before its session descriptor arrives. */
+  min-width: var(--chat-pane-header-icon-size);
+  min-height: var(--chat-pane-header-icon-size);
   align-items: center;
   gap: 0;
 }
@@ -490,6 +493,8 @@ div.chat-thread:where(.chat-thread--annotations) {
 
 /* Desktop composition; mobile keeps its own presenter and touch targets. */
 .chat-pane__header:not(.chat-pane__header--mobile) {
+  --chat-pane-header-icon-size: 32px;
+
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
   gap: 4px;
@@ -501,8 +506,8 @@ div.chat-thread:where(.chat-thread--annotations) {
   }
 
   & .chat-icon-btn {
-    width: 32px;
-    min-width: 32px;
+    width: var(--chat-pane-header-icon-size);
+    min-width: var(--chat-pane-header-icon-size);
     padding: 0;
   }
 

@@ -27,6 +27,7 @@ function transcript(
   session: number,
   now: number,
   imageBlocks: readonly unknown[],
+  agentId: string,
   longMarkdown = false,
 ) {
   const events: unknown[] = [];
@@ -146,7 +147,7 @@ function transcript(
                       `- **Verification ${index + 1}** retains the complete synthetic result.\n  - The nested item links to [fixture evidence](https://example.invalid/verification/${index + 1}) and preserves its layout on reload.`,
                   )
                 : []),
-              "[Related fixture session](/chat/main/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)",
+              `[Related fixture session](/chat/${agentId}/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)`,
             ].join("\n\n"),
           },
           ...(row === 8 ? imageBlocks : []),
@@ -178,30 +179,45 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     throw new Error("Warm-reload Gateway port must be between 19600 and 19699");
   }
   const sessions = options.sessions ?? 3000;
-  const groups = Array.from({ length: 97 }, (_, index) => `Fixture category ${index + 1}`);
   if (!Number.isSafeInteger(sessions) || sessions < 2000) {
     throw new Error("Warm-reload fixture requires at least 2000 sessions");
   }
   const stateDir = path.resolve(options.stateDir);
-  const workspaceDir = path.join(stateDir, "workspace");
+  const agentId = "reviewer";
+  const workspaceDir = path.join(stateDir, "workspace", agentId);
   const worktreeLocal = path.resolve(".local");
   if (!stateDir.startsWith(`${worktreeLocal}${path.sep}`)) {
     throw new Error("Fixture state must be a new directory inside this worktree's .local/");
   }
   const now = Date.now();
+  const sidebarGroups = Array.from(
+    { length: 97 },
+    (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
+  );
+  const sidebarSectionOrder = [
+    "work",
+    "groups",
+    "ungrouped",
+    "catalog:cron",
+    "catalog:terminal",
+    ...sidebarGroups.map((name) => `category:${name}`),
+  ];
+  let viewerId: string;
+  let pinKeys: string[];
+  let sidebarParents: Array<{ key: string; childKeys: string[] }>;
   const sessionKeys = [
-    options.transcriptLatePaint
-      ? "agent:main:dashboard:24800000-0000-4000-8000-000000000001"
-      : "agent:main:24800000-0000-4000-8000-000000000001",
-    "agent:main:dashboard:24800001-0000-4000-8000-000000000001",
+    `agent:${agentId}:dashboard:24800000-0000-4000-8000-000000000001`,
+    `agent:${agentId}:dashboard:24800001-0000-4000-8000-000000000001`,
   ];
   const baseOptions = parseTeamShapeOptions([
     "--state-dir",
     stateDir,
     "--sessions",
     String(sessions),
+    "--agents",
+    "2",
     "--runs",
-    "8",
+    "11",
     "--settled-runs",
     "--approvals",
     "0",
@@ -217,6 +233,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
   ]);
   const fixture = await generateTeamShapeFixture({
     ...baseOptions,
+    agentId,
     port: options.port,
     sessionKeys,
   });
@@ -262,10 +279,12 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       defaults: {
         ...config.agents?.defaults,
         modelPolicy: { allow: ["openai/*"] },
+        systemAgent: { agentId: "main" },
       },
       entries: {
-        main: {
-          ...config.agents?.entries?.main,
+        ...config.agents?.entries,
+        [agentId]: {
+          ...config.agents?.entries?.[agentId],
           workspace: workspaceDir,
           identity: { name: "Harbor proof assistant", emoji: "⚓", avatar: "avatar.png" },
         },
@@ -287,6 +306,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       cronKey,
       profileWrites,
       owners,
+      preferences,
     ] = await Promise.all([
       import("../../src/state/openclaw-agent-db.js"),
       import("../../src/state/openclaw-state-db.js"),
@@ -302,8 +322,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       import("../../src/cron/store/key.js"),
       import("../../src/state/user-profile-writes.js"),
       import("../../src/config/sessions/session-accessor.sqlite-owner.js"),
+      import("../../src/state/user-preferences.js"),
     ]);
-    const database = { agentId: "main", env };
+    const database = { agentId, env };
     const targets = [0, 1].map((index) => ({
       key: sessionKeys[index]!,
       id: `team-shape-session-${index}`,
@@ -343,6 +364,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             env,
           })
         : gatewayOwner;
+      viewerId = viewer.id;
       if (options.admission) {
         await profileWrites.setCanonicalUserProfileDisplayName(
           viewer.id,
@@ -391,7 +413,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
-              archivedAt: options.transcriptLatePaint ? now - 1000 : undefined,
+              archivedAt: now - 1000,
               pinnedAt: now - index,
               updatedAt: now - index,
               lastActivityAt: now - index,
@@ -404,7 +426,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         const imageId = `warm-proof-${index}-assistant-8`;
         const imageBlocks = await images.createManagedOutgoingMediaBlocks({
           sessionKey: target.key,
-          agentId: "main",
+          agentId,
           stateDir,
           messageId: imageId,
           items: [
@@ -422,7 +444,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               sessionKey: target.key,
               sessionId: target.id,
             },
-            transcript(index, now, imageBlocks, options.transcriptLatePaint),
+            transcript(index, now, imageBlocks, agentId, options.transcriptLatePaint),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
             expectedSessionId: target.id,
@@ -445,20 +467,58 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       const inventory = Object.entries(
         entries.readSessionEntryStore(agentDb.openOpenClawAgentDatabase(database)),
       );
+      pinKeys = inventory.slice(2, 4).map(([key]) => key);
+      const retainedParents = new Map<string, string[]>();
+      for (const [key, entry] of inventory) {
+        if (entry.spawnedBy) {
+          const children = retainedParents.get(entry.spawnedBy) ?? [];
+          children.push(key);
+          retainedParents.set(entry.spawnedBy, children);
+        }
+      }
+      sidebarParents = [...retainedParents].flatMap(([key, childKeys]) =>
+        targetKeys.has(key) || pinKeys.includes(key) ? [] : [{ key, childKeys }],
+      );
+      const parentKeys = new Set(sidebarParents.map(({ key }) => key));
+      const childKeys = new Set([...retainedParents.values()].flat());
       for (let offset = 0; offset < inventory.length; offset += 100) {
         agentDb.runOpenClawAgentWriteTransaction((owner) => {
           for (let index = offset; index < Math.min(offset + 100, inventory.length); index++) {
             const [key, entry] = inventory[index]!;
-            if (options.transcriptLatePaint) {
-              const current = entries.readExactSessionEntryRow(owner, key)!;
-              entries.writeSessionEntry(
-                owner,
-                key,
-                { ...current.entry, category: groups[index % groups.length] },
-                { canonicalPreviousEntry: current.entry, canonicalPreviousRow: current.row },
-              );
+            const old = entries.readExactSessionEntryRow(owner, key);
+            if (!old) {
+              throw new Error("Missing synthetic sidebar session");
             }
-            if (index % 10 === 0 && !targetKeys.has(key)) {
+            const parent = parentKeys.has(key);
+            const child = childKeys.has(key);
+            const unarchived = index === 2 || index === 3 || parent || child;
+            const category = index % sidebarGroups.length;
+            entries.writeSessionEntry(
+              owner,
+              key,
+              {
+                ...old.entry,
+                // The first expanded category contains the real retained-run parent cohort.
+                category: child
+                  ? undefined
+                  : sidebarGroups[parent ? 5 : category === 5 ? 6 : category],
+                ...(parent
+                  ? {
+                      updatedAt: now - index,
+                      lastActivityAt: now - index,
+                      lastInteractionAt: now - index,
+                    }
+                  : {}),
+                ...(unarchived ? { archivedAt: undefined } : {}),
+              },
+              { canonicalPreviousEntry: old.entry, canonicalPreviousRow: old.row },
+            );
+            if (
+              index % 10 === 0 &&
+              !targetKeys.has(key) &&
+              !parentKeys.has(key) &&
+              !childKeys.has(key)
+            ) {
               continue;
             }
             owners.replaceSessionOwnerInTransaction(owner, key, {
@@ -467,11 +527,19 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               assignedAt: now,
             });
             assignedToOperator++;
-            if (!entry.archivedAt) {
+            if (unarchived || !entry.archivedAt) {
               activeAssignedToOperator++;
             }
           }
         }, database);
+      }
+      const pinned = await preferences.setCanonicalUserPreferences(
+        viewer.id,
+        { "ui.railShortcuts": pinKeys.map((key) => `session:${key}`) },
+        { env },
+      );
+      if (!pinned?.ok) {
+        throw new Error("Unable to seed synthetic personal sidebar pins");
       }
     } finally {
       await agentDb.closeOpenClawAgentDatabasesAsync();
@@ -494,20 +562,31 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       admission: options.admission ? "signed-in" : "token",
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
+      viewerId,
+      pinKeys,
+      sidebarParents,
+      sidebarShape: {
+        agentId,
+        defaultAgentId: "main",
+        owner: "involving-me",
+        grouping: "category",
+        sort: "created",
+        groups: sidebarGroups.length,
+        sectionOrder: sidebarSectionOrder.length,
+        collapsed: 5,
+        emptyGroups: "always",
+        preview: false,
+        archivedTargets: true,
+        nonArchivedPins: 2,
+        expandedRetainedParents: sidebarParents.length,
+      },
       ...(options.transcriptLatePaint
         ? {
             transcriptLatePaint: {
               archivedTargets: true,
-              groups,
-              sectionOrder: [
-                "work",
-                "groups",
-                "ungrouped",
-                "catalog:fixture-a",
-                "catalog:fixture-b",
-                ...groups.map((name) => `category:${name}`),
-              ],
-              collapsedSections: groups.slice(0, 5).map((name) => `category:${name}`),
+              groups: sidebarGroups,
+              sectionOrder: sidebarSectionOrder,
+              collapsedSections: sidebarGroups.slice(0, 5).map((name) => `category:${name}`),
               ownerFilter: "involving-me",
               grouping: "category",
               sort: "created",
@@ -542,12 +621,10 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       })!,
       fixtureSummary,
       async prepareGateway(request: RequestGateway) {
-        if (fixtureSummary.transcriptLatePaint) {
-          await request("sessions.groups.put", {
-            names: groups,
-            sectionOrder: fixtureSummary.transcriptLatePaint.sectionOrder,
-          });
-        }
+        await request("sessions.groups.put", {
+          names: sidebarGroups,
+          sectionOrder: sidebarSectionOrder,
+        });
         await request("board.widget.put", {
           sessionKey: targets[1]!.key,
           name: "warm-reload-verification",
