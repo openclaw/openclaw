@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -24,6 +24,9 @@ import {
 } from "./plugins-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+// The page lazy-loads its detail views. Import them once up front so the first test's
+// short render waits measure rendering, not cold module transforms on a loaded runner.
+beforeAll(() => Promise.all([import("./settings-view.tsx"), import("./catalog-detail.tsx")]));
 beforeEach(async () => {
   await i18n.setLocale("en");
   vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);

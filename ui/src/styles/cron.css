@@ -122,16 +122,6 @@
   padding-left: 32px;
 }
 
-/* The global :focus-visible outline draws an offset accent rectangle around
-   the input, and the accent is red — it reads as an error state. Focus is a
-   quiet border tint instead. */
-.cron-search-box input:focus,
-.cron-search-box input:focus-visible {
-  outline: none;
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-}
-
 .cron-toolbar__actions {
   display: flex;
   align-items: center;

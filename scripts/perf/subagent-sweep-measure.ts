@@ -12,18 +12,14 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -206,21 +202,13 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
 }
 
 const inspector = new Session();
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
 
 try {
   assert.equal(subagentRuns.size, 0, "The harness requires an empty process-local registry");
@@ -277,7 +265,7 @@ try {
   marker("heap-stop");
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   assertUnchanged();

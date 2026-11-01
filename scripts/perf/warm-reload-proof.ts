@@ -205,6 +205,24 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
           });
         const snapshots = await readKeys("snapshots");
         const sidebar = await readKeys("sidebarSnapshots");
+        const sidebarRecords = await Promise.all(
+          sidebar.map(
+            (value) =>
+              new Promise<unknown>((resolve, reject) => {
+                const request = database
+                  .transaction("sidebarSnapshots", "readonly")
+                  .objectStore("sidebarSnapshots")
+                  .get(value);
+                request.addEventListener("success", () => resolve(request.result), { once: true });
+                request.addEventListener(
+                  "error",
+                  () =>
+                    reject(new Error("Unable to read sidebar snapshot", { cause: request.error })),
+                  { once: true },
+                );
+              }),
+          ),
+        );
         const targetKeys = snapshots.filter(
           (value) =>
             typeof value === "string" &&
@@ -257,6 +275,18 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
           ),
           snapshots: snapshots.length,
           sidebarSnapshots: sidebar.length,
+          sidebarRecordBytes: sidebarRecords.map(
+            (value) => new TextEncoder().encode(JSON.stringify(value)).length,
+          ),
+          sidebarHost: {
+            state: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-state"),
+            saved: document.querySelector("aside.sidebar")?.getAttribute("data-snapshot-saved"),
+            rows: new Set(
+              [...document.querySelectorAll("openclaw-app-sidebar [data-session-key]")].map((row) =>
+                row.getAttribute("data-session-key"),
+              ),
+            ).size,
+          },
         };
       } finally {
         database.close();
@@ -443,6 +473,7 @@ async function captureReload(
       ...probe.shifts,
       ...probe.domStates,
       ...probe.animationSamples,
+      ...probe.sidebarFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -836,12 +867,6 @@ try {
             await page.goto(handoffUrl.href);
           }
           await waitForControlUiGatewayReady(page, 60000);
-          const operator = values["transcript-late-paint"]
-            ? await evaluateControlUiContext(page, (application) => ({
-                gatewayUrl: application.gateway.connection.gatewayUrl.replace(/\/$/u, ""),
-                userId: application.gateway.snapshot.selfUser?.id,
-              }))
-            : null;
           await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
             timeout: 60000,
           });
@@ -872,31 +897,33 @@ try {
             storageTypes: "indexeddb,cache_storage",
           });
           await cdp.send("Network.clearBrowserCache");
-          if (operator && fixture.fixtureSummary.transcriptLatePaint) {
-            if (!operator.userId) {
-              throw new Error("Transcript late-paint fixture requires an identified operator");
-            }
-            await page.evaluate(
-              ({ gatewayUrl, userId, settings }) => {
-                localStorage.setItem("openclaw:sidebar:sessions:grouping", settings.grouping);
-                localStorage.setItem("openclaw:sidebar:sessions:sort-mode", settings.sort);
-                localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
-                localStorage.setItem(
-                  "openclaw:sidebar:sessions:collapsed-sections",
-                  JSON.stringify(settings.collapsedSections),
-                );
-                localStorage.setItem(
-                  `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(userId!)}`,
-                  settings.ownerFilter,
-                );
-                localStorage.setItem(
-                  `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(userId!)}`,
-                  settings.emptyGroups,
-                );
-              },
-              { ...operator, settings: fixture.fixtureSummary.transcriptLatePaint },
-            );
-          }
+          await page.evaluate(
+            ({ viewerId, groups }) => {
+              const gatewayUrl = `ws://${location.host}`;
+              localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
+              localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
+              localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
+              localStorage.setItem(
+                "openclaw:sidebar:sessions:collapsed-sections",
+                JSON.stringify(groups.slice(0, 5).map((group) => `category:${group}`)),
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${encodeURIComponent(viewerId)}`,
+                "involving-me",
+              );
+              localStorage.setItem(
+                `openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${encodeURIComponent(viewerId)}`,
+                "always",
+              );
+            },
+            {
+              viewerId: fixture.fixtureSummary.viewerId,
+              groups: Array.from(
+                { length: 97 },
+                (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
+              ),
+            },
+          );
           const url = `${baseUrl}${routePath}`;
           results.push({
             arm: arm.name,
@@ -914,6 +941,21 @@ try {
               ),
             ],
           });
+          // Persist actual disclosure choices, not hand-authored snapshot fields.
+          for (const parent of fixture.fixtureSummary.sidebarParents) {
+            const toggle = page.locator(
+              `[data-child-session-toggle=${JSON.stringify(parent.key)}]`,
+            );
+            await toggle.waitFor({ state: "visible" });
+            if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+              await toggle.click();
+            }
+            for (const key of parent.childKeys) {
+              await page
+                .locator(`.sidebar-session-content [data-session-key=${JSON.stringify(key)}]`)
+                .waitFor({ state: "visible" });
+            }
+          }
           const details = page.locator(".chat-details-toggle:visible");
           if (
             route === "chat" &&

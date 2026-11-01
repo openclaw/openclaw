@@ -18,8 +18,8 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readTableColumns, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
-import { workerPlacementMoveFromRow } from "./placement-move-intent.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
+import { workerPlacementMoveFromRow } from "./placement-move-row-codec.js";
 import type {
   WorkerEnvironmentPlacementFacts,
   WorkerPlacementConflictBinding,
@@ -38,8 +38,8 @@ import { isCurrentJournalOwner } from "./placement-workspace-journal.js";
 import {
   isWorkerWorkspaceResultReconciling,
   matchesWorkspaceResultClaim,
+  pendingResultFromRow,
 } from "./placement-workspace-result-owner.js";
-import { pendingResultFromRow } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { decodeWorkerEnvironmentRow } from "./store-row-codec.js";
 

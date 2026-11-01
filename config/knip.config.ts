@@ -157,6 +157,8 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-ingress-writer.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
+  // Its source header documents this opt-in Node worker allocation preload.
+  "scripts/lib/gateway-bench-heap-profile.mjs!",
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
   "scripts/bench-package-integrity.ts!",
   "scripts/perf/cron-delivery-gateway-entry.ts!",

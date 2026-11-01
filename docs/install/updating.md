@@ -534,6 +534,10 @@ affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema
 again and refuses a version newer than the running updater supports.
 
+Before Doctor admits the installed updater's database capture, plugin rollback
+journal discovery preserves the original SQLite WAL/SHM family. Older updaters
+can then verify their physical fingerprints without a false source-change refusal.
+
 After Doctor backs up and admits shared-state maintenance reads, native Codex
 assignment detection reads one database transaction snapshot. Lease renewals and
 other maintenance writes can continue without requiring the database files to
