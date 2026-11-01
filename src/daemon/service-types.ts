@@ -216,6 +216,8 @@ export type GatewayServiceReadOptions = {
   onCommandInspection?: (inspection: GatewayServiceCommandInspection) => void;
   /** Same-read native executable; separate from persisted argv and command fingerprints. */
   onEffectiveExecutable?: (executable: string) => void;
+  /** Same-read systemd service account match; separate from command objects and fingerprints. */
+  onSystemdServiceAccountMatch?: (sameAccount: boolean) => void;
   /** Command inspection must not load an unloaded native unit. */
   requireLoaded?: boolean;
   loadForInspection?: GatewayServiceUnitInspection;

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import {
   inspectGatewayServiceInstallationDrift,
@@ -11,10 +12,32 @@ import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-pa
 import type { GatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
 import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { statIfExists } from "../infra/path-existence.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+
+// Treat a caller-owned inferred database directory as caller state only for non-root callers.
+async function nonRootCallerOwnsDatabaseDirectory(databasePath: string): Promise<boolean> {
+  const euid = process.geteuid?.();
+  if (euid === undefined || euid === 0) {
+    return false;
+  }
+  try {
+    for (let directory = path.dirname(databasePath); ; directory = path.dirname(directory)) {
+      const stats = await statIfExists(directory);
+      if (stats) {
+        return stats.uid === euid;
+      }
+      if (path.dirname(directory) === directory) {
+        return false;
+      }
+    }
+  } catch {
+    return false;
+  }
+}
 
 /** Resolve this Gateway's own manager, never a same-named unit in another scope. */
 export async function readOwnGatewayServiceCommand(
@@ -90,7 +113,14 @@ export async function inspectCliGatewayServiceInstallation(
   try {
     const service = resolveGatewayService();
     const ownCommand = await readOwnGatewayServiceCommand(env);
-    const command = ownCommand ?? (await service.readCommand(env));
+    let sameSystemdServiceAccount: boolean | undefined;
+    const command =
+      ownCommand ??
+      (await service.readCommand(env, {
+        onSystemdServiceAccountMatch: (sameAccount) => {
+          sameSystemdServiceAccount = sameAccount;
+        },
+      }));
     const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const layout = await summarizeGatewayServiceLayout(command);
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;
@@ -127,13 +157,23 @@ export async function inspectCliGatewayServiceInstallation(
         }
       }
     }
+    const databasePath = resolveIdentityPathViaExistingAncestorSync(
+      resolveOpenClawStateSqlitePath(serviceEnv),
+    );
+    if (
+      sameSystemdServiceAccount === false &&
+      !["OPENCLAW_STATE_DIR", "OPENCLAW_HOME", "HOME", "USERPROFILE"].some((key) =>
+        command?.environment?.[key]?.trim(),
+      ) &&
+      (await nonRootCallerOwnsDatabaseDirectory(databasePath))
+    ) {
+      return undefined;
+    }
     return {
       root: drift.serviceRoot,
       version: drift.serviceVersion,
       cliVersion: VERSION,
-      databasePath: resolveIdentityPathViaExistingAncestorSync(
-        resolveOpenClawStateSqlitePath(serviceEnv),
-      ),
+      databasePath,
     };
   } catch {
     // Service inspection is best effort and must not make an uninspectable host unusable.

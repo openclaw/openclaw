@@ -104,6 +104,7 @@ async function readSystemdManagerCommand(
     unavailable,
   );
   let effectiveExecutable: string | undefined;
+  let sameSystemdServiceAccount: boolean | undefined;
   try {
     const assertAbsentWithoutLoading = async (): Promise<null> => {
       // Missing loaded objects do not prove an authored/native unit definition is absent.
@@ -317,6 +318,9 @@ async function readSystemdManagerCommand(
     ) {
       snapshot.environment = { ...snapshot.environment, HOME: account.homedir };
     }
+    if (account) {
+      sameSystemdServiceAccount = Boolean(sameAccount);
+    }
     effectiveExecutable = execution[0];
     return {
       ...snapshot,
@@ -329,6 +333,9 @@ async function readSystemdManagerCommand(
     await close();
     if (effectiveExecutable) {
       opts?.onEffectiveExecutable?.(effectiveExecutable);
+    }
+    if (sameSystemdServiceAccount !== undefined) {
+      opts?.onSystemdServiceAccountMatch?.(sameSystemdServiceAccount);
     }
   }
 }
