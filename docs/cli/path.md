@@ -213,6 +213,8 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
+For JSONL, `**` can span both the physical line and nested value keys:
+`oc://session.jsonl/**/event` finds nested `event` values inside each line.
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as

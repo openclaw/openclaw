@@ -3141,8 +3141,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/gateway-protocol
       '@openclaw/libterminal':
-        specifier: 0.3.10
-        version: 0.3.10
+        specifier: 0.3.11
+        version: 0.3.11
       '@openclaw/media-core':
         specifier: workspace:*
         version: link:../packages/media-core
@@ -5161,8 +5161,8 @@ packages:
     resolution: {integrity: sha512-v9RWszhsnswr7kAg/6ZM1fUxtyY1PItj7uBarnQ2UdeTPgDdUZFS5hXIGUdLtNvSty/JEPJvjE3MWqbKbx9dng==}
     engines: {node: '>=22'}
 
-  '@openclaw/libterminal@0.3.10':
-    resolution: {integrity: sha512-KowZVA82B3VFlKNC+DhNZUxTQPQ9hA/4f7iTlcnfDE4dDGPlUcBlzHo89eBs3gzUA8mwsRpjI8M/NFy3nL6CXA==}
+  '@openclaw/libterminal@0.3.11':
+    resolution: {integrity: sha512-Iq3ztdigaVghrcjIR8VfRZpB4A9ASTBit+tg1Vfo6lWiu5MLtI8ZP4oQjNcMBW/9N+bSaauwAK5plZuArThAmQ==}
     engines: {node: ^22.18.0 || >=24.11.0}
     peerDependencies:
       node-pty: '>=1.0.0'
@@ -13247,7 +13247,7 @@ snapshots:
       '@openclaw/fs-safe-win32-x64-msvc': 0.27.0
       jszip: 3.10.2
 
-  '@openclaw/libterminal@0.3.10':
+  '@openclaw/libterminal@0.3.11':
     dependencies:
       ghostty-web: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
 
