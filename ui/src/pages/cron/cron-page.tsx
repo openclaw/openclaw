@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Loading } from "solid-js";
+import { createEffect, createMemo, createSignal, Loading, onSettled } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
@@ -14,7 +14,22 @@ import { CronRunTranscriptView } from "./run-transcript.tsx";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
+const PHONE_LAYOUT_QUERY = "(max-width: 560px)";
+
+function createPhoneLayout() {
+  const query =
+    typeof window.matchMedia === "function" ? window.matchMedia(PHONE_LAYOUT_QUERY) : null;
+  const [matches, setMatches] = createSignal(query?.matches ?? false);
+  onSettled(() => {
+    const sync = () => setMatches(query?.matches ?? false);
+    query?.addEventListener("change", sync);
+    return () => query?.removeEventListener("change", sync);
+  });
+  return matches;
+}
+
 export function CronPageContent(props: { page: ReturnType<typeof createCronPage> }) {
+  const phoneLayout = createPhoneLayout();
   const revision = () => i18nRevision() + props.page.revision();
   // Search publications must not invalidate the retained rows' permission branches.
   // Sample values because Gateway auth and identity snapshots can be mutated in place.
@@ -66,6 +81,15 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       selectedAgentId: page.context().agentSelection.state.scopeId,
     };
   };
+  const scopeControl = () => (
+    <AgentScopeControl
+      agents={pageHeader().agents}
+      selection={props.page.context().agentSelection}
+      selectedId={pageHeader().selectedAgentId}
+    />
+  );
+  // The phone list seats the scope beside its create action; detail views keep it here.
+  const phoneList = () => phoneLayout() && !viewProps().editingJob && !viewProps().createOpen;
   return (
     <>
       <HubPageHeader
@@ -86,12 +110,8 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
             >
               {t("cron.list.showAll")}
             </a>
-          ) : (
-            <AgentScopeControl
-              agents={pageHeader().agents}
-              selection={props.page.context().agentSelection}
-              selectedId={pageHeader().selectedAgentId}
-            />
+          ) : phoneList() ? undefined : (
+            scopeControl()
           )
         }
       />
@@ -101,6 +121,8 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
           {...viewProps()}
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
+          phoneLayout={phoneList()}
+          toolbarScope={phoneList() && !pageHeader().filtered ? scopeControl() : undefined}
           busy={props.page.saving() || viewProps().busy}
           toggleSavingJobId={props.page.toggleSavingJobId()}
         />
