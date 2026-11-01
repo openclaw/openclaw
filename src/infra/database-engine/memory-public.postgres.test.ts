@@ -21,10 +21,10 @@ import type {
 import { createPluginStateKeyedStoreForTests } from "../../plugin-sdk/plugin-state-test-runtime.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
+import type { EmbeddingInput } from "../../plugins/embedding-provider-runtime-types.js";
 import {
   clearEmbeddingProviders,
   registerEmbeddingProvider,
-  type EmbeddingInput,
 } from "../../plugins/embedding-providers.js";
 import type { MemoryPluginRuntime } from "../../plugins/registry-contribution-types.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";

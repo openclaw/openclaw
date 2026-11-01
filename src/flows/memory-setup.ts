@@ -2,10 +2,8 @@ import type { SecretInputMode } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { withTimeout } from "../infra/fs-safe.js";
-import type {
-  EmbeddingProviderAdapter,
-  EmbeddingProvider,
-} from "../plugins/embedding-provider-types.js";
+import type { EmbeddingProvider } from "../plugins/embedding-provider-runtime-types.js";
+import type { EmbeddingProviderAdapter } from "../plugins/embedding-provider-types.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   WizardCancelledError,
