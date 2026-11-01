@@ -127,6 +127,7 @@ describe("active-memory escalation", () => {
     "Gestern habe ich Pizza gegessen",
     "Weißt du noch mehr darüber?",
     "Erinnerst du dich morgen an den Termin?",
+    "Erinnerst du dich in fünf Minuten an den Kuchen?",
     "Weißt du noch, ob wir übermorgen Zeit haben?",
     "Weißt du noch, was nächste Woche ansteht?",
     "Was wollten wir morgen kaufen?",
