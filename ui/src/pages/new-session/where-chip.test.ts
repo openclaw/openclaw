@@ -221,6 +221,29 @@ describe("Where chip", () => {
     expect(hoverDetails(option(container, "device:alpha"))).toContain("Linux");
   });
 
+  it.each([["münchen".normalize("NFC")], ["münchen".normalize("NFD")]])(
+    "matches NFC and NFD environment queries against NFD device labels: %s",
+    async (query) => {
+      const nfdLabel = "München Runner".normalize("NFD");
+      const container = await renderPicker(
+        true,
+        undefined,
+        {
+          environments: [device("muenchen", nfdLabel)],
+        },
+        { environmentQuery: query },
+      );
+
+      expect(
+        [
+          ...container.querySelectorAll(
+            '.new-session-page__environment-list [data-value]:not([data-value="auto-device"])',
+          ),
+        ].map((row) => row.getAttribute("data-value")),
+      ).toEqual(["device:muenchen"]);
+    },
+  );
+
   it("keeps explicit destinations selectable while Auto is enabled", async () => {
     const onSelectDevice = vi.fn();
     const onSelectCloudProfile = vi.fn();
