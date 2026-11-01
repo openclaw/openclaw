@@ -61,14 +61,16 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main `52fb7e066e6c`: qualify moving the existing path-policy mock
-setup from the Windows group to file scope. The two POSIX cases currently depend
-on the Windows group running first. Preserve all19 cases, input rows and
-assertions; production remains unchanged.
-Complete owners, mock consumers, selected history and static route inspected.
-Untouched full-file baseline, selected POSIX failure, focused/full candidate,
-scoped checks, fresh review and final-head proof remain pending.
-No declarations, assertions, fixtures or production exports are being removed.
+Pinned main `52fb7e066e6c`: moved the existing path-policy mock setup from
+the Windows group to file scope. All19 cases, table rows, inputs and assertions
+remain; zero net test LOC and no production changes.
+Untouched full file passes19 cases. Selecting its two POSIX cases alone fails
+both because the mock returns undefined; the expected traversal error is lost.
+After moving the hook, the same selection passes2 cases (17 filtered), and the
+full file passes19 again. Production owners retain their original bytes.
+The ordinary runner selects the agents-core Vitest project.
+No removal scan applies: no declaration, assertion, fixture, import or export is
+removed. Focused types, lint, format and MDX pass. Fresh review, final-head proof and CI remain pending.
 
 ## Completed source review
 
