@@ -30,7 +30,10 @@ vi.mock("./diagnostic-profile.js", async (original) => ({
   ...(await original<typeof import("./diagnostic-profile.js")>()),
   hasProfilerConflict: native.conflict,
 }));
-vi.mock("./diagnostic-stall-kernel.js", () => ({ createStallKernelRecorder: native.kernel }));
+vi.mock("./diagnostic-stall-kernel.js", async (original) => ({
+  ...(await original<typeof import("./diagnostic-stall-kernel.js")>()),
+  createStallKernelRecorder: native.kernel,
+}));
 
 const recorders: ReturnType<typeof createStallFlightRecorder>[] = [];
 const getBuiltinModule = process.getBuiltinModule.bind(process);
