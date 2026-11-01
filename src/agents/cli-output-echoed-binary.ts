@@ -1,15 +1,49 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-/** Drops Claude's echoed binary bytes before they enter retained tool/transcript state. */
+// Edit and Write results echo the whole pre-edit file (`originalFile`), a patch
+// that can span all of it (`structuredPatch`), and Write's new `content`. The
+// model receives only the short `message` tool_result and nothing in OpenClaw
+// reads these echoes, yet each edit of a large file charged its full size.
+const CLAUDE_FILE_ECHO_FIELDS = ["originalFile", "structuredPatch", "content"] as const;
+
+function omitClaudeCliEchoedFileContents(toolUseResult: unknown): number | undefined {
+  if (
+    !isRecord(toolUseResult) ||
+    typeof toolUseResult.filePath !== "string" ||
+    !("originalFile" in toolUseResult)
+  ) {
+    return undefined;
+  }
+  let omittedRawChars = 0;
+  for (const field of CLAUDE_FILE_ECHO_FIELDS) {
+    const value = toolUseResult[field];
+    if (value == null) {
+      continue;
+    }
+    let wireChars: number;
+    try {
+      // Re-serialized size of the dropped value; any longer wire form stays charged.
+      wireChars = JSON.stringify(value).length;
+    } catch {
+      continue;
+    }
+    delete toolUseResult[field];
+    omittedRawChars += wireChars;
+  }
+  return omittedRawChars;
+}
+
+/** Drops Claude's echoed binary bytes and file contents before they enter retained state. */
 export function normalizeClaudeCliStreamJsonRecord(
   parsed: Record<string, unknown>,
 ): { line: string; omittedRawChars: number } | undefined {
   if (parsed.type !== "user" || !isRecord(parsed.message)) {
     return undefined;
   }
-  let normalized = false;
-  let omittedRawChars = 0;
+  const omittedFileChars = omitClaudeCliEchoedFileContents(parsed.tool_use_result);
+  let normalized = (omittedFileChars ?? 0) > 0;
+  let omittedRawChars = omittedFileChars ?? 0;
   // Claude echoes each payload twice, under `message` and under `tool_use_result`, so the
   // whole record is walked. The walk is iterative to stay stack-safe on deep records.
   const pending: unknown[] = [parsed];
