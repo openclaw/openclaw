@@ -71,8 +71,9 @@ const storeCatalog = (row: StoredCatalog) => writeCatalog(row, workerContext(dat
 const mirrorConfig = (suffix = "") => ({
   models: { catalogRefresh: { url: `https://mirror.example.test/${suffix}catalog.json` } },
 });
-const currentKey = "modelCatalog.remote.v3";
-const previousKey = "modelCatalog.remote.v2";
+const currentKey = "modelCatalog.remote.v4";
+const previousKey = "modelCatalog.remote.v3";
+const olderKey = "modelCatalog.remote.v2";
 const legacyKey = "modelCatalog.remote";
 const initial: StoredCatalog = {
   bundle_json: '{"schemaVersion":1}',
@@ -214,44 +215,6 @@ describe("remote model catalog refresh", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(calls);
   });
 
-  it("stores configured v3 capabilities without changing either released client slot", async () => {
-    const legacyBundle = {
-      schemaVersion: 1,
-      generatedAt: bundle.generatedAt,
-      sourceCommit: bundle.sourceCommit,
-      providers: { anthropic: { models: [{ id: "claude-test" }] } },
-    };
-    const previous = storedCatalog(bundle, { min_version: null, checked_at: 1 });
-    const legacy = { ...previous, bundle_json: JSON.stringify(legacyBundle) };
-    const slots = [
-      [previousKey, previous],
-      [legacyKey, legacy],
-    ] as const;
-    for (const [key, record] of slots) {
-      machineState.writeConfigMachineState(key, record, databaseOptions);
-    }
-    const decision = {
-      protocol: "fixture.decisions",
-      input: ["text"],
-    };
-    const downloaded = {
-      ...bundle,
-      schemaVersion: 3,
-      models: [{ ...bundle.models[0], inference: { chat: false, decision } }],
-    };
-    const config = mirrorConfig("v3/");
-    mockDownload(downloaded);
-    await expectRefresh({ status: "updated", models: 1 }, config);
-    expect(JSON.parse(readCatalog(databaseOptions)?.bundle_json ?? "null")).toEqual(downloaded);
-    for (const [key, record] of slots) {
-      expect(readState(key, databaseOptions)).toEqual(record);
-    }
-    mockFetch(async () => {
-      throw new Error("fresh v3 must not fetch");
-    });
-    await expectRefresh({ status: "fresh", models: 1 }, config, false);
-  });
-
   it("keeps a configured v1 mirror's pricing-only rows and sanitizes transport", async () => {
     const legacy = {
       ...bundle,
@@ -307,6 +270,7 @@ describe("remote model catalog refresh", () => {
     ],
     ["invalid UTF-8", async () => new Response(Uint8Array.of(0xff))],
     ["invalid schema", async () => Response.json({ ...bundle, models: [] })],
+    ["unsupported schemaVersion", async () => Response.json({ ...bundle, schemaVersion: 4 })],
   ] satisfies Array<[string, typeof fetch]>)(
     "preserves the previous catalog without a fallback request after %s",
     async (_failure, fetch) => {
@@ -357,6 +321,9 @@ describe("remote model catalog store", () => {
     machineState.importConfigMachineState([[previousKey, initial]], db);
     expect(await read()).toEqual({ id: 1, ...initial });
     put(previousKey, null);
+    put(olderKey, { ...initial, checked_at: 4 });
+    expect(await read()).toEqual({ id: 1, ...initial, checked_at: 4 });
+    put(olderKey, null);
     put(legacyKey, { ...initial, checked_at: 5 });
     expect(await read()).toEqual({ id: 1, ...initial, checked_at: 5 });
     const beforeFailure = workerContext(db);
@@ -406,7 +373,7 @@ describe("remote model catalog store", () => {
     ).toEqual({ value_json: "{" });
   });
 
-  it.each([legacyKey, previousKey])(
+  it.each([legacyKey, olderKey, previousKey])(
     "adopts only matching %s rows without writing the older client slot",
     async (key) => {
       const { db, check, state, put } = store();
@@ -419,7 +386,7 @@ describe("remote model catalog store", () => {
       put(key, latest);
       expect(readCatalog(db)).toEqual({ id: 1, ...latest });
       if (key === legacyKey) {
-        // Raw v2 precedence survives a null payload, while reads still fall back to v1.
+        // Raw newer-slot precedence survives a null payload; reads still fall back.
         put(previousKey, null);
         expect(await check(15, { expected: latest })).toBe(false);
         expect(state()).toBeUndefined();

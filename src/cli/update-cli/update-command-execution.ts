@@ -24,7 +24,7 @@ import {
   preflightUpdateCandidatePlugins,
   validateUpdateCandidateWithProgress,
 } from "./update-command-candidate-validation.js";
-import { captureUpdateDatabases } from "./update-command-database-backup.js";
+import { createUpdateCommandRollbackCapture } from "./update-command-cohort.js";
 import {
   inspectUpdateDatabaseContexts,
   revalidateUpdateDatabaseContexts,
@@ -61,6 +61,7 @@ import {
   GatewayServiceUpdateOwnershipError,
 } from "./update-command-service-plan.js";
 import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
+import { createManagedServiceStopError } from "./update-command-service-stop-error.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -118,6 +119,11 @@ export async function executeMutableUpdate(
     );
   }
   await waitForCurrent();
+  const rollbackCapture = await createUpdateCommandRollbackCapture(
+    params,
+    originalRun,
+    assertExecutionCurrent,
+  );
   const stagedPluginAdmission =
     params.updateInstallKind === "package" &&
     !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? params.tag);
@@ -150,17 +156,10 @@ export async function executeMutableUpdate(
     });
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
-  let databaseCapture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
+  let databaseCapture: Awaited<ReturnType<typeof rollbackCapture.capture>>;
   const onTransaction = async (transaction: PackageUpdateTransaction) => {
     packageTransaction = transaction;
-    if (originalRun) {
-      databaseCapture = await captureUpdateDatabases({
-        transaction,
-        execution: params,
-        context: ownedManagedUpdateContext,
-        assertCurrent: assertExecutionCurrent,
-      });
-    }
+    databaseCapture = await rollbackCapture.capture(transaction, ownedManagedUpdateContext);
   };
   let schemaVersions: UpdateStateSchemaVersion[] | undefined;
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
@@ -306,11 +305,7 @@ export async function executeMutableUpdate(
         });
       }
       params.stop();
-      throw new UpdatePreMutationError(
-        "managed-service-stop-failed",
-        `Failed to stop managed gateway service before update: ${String(err)}`,
-        { cause: err },
-      );
+      throw createManagedServiceStopError(err, originalRun?.env);
     }
 
     if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {
@@ -426,6 +421,7 @@ export async function executeMutableUpdate(
     assertExecutionCurrent();
     doctorConfigChanges = [...(validation.doctorConfigChanges ?? [])];
     if (validation.status === "ok") {
+      await rollbackCapture.observeCandidate(root);
       validatedConfigSnapshot = snapshot;
       candidateSchemaVersions = validation.candidateSchemaVersions;
       gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
@@ -616,6 +612,7 @@ export async function executeMutableUpdate(
         channel: params.channel,
         devTarget: params.devTarget,
         inspectGitTarget: async (target, installTarget) => {
+          rollbackCapture.selectTargetVersion(target.version);
           await waitForCurrent();
           await assertUpdateDatabaseEngineContexts(
             admission!.contexts,
@@ -694,6 +691,7 @@ export async function executeMutableUpdate(
     databaseCaptureStep: databaseCapture?.step,
     activationSteps,
     doctorEntered,
+    doctorDelegated: doctorConfigWrites,
     packageTransaction,
     originalRun,
     env: ownedManagedUpdateContext?.env,

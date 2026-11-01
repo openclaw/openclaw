@@ -3,6 +3,7 @@ import { createServer as createHttpServer, type ServerResponse } from "node:http
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
+import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
@@ -287,12 +288,43 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             return;
           }
           const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
+          const createCallerIdentity = (
+            agentId: string | undefined,
+            phase: "construction" | "execution",
+          ) => {
+            const callerIdentity = boundClientGrant
+              ? createAdmittedGatewayToolCallerIdentity({
+                  admittedRunContext: boundClientGrant.admittedRunContext,
+                  receiptAuthority: isGrantAndLineageCurrent,
+                  receiptAdmission: lineage.admission,
+                  cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
+                  // Management binding needs the admitted identity, not execution's issuer.
+                  mintCronRequesterGrant:
+                    phase === "execution" ? boundClientGrant.mintCronRequesterGrant : undefined,
+                  agentId,
+                  sessionKey: requestContext.sessionKey,
+                  requesterOrigin: requestContext.requesterOrigin,
+                  turnSourceChannel: requestContext.messageProvider,
+                  turnSourceLocal:
+                    !requestContext.messageProvider &&
+                    requestContext.cronCreatorCallerOrigin?.kind === "local"
+                      ? true
+                      : undefined,
+                  turnSourceTo: requestContext.currentChannelId,
+                  turnSourceAccountId: requestContext.accountId,
+                  turnSourceThreadId: requestContext.currentThreadTs,
+                })
+              : undefined;
+            if (callerIdentity && boundClientGrant?.personalToolParticipants) {
+              callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
+            }
+            return callerIdentity;
+          };
           // Tools capture their creator at construction, not the later HTTP execution scope.
           let scopedTools: Awaited<ReturnType<typeof toolCache.resolve>>;
           try {
-            scopedTools = await withAgentQuestionAnswerAuthority(
-              boundClientGrant?.questionAnswerAuthority,
-              () =>
+            const resolveTools = () =>
+              withAgentQuestionAnswerAuthority(boundClientGrant?.questionAnswerAuthority, () =>
                 toolCache.resolve({
                   context: requestContext,
                   admittedRunContext: boundClientGrant?.admittedRunContext,
@@ -318,7 +350,27 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     ? { bundledTools: boundClientGrant.bundledTools }
                     : {}),
                 }),
-            );
+              );
+            const withManagementScope = boundClientGrant?.withCronManagementToolConstruction;
+            if (boundClientGrant && withManagementScope) {
+              const agentId = resolveSessionAgentIds({
+                config: boundClientGrant.toolPolicyConfig,
+                sessionKey: requestContext.sessionKey,
+                agentId: requestContext.agentId,
+              }).sessionAgentId;
+              const constructAsCaller = () =>
+                withGatewayToolCallerIdentity(createCallerIdentity(agentId, "construction"), () =>
+                  withManagementScope(resolveTools),
+                );
+              scopedTools = await (boundClientGrant.requestScope
+                ? withPluginRuntimeGatewayRequestScope(
+                    boundClientGrant.requestScope,
+                    constructAsCaller,
+                  )
+                : constructAsCaller());
+            } else {
+              scopedTools = await resolveTools();
+            }
           } catch (error) {
             requestAbort.signal.throwIfAborted();
             if (boundClientGrant && !boundClientGrant.isCurrent()) {
@@ -425,30 +477,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                       }
                     : undefined,
                 });
-              const callerIdentity = boundClientGrant
-                ? createAdmittedGatewayToolCallerIdentity({
-                    admittedRunContext: boundClientGrant.admittedRunContext,
-                    receiptAuthority: isGrantAndLineageCurrent,
-                    receiptAdmission: lineage.admission,
-                    cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
-                    mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
-                    agentId: scopedTools.agentId,
-                    sessionKey: requestContext.sessionKey,
-                    requesterOrigin: requestContext.requesterOrigin,
-                    turnSourceChannel: requestContext.messageProvider,
-                    turnSourceLocal:
-                      !requestContext.messageProvider &&
-                      requestContext.cronCreatorCallerOrigin?.kind === "local"
-                        ? true
-                        : undefined,
-                    turnSourceTo: requestContext.currentChannelId,
-                    turnSourceAccountId: requestContext.accountId,
-                    turnSourceThreadId: requestContext.currentThreadTs,
-                  })
-                : undefined;
-              if (callerIdentity && boundClientGrant?.personalToolParticipants) {
-                callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
-              }
+              const callerIdentity = createCallerIdentity(scopedTools.agentId, "execution");
               // The grant's caller supplies the permission ceiling and live connection check.
               const runRequestScope = boundClientGrant?.requestScope;
               const handleAsCaller = () =>

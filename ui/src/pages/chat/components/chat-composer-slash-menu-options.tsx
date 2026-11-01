@@ -1,5 +1,5 @@
 import { For } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { sessionIconMask } from "../../../components/solid/icon.tsx";
 import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
@@ -26,12 +26,17 @@ export function SlashMenuOptions(props: {
         hover={() => props.menu.hover(childProps.index)}
         icon={
           <ComposerContent>
-            <Icon
-              name={
-                childProps.command.source === "skill"
-                  ? "pencilSparkles"
-                  : (childProps.command.icon ?? "terminal")
-              }
+            <i
+              class="session-css-icon"
+              aria-hidden="true"
+              style={{
+                "mask-image": sessionIconMask(
+                  childProps.command.source === "skill"
+                    ? "pencilSparkles"
+                    : (childProps.command.icon ?? "terminal"),
+                  1.5,
+                ),
+              }}
             />
           </ComposerContent>
         }
@@ -68,7 +73,13 @@ export function SlashArgumentOptions(props: { menu: SlashMenuState; host: SlashM
           hover={() => props.menu.hover(index())}
           icon={
             <ComposerContent>
-              <Icon name={state().slashMenuCommand?.icon ?? "terminal"} />
+              <i
+                class="session-css-icon"
+                aria-hidden="true"
+                style={{
+                  "mask-image": sessionIconMask(state().slashMenuCommand?.icon ?? "terminal", 1.5),
+                }}
+              />
             </ComposerContent>
           }
           name={arg}

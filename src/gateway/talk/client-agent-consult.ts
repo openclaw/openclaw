@@ -181,14 +181,15 @@ export function createTalkClientAgentConsultRunner(params: {
       physicalSource?.assertCurrent();
       assertRunRegistrationCurrent?.();
     };
-    // Readiness can outlive its physical browser owner. Recheck after that
-    // suspension and keep this path synchronous until backend admission.
-    assertConsultCurrent();
     // Relays own admission before their lazy record registration. Browser callbacks
     // must validate the durable call before accepting a new run.
     if (!params.registerRun) {
-      assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId }, physicalSource);
+      await assertClientVoiceSessionOpen({ agentId, sessionKey, voiceSessionId }, physicalSource);
+      signal?.throwIfAborted();
     }
+    // Readiness and the call read can outlive their physical browser owner. Recheck
+    // after those suspensions and keep this path synchronous until backend admission.
+    assertConsultCurrent();
     const runtime = owner
       ? createOwnedAgentRuntime(owner, assertConsultCurrent)
       : createTalkClientAgentRuntime({
@@ -378,7 +379,8 @@ export function createTalkClientAgentConsultRunner(params: {
                   (registeredRun?.isCurrent(phase) ?? true);
               }
               return {
-                cleanupBeforeRun: releaseVoice || undefined,
+                // Owned failures keep their registration until the existing failure claim settles.
+                cleanupBeforeRun: owner ? undefined : releaseVoice || undefined,
                 ...(registration
                   ? {
                       abortSignal: registration.controller.signal,

@@ -105,6 +105,13 @@ A decision request cannot use a legacy-only exchange and returns
 Explicit provider `auth: "none"` skips both hooks. Existing credential ownership
 and caller cancellation checks apply before and after either exchange.
 
+Both exchange contexts accept an optional `signal`. Pass it to token-exchange
+requests and release their resources when it aborts. Embedded runs share their
+existing deadline across credential lookup and exchange, including request-time
+OAuth renewal. A timeout names the provider and auth step and fails the caller;
+it does not install late credentials or continue without authentication. Durable
+OAuth refresh settlement remains owned by the OAuth manager.
+
 <Tabs>
   <Tab title="Token exchange">
     For providers that need a token exchange before each inference call:
@@ -285,7 +292,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `catalog`                         | Model catalog or base URL defaults                                                          |
 | `applyConfigDefaults`             | Provider-owned global defaults during config materialization                                |
 | `normalizeModelId`                | Legacy/preview model-id alias cleanup before lookup                                         |
-| `normalizeTransport`              | Provider-family `api` / `baseUrl` cleanup before generic model assembly                     |
+| `normalizeTransport`              | Same-origin `api` / `baseUrl` cleanup for its transport family before model assembly        |
 | `normalizeConfig`                 | Normalize `models.providers.<id>` config                                                    |
 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers                                 |
 | `resolveConfigApiKey`             | Provider-owned env-marker auth resolution                                                   |
@@ -341,7 +348,7 @@ Runtime fallback notes:
 - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
 - Config assembly calls `normalizeConfig` only through the owning bundled provider's lightweight policy surface, without loading provider runtime or scanning other providers. Google's own hook normalizes `google` / `google-vertex` / `google-antigravity` config entries through that surface.
 - Config assembly likewise uses the lightweight policy surface for `resolveConfigApiKey`. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
-- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile. Without this hook, the ladder is the base levels plus any `xhigh` or `max` declared in catalog `compat.supportedReasoningEfforts` or `thinkingLevelMap`; `supportedReasoningEfforts` alone never removes base levels, while a `thinkingLevelMap` entry set to `null` does. To expose exactly the advertised efforts, return `resolveEffortThinkingProfile(ctx.compat?.supportedReasoningEfforts)` from `openclaw/plugin-sdk/provider-thinking-runtime` instead of a hard-coded level list.
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 

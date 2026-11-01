@@ -241,6 +241,59 @@ it("rejects resume for a missing Gateway session without creating bridge state",
   expect(sessionStore.hasSession("missing")).toBe(false);
 });
 
+it.each([true, false])(
+  "resumes a bridge-created session after restart with complete replay=%s",
+  async (complete) => {
+    const ledger = createTestAcpEventLedger();
+    const rows: GatewaySessionRow[] = [];
+    const request: RequestHandler = async (method, params) => {
+      if (method === "sessions.create") {
+        rows.push(row(`agent:main:${String(params?.key)}`, { thinkingLevel: "adaptive" }));
+      }
+      if (method === "sessions.resolve") {
+        return {
+          ok: true,
+          key: rows.find((entry) => entry.key === `agent:main:${String(params?.key)}`)?.key,
+        };
+      }
+      return method === "sessions.list" ? sessions(rows) : { ok: true };
+    };
+    const gateway = createAcpGateway(request as GatewayClient["request"]);
+    const first = createAcpGatewayAgent(createAcpConnection(), gateway, { eventLedger: ledger });
+    const created = await first.newSession(createNewSessionRequest(cwd));
+    const key = `acp-bridge:${created.sessionId}`;
+    await ledger.recordUserPrompt({
+      sessionId: created.sessionId,
+      sessionKey: key,
+      runId: "remember",
+      prompt: [{ type: "text", text: "Remember the previous turn." }],
+    });
+    await first.shutdown();
+    if (!complete) {
+      await ledger.markIncomplete({ sessionId: created.sessionId, sessionKey: key });
+    }
+    const { agent: second, sessionUpdate } = createTranslatorScenario(request, {
+      eventLedger: ledger,
+      sessions: [],
+    });
+    try {
+      const resumed = await second.resumeSession({
+        sessionId: created.sessionId,
+        cwd,
+        mcpServers: [],
+      });
+      expect(resumed.modes?.currentModeId).toBe("adaptive");
+      expect(
+        sessionUpdate.mock.calls.some(([notification]) =>
+          ["user_message_chunk", "agent_message_chunk"].includes(notification.update.sessionUpdate),
+        ),
+      ).toBe(false);
+    } finally {
+      await second.shutdown();
+    }
+  },
+);
+
 it.each(["resume", "load"] as const)(
   "publishes %s snapshots in the Gateway namespace",
   async (route) => {

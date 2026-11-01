@@ -263,6 +263,7 @@ export function createWorkerEnvironmentTransitionOps(db: EngineConnection, now: 
       assertShape({
         state: to,
         leaseId,
+        resourceReceipt: current.resourceReceipt,
         nodeDeviceId,
         sshEndpoint,
         desktop,

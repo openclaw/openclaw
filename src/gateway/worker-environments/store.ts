@@ -443,6 +443,9 @@ export async function createWorkerEnvironmentStore(
     },
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
       mutate("workerEnvironments.createIntent", { input }, assertCurrent),
+    recordResourceReceipt({ assertCurrent, ...input }: Input<"recordResourceReceipt">) {
+      return mutate("workerEnvironments.recordResourceReceipt", { input }, assertCurrent);
+    },
     ensureNodeEnrollment: (input: string) =>
       mutate("workerEnvironments.ensureNodeEnrollment", { input }),
     async revokeEnvironmentCredential(

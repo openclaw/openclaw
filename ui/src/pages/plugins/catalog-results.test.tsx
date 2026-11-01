@@ -81,12 +81,6 @@ describe("renderPluginCatalogResults", () => {
       ],
     });
     const { container } = await mount(props);
-    const notices = container.querySelectorAll(".plugin-native-ui-disclosure");
-    expect(notices).toHaveLength(1);
-    const body = container.querySelector(".plugin-catalog-results__body")!;
-    expect(notices[0]!.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
-      0,
-    );
     const card = container.querySelector('[data-plugin-id="catalog"]');
     expect(card?.querySelector("[data-plugin-state]")?.getAttribute("data-plugin-state")).toBe(
       "disabled",

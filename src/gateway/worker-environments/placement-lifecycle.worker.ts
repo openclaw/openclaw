@@ -33,6 +33,7 @@ import {
   getRequired,
   query,
   readWorkerPlacementsInDatabase,
+  readWorkerPlacementIdentitiesInDatabase,
   readWorkerPlacementsForReconcileInDatabase,
   updateTransition,
 } from "./placement-row-codec.js";
@@ -88,6 +89,10 @@ function operation<Input extends { sessionId: string }>(
 }
 
 export const placementReadOperations = {
+  "workerPlacements.readIdentities": (
+    _input: Record<string, never>,
+    { open }: WorkerOperationContext,
+  ) => readWorkerPlacementIdentitiesInDatabase(open().db),
   "workerPlacements.read": (
     input: { sessionIds?: readonly string[] },
     { open }: WorkerOperationContext,

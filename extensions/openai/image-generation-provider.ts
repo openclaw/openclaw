@@ -643,11 +643,10 @@ async function generateOpenAICodexImage(params: {
     }
   }
   const images = results.flatMap((result) => result.images);
-  const output = resolveOutputMime(req.outputFormat);
   return {
     images: images.map((image, index) =>
       Object.assign({}, image, {
-        fileName: `image-${index + 1}.${output.extension}`,
+        fileName: `image-${index + 1}${extensionForMime(image.mimeType)}`,
       }),
     ),
     model,

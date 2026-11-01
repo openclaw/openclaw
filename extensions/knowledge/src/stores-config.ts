@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { DEFAULT_HUB_PERCENTILE } from "./page-budget.js";
-import { AGENT_ID, STORE_KEY } from "./stores-contract.js";
+import { AGENT_ID, STORE_KEY, type GrantAccess } from "./stores-contract.js";
 export const agentIdPattern = new RegExp(AGENT_ID);
-const storeKeyPattern = new RegExp(STORE_KEY);
 
 const NamedStore = Type.Object(
   {
@@ -157,7 +156,7 @@ export function parseMembership(raw: unknown): Membership {
     issues: string[] = [];
   const assigned = new Map<string, string>(),
     invalid = new Set<string>();
-  if (!Check(StoresSection, raw) || Object.keys(raw).some((key) => !storeKeyPattern.test(key))) {
+  if (!Check(StoresSection, raw)) {
     // Salvage agent names so the affected agents are reported, never defaulted.
     const entries: unknown[] = Object.values(raw && typeof raw === "object" ? raw : {});
     for (const entry of entries) {
@@ -209,4 +208,30 @@ export function effectiveBinding(membership: Membership, agentId: string): Bindi
   }
   const key = membership.assigned.get(agentId);
   return key === undefined ? `agent:${agentId}` : `named:${key}`;
+}
+
+/** Owner grants keyed by a conversation's stable session key. */
+export type ConversationGrants = Record<string, GrantAccess>;
+/** Revision operators edit grants against: a hash of the grants only. */
+export const grantsRevision = (grants: ConversationGrants) => storesRevision(grants);
+
+/** The grant covering a conversation: its own key's, else the nearest
+ * `:`-delimited ancestor's. Thread, topic and other key-denoted child sessions
+ * extend their conversation's key, so they inherit its grant; a more specific
+ * grant wins. Session keys are read as structure only, never as authority: the
+ * key comes from the host-minted audience. */
+export function coveringGrant(
+  grants: ConversationGrants,
+  sessionKey: string,
+): GrantAccess | undefined {
+  for (let key = sessionKey; ;) {
+    if (Object.hasOwn(grants, key)) {
+      return grants[key];
+    }
+    const at = key.lastIndexOf(":");
+    if (at <= 0) {
+      return undefined;
+    }
+    key = key.slice(0, at);
+  }
 }

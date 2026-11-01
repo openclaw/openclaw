@@ -181,6 +181,14 @@ Treat `toolAuthority` as an ephemeral capability:
 
 - `allows(toolName)` checks a standard tool id against the finalized surface
   and also verifies that the capability is still active.
+- `list()` returns the same surface as frozen, normalized, deduplicated, sorted
+  tool names. For example, a policy plugin can select tool-specific prompt
+  guidance without maintaining its own catalog. It exposes no descriptions,
+  schemas, arguments, or tool handles, and grants no execution authority.
+  Like `allows()`, it verifies the host and dispatch are still active. The method
+  is optional for older-host compatibility: feature-detect with
+  `typeof authority.list === "function"` and fail closed if enumeration is required
+  but unavailable. Previously returned names are data, not live authorization.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
   and before committing plugin-owned side effects.

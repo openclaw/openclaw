@@ -220,8 +220,8 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
       )
       .all();
     expect(mix).toEqual([
-      { execution: "interrupted", delivery: "not_required", n: 2 },
       { execution: "terminal", delivery: "delivered", n: 15 },
+      { execution: "terminal", delivery: "not_required", n: 2 },
       { execution: "terminal", delivery: "pending", n: 3 },
     ]);
   }
@@ -281,7 +281,7 @@ it("retains settled history and seeds disabled announce/last jobs without delive
     settledRuns: true,
     cronJobs: 40,
     cronAnnounceLast: true,
-    retainedRunStates: { successful: 51, failed: 9, pending: 0, interrupted: 0 },
+    retainedRunStates: { successful: 51, failed: 9, pending: 0, cancelled: 0 },
   });
   using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
   expectCounts(state, {

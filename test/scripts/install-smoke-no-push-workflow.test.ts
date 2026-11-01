@@ -1,10 +1,11 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowCondition, runWorkflowCommand } from "./ci-workflow.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -99,8 +100,7 @@ function git(directory: string, ...args: string[]) {
 }
 
 function runShell(script: string, env: NodeJS.ProcessEnv, cwd?: string) {
-  return spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
-    encoding: "utf8",
+  return runWorkflowCommand("bash", ["--noprofile", "--norc", "-c", script], {
     cwd,
     env: { ...process.env, ...env },
   });
@@ -181,25 +181,6 @@ job.workflow_sha must be a full lowercase commit SHA`);
 fromJSON(toJSON(job)).workflow_
 needs.preflight.outputs.workflow_`);
 
-  const fastJob = job("install-smoke-fast");
-  const warningRelay = step(fastJob, "Checkout trusted build warning relay");
-  expect(fastJob.needs).toContain("preflight");
-  expect(warningRelay.with).toMatchObject({
-    repository: "openclaw/openclaw",
-    ref: "${{ github.sha }}",
-    path: ".artifacts/build-warning-harness",
-    "fetch-depth": 1,
-    "persist-credentials": false,
-    "sparse-checkout-cone-mode": false,
-    "sparse-checkout": "scripts/relay-build-limit-warnings.mts\nscripts/lib/check-limits.mts\n",
-  });
-  const warningBuild = step(fastJob, "Build root Dockerfile smoke image");
-  expect(warningBuild.run).toContain(
-    "node .artifacts/build-warning-harness/scripts/relay-build-limit-warnings.mts",
-  );
-  expect(
-    fastJob.steps!.indexOf(step(fastJob, "Resolve exact trusted workflow identity")),
-  ).toBeLessThan(fastJob.steps!.indexOf(warningBuild));
   const trustedJobs: string[] = [];
   for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
     const trustedCheckouts =
@@ -214,8 +195,7 @@ needs.preflight.outputs.workflow_`);
       EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
       JOB_CONTEXT: "${{ toJSON(job) }}",
     });
-    const harnessPath =
-      jobName === "install-smoke-fast" ? ".artifacts/build-warning-harness" : ".release-harness";
+    const harnessPath = ".release-harness";
     assertText(resolver.run, jobName).contains(`job.workflow_sha must be a full lowercase commit SHA
 \`repository=\${repository}\\nsha=\${job.workflow_sha}\\n\``);
     assertText(resolver.run, jobName).excludes(`execFileSync`);
@@ -241,7 +221,7 @@ needs.preflight.outputs.workflow_`);
   }
 
   expect(trustedJobs.toSorted()).toEqual(
-    `bun_global_install_smoke bun_only_runtime_smoke install-smoke-fast
+    `bun_global_install_smoke bun_only_runtime_smoke
 installer_smoke_candidate_payload installer_smoke_nonroot installer_smoke_nonroot_image
 installer_smoke_update installer_smoke_update_image root_dockerfile_image root_dockerfile_smokes`
       .split(/\s+/)
@@ -290,6 +270,55 @@ workflow_call`);
 docker/login-action@
 --push`);
   expect(workflow.jobs.push_root_dockerfile_image).toBeUndefined();
+});
+
+it("keeps one full install path and the dependency failure gates", () => {
+  for (const [name, workflowJob] of Object.entries(workflow.jobs)) {
+    if (
+      [
+        "preflight",
+        "root_dockerfile_image_ready",
+        "installer_smoke",
+        "bun_global_install_smoke",
+        "bun_only_runtime_smoke",
+      ].includes(name)
+    ) {
+      continue;
+    }
+    expect(workflowJob.needs, name).toContain("preflight");
+    expect(workflowJob.if, name).toBeUndefined();
+  }
+  for (const name of ["root_dockerfile_image_ready", "installer_smoke"]) {
+    const condition = job(name).if!;
+    expect(condition).toBe("always() && needs.preflight.result == 'success'");
+    for (const preflightResult of ["success", "failure", "cancelled", "skipped"]) {
+      expect(
+        evaluateWorkflowCondition(condition, {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightResult,
+          failed: true,
+        }),
+      ).toBe(preflightResult === "success");
+    }
+  }
+});
+
+it.each([
+  [false, false, false, false],
+  [true, false, true, true],
+  [true, true, true, false],
+])("retains Bun opt-in %s and frozen-target exclusion %s", (enabled, frozen, global, only) => {
+  const context = {
+    eventName: "workflow_dispatch" as const,
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    preflightOutputs: { run_bun_global_install_smoke: String(enabled) },
+    inputs: { run_bun_only_runtime_smoke: enabled, allow_frozen_target_scenario_omissions: frozen },
+  };
+  expect(evaluateWorkflowCondition(job("bun_global_install_smoke").if!, context)).toBe(global);
+  expect(evaluateWorkflowCondition(job("bun_only_runtime_smoke").if!, context)).toBe(only);
 });
 
 it("builds one local target image and uploads provenance-bound bytes", () => {
@@ -673,7 +702,7 @@ OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE
   const bunOnlyConsumer = job("bun_only_runtime_smoke");
   expect(bunOnlyConsumer.needs).toEqual(["preflight", "installer_smoke_candidate_payload"]);
   expect(bunOnlyConsumer.if).toBe(
-    "needs.preflight.outputs.run_full_install_smoke == 'true' && inputs.run_bun_only_runtime_smoke && !inputs.allow_frozen_target_scenario_omissions",
+    "inputs.run_bun_only_runtime_smoke && !inputs.allow_frozen_target_scenario_omissions",
   );
   expect(bunOnlyConsumer["continue-on-error"]).toBe(true);
   expect(bunOnlyConsumer["runs-on"]).toBe(bunConsumer["runs-on"]);
@@ -769,24 +798,24 @@ install -d -m 0750 "$payload_dir"
   expect(seal.run).not.toContain('chmod 0777 "$payload_dir"');
   assertText(seal.run).contains(`install-smoke-candidate-payload.mts seal
 --harness-sha`);
-
   for (const consumerName of ["installer_smoke_update", "installer_smoke_nonroot"]) {
     const consumer = job(consumerName);
-    expect(consumer.steps?.find((candidate) => candidate.name === "Checkout candidate CLI")).toBe(
-      undefined,
-    );
+    expect(consumer.steps?.some(({ name }) => name === "Checkout candidate CLI")).toBe(false);
     const binding = step(consumer, "Validate candidate payload artifact binding");
     assertText(binding.run).contains(`verify-upload "Candidate payload"
 expected_artifact_name="install-smoke-candidate-payload-\${TARGET_SHA}-\${ARTIFACT_RUN_ID}-\${ARTIFACT_RUN_ATTEMPT}"`);
     const verify = step(consumer, "Verify candidate payload contents");
-    expect(verify.env).toMatchObject(
-      references(candidateScope, "manifest_sha256 package_version source_archive_sha256", true),
-    );
-    assertText(verify.run).contains(`--manifest-sha256
+    expect(verify.env).toMatchObject({
+      ...references(candidateScope, "manifest_sha256 package_version source_archive_sha256", true),
+      PRODUCER_RUN_ATTEMPT: reference(candidateScope, "artifact_run_attempt"),
+      PRODUCER_RUN_ID: reference(candidateScope, "artifact_run_id"),
+    });
+    assertText(verify.run)
+      .contains(`--run-id "$PRODUCER_RUN_ID"\n--run-attempt "$PRODUCER_RUN_ATTEMPT"\n--manifest-sha256
 --source-archive-sha256`);
+    expect(verify.run).not.toContain("$GITHUB_RUN_");
   }
 });
-
 it("drains every independent producer and consumer without sibling failure suppression", () => {
   const aggregate = job("installer_smoke");
   for (const group of ["update", "nonroot"]) {

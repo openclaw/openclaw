@@ -30,7 +30,11 @@ suite.define(() => {
         sessions: [{ key: sessionKey, kind: "direct", reasoningLevel }],
         historyMessages: [
           { role: "user", content: "Check the evidence." },
-          { role: "assistant", content: [{ type: "thinking", thinking }] },
+          ...["reasoning-1", "reasoning-2"].map((id) => ({
+            role: "assistant",
+            content: [{ type: "thinking", thinking }],
+            __openclaw: { id },
+          })),
           ...(withTools
             ? [
                 { role: "assistant", content: [tool] },
@@ -43,7 +47,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const answer = pane.getByText(finalText, { exact: true });
-      const reasoning = pane.locator(".chat-thinking", { hasText: reasoningText });
+      const reasoningItems = pane.locator(".chat-thinking", { hasText: reasoningText });
+      const reasoning = reasoningItems.first();
       const worked = pane.locator(".chat-work-group > .chat-activity-group__summary");
 
       for (const reload of [false, true]) {
@@ -60,8 +65,12 @@ suite.define(() => {
         }
         await expect.poll(() => reasoning.isVisible()).toBe(reasoningLevel === "on");
         if (reasoningLevel === "on") {
-          expect(await reasoning.locator("pre code").allTextContents()).toEqual([code]);
-          expect(await reasoning.locator("p").allTextContents()).toEqual([
+          expect(await reasoningItems.count()).toBe(2);
+          expect(await reasoningItems.locator("pre code").allTextContents()).toEqual([code, code]);
+          expect(await reasoningItems.locator("p").allTextContents()).toEqual([
+            "Reasoning:",
+            reasoningText,
+            conclusion,
             "Reasoning:",
             reasoningText,
             conclusion,

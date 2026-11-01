@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { chatDelta } from "./chat-flow-fixtures.test-support.ts";
@@ -31,18 +31,20 @@ suite.define(() => {
           {
             role: "assistant",
             content: [
-              { type: "text", text: "Files for the release checklist." },
               {
                 type: "attachment",
                 attachment: {
                   kind: "document",
-                  label: "release-checklist.txt",
+                  label: "Cafe\u0301-ΕΛΕΓΧΟΣ-checklist.txt",
                   mimeType: "text/plain",
                   url: "https://example.com/release-checklist.txt",
-                  sizeBytes: 64,
                 },
               },
-              { type: "image", url: "https://example.com/layout.png", alt: "layout.png" },
+              {
+                type: "image",
+                url: "https://example.com/layout.png",
+                alt: "Cafe\u0301-ΕΛΕΓΧΟΣ-layout.png",
+              },
             ],
           },
         ],
@@ -68,6 +70,7 @@ suite.define(() => {
           await page.getByRole("separator", { name: "Resize side panel" }).press("End");
         } else if (mobile) {
           await page.setViewportSize({ width: 390, height: 900 });
+          await openChatPanels(page, "mobile");
         }
         const selector = mobile
           ? '.chat-workspace-mobile__group[role="list"] .chat-workspace-mobile__row'
@@ -94,8 +97,7 @@ suite.define(() => {
           });
           for (const icon of bounds.icons) {
             expect(icon.width).toBeGreaterThan(0);
-            expect(icon.width).toBeLessThanOrEqual(20);
-            expect(icon.height).toBeLessThanOrEqual(20);
+            expect(Math.max(icon.width, icon.height)).toBeLessThanOrEqual(20);
           }
           expect(bounds.icons).toHaveLength(mobile ? 2 : 1);
           expect(bounds.rowHeight).toBeLessThanOrEqual(mobile ? 48 : 32);
@@ -108,6 +110,12 @@ suite.define(() => {
         const projectFile = page.getByRole("button", { name: "README.md", exact: true });
         await projectFile.waitFor();
         expect((await projectFile.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 48 : 32);
+      }
+      await page.getByRole("searchbox", { name: "Search files", exact: true }).fill("CAFÉ");
+      await page.getByText("Cafe\u0301-ΕΛΕΓΧΟΣ-checklist", { exact: true }).waitFor();
+      for (const query of ["Σ", "σ", "ς"]) {
+        await page.getByRole("searchbox", { name: "Search files", exact: true }).fill(query);
+        await page.getByText("Cafe\u0301-ΕΛΕΓΧΟΣ-checklist", { exact: true }).waitFor();
       }
     });
   });
@@ -170,9 +178,18 @@ suite.define(() => {
       await file.click();
       const heading = page.getByRole("heading", { name: "Delivery notes", exact: true });
       await heading.waitFor();
+      await gateway.deferNext("sessions.files.download");
       await page.getByRole("button", { name: "More file actions", exact: true }).click();
       await page.getByRole("menuitem", { name: "Attach to session", exact: true }).click();
+      await gateway.waitForRequest("sessions.files.download");
+      await page.setViewportSize({ width: 1300, height: 900 });
+      await waitForLayoutSettled(page, "openclaw-chat-detail-panel");
+      await gateway.resolveDeferred("sessions.files.download");
       await page.getByRole("button", { name: "Remove notes.md", exact: true }).waitFor();
+      expect(await composer.inputValue()).toBe(
+        "Please review the delivery notes before publishing.",
+      );
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const sent = await gateway.waitForRequest("chat.send");
       const runId = requireString(requireRecord(sent.params).idempotencyKey, "run ID");
@@ -346,6 +363,7 @@ suite.define(() => {
       await expect.poll(listRequests).toHaveLength(2);
       await waitForFile("AFTER_RUN.md");
       await page.setViewportSize({ height: 900, width: 640 });
+      await openChatPanels(page, "mobile");
       const workspaceRail = page.locator(".chat-workspace-mobile");
       await workspaceRail.waitFor();
       await expect

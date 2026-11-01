@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -67,7 +67,12 @@ function makeStaleGateRepo(docsOnly: boolean) {
     mkdirSync(join(repoDir, "docs"));
   }
   commitFile(repoDir, docsOnly ? "docs/proof.md" : "changed.ts", "change\n");
-  writeLocal(repoDir, "pr-meta.env", "PR_AUTHOR=steipete\n");
+  writeLocal(repoDir, "pr-meta.env", "PR_NUMBER=4242\nPR_AUTHOR=steipete\n");
+  writeLocal(
+    repoDir,
+    "prep-context.env",
+    `PR_NUMBER=4242\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${fixtureGit(repoDir, ["rev-parse", "HEAD"])}\n`,
+  );
   writeLocal(
     repoDir,
     "gates.env",
@@ -381,31 +386,6 @@ it.each(["empty", "partial", "parse"])(
   },
 );
 
-it.each([true, false])("selects fork publication transport for signed=%s fixups", (signed) => {
-  const { repoDir } = makeRetryRepo();
-  const result = runGatesBash(
-    [
-      "PR_HEAD_OWNER=contributor",
-      "PR_HEAD_REPO_NAME=repo",
-      "PRHEAD_REMOTE_URL=https://github.com/contributor/repo.git",
-      `pr_git() { printf '%s\\n' "$*" >> .local/git-calls; case "$1" in rev-list) printf '%s\\n' prepared;; verify-commit) return ${signed ? 0 : 1};; esac; return 0; }`,
-      `graphql_push_to_fork() { touch .local/graphql-called; ${signed ? "return 99" : "printf '%s\\n' signed-head"}; }`,
-      ...(signed ? ["revalidate_pr_publication() { :; }"] : []),
-      "push_prep_head_once topic hosted prepared 42 '{}'",
-      ...(signed
-        ? [
-            "grep -F 'verify-commit prepared' .local/git-calls",
-            "grep -F 'push --force-with-lease=refs/heads/topic:hosted https://github.com/contributor/repo.git prepared:refs/heads/topic' .local/git-calls",
-            "test ! -e .local/graphql-called",
-          ]
-        : ["test -e .local/graphql-called"]),
-    ].join("\n"),
-    { cwd: repoDir, sourcePush: true },
-  );
-
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain(signed ? "prepared" : "signed-head");
-});
 const shardOwnershipPath = "test/tsconfig/tsconfig.core.test.agents-tools.json";
 it.each([
   ["overlapping source changes", "src/subject.ts", true, "Hosted CI reuse declined"],
@@ -475,15 +455,17 @@ fi
 it("does not stamp declined hosted proof in a conditional caller", () => {
   const dir = tempDirs.make("openclaw-pr-declined-proof-");
   mkdirSync(join(dir, ".local"));
-  writeFileSync(join(dir, ".local", "pr-meta.env"), "PR_AUTHOR=fixture\n");
+  const currentHead = "a".repeat(40);
+  writeFileSync(join(dir, ".local", "pr-meta.env"), "PR_NUMBER=42\nPR_AUTHOR=fixture\n");
   const result = runGatesBash(
     `
 enter_worktree() { PR_MAIN_SHA=fixture-main; }
-checkout_prep_branch() { :; }
+refresh_prep_branch_for_reviewed_head() { :; }
+checkout_prep_branch() { PR_NUMBER=42; PR_HEAD=topic; PR_HEAD_SHA_BEFORE=${currentHead}; }
 ${changePlan("fixture-main", "src/subject.ts")}
 pr_git() {
   case "$*" in
-    "rev-parse HEAD") printf '%s\\n' fixture-head ;;
+    "rev-parse HEAD") printf '%s\\n' ${currentHead} ;;
     *) echo "unexpected fixture Git query: $*" >&2; return 99 ;;
   esac
 }
@@ -494,7 +476,7 @@ else
   exit 1
 fi
 `,
-    { cwd: dir, env: { OPENCLAW_TESTBOX: "1" } },
+    { cwd: dir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
   );
   expect(result.status, result.stdout + result.stderr).toBe(1);
   expect(result.stdout, result.stderr).toContain("fixture context declined");
@@ -529,7 +511,8 @@ it.each(["docs", "hosted", "github"])(
     const result = runGatesBash(
       [
         "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
-        "checkout_prep_branch() { :; }",
+        "refresh_prep_branch_for_reviewed_head() { :; }",
+        "checkout_prep_branch() { source .local/prep-context.env; }",
         `path_is_docsish() { return ${docsOnly ? 0 : 1}; }`,
         "changelog_required_for_changed_files() { return 1; }",
         ...(docsOnly
@@ -540,6 +523,7 @@ it.each(["docs", "hosted", "github"])(
       ].join("\n"),
       {
         cwd: repoDir,
+        sourcePrepareCore: true,
         env: docsOnly
           ? { OPENCLAW_PR_GATES_REMOTE: "local" }
           : mode === "hosted"
@@ -568,6 +552,79 @@ it.each(["docs", "hosted", "github"])(
       expect(gates).toContain("REMOTE_GATES_LEASE_ID=''");
     }
     expect(result.stdout).not.toContain("tbx_stale");
+  },
+);
+
+function publishedAlias() {
+  const f = createPublisher();
+  f.git("push", "-q", "origin", `${f.sameTree}:refs/heads/topic`);
+  const completed = runPublisher(
+    f,
+    `source .local/prep-context.env
+PR_AUTHOR=fixture
+PUSH_REPLACED_HOSTED_ANCESTRY=false
+complete_prepare_push ${f.sameTree} ${f.candidate} ${f.base} ${f.source} ${f.sameTree}`,
+  );
+  expect(completed.status, completed.stdout + completed.stderr).toBe(0);
+  rmSync(join(f.local, "gates.env"));
+  return f;
+}
+
+it.each(["github", "hosted", "github fixup"])(
+  "requalifies the authenticated publication target with %s gates",
+  (mode) => {
+    const f = publishedAlias();
+    const prep = f.read("prep.env");
+    let localHead = f.candidate;
+    if (mode === "github fixup") {
+      f.git("reset", "--hard", f.sameTree);
+      f.git("commit", "-qm", "fixup after hosted publication", "--allow-empty");
+      localHead = f.git("rev-parse", "HEAD");
+    }
+    const expectedTarget = mode === "github fixup" ? localHead : f.sameTree;
+    if (mode === "hosted") {
+      f.env.OPENCLAW_TESTBOX = "1";
+    }
+    const result = runPublisher(f, "prepare_gates 4242", [
+      // Only the external verifier response is synthetic; its live-head check is real.
+      "run_quiet_logged() { cat >/dev/null; printf 'HOSTED_ARG:%s\\n' \"$@\"; printf '{}\\n' >.local/gates-hosted-checks.json; }",
+    ]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(f.git("rev-parse", "HEAD")).toBe(localHead);
+    expect(f.read("prep.env")).toBe(prep);
+    const gates = f.read("gates.env");
+    expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${expectedTarget}\n`);
+    if (mode !== "hosted") {
+      expect(gates).not.toMatch(/VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/u);
+    } else {
+      expect(result.stdout).toContain(`HOSTED_ARG:${f.sameTree}\n`);
+      expect(gates).toContain(`LAST_VERIFIED_HEAD_SHA=${f.sameTree}\n`);
+    }
+  },
+);
+
+it.each(["foreign PR", "foreign branch", "different tree", "unpublished fixup"])(
+  "refuses %s alias authority before writing fresh hosted gates",
+  (fault) => {
+    const f = publishedAlias();
+    const prep = f.read("prep.env");
+    if (fault === "foreign PR") {
+      f.write("prep.env", prep.replace("PR_NUMBER=4242", "PR_NUMBER=99"));
+    } else if (fault === "foreign branch") {
+      f.write("prep.env", prep.replace("PR_HEAD=topic", "PR_HEAD=other"));
+    } else if (fault === "different tree") {
+      f.write(
+        "prep.env",
+        prep.replace(`PREP_HEAD_SHA=${f.sameTree}\n`, `PREP_HEAD_SHA=${f.source}\n`),
+      );
+    } else {
+      f.git("commit", "-qm", "unpublished fixup", "--allow-empty");
+    }
+    const retained = f.read("prep.env");
+    const result = runPublisher(f, "prepare_gates 4242");
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(f.exists("gates.env")).toBe(false);
+    expect(f.read("prep.env")).toBe(retained);
   },
 );
 

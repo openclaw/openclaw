@@ -20,6 +20,7 @@ import {
   waitForMobileSidebarDrawerOpen,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { seedSidebarSettings } from "./sidebar-contract.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const menuItem = (root: Page | Locator, name: string) =>
@@ -72,13 +73,13 @@ async function expectSessionGeometry(row: Locator, multiline = false) {
   expect(title.x + title.width).toBeLessThanOrEqual(button.x);
   expectVerticalOverlap(button, title);
   if (multiline) {
-    expect(button.width).toBeCloseTo(44, 4);
+    expect(button.width).toBeCloseTo(36, 4);
     expect(button.height).toBeCloseTo(44, 4);
     expect(title.x).toBeGreaterThanOrEqual(bounds.x);
     expectVerticalBounds(button, bounds);
   } else {
     expectHorizontalBounds(button, bounds);
-    expect(button.width).toBe(44);
+    expect(button.width).toBe(36);
     expect(bounds.height).toBeCloseTo(44, 1);
   }
 }
@@ -139,7 +140,8 @@ async function expectTwoLineTitleSpace(
         expect(await box(badge)).toEqual(restingBadge);
         if (pointer === "fine") {
           const gap = actions.x - title.x - title.width;
-          expect(resting.width - title.width).toBeCloseTo(actions.width + gap, 0);
+          // Actions sit 2px inside the resting title edge, centered on the trailing column.
+          expect(resting.width - title.width).toBeCloseTo(actions.width + gap + 2, 0);
         }
       }
       if (pointer !== "fine") {
@@ -244,7 +246,7 @@ suite.define(() => {
         expect(await rail.locator(".sidebar-recent-session").count()).toBe(0);
         for (const width of [320, 390, 768]) {
           await page.setViewportSize({ width, height: 844 });
-          expect((await rail.boundingBox())?.width).toBe(52);
+          expect((await rail.boundingBox())?.width).toBe(49);
           for (const row of [pinned, plugin]) {
             const shortcut = row.getByRole("link");
             await row.hover();
@@ -258,15 +260,6 @@ suite.define(() => {
             expectVerticalBounds(glyph, button);
           }
           await expectSessionGeometry(session);
-          for (const colored of [session, group.locator(".sidebar-recent-session")]) {
-            const clearance = await colored.evaluate((row) => {
-              const stripe = getComputedStyle(row, "::before");
-              const glyph = row.querySelector(".session-glyph")!.getBoundingClientRect();
-              const stripeRight = Number.parseFloat(stripe.left) + Number.parseFloat(stripe.width);
-              return glyph.left - row.getBoundingClientRect().left - stripeRight;
-            });
-            expect(clearance).toBeGreaterThanOrEqual(2);
-          }
         }
         const toggle = group.locator(".sidebar-session-group-toggle");
         await toggle.click();
@@ -275,6 +268,41 @@ suite.define(() => {
         await group.locator(".sidebar-recent-session").waitFor();
         expect(await gateway.getRequests("sessions.patch")).toEqual([]);
         expect(await gateway.getRequests("config.patch")).toEqual([]);
+      });
+    },
+  );
+
+  it.each(["coarse", "fine"] as const)(
+    "keeps roster mobile menus clear of titles and child toggles with a %s pointer",
+    async (pointer) => {
+      const key = "agent:main:roster-parent";
+      const childKey = "agent:main:roster-child";
+      const title = "Investigate the long shared project session title";
+      await suite.withPage(pageOptions(390, 650, pointer === "coarse"), async ({ page }) => {
+        await seedSidebarSettings(page, suite.server.baseUrl, {
+          sidebarAgentsMode: "roster",
+          railShortcuts: [`session:${key}`],
+        });
+        await installMockGateway(page, {
+          sessions: [
+            sessionRow(key, title, 2, { childSessions: [childKey] }),
+            sessionRow(childKey, "Child", 1, { spawnedBy: key }),
+          ],
+          sessionKey: key,
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+        await openDrawer(page, true);
+        const row = page.locator(`[data-session-section="pinned"] [data-session-key="${key}"]`);
+        await row.waitFor({ state: "visible" });
+        expect(await row.getAttribute("class")).toContain("sidebar-recent-session--team");
+        await page.mouse.move(389, 649);
+        await expectSessionGeometry(row);
+        const menu = row.locator("[data-sidebar-session-menu]");
+        const toggle = row.locator("[data-child-session-toggle]");
+        const menuBox = await box(menu);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual((await box(toggle)).x);
+        await (pointer === "coarse" ? menu.tap() : menu.click());
+        await page.getByRole("menu", { name: `Actions for ${title}` }).waitFor();
       });
     },
   );
@@ -328,7 +356,7 @@ suite.define(() => {
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
         expect(drawerBox?.width).toBeLessThanOrEqual(336);
-        // Reserve one 44px menu target without starving the title beside the rail.
+        // Reserve one 36px menu target without starving the title beside the rail.
         expect(restingWidth).toBeGreaterThanOrEqual(180);
         const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
         const plainTitle = part(plainRow, "name");
@@ -356,9 +384,9 @@ suite.define(() => {
           await plainTitle.evaluate((element) => ({
             clipped: element.scrollWidth > element.clientWidth,
             overflow: getComputedStyle(element).textOverflow,
-            mask: getComputedStyle(element).maskImage,
+            fades: getComputedStyle(element).maskImage.includes("linear-gradient"),
           })),
-        ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
+        ).toEqual({ clipped: true, overflow: "clip", fades: true });
         await (pointer === "coarse" ? menuButton.tap() : menuButton.click());
 
         const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });

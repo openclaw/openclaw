@@ -46,11 +46,14 @@ export function findForbiddenChangelogThanks(content: string, options: ThanksOpt
   return content
     .split(/\r?\n/u)
     .map((text, index) => {
-      if (!THANKS_PATTERN.test(text)) {
+      const thanksStart = text.search(THANKS_PATTERN);
+      if (thanksStart < 0) {
         return null;
       }
-      // A single changelog line may thank multiple handles; scan all of them.
-      for (const match of text.matchAll(THANKED_HANDLE_PATTERN)) {
+      // Author credit may precede a Thanks clause. Only classify handles that
+      // the line actually thanks.
+      const thanksText = text.slice(thanksStart);
+      for (const match of thanksText.matchAll(THANKED_HANDLE_PATTERN)) {
         const handle = match[1];
         if (handle && isForbiddenChangelogThanksHandle(handle, options)) {
           return { line: index + 1, handle: handle.toLowerCase(), text };

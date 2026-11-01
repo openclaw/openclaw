@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
 import { AsyncContext } from "../shared/async-context.js";
 import { runWithAsyncStore } from "../shared/async-store.js";
 
@@ -54,6 +54,31 @@ export function isValidDiagnosticSpanId(value: unknown): value is string {
 /** Returns whether a value is a valid W3C trace-flags byte. */
 export function isValidDiagnosticTraceFlags(value: unknown): value is string {
   return typeof value === "string" && TRACE_FLAGS_RE.test(value);
+}
+
+/** Validates external trace fields without generating ids or changing their case. */
+export function normalizeDiagnosticTraceContext(
+  value: unknown,
+): DiagnosticTraceContext | undefined {
+  const candidate = asOptionalRecord(value);
+  if (!candidate || !isValidDiagnosticTraceId(candidate.traceId)) {
+    return undefined;
+  }
+  if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
+    return undefined;
+  }
+  if (candidate.parentSpanId !== undefined && !isValidDiagnosticSpanId(candidate.parentSpanId)) {
+    return undefined;
+  }
+  if (candidate.traceFlags !== undefined && !isValidDiagnosticTraceFlags(candidate.traceFlags)) {
+    return undefined;
+  }
+  return {
+    traceId: candidate.traceId,
+    ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
+    ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
+    ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
+  };
 }
 
 function normalizeTraceField(

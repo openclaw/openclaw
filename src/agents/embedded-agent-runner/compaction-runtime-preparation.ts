@@ -21,12 +21,13 @@ import {
   providerUsesCredentialScopedModelMetadata,
   resolveReusableRuntimeModelAuth,
 } from "../runtime-plan/credential-scoped-model.js";
-import {
-  prepareAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import { prepareAgentRuntimeAuth } from "../runtime-plan/prepare-auth.js";
+import type {
+  PreparedAgentRuntimeAuth,
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+  AgentRuntimePlan,
+} from "../runtime-plan/types.js";
 import {
   resolveCompactionHarnessRuntime,
   resolveCompactionTargetRuntime,

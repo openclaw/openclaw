@@ -388,6 +388,23 @@ describe("printDaemonStatus", () => {
     expect(errors).toContain("may be from an earlier run");
   });
 
+  it("names the installed service's journal instead of the caller's profile", () => {
+    withMockedPlatform("linux", () =>
+      withEnv({ OPENCLAW_PROFILE: "isolated" }, () => {
+        printDaemonStatus({
+          service: {
+            ...runningService,
+            command: { programArguments: ["node", "openclaw.mjs", "gateway"], environment: {} },
+          },
+          gateway,
+          port: emptyPort("free"),
+        });
+        expect(output(runtime.error)).toContain("journalctl --user -u openclaw-gateway.service");
+        expect(output(runtime.error)).not.toContain("openclaw-gateway-isolated.service");
+      }),
+    );
+  });
+
   it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
     withMockedPlatform("win32", () => {
       printDaemonStatus({

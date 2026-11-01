@@ -95,8 +95,10 @@ export function registerModelsAuthAuthorityTests(fixture: {
           },
         );
       }
-      await reject(authority);
+      const refreshAfterLogin = vi.fn(async () => undefined);
+      await reject(authority, { refreshAfterLogin });
       expect(published).toBe(false);
+      expect(refreshAfterLogin).not.toHaveBeenCalled();
       if (credentialGate) {
         expect(mocks.updateConfig).not.toHaveBeenCalled();
       }

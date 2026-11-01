@@ -20,6 +20,7 @@ import {
 import { setSessionsGrouping } from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/settings-controls.css";
+import "../styles/sidebar-rail.css";
 import "../styles/settings-native-controls.css";
 import "./app-sidebar.tsx";
 
@@ -53,7 +54,7 @@ const ownerOptions = (root: Element) =>
       .querySelectorAll<HTMLElement>(".picker-select__option:not([hidden]) .picker-select__label"),
   ].map((label) => label.textContent!.trim());
 
-async function mountFilters(width: number, teammates = 0) {
+async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
   const { page, userEvent } = await import("vitest/browser");
   const role = (kind: Parameters<typeof page.getByRole>[0], name: string | RegExp) =>
     page.getByRole(kind, { name, exact: true });
@@ -69,7 +70,7 @@ async function mountFilters(width: number, teammates = 0) {
   const result = sessions.sessions.state.result!;
   result.owners = [
     { type: "human", id: "profile-ada", label: "Ada" },
-    { type: "human", id: "profile-bob", label: "Bob" },
+    { type: "human", id: "profile-bob", label: otherOwner },
     ...Array.from({ length: teammates }, (_, index) => ({
       type: "human" as const,
       id: `profile-${index}`,
@@ -102,6 +103,23 @@ async function mountFilters(width: number, teammates = 0) {
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popover", () => {
+  it("keeps a long selected owner clear of toolbar controls", async () => {
+    const name = "Alexandria Montgomery Engineering";
+    const { query, choose } = await mountFilters(390, 0, name);
+    await choose("Owners: All owners", name);
+    const owner = query(".sidebar-session-owner-filter");
+    const sort = query(".sidebar-session-sort");
+    expect(owner.getBoundingClientRect().right).toBeLessThanOrEqual(
+      sort.getBoundingClientRect().left,
+    );
+    expect(sort.getBoundingClientRect().right).toBeLessThanOrEqual(
+      query(".sidebar-session-toolbar").getBoundingClientRect().right,
+    );
+    const label = owner.querySelector<HTMLElement>(".picker-select__label")!;
+    expect(label.scrollWidth).toBeGreaterThan(label.clientWidth);
+    expect(getComputedStyle(label).textOverflow).toBe("ellipsis");
+  });
+
   it.each([
     { width: 1440, direction: "ltr" },
     { width: 390, direction: "ltr" },
@@ -151,22 +169,19 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard("{Enter}");
       await expect.element(role("listbox", "Owners")).toBeVisible();
       expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", "My sessions", "Bob"]);
-      const search = role("combobox", "Search");
-      const ownersSurface = search.element().closest(".picker-select__menu")!;
+      const ownersSurface = role("listbox", "Owners").element().closest(".picker-select__menu")!;
       // Native overlap can change during the sheet's slide-in; sample close/open edges after entry.
       await finishAnimations(ownersSurface);
       await expect.poll(() => occlusion.at(-1)).toBe(true);
       const occlusionAfterOpening = occlusion.length;
       const occlusionTail = () => occlusion.slice(occlusionAfterOpening);
-      await expect.element(search).toHaveFocus();
-      expect(getComputedStyle(query(".picker-select__search")!).boxShadow).not.toBe("none");
       await expect.poll(() => query(".picker-select__option[data-active]")).not.toBeNull();
       expect(ringStyle(sidebar, ".picker-select__option[data-active]")).not.toBe("none");
       await userEvent.keyboard("bo");
       await expect.poll(() => ownerOptions(sidebar)).toEqual(["Bob"]);
-      await expect.element(search).toHaveFocus();
+      await expect.element(role("combobox", "Search")).toHaveFocus();
       await userEvent.keyboard("{Escape}");
-      await expect.element(search).toHaveValue("");
+      expect(query(".picker-select__search")).toBeNull();
       await expect.poll(() => ownerOptions(sidebar)).toHaveLength(4);
       // Focus returns before the closing frame releases native occlusion.
       const ownersHidden = new Promise<void>((resolve) => {
@@ -485,7 +500,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         .poll(() => trigger()?.getAttribute("aria-description"))
         .toBe(count ? "Status: All" : "Status: Active");
       expect(trigger()?.classList.contains("sidebar-session-sort--filtered")).toBe(count > 0);
-      expect(trigger()?.textContent?.trim()).toBe(count ? "All" : "Active");
       expect(query("#sidebar-sessions-reset") !== null).toBe(resetVisible);
     };
     await expectFilterCount(0);

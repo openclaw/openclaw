@@ -10,7 +10,7 @@
  */
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -23,6 +23,7 @@ import {
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -101,9 +102,6 @@ async function run(count: number) {
   assert.equal(fixture.publications, count);
   return `${fixture.reads}:${fixture.publications}:same-runtime-and-source`;
 }
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 await run(1000);
 globalThis.gc();
 await setImmediate();
@@ -131,7 +129,7 @@ try {
   const memoryAfter = process.memoryUsage();
   const allocatedBytes =
     values.mode === "allocation"
-      ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
   await setImmediate();
   collections.push(...observer.takeRecords());

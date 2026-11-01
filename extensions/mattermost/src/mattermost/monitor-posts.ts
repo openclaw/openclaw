@@ -176,6 +176,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       senderId,
       senderName,
       channelId,
+      threadId: effectiveReplyToId,
       kind,
       groupPolicy,
       readStoreAllowFrom: pairing.readAllowFromStore,
@@ -183,6 +184,13 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       hasControlCommand: isControlCommand,
       eventKind: "message",
       mayPair: true,
+      contextBinding: {
+        agentId: route.agentId,
+        sessionKey,
+        messageId: post.id,
+        nativeChannelId: channelId,
+        inboundEventKind: "user_request",
+      },
     });
     const commandAuthorized = accessDecision.commandAccess.authorized;
 
@@ -503,30 +511,56 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             limit: historyLimit,
           })
         : undefined;
-    const ctxPayload = eventPlan.finalizeContext({
-      Body: combinedBody,
-      BodyForAgent: bodyForAgent,
-      InboundHistory: inboundHistory,
-      RawBody: commandBody,
-      CommandBody: commandBody,
-      BodyForCommands: commandBody,
-      ConversationLabel: fromLabel,
-      GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
-      SenderName: senderName,
-      MessageSid: post.id,
-      MessageSids: allMessageIds.length > 1 ? allMessageIds : undefined,
-      MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
-      MessageSidLast:
-        allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
-      Timestamp: post.create_at ?? undefined,
-      WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
-      CommandAuthorized: commandAuthorized,
-      // Tag typed text-slash control commands (e.g. ` /new`, ` /reset` sent via the regular
-      // post path rather than Mattermost's native slash UI) so the explicit-command turn
-      // exception in source-reply-delivery-mode.ts surfaces their acknowledgements under
-      // message_tool_only delivery modes (e.g. Codex harness DMs). Mirrors iMessage #82642.
-      CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
+    const ctxPayload = core.channel.inbound.buildContext({
+      channel: "mattermost",
+      accountId: route.accountId,
+      channelIngress: accessDecision,
+      from: eventPlan.from,
+      messageId: post.id,
+      timestamp: post.create_at ?? undefined,
+      sender: { id: senderId, name: senderName, isBot: isBotPost || undefined },
+      conversation: {
+        kind,
+        id: channelId,
+        nativeChannelId: channelId,
+        routePeer: { kind, id: kind === "direct" ? senderId : channelId },
+        label: fromLabel,
+        spaceId: eventPlan.teamId,
+        threadId: effectiveReplyToId,
+      },
+      route: {
+        ...route,
+        routeSessionKey: route.sessionKey,
+        dispatchSessionKey: sessionKey,
+        parentSessionKey: thread.parentSessionKey,
+      },
+      reply: {
+        to: eventPlan.to,
+        replyToId: effectiveReplyToId,
+        messageThreadId: effectiveReplyToId,
+      },
+      message: {
+        body: combinedBody,
+        bodyForAgent,
+        rawBody: commandBody,
+        commandBody,
+        inboundHistory,
+      },
+      access: {
+        commands: accessDecision.commandAccess,
+      },
       media: await toInboundMediaFactsWithMetadata(mediaList),
+      extra: {
+        GroupSubject: kind !== "direct" ? channelDisplay || roomLabel : undefined,
+        GroupChannel: eventPlan.channelName ? `#${eventPlan.channelName}` : undefined,
+        WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
+        MessageSids: allMessageIds.length > 1 ? allMessageIds : undefined,
+        MessageSidFirst: allMessageIds.length > 1 ? allMessageIds[0] : undefined,
+        MessageSidLast:
+          allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
+        // Typed slash commands retain their explicit-command acknowledgment behavior.
+        CommandSource: commandAuthorized && isControlCommand ? ("text" as const) : undefined,
+      },
     });
     const pinnedMainDmOwner =
       kind === "direct"

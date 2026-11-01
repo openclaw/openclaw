@@ -175,7 +175,7 @@ describe("immutable activation service", () => {
         if (!alive) {
           throw Object.assign(new Error("exited"), { code: "ENOENT" });
         }
-        return `${pid} (openclaw-gateway) S ${"0 ".repeat(18)}${ticks}`;
+        return `${path.basename(path.dirname(String(file)))} (openclaw-gateway) S ${"0 ".repeat(18)}${ticks}`;
       }
       if ([pid, currentPid].some((candidate) => String(file) === `/proc/${candidate}/cgroup`)) {
         return `0::${controlGroup}\n`;

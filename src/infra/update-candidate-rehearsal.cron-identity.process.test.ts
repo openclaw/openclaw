@@ -118,14 +118,14 @@ it.each(["default-state", "explicit-state", "custom-config"] as const)(
   },
 );
 
-it("does not bind an unmatched original identity to a retained sibling", async () => {
+it("binds a sole retained sibling when the original identity is unmatched", async () => {
   const fixture = await prepareFixture("custom-config", ({ sibling }) => [sibling]);
   try {
     const result = await runFirstPrivateAdmission(fixture.rehearsal.env);
     expect(result.initializationCronDefaultStoreKey).toBe(
       path.join(fixture.rehearsal.stateDir, "cron", "jobs.json"),
     );
-    expect(result.boundStoreKey).toBeUndefined();
+    expect(result.boundStoreKey).toBe(fixture.sibling);
   } finally {
     await cleanupFixture(fixture);
   }

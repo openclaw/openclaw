@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
  */
 import os from "node:os";
 import path from "node:path";
-import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,6 +17,7 @@ import {
   onDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
   type DiagnosticToolLoopEvent,
@@ -197,7 +197,7 @@ describe("before_tool_call loop detection behavior", () => {
   }
 
   async function withToolExecutionEvents(
-    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
+    run: (emitted: DiagnosticEventPayload[]) => Promise<void>,
   ) {
     const emitted: DiagnosticEventPayload[] = [];
     const stop = onInternalDiagnosticEvent((evt) => {
@@ -206,21 +206,19 @@ describe("before_tool_call loop detection behavior", () => {
       }
     });
     try {
-      await run(emitted, flushDiagnosticEvents);
+      await run(emitted);
     } finally {
       stop();
     }
   }
 
-  async function withDiagnosticEvents(
-    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
-  ) {
+  async function withDiagnosticEvents(run: (emitted: DiagnosticEventPayload[]) => Promise<void>) {
     const emitted: DiagnosticEventPayload[] = [];
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
     try {
-      await run(emitted, flushDiagnosticEvents);
+      await run(emitted);
     } finally {
       stop();
     }
@@ -230,7 +228,6 @@ describe("before_tool_call loop detection behavior", () => {
     run: (
       emitted: DiagnosticEventPayload[],
       privateData: DiagnosticEventPrivateData[],
-      flush: () => Promise<void>,
     ) => Promise<void>,
   ) {
     const emitted: DiagnosticEventPayload[] = [];
@@ -242,7 +239,7 @@ describe("before_tool_call loop detection behavior", () => {
       }
     });
     try {
-      await run(emitted, skillUsagePrivateData, flushDiagnosticEvents);
+      await run(emitted, skillUsagePrivateData);
     } finally {
       stopTrusted();
       stopShared();
@@ -381,9 +378,9 @@ describe("before_tool_call loop detection behavior", () => {
       await expectUnblockedToolExecution(tool, `poll-${i}`, params);
     }
 
-    await withDiagnosticEvents(async (emitted, flush) => {
+    await withDiagnosticEvents(async (emitted) => {
       const result = await tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
-      await flush();
+      await waitForDiagnosticEventsDrained();
       expectToolLoopBlockedResult(result, "CRITICAL");
       expectCriticalLoopEvent(
         emitted.find((event): event is DiagnosticToolLoopEvent => event.type === "tool.loop"),
@@ -1074,14 +1071,14 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute(
         "tool-call-1",
         { command: "pwd", token: "sk-1234567890abcdef1234567890abcdef" },
         undefined,
         undefined,
       );
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -1138,11 +1135,11 @@ describe("before_tool_call loop detection behavior", () => {
         },
       );
 
-      await withToolExecutionEvents(async (emitted, flush) => {
+      await withToolExecutionEvents(async (emitted) => {
         await expect(
           tool.execute("tool-call-hook-failure", { command: "private" }, undefined, undefined),
         ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
-        await flush();
+        await waitForDiagnosticEventsDrained();
 
         expect(execute).not.toHaveBeenCalled();
         expect(emitted.map((event) => event.type)).toEqual(["tool.execution.error"]);
@@ -1182,11 +1179,11 @@ describe("before_tool_call loop detection behavior", () => {
       },
     );
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await expect(
         tool.execute("tool-call-preflight", params, undefined, undefined),
       ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(execute).not.toHaveBeenCalled();
       expect(emitted.map((event) => event.type)).toEqual(["tool.execution.error"]);
@@ -1258,11 +1255,11 @@ describe("before_tool_call loop detection behavior", () => {
         { approvalMode: mode },
       );
 
-      await withToolExecutionEvents(async (emitted, flush) => {
+      await withToolExecutionEvents(async (emitted) => {
         await expect(
           tool.execute(toolCallId, { command: "private" }, undefined, undefined),
         ).rejects.toThrow(reason);
-        await flush();
+        await waitForDiagnosticEventsDrained();
         expect(execute).not.toHaveBeenCalled();
         if (mode === "report") {
           expect(mockCallGateway).not.toHaveBeenCalled();
@@ -1360,9 +1357,9 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute("tool-call-1", { command: "false" }, undefined, undefined);
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((event) => event.type)).toEqual(["tool.execution.started", terminal.type]);
       expectEventFields(emitted[1], terminal);
@@ -1379,9 +1376,9 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute("tool-call-mcp", { query: "status" }, undefined, undefined);
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expectEventFields(emitted[0], {
         type: "tool.execution.started",
@@ -1532,9 +1529,9 @@ describe("before_tool_call loop detection behavior", () => {
         ...ctx,
       });
 
-      await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
+      await withSkillUsageDiagnosticEvents(async (emitted, privateData) => {
         await tool.execute("skill-read", params, undefined, undefined);
-        await flush();
+        await waitForDiagnosticEventsDrained();
         expect(emitted.map((evt) => evt.type)).toEqual([
           "tool.execution.started",
           ...(expected ? ["skill.used"] : []),
@@ -1587,14 +1584,14 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
+    await withSkillUsageDiagnosticEvents(async (emitted, privateData) => {
       await tool.execute(
         "tool-call-skill-command",
         { command: "display name", commandName: "set_profile", skillName: "matrix-profile" },
         undefined,
         undefined,
       );
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -1649,7 +1646,7 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       const execution = tool.execute(
         "tool-call-error",
         { path: "/tmp/file" },
@@ -1660,7 +1657,7 @@ describe("before_tool_call loop detection behavior", () => {
       if (errorCode) {
         await expect(execution).rejects.toThrow("failed with key");
       }
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(emitted.map((evt) => evt.type)).toEqual([
         "tool.execution.started",
@@ -1723,11 +1720,11 @@ describe("before_tool_call loop detection behavior", () => {
         loopDetection: { enabled: false },
       });
 
-      await withToolExecutionEvents(async (emitted, flush) => {
+      await withToolExecutionEvents(async (emitted) => {
         await expect(
           tool.execute(toolCallId, { path: "/tmp/file" }, controller.signal, undefined),
         ).rejects.toThrow(message);
-        await flush();
+        await waitForDiagnosticEventsDrained();
         expectEventFields(emitted[1], {
           type: "tool.execution.error",
           toolCallId,
@@ -1751,9 +1748,9 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
-    await withDiagnosticEvents(async (emitted, flush) => {
+    await withDiagnosticEvents(async (emitted) => {
       const result = await tool.execute("tool-call-blocked", { path: "/tmp/file" });
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       expect(result).toEqual({
         content: [{ type: "text", text: "blocked by policy" }],
@@ -1831,9 +1828,9 @@ describe("before_tool_call loop detection behavior", () => {
       },
     );
 
-    await withToolExecutionEvents(async (emitted, flush) => {
+    await withToolExecutionEvents(async (emitted) => {
       await tool.execute("tool-call-proxy", params, undefined, undefined);
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       const started = expectEventFields(emitted[0], {
         type: "tool.execution.started",
@@ -2602,9 +2599,7 @@ describe("before_tool_call tool content private-data capture", () => {
     resetDiagnosticEventsForTest();
   });
 
-  async function withTrustedToolEvents(
-    run: (emitted: TrustedToolEvent[], flush: () => Promise<void>) => Promise<void>,
-  ) {
+  async function withTrustedToolEvents(run: (emitted: TrustedToolEvent[]) => Promise<void>) {
     const emitted: TrustedToolEvent[] = [];
     const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
       if (event.type.startsWith("tool.execution.")) {
@@ -2612,7 +2607,7 @@ describe("before_tool_call tool content private-data capture", () => {
       }
     });
     try {
-      await run(emitted, flushDiagnosticEvents);
+      await run(emitted);
     } finally {
       stop();
     }
@@ -2649,14 +2644,14 @@ describe("before_tool_call tool content private-data capture", () => {
       ...(capture ? { config: configWithToolContent() } : {}),
     });
 
-    await withTrustedToolEvents(async (emitted, flush) => {
+    await withTrustedToolEvents(async (emitted) => {
       const execution = tool.execute("call-1", liveParams, undefined, undefined);
       if (fails) {
         await expect(execution).rejects.toThrow("boom");
       } else {
         await execution;
       }
-      await flush();
+      await waitForDiagnosticEventsDrained();
 
       const terminal = emitted.find(
         (e) => e.event.type === (fails ? "tool.execution.error" : "tool.execution.completed"),

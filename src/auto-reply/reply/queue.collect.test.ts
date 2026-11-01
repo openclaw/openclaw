@@ -1891,7 +1891,7 @@ describe("followup queue collect routing", () => {
     expect(q.calls).toHaveLength(2);
     expect(q.calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(q.calls[0]?.currentInboundEventKind).toBe("room_event");
-    expect(q.calls[0]?.currentInboundContext).toBeUndefined();
+    expect(q.calls[0]?.currentInboundContext).toEqual({ text: "dropped context" });
     expect(q.calls[0]?.abortSignal).toBeUndefined();
     expect(summaryEnd).toHaveBeenCalledExactlyOnceWith({ visibleReplySent: true, failed: false });
     expect(q.calls[1]?.prompt).toBe("live ambient");
@@ -2410,7 +2410,7 @@ describe("followup queue collect routing", () => {
       "room_event",
     );
     expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.turnAdoptionLifecycle).toBeDefined();
-    expect(q.calls[0]?.currentInboundContext).toBeUndefined();
+    expect(q.calls[0]?.currentInboundContext).toEqual({ text: "dropped context" });
 
     releaseRetry.resolve();
     await q.done.promise;

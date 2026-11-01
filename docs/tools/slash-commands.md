@@ -47,6 +47,9 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
+    - Ordinary prose such as `How does /queue work?` stays unchanged. Native
+      `/queue` commands and explicit `/queue:` syntax still validate their arguments;
+      a mistyped mode such as `/queue backlog` still produces an error.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
       command and its delivered acknowledgement are retained as user/assistant
@@ -449,6 +452,9 @@ conversation** — not a static config catalog.
 Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
+
+Managed sessions on supported runtimes include brokered GitHub tools when tool
+policy allows them. Listing a tool does not grant permission to run its actions.
 
 ## `/loop`: recurring conversation work
 

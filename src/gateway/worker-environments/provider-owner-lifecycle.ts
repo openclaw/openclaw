@@ -55,6 +55,7 @@ export function createWorkerProviderOwnerLifecycle(
   const lifecycleLease = (record: WorkerEnvironmentRecord, leaseId: string) => ({
     leaseId,
     profile: requireWorkerProfile(record.profileSnapshot.settings),
+    ...(record.resourceReceipt ? { resourceReceipt: record.resourceReceipt } : {}),
   });
 
   const requireCurrentOwner = (record: WorkerEnvironmentRecord): WorkerEnvironmentRecord => {
@@ -160,6 +161,18 @@ export function createWorkerProviderOwnerLifecycle(
     provider: WorkerProvider,
     lease: Parameters<WorkerProvider["destroy"]>[0],
   ) => {
+    if (record.resourceReceipt && !provider.supportsResourceReceipts) {
+      throw serviceError(
+        "provider_failure",
+        "Worker provider cannot honor the recorded resource receipt",
+      );
+    }
+    if (record.resourceReceipt && record.resourceReceipt.leaseId !== lease.leaseId) {
+      throw serviceError(
+        "invalid_state",
+        "Worker cleanup allocation differs from its resource receipt",
+      );
+    }
     const timeoutMs =
       options.providerCallTimeoutMs ??
       requireProviderOperationTimeoutMs(
@@ -187,7 +200,18 @@ export function createWorkerProviderOwnerLifecycle(
         );
         timer.unref();
         try {
-          await provider.destroy({ ...lease, signal });
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            if (requireCurrentOwner(record).state !== record.state) {
+              throw serviceError("invalid_state", "Worker teardown owner changed");
+            }
+          };
+          assertCurrent();
+          await provider.destroy({ ...lease, signal, assertCurrent });
+          // Drain can cancel new effects, not discard an already confirmed deletion.
+          if (requireCurrentOwner(record).state !== record.state) {
+            throw serviceError("invalid_state", "Worker teardown owner changed");
+          }
         } finally {
           clearTimeout(timer);
         }

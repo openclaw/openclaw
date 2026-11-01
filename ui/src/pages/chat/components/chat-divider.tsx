@@ -11,10 +11,12 @@ import {
   normalizeChatModelProviderId,
 } from "../../../lib/chat/model-ref.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { formatModelLabel } from "./chat-model-picker-options.ts";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 export type ChatNoticeProps = {
@@ -113,6 +115,7 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
 function NoticeBody(props: { text: string }) {
   return (
     <MarkdownHtml
+      ref={elementRef(registerChatSearchTextBlock)}
       class="chat-text chat-notice__body"
       dir={detectTextDirection(props.text)}
       markdown={props.text}
@@ -243,12 +246,9 @@ function OrdinaryNotice(props: ChatNoticeProps) {
                 <button
                   class="btn btn--sm"
                   type="button"
-                  aria-label={t(
-                    retired().status === "interrupted"
-                      ? "chat.pendingInputs.dismissInterrupted"
-                      : "chat.pendingInputs.dismissCancelled",
-                    { preview: retired().preview },
-                  )}
+                  aria-label={t("chat.pendingInputs.dismissCancelled", {
+                    preview: retired().preview,
+                  })}
                   onClick={() => dismiss()(retired().id)}
                 >
                   {t("chat.pendingInputs.dismiss")}

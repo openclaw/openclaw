@@ -17,6 +17,7 @@ import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-pro
 import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { clampMaxTokensToModel } from "../providers/simple-options.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
+import { hasMutableModelPayloadHook } from "./model-request-body.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
@@ -111,7 +112,7 @@ export function buildOpenAIResponsesParams(
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
-    mutableInput: Boolean(options?.onPayload),
+    mutableInput: hasMutableModelPayloadHook(options?.onPayload),
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,

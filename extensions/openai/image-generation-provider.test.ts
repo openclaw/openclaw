@@ -722,11 +722,12 @@ describe("openai image generation provider", () => {
       mockCodexImageStream();
     });
 
-    it("serializes reference-image requests and caps the per-image Responses calls", async () => {
+    it("serializes reference-image requests and keeps returned formats across batches", async () => {
+      const buffer = Buffer.from("89504e470d0a1a0a", "hex");
       mockCodexEvents([
         {
           type: "response.output_item.done",
-          item: { ...imageItem(), revised_prompt: "revised prompt" },
+          item: { ...imageItem(buffer.toString("base64")), revised_prompt: "revised prompt" },
         },
         {
           type: "response.completed",
@@ -785,15 +786,15 @@ describe("openai image generation provider", () => {
       });
       expect(jsonRequestCall().headers?.get("authorization")).toBe("Bearer codex-key");
       expect(result.images.map((image) => image.fileName)).toEqual([
-        "image-1.jpg",
-        "image-2.jpg",
-        "image-3.jpg",
-        "image-4.jpg",
+        "image-1.png",
+        "image-2.png",
+        "image-3.png",
+        "image-4.png",
       ]);
       expect(result.images[0]).toEqual({
-        buffer: Buffer.from("codex-image"),
-        mimeType: "image/jpeg",
-        fileName: "image-1.jpg",
+        buffer,
+        mimeType: "image/png",
+        fileName: "image-1.png",
         revisedPrompt: "revised prompt",
       });
       expect(result.metadata?.responses).toEqual(

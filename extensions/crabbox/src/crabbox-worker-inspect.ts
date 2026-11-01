@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseCrabboxJson, sanitizeCrabboxNotice } from "./crabbox-worker-command.js";
 import { parseCrabboxDurationMs } from "./crabbox-worker-profile.js";
+import { readCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
 
 export type CrabboxLeaseLifetime = {
   expiresAtMs?: number;
@@ -92,10 +93,12 @@ export function parseInspectJson(stdout: string) {
 
   const failureError = nonEmptyString(value.failureError);
   const lifetime = parseCrabboxLeaseLifetime(value);
+  const resourceReceipt = readCrabboxResourceReceipt(value);
   return {
     id,
     state,
     tailscaleEnabled,
+    ...(resourceReceipt ? { resourceReceipt } : {}),
     ...(Object.keys(lifetime).length ? { lifetime } : {}),
     ...(failureError
       ? {

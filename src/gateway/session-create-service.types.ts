@@ -47,7 +47,9 @@ export type PreparedGatewaySessionLifecycle = {
   repositoryWorkspaceId?: string;
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   /** Reacquire source custody only around the final persistence operation. */
-  withCommit?: <T>(run: (assertSourceCurrent: SessionSourceAssertion) => Promise<T>) => Promise<T>;
+  withCommit?: <T>(
+    run: (assertSourceCurrent: SessionSourceAssertion, signal?: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
   rollback?: () => Promise<void>;
 };
 

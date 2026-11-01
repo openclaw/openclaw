@@ -189,7 +189,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     filePath: path.join(realRootDir, "package.json"),
     content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
     preserveExistingMode: true,
-    dirMode: (await fs.promises.stat(realRootDir)).mode & 0o7777,
+    dirMode: "preserve",
     syncTempFile: true,
     syncParentDir: true,
   });
@@ -311,6 +311,9 @@ export async function runPluginsInitCommand(
       )}.`,
     );
   }
+  const packageName = id.startsWith("@")
+    ? id.replace("/", "/openclaw-plugin-")
+    : `openclaw-plugin-${id}`;
   const rootDir = path.resolve(opts.directory ?? id);
   if (opts.force !== true && fs.existsSync(rootDir)) {
     throw new Error(`Refusing to overwrite existing path: ${rootDir}`);
@@ -320,7 +323,6 @@ export async function runPluginsInitCommand(
   if (type === "feature") {
     writeFeaturePluginScaffold({ rootDir, id, name });
   } else if (type === "provider") {
-    const packageName = `openclaw-plugin-${id}`;
     const envVar = `${id
       .replace(/[^a-z0-9]+/giu, "_")
       .replace(/^_+|_+$/gu, "")
@@ -615,7 +617,7 @@ jobs:
     });
   } else {
     const packageManifest = {
-      name: `openclaw-plugin-${id}`,
+      name: packageName,
       version: "0.1.0",
       type: "module",
       private: true,

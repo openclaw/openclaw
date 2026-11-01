@@ -10,7 +10,6 @@ import {
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { markStartupOrphanedMainSessionsForRecovery } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
@@ -26,7 +25,6 @@ import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
@@ -57,11 +55,6 @@ const childKey = "agent:main:subagent:yielded-child";
 const childId = "yielded-child-session";
 const childRunId = "yielded-child-run";
 const target = { agentId: "main", sessionKey: parentKey };
-const markStartupRecovery = () =>
-  markStartupOrphanedMainSessionsForRecovery({
-    cfg: getRuntimeConfig(),
-    stateDir: fixture.stateDir,
-  });
 
 function observeChildPublications() {
   const entries = [subagentRuns.get(childRunId)];
@@ -230,7 +223,6 @@ it.each([
       ),
     ).toBe(true);
     expect(await getSubagentRunByChildSessionKey(childKey)).toBeNull();
-    expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
     expect(loadSessionEntry(target)).toMatchObject({
       status: "killed",
       abortedLastRun: true,
@@ -297,7 +289,6 @@ it.each([false, true])(
       await fixture.settle();
       if (pendingWake) {
         expectCancelledSession(loadSessionEntry(target), parentRunId);
-        expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
       } else {
         expect(loadSessionEntry(target)).toEqual(before);
       }

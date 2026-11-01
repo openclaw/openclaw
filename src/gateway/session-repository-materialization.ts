@@ -83,6 +83,11 @@ async function materializeCapturedRepositoryWorkspace(
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
   }
+  if (repository.diskAuthority) {
+    throw new Error(
+      "Moving this repository to the Gateway requires a fresh disk export; preserve the original runner and retry after export support is available.",
+    );
+  }
   const githubHost = resolveConfiguredGitHubHost(params.cfg);
   const remote = parseGitHubRemoteUrl(repository.url, githubHost);
   if (!remote) {
@@ -313,7 +318,7 @@ async function materializeCapturedRepositoryWorkspace(
     } else {
       await alignPublication();
     }
-    const bind = async (assertSourceCurrent: SessionSourceAssertion) =>
+    const bind = async (assertSourceCurrent: SessionSourceAssertion, sourceSignal?: AbortSignal) =>
       await patchSessionEntryCore(
         { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
         (current) => {
@@ -331,6 +336,10 @@ async function materializeCapturedRepositoryWorkspace(
         },
         {
           replaceEntry: true,
+          signal:
+            params.signal && sourceSignal
+              ? AbortSignal.any([params.signal, sourceSignal])
+              : (params.signal ?? sourceSignal),
           ...sessionEntryCommitGuardOptions(
             composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]),
           ),

@@ -388,17 +388,17 @@ ${cases
   });
 
   itWithPowerShell.each([
-    ["openclaw 'completion' --shell f", "fish"],
-    ['openclaw "completion" --shell f', "fish"],
-    ["openclaw 'gateway' 'status' --j", "--json"],
-    ["openclaw gateway --token 'status' --f", "--force"],
-    ["openclaw completion -ysf", "-ysfish"],
-    ["openclaw completion -ys f", "fish"],
-    ["openclaw completion --shell 'f", "fish"],
-    ['openclaw completion --shell "f', "fish"],
-    ["openclaw completion --shell 'f'", "fish"],
-    ["openclaw completion --shell='f", "--shell=fish"],
+    ["openclaw 'completion' --shell f", ["fish"]],
+    ["openclaw 'gateway' 'status' --j", ["--json"]],
+    ["openclaw gateway --token 'status' --f", ["--force"]],
+    ["openclaw gateway --token --token --f", ["--force"]],
+    ["openclaw gateway --token --f", []],
+    ["openclaw completion -ysf", ["-ysfish"]],
+    ["openclaw completion -ys f", ["fish"]],
+    ["openclaw completion --shell 'f", ["fish"]],
+    ['openclaw completion --shell "f', ["fish"]],
+    ["openclaw completion --shell='f", ["--shell=fish"]],
   ])("completes PowerShell line %s", async (commandLine, expected) => {
-    expect(await powershell.complete(documentedProgram(), commandLine)).toEqual([expected]);
+    expect(await powershell.complete(documentedProgram(), commandLine)).toEqual(expected);
   });
 });

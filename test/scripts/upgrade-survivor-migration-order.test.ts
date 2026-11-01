@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -17,6 +17,7 @@ import {
   seedWorkshopLegacyProposals,
 } from "../../scripts/e2e/lib/upgrade-survivor/workshop-legacy-proposals.mjs";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -208,7 +209,7 @@ type WorkshopFixture = {
   filename: string;
 };
 
-function workshopFixture(): WorkshopFixture {
+async function workshopFixture(): Promise<WorkshopFixture> {
   const root = tempDirs.make("ws-");
   const state = join(root, "state");
   const artifacts = join(root, "artifacts");
@@ -234,7 +235,7 @@ function workshopFixture(): WorkshopFixture {
   }
   const baseline = captureWorkshopBaseline(packageRoot, artifacts);
   const tarball = join(root, "candidate.tgz");
-  execFileSync("tar", ["-czf", tarball, "package"], { cwd: root });
+  await packToArchive({ pkgDir: candidateRoot, outDir: root, outName: "candidate.tgz" });
   const candidate = captureWorkshopCandidate(tarball, artifacts, "2026.9.4");
   const filename = join(state, "state", "openclaw.sqlite");
   const initial = new DatabaseSync(filename);
@@ -365,8 +366,8 @@ function simulateWorkshopRetirement(
 describe("Workshop Doctor recovery evidence", () => {
   it.each(["intact", "baseline-consumed", "retirement-warning"])(
     "keeps published refusal, candidate retirement, and repair distinct: %s",
-    (outcome) => {
-      const fixture = workshopFixture();
+    async (outcome) => {
+      const fixture = await workshopFixture();
       const first = join(fixture.artifacts, "first-update");
       recordProcess(first, 101, "update", fixture.baseline, true, false, 1);
       assertWorkshopUpdateRefusal(fixture.state, fixture.artifacts, first, fixture.packageRoot, 1);

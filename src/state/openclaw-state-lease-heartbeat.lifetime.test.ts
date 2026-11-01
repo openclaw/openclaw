@@ -76,8 +76,8 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (controls.constructorError) {
           throw controls.constructorError;
         }
-        const { databaseAdmissionPort, ...data } = workerOptions.workerData;
-        this.data = { ...structuredClone(data), databaseAdmissionPort };
+        const { databaseAdmissionPort, lossPort, ...data } = workerOptions.workerData;
+        this.data = { ...structuredClone(data), databaseAdmissionPort, lossPort };
         this.shared = new BigInt64Array(this.data.shared);
         controls.workers.push(this);
       }
@@ -323,17 +323,37 @@ describe("state lease heartbeat lifetime", () => {
     expect(() => heartbeat.assertRunning()).toThrow("not running");
   });
 
-  it("reports worker-observed loss only once across timer and error delivery", async () => {
-    const { params, worker } = await readyHeartbeat(Date.now() + 100);
-    Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + 60_000));
-    Atomics.store(worker.shared, state.status, state.lost);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(params.onLost).toHaveBeenCalledExactlyOnceWith(
-      new Error("state lease heartbeat is not running"),
-    );
-    worker.emit("error", new Error("later error delivery"));
-    expect(params.onLost).toHaveBeenCalledOnce();
-  });
+  it.each(["synchronous", "timer"] as const)(
+    "preserves the first worker loss through %s observation",
+    async (observation) => {
+      const { params, heartbeat, worker } = await readyHeartbeat(Date.now() + 100);
+      const leaseLoss = {
+        reason: "expired",
+        expiresAt: 1_000,
+        expiredByMs: 500,
+        heartbeatAgeMs: 1_500,
+      };
+      Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + 60_000));
+      // The worker queues its cause before publishing loss; no parent callback has run yet.
+      worker.data.lossPort.postMessage(
+        { path: "automatic-renewal", outcome: "no-current-owned-unexpired-row", leaseLoss },
+        [],
+      );
+      Atomics.store(worker.shared, state.status, state.lost);
+      const message =
+        "state lease heartbeat is not running (lossPath=automatic-renewal, lossOutcome=no-current-owned-unexpired-row)";
+      if (observation === "synchronous") {
+        expect(() => heartbeat.assertRunning()).toThrow(message);
+      } else {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      expect(params.onLost).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message, code: "OPENCLAW_STATE_LEASE_LOST", loss: leaseLoss }),
+      );
+      worker.emit("error", new Error("later error delivery"));
+      expect(params.onLost).toHaveBeenCalledOnce();
+    },
+  );
 
   it("preserves raw worker errors with received loss diagnostics", async () => {
     const params = options();
@@ -347,7 +367,7 @@ describe("state lease heartbeat lifetime", () => {
       errcode: 266,
     });
     Atomics.store(worker.shared, state.status, state.lost);
-    worker.emit("message", { loss: { path: "activation", outcome: "operation-error" } });
+    worker.data.lossPort.postMessage({ path: "activation", outcome: "operation-error" }, []);
     expect(params.onLost).not.toHaveBeenCalled();
     worker.emit("error", error);
     worker.finishExit();

@@ -25,6 +25,7 @@ import {
   createOpenAiCodexOauthHealthSummary,
   createStaticApiKeyProvider,
   healthProfile,
+  oauthCredential,
 } from "./models-auth-status.health.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -165,20 +166,6 @@ const orderHandler = expectDefined(
   "auth-order handler",
 );
 
-function oauthCredential(
-  provider: string,
-  overrides: Partial<Extract<AuthProfileStore["profiles"][string], { type: "oauth" }>> = {},
-) {
-  return {
-    type: "oauth" as const,
-    provider,
-    access: "access",
-    refresh: "refresh",
-    expires: 1_000_000,
-    ...overrides,
-  };
-}
-
 function mockHealthProvider(provider: AuthHealthSummary["providers"][number], now = 0) {
   mockHealthProviders([provider], now);
 }
@@ -224,6 +211,7 @@ function createOrderOptions(params: Record<string, unknown>): RespondOptions {
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 let preparedAuthStore: AuthProfileStore = { version: 1, profiles: {} };
 let preparedMetadataSnapshot: unknown;
+const isPreparedOwnerCurrent = () => true;
 
 function setPreparedAuthStore(store: RuntimeAuthProfileStore): void {
   preparedAuthStore = store;
@@ -254,6 +242,7 @@ function createPreparedOwnerSnapshot(agentId: string) {
     authStore: preparedAuthStore,
     authMaterializations: [],
     metadataSnapshot: preparedMetadataSnapshot as never,
+    isCurrent: isPreparedOwnerCurrent,
   };
 }
 

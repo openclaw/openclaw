@@ -2,12 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
-import { projectDetailsSubagents } from "./chat-details-snapshot.ts";
+import { captureChatDetailsSnapshot, projectDetailsSubagents } from "./chat-details-snapshot.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
-  captureChatDetailsSnapshot,
   createChatWidgetLayout,
   observeChatCache,
   readChatMessagesFromCache,
@@ -64,6 +63,22 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("publishes changed older edges without inventing numeric coverage", () => {
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn();
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
+    const messages = ["held source group"];
+    const snapshot = widgetSnapshot(messages);
+    write({ ...snapshot, pagination: { hasMore: true, olderCursor: "older-A" } });
+    write({ ...snapshot, pagination: { hasMore: true, olderCursor: "older-B" } });
+    expect(read()?.pagination).toEqual({ hasMore: true, olderCursor: "older-B" });
+    write({ ...snapshot, pagination: { hasMore: true, needsBoundary: true } });
+    write({ ...snapshot, pagination: { hasMore: true, needsBoundary: true } });
+    expect(persisted).toHaveBeenCalledTimes(3);
+    expect(read()?.pagination).toEqual({ hasMore: true, needsBoundary: true });
+    expect(read()?.messages).toBe(messages);
+  });
+
   it("persists changed session display facts once without repeating unchanged writes", () => {
     const { cache, write, read } = createCacheContext();
     const persisted = vi.fn();
@@ -77,9 +92,58 @@ describe("session message cache", () => {
     expect(persisted).toHaveBeenCalledTimes(2);
     expect(read()?.sessionState?.archived).toBe(false);
   });
+
+  it("publishes each admitted snapshot once with its pruned thumbnail weight", () => {
+    const { cache, read, write, append } = createCacheContext();
+    const thumbnail = new Blob([new Uint8Array(256 * 1024)], { type: "image/webp" });
+    const image = { width: 480, height: 240, rendition: 480 as const, thumbnail };
+    const messages = Array.from({ length: 34 }, (_, index) => ({
+      role: "assistant",
+      content: "Synthetic image",
+      __openclaw: { id: `image-${index}`, seq: index + 1 },
+    }));
+    const publish = vi.fn((_key: string, value: ChatSessionSnapshot, weight: number) => {
+      expect(weight).toBe(JSON.stringify(value).length);
+    });
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
+    write(
+      widgetSnapshot(messages, "session-1", {
+        rowDisplay: Object.fromEntries(
+          messages.map((_, index) => [`image-${index}`, { images: { source: image } }]),
+        ),
+      }),
+    );
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(read()?.messages).toBe(messages);
+    expect(
+      Object.values(read()?.rowDisplay ?? {}).filter((row) => row.images?.source?.thumbnail),
+    ).toHaveLength(32);
+    append("home", {
+      role: "assistant",
+      content: "Following message",
+      __openclaw: { id: "following", seq: 35 },
+    });
+    expect(publish).toHaveBeenCalledTimes(2);
+    write(
+      widgetSnapshot(
+        [{ role: "assistant", content: "Other", __openclaw: { id: "other" } }],
+        "two",
+        { rowDisplay: { other: { images: { source: image } } } },
+      ),
+      "other",
+    );
+    expect(publish).toHaveBeenCalledTimes(4);
+    expect(
+      Object.values(read()?.rowDisplay ?? {}).filter((row) => row.images?.source?.thumbnail),
+    ).toHaveLength(31);
+  });
+
   it.each([
     { messageReactions: { reply: [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }] } },
     { composer: { id: "saved", provider: "example", name: "Saved", permissionMode: "full" } },
+    { rowDisplay: { reply: { links: { source: { title: "Saved title" } } } } },
+    { rowDisplay: { reply: { images: { source: { width: 480, height: 240, rendition: 480 } } } } },
+    { avatarSources: { ops: "/avatar/ops?v=1", cleared: null } },
     {
       headerViewers: { users: [{ id: "peer", name: "Peer" }], totalCount: 5, ownerViewing: false },
       headerSharing: "public",
@@ -95,13 +159,17 @@ describe("session message cache", () => {
     },
   ] satisfies Partial<ChatSessionSnapshot>[])("retains %j across the same incarnation", (facts) => {
     const { read, write } = createCacheContext();
-    write(widgetSnapshot(["cached"], "session-1", facts));
-    write(widgetSnapshot(["live"], "session-1"));
+    const messages = [{ role: "assistant", content: "Cached", __openclaw: { id: "reply" } }];
+    write(widgetSnapshot(messages, "session-1", facts));
+    write(widgetSnapshot(messages.slice(), "session-1"));
     expect(read()).toMatchObject(facts);
     write(widgetSnapshot(["reset"], "session-2"));
-    for (const field of Object.keys(facts)) {
-      expect(read()).not.toHaveProperty(field);
-    }
+    expect(read()).toMatchObject({ messages: ["reset"], sessionId: "session-2" });
+    expect(
+      Object.entries(read() ?? {}).filter(
+        ([field, value]) => field in facts && value !== undefined,
+      ),
+    ).toEqual([]);
   });
 
   it("merges current-locale Details receipts without overwriting row footprints", () => {
@@ -167,32 +235,30 @@ describe("session message cache", () => {
   });
 
   it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
-    const cache: ChatMessageCache = new Map();
-    const host = { assistantAgentId: "main" };
-    const target = { sessionKey: "agent:main:batch" };
-    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one"));
-    const layout = createChatWidgetLayout()(cache, host, target);
+    const { cache, read, write, layout: createLayout } = createCacheContext();
+    write(widgetSnapshot([], "one"));
+    const layout = createLayout();
     expect(layout.readRows()).toBeUndefined();
-    const write = vi.fn();
-    observeChatCache(cache, { write, delete: vi.fn() });
+    const publish = vi.fn();
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
     const heights = {
       'row:v1:768:appearance:first:"one"': 100,
       'row:v1:768:appearance:second:"two"': 200,
     };
     layout.writeRows(heights);
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toEqual(heights);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(read()?.widgetHeights).toEqual(heights);
     // Newly measured rows belong to the next reload, not this admission.
     expect(layout.readRows()).toBeUndefined();
-    const reloaded = createChatWidgetLayout()(cache, host, target);
+    const reloaded = createLayout();
     expect(reloaded.readRows()).toEqual(heights);
     layout.writeRows(heights);
-    expect(write).toHaveBeenCalledTimes(1);
-    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "two"));
-    write.mockClear();
+    expect(publish).toHaveBeenCalledTimes(1);
+    write(widgetSnapshot([], "two"));
+    publish.mockClear();
     layout.writeRows(heights);
-    expect(write).not.toHaveBeenCalled();
-    expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toBeUndefined();
+    expect(publish).not.toHaveBeenCalled();
+    expect(read()?.widgetHeights).toBeUndefined();
     expect(reloaded.readRows()).toBeUndefined();
   });
   it("retires admitted row heights when the same session key moves to another account", () => {
@@ -478,20 +544,36 @@ describe("session message cache", () => {
   });
 
   it("caps an oversized snapshot at a raw transcript boundary", () => {
-    const { write, read } = createCacheContext();
+    const { cache, write, read } = createCacheContext();
+    observeChatCache(cache, {
+      write: (_key, snapshot, weight) => expect(weight).toBe(JSON.stringify(snapshot).length),
+      delete: vi.fn(),
+    });
     const content = "x".repeat(4 * 1024 * 1024);
     write({
       messages: [
-        { content, __openclaw: { seq: 1 } },
-        { content, projection: "sibling", __openclaw: { seq: 1 } },
-        { content, __openclaw: { seq: 2 } },
+        { role: "assistant", content, __openclaw: { id: "first", seq: 1 } },
+        {
+          role: "assistant",
+          content,
+          projection: "sibling",
+          __openclaw: { id: "sibling", seq: 1 },
+        },
+        { role: "assistant", content, __openclaw: { id: "last", seq: 2 } },
       ],
+      rowDisplay: {
+        first: { links: { source: { title: "First linked task" } } },
+        last: { links: { source: { title: "Last linked task" } } },
+      },
       pagination: { hasMore: false, totalMessages: 2 },
       sessionId: "session-1",
     });
     const snapshot = read();
     expect(snapshot?.messages).toHaveLength(1);
-    expect(snapshot?.pagination).toEqual({ hasMore: true, nextOffset: 1, totalMessages: 2 });
+    expect(snapshot?.pagination).toEqual({ hasMore: true, needsBoundary: true, totalMessages: 2 });
+    expect(snapshot?.rowDisplay).toEqual({
+      last: { links: { source: { title: "Last linked task" } } },
+    });
   });
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {

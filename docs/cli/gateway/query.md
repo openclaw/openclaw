@@ -213,6 +213,11 @@ It is designed to be shared. It keeps operational details useful for debugging â
 
 Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivity/auth check.
 
+Installed-service config, runtime intent, and log diagnostics use the service's
+own state selectors. An inspecting CLI's `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_PROFILE`, and `OPENCLAW_CONFIG_PATH` do not fill in selectors omitted
+from the service definition.
+
 ```bash
 openclaw gateway status
 openclaw gateway status --json
@@ -499,6 +504,9 @@ Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
 ID. The value must be a non-negative number of seconds; an empty value is rejected.
 Use `--wait 0` for a single attempt without polling.
 
+Ctrl-C or SIGTERM stops further prepare attempts. An already dispatched prepare
+still settles and reports any acquired lease so you can resume it explicitly.
+
 ```bash
 openclaw gateway suspend
 openclaw gateway suspend --request-id snapshot-2026-08-11 --wait 30
@@ -506,7 +514,9 @@ openclaw gateway suspend --port 18999 --json
 ```
 
 The ready output includes the suspension ID, lease expiry, and the matching
-resume command. Common RPC options such as `--url`, `--token`, `--password`,
+resume guidance. For an explicit `--url`, reuse that URL and the authentication
+options from the suspend command; the guidance does not echo their values.
+Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
 
 Suspension blocker messages name active root requests and include run IDs and

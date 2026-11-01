@@ -196,8 +196,14 @@ function isInvalidEmbeddingResponse(error: unknown): boolean {
 }
 
 function embeddingRetryMessage(error: unknown): string {
-  const message = asOptionalRecord(error)?.embeddingErrorMessage;
-  return typeof message === "string" ? message : formatErrorMessage(error);
+  const fields = asOptionalRecord(error);
+  const message = fields?.embeddingErrorMessage;
+  // Wrapped provider errors can put the item cap beyond the message preview.
+  // The bounded raw-body preview may still contain it.
+  const errorBody = typeof fields?.errorBody === "string" ? fields.errorBody : undefined;
+  return [typeof message === "string" ? message : formatErrorMessage(error), errorBody]
+    .filter((part): part is string => Boolean(part))
+    .join("\n");
 }
 
 function resolveMemoryEmbeddingRetryBudget(

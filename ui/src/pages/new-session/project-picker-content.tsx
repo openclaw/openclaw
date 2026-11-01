@@ -4,6 +4,7 @@ import {
   affects,
   createMemo,
   createOptimistic,
+  createSignal,
   Errored,
   For,
   Loading,
@@ -11,6 +12,7 @@ import {
   Show,
 } from "solid-js";
 import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -29,6 +31,7 @@ import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
 
 export function ProjectPickerContent(props: ProjectChipProps) {
+  const [projectSearching, setProjectSearching] = createSignal(false);
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -110,6 +113,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
     },
   );
   const projectsReady = createMemo(() => props.params.place.browser.projectsReady);
+  const projectCatalogError = createMemo(() => props.params.place.browser.projectCatalogError);
   const projects = createDeferred<readonly ProjectRecord[]>((previous) => {
     const source = projectSource();
     // A picker mounted during a shared refresh starts with the accepted rows.
@@ -178,10 +182,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const localProjects = createMemo(() => {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
-    const query = view().query.toLowerCase();
+    const query = view().query.toLowerCase().normalize("NFC");
     // Match the visible name, not shared Git owners or parent checkout directories.
     return query
-      ? accepted.filter((project) => project.displayName.toLowerCase().includes(query))
+      ? accepted.filter((project) =>
+          project.displayName.toLowerCase().normalize("NFC").includes(query),
+        )
       : accepted;
   });
   const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
@@ -250,7 +256,27 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         />
       ) : (
         <div class="new-session-page__picker-root">
-          <div class="new-session-page__menu-title">{t("newSession.projects")}</div>
+          <HeaderSearch
+            title={t("newSession.projects")}
+            label={t("newSession.projectSearchPlaceholder")}
+            query={props.params.place.browser.projectQuery}
+            open={projectSearching() || Boolean(props.params.place.browser.projectQuery)}
+            disabled={props.params.submitting || props.params.pendingPlacement}
+            inputProps={{ onCompositionEnd: recordCompositionEnd }}
+            onOpenChange={setProjectSearching}
+            onQueryChange={(query) => props.params.place.browser.changeProjectQuery(query)}
+            onInputKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                !isComposingKeyboardEvent(event) &&
+                view().cloneInput &&
+                view().projectAddAvailable
+              ) {
+                event.preventDefault();
+                selectClone(view().cloneInput!);
+              }
+            }}
+          />
           {props.params.place.remotePlacement && !view().query ? (
             <SessionMenuItem
               item={{
@@ -321,32 +347,23 @@ export function ProjectPickerContent(props: ProjectChipProps) {
               submitting={props.params.submitting}
             />
           ) : undefined}
-          <label class="new-session-page__project-search">
-            <span class="sr-only">{t("newSession.projectSearchPlaceholder")}</span>
-            <input
-              type="search"
-              placeholder={t("newSession.projectSearchPlaceholder")}
-              value={props.params.place.browser.projectQuery}
-              disabled={props.params.submitting || props.params.pendingPlacement}
-              onInput={(event: Event) =>
-                props.params.place.browser.changeProjectQuery(
-                  event.target instanceof HTMLInputElement ? event.target.value : "",
-                )
-              }
-              onCompositionEnd={recordCompositionEnd}
-              ref={nativeListener("keydown", (event: KeyboardEvent) => {
-                if (
-                  event.key === "Enter" &&
-                  !isComposingKeyboardEvent(event) &&
-                  view().cloneInput &&
-                  view().projectAddAvailable
-                ) {
-                  event.preventDefault();
-                  selectClone(view().cloneInput!);
+          <Show when={projectCatalogError()}>
+            <div class="new-session-page__project-error" role="alert">
+              {formatUiError(projectCatalogError())}
+              <button
+                type="button"
+                class="btn btn--sm"
+                disabled={
+                  props.params.submitting ||
+                  props.params.pendingPlacement ||
+                  props.params.place.browser.projectsLoading
                 }
-              })}
-            />
-          </label>
+                onClick={() => void props.params.place.browser.refreshProjects()}
+              >
+                {t("common.retry")}
+              </button>
+            </div>
+          </Show>
           <Loading on={projectsReady()}>
             <For each={localProjects()} keyed={(project) => project.id}>
               {(project) => {

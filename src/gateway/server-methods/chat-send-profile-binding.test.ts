@@ -357,7 +357,7 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
       items: [
         {
           id: pending.items[0]?.id,
-          state: "interrupted",
+          state: "cancelled",
           message: pending.items[0]?.message,
         },
       ],

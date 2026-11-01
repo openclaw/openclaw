@@ -307,18 +307,6 @@ function validateBundleModelRefs(
 export const remoteModelCatalogBundleV2Schema =
   bundleV2FieldsSchema.superRefine(validateBundleModelRefs);
 
-const modelV3Schema = modelV2Schema.safeExtend({
-  inference: ModelInferenceCapabilitiesSchema.optional(),
-});
-const bundleV3FieldsSchema = bundleV2FieldsSchema.extend({
-  schemaVersion: z.literal(3),
-  models: z.array(modelV3Schema).min(1),
-});
-
-/** Native task metadata is negotiated separately from the strict released v2 wire. */
-export const remoteModelCatalogBundleV3Schema =
-  bundleV3FieldsSchema.superRefine(validateBundleModelRefs);
-
 export type RemoteModelCatalogModelV2 = Omit<
   ModelCatalogModel,
   "cost" | "baseUrl" | "headers" | "upstreamModel" | "inference"
@@ -332,16 +320,61 @@ export type RemoteModelCatalogBundleV2 = Omit<
   "models"
 > & { models: RemoteModelCatalogModelV2[] };
 
+const modelV3Schema = modelFieldsSchema
+  .omit({ cost: true, baseUrl: true, headers: true })
+  .extend({
+    provider: z.string().trim().min(1),
+    pricing: pricingV2Schema,
+    inference: ModelInferenceCapabilitiesSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateContextWindowDefault);
+
+const bundleV3FieldsSchema = bundleV2FieldsSchema.extend({
+  schemaVersion: z.literal(3),
+  models: z.array(modelV3Schema).min(1),
+});
+
+export const remoteModelCatalogBundleV3Schema = bundleV3FieldsSchema.superRefine(
+  (bundle, context) => {
+    validateBundleModelRefs(bundle, context);
+    for (const [provider, entry] of Object.entries(bundle.providers)) {
+      const chatIds = new Set(
+        bundle.models
+          .filter((model) => model.provider === provider && model.inference?.chat !== false)
+          .map((model) => model.id),
+      );
+      for (const field of ["defaultModel", "defaultUtilityModel"] as const) {
+        if (entry[field] !== undefined && !chatIds.has(entry[field])) {
+          context.addIssue({
+            code: "custom",
+            message: `${field} must reference a chat model of provider ${provider}`,
+            path: ["providers", provider, field],
+          });
+        }
+      }
+      for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
+        if (!chatIds.has(id)) {
+          context.addIssue({
+            code: "custom",
+            message: "recommended model must support chat",
+            path: ["providers", provider, "recommendedModels", index],
+          });
+        }
+      }
+    }
+  },
+);
+
+export type RemoteModelCatalogModelV3 = RemoteModelCatalogModelV2 &
+  Pick<ModelCatalogModel, "inference">;
 export type RemoteModelCatalogBundleV3 = Omit<
-  RemoteModelCatalogBundleV2,
-  "schemaVersion" | "models"
-> & {
-  schemaVersion: 3;
-  models: Array<RemoteModelCatalogModelV2 & Pick<ModelCatalogModel, "inference">>;
-};
+  z.infer<typeof remoteModelCatalogBundleV3Schema>,
+  "models"
+> & { models: RemoteModelCatalogModelV3[] };
 
 export function parseRemoteModelCatalogBundleV3(value: unknown): RemoteModelCatalogBundleV3 {
-  // SAFETY: the schema validates every field; shared catalog types narrow compat metadata.
+  // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
   return remoteModelCatalogBundleV3Schema.parse(value) as RemoteModelCatalogBundleV3;
 }
 
@@ -471,9 +504,24 @@ export function validateAndSanitizeRemoteModelCatalogBundleV3(
   if (models.length === 0) {
     throw new Error("remote model catalog contains no valid models");
   }
-  const providers = pruneRemoteCatalogRecommendations(
-    bundle.providers,
-    models.filter((model) => model.inference?.chat !== false),
+  // Row salvage also removes chat references to dropped or native-only rows.
+  const chatModels = models.filter((model) => model.inference?.chat !== false);
+  const providers = Object.fromEntries(
+    Object.entries(pruneRemoteCatalogRecommendations(bundle.providers, chatModels)).map(
+      ([id, { defaultModel, defaultUtilityModel, ...provider }]) => {
+        const hasChatModel = (modelId: string | undefined) =>
+          modelId !== undefined &&
+          chatModels.some((model) => model.provider === id && model.id === modelId);
+        return [
+          id,
+          {
+            ...provider,
+            ...(hasChatModel(defaultModel) ? { defaultModel } : {}),
+            ...(hasChatModel(defaultUtilityModel) ? { defaultUtilityModel } : {}),
+          },
+        ];
+      },
+    ),
   );
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
 }

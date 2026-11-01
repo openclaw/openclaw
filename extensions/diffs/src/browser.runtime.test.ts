@@ -265,6 +265,7 @@ function createRegistrationHarness(
   let config = initialConfig;
   const registered: {
     tool?: Parameters<OpenClawPluginApi["registerTool"]>[0];
+    toolOptions?: Parameters<OpenClawPluginApi["registerTool"]>[1];
     httpHandler?: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]["handler"];
   } = {};
   const on = vi.fn();
@@ -277,8 +278,9 @@ function createRegistrationHarness(
       config: { current: () => config },
       state: { openBlobStore: () => blobStore },
     } as never,
-    registerTool(tool) {
+    registerTool(tool, options) {
       registered.tool = tool;
+      registered.toolOptions = options;
     },
     registerHttpRoute(route) {
       registered.httpHandler = route.handler;
@@ -294,6 +296,7 @@ function createRegistrationHarness(
 
   return {
     on,
+    toolOptions: registered.toolOptions,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
@@ -370,34 +373,17 @@ describe("diffs plugin registration", () => {
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
-    const { on, render, get, setConfig } = createRegistrationHarness(
+    const { on, toolOptions, render, get, setConfig } = createRegistrationHarness(
       { defaults: STARTUP_DIFFS_DEFAULTS, security: { allowRemoteViewer: true } },
       createRuntimeConfig({ security: { allowRemoteViewer: true } }),
     );
 
-    expect(on).toHaveBeenCalledTimes(1);
-    const [hookName, beforePromptBuild] = expectDefined(
-      on.mock.calls[0],
-      "plugin hook registration",
-    );
-    expect(hookName).toBe("before_prompt_build");
-    if (typeof beforePromptBuild !== "function") {
-      throw new Error("expected before_prompt_build callback");
-    }
-    const promptResult = await beforePromptBuild({}, {});
-    expect(promptResult?.prependSystemContext).toBe(
-      [
-        "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
-        "It accepts either `before` + `after` text or a unified `patch`.",
-        "Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.",
-        "`mode=view` returns `details.viewerUrl` for interactive viewing; `mode=file` returns `details.filePath`; `mode=both` returns both.",
-        "To send the rendered file, use an available file-sending tool to send `details.filePath` as an attachment.",
-        "Include `path` when you know the filename, and omit presentation overrides unless needed.",
-      ].join("\n"),
-    );
-    // Unconditional guidance cannot require optional message/canvas tools.
-    expect(promptResult?.prependSystemContext).not.toMatch(/\bmessage\b|\bcanvas\b/i);
-    expect(promptResult?.prependContext).toBeUndefined();
+    // Guidance rides the tool registration, so a run that denies `diffs` gets none.
+    expect(on).not.toHaveBeenCalled();
+    expect(toolOptions?.name).toBe("diffs");
+    expect(toolOptions?.promptGuidance).toContain("prefer the `diffs` tool");
+    // Guidance is gated on `diffs` alone, so it cannot require optional message/canvas tools.
+    expect(toolOptions?.promptGuidance).not.toMatch(/\bmessage\b|\bcanvas\b/i);
 
     const { details, viewerPath } = await render();
     const res = await get(viewerPath);

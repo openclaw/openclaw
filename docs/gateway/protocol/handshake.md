@@ -124,6 +124,14 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
+`server.commit` and `server.builtAt` optionally identify the running Gateway
+artifact. They are captured at process startup, not read from a checkout each
+time a client connects. Missing build provenance is omitted rather than replaced
+with the current time. Authenticated members receive these fields alongside
+`server.version` without requiring diagnostic or update scopes. The Control UI
+shows them on **Settings → About**, separately from its frontend build details;
+`system.info` and `update.status` retain their existing access requirements.
+
 Clients that do not use health details at connection time can advertise
 `hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
 then sends `snapshot.health: {}` instead of the cached health details. The
@@ -326,7 +334,7 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
   Successful queue acknowledgments are omitted for this recipient; refusals, drops,
   and errors remain visible. Clients without it retain a transient textual acknowledgment.
 
-Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities. The session metadata owner records the operator client's declaration for tool listing and replaces it on the next operator turn; an empty declaration or a channel-originated turn clears it. Internal wakes and restart recovery retain that session fact, so they list the same tools even without a current client. Session reset or deletion removes it. Existing sessions acquire it on their next operator turn. Calls still require current client capabilities, and attached-client tools check that their bound recipient is connected at execution. For example, `screen` refuses a call without its requesting Control UI and asks the model to retry from the open Control UI.
+Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities. The session metadata owner records the operator client's declaration for tool listing and replaces it on the next operator turn; an empty declaration or a channel-originated turn clears it. Internal wakes, including post-restart resume inputs, retain that session fact, so they list the same tools even without a current client. Session reset or deletion removes it. Existing sessions acquire it on their next operator turn. Calls still require current client capabilities, and attached-client tools check that their bound recipient is connected at execution. For example, `screen` refuses a call without its requesting Control UI and asks the model to retry from the open Control UI.
 
 ### Node connect example
 

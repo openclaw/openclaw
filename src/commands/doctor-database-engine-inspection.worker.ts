@@ -13,11 +13,13 @@ import { databasePortProviders } from "../infra/database-engine/port-provider.js
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { resolveStatePortRoots } from "../infra/database-engine/state-port.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import type {
   DoctorDatabaseEngineInspection,
   DoctorDatabaseEngineInspectionInput,
@@ -194,10 +196,17 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
         );
       }
     };
+    const inspectState = () =>
+      selection?.effectiveEngines.state === "sqlite"
+        ? withOpenClawStateDatabaseReadSnapshot(inspect, { env, lazy: true })
+        : inspect();
     // The caller's inspection context does not cross this worker boundary.
     await withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
       withArtifactPreservingStateReads(
-        () => (selection ? withDatabaseEngineSelection(selection, inspect) : inspect()),
+        () =>
+          withSqliteReadOnlyWorkerScope(() =>
+            selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
+          ),
         { agentDatabases: true },
       ),
     );

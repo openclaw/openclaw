@@ -111,9 +111,9 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
     const entered = createDeferredCore<Parameters<RetainUpdateRuntime>[0]>();
     const release = createDeferredCore();
     const leases = createManagedHandoffLeaseStore();
-    const sharedArtifacts = ["update-reports", "logs/support"].map(
-      (relative) => `${f.profileStateDir()}/${relative}`,
-    );
+    const reportDirectory = `${f.profileStateDir()}/update-reports`;
+    const supportDirectory = `${f.profileStateDir()}/logs/support`;
+    const sharedArtifacts = [reportDirectory, supportDirectory];
     let retentionSettled = false;
     f.retainUpdateRuntime.mockImplementationOnce(async (options) => {
       options.assertCurrent();
@@ -147,31 +147,50 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
         expect(fsSync.existsSync(artifact)).toBe(false);
       }
       await vi.advanceTimersByTimeAsync(60_000);
-      await vi.waitFor(() => expect(f.lastWriteJsonCall()).toMatchObject({ status: "error" }));
+      await vi.waitFor(() => expect(retentionSettled).toBe(true));
       expect(await work).toMatchObject({ code: 1 });
-      expect(retentionSettled).toBe(true);
       expect(signal?.aborted).toBe(true);
       expect(signal?.reason).toMatchObject({ reason: "update-activation-timeout" });
       expect(assertCurrent).toThrow(UpdateActivationTimeoutError);
+      const runId = before[0]?.runId;
+      const terminalRuns = f.listUpdateRuns();
+      expect(terminalRuns, JSON.stringify({ result: f.lastWriteJsonCall(), terminalRuns })).toEqual(
+        [
+          expect.objectContaining({
+            runId,
+            status: "failed",
+            phase: "finished",
+            reason: "update-activation-timeout",
+          }),
+          ...before.slice(1),
+        ],
+      );
+      const reportPath = `${reportDirectory}/${runId}.md`;
       expect(f.defaultRuntime.writeJson).toHaveBeenCalledOnce();
       expect(f.lastWriteJsonCall()).toMatchObject({
         status: "error",
         reason: "update-activation-timeout",
-        runId: before[0]?.runId,
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        runId,
+        reportPath,
       });
-      // The initiating timeout diagnostic precedes the final custody outcome.
-      expect(vi.mocked(f.defaultRuntime.error).mock.calls).toEqual([
-        [expect.stringContaining("60-second budget")],
-        [expect.stringContaining("Update recovery remains pending (update-activation-timeout)")],
-      ]);
+      expect(f.getErrorOutput()).toContain("60-second budget");
+      expect(f.getErrorOutput()).not.toContain("Update recovery remains pending");
       await vi.waitFor(() => expect(leases.read(packageRoot)).toEqual({ kind: "absent" }));
-      // Cancellation revokes the original writer. A future owner may reconcile
-      // this row after driver death; the still-live test driver cannot finish it.
-      expect(f.listUpdateRuns()).toEqual(before);
       expect(await readRestartSentinelReadOnly()).toEqual(sentinelBefore);
-      for (const artifact of sharedArtifacts) {
-        expect(fsSync.existsSync(artifact)).toBe(false);
+      // Joined preparation may publish failure receipts without changing the installed runtime.
+      expect(await fs.readdir(reportDirectory)).toEqual([`${runId}.md`]);
+      expect(await fs.readFile(reportPath, "utf8")).toContain(
+        "update failed: update-activation-timeout",
+      );
+      const diagnostics = await fs.readdir(supportDirectory);
+      expect(diagnostics).not.toHaveLength(0);
+      for (const filename of diagnostics) {
+        expect(filename).toMatch(/^openclaw-update-failure-[a-f0-9_]+\.json$/);
+        expect(
+          JSON.parse(await fs.readFile(`${supportDirectory}/${filename}`, "utf8")),
+        ).toMatchObject({
+          result: { runId, status: "error", reason: "update-activation-timeout" },
+        });
       }
       expect(await fs.readFile(`${packageRoot}/package.json`, "utf8")).toBe(manifest);
     } finally {

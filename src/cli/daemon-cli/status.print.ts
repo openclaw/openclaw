@@ -16,6 +16,7 @@ import {
 } from "../../daemon/restart-logs.js";
 import { buildGatewayRuntimeRecoveryHints } from "../../daemon/runtime-hints.js";
 import { SERVICE_RUNTIME_AUDIT_CODES } from "../../daemon/service-audit-runtime.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import {
@@ -129,6 +130,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
   if (service.gatewayHeap) {
     printInfo("Gateway heap:", terminalText`${formatGatewayHeapLimitReport(service.gatewayHeap)}`);
+  }
+  if (service.installationDrift) {
+    printWarning(terminalText`${service.installationDrift}`);
   }
   printInfo("Host desktop:", formatHostDesktopStatus(status.hostDesktop));
   spacer();
@@ -272,6 +276,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       printInfo("Gateway service version:", serviceInstallLine);
       defaultRuntime.log(infoText("The Gateway did not report its own version."));
       if (
+        !status.service.installationDrift &&
         status.service.targetRole !== "diagnostic-only" &&
         status.cli?.version &&
         serviceInstallVersion &&
@@ -591,7 +596,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     status.port.status === "free"
   ) {
     printError(`Gateway port ${status.port.port} is not listening (service appears running).`);
-    const serviceEnv = { ...process.env, ...service.command?.environment };
+    const serviceEnv = mergeGatewayServiceEnv(process.env, service.command ?? null);
     if (process.platform === "linux") {
       const unit =
         service.runtime?.systemd?.unit ??
