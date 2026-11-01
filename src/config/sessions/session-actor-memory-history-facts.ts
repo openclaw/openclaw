@@ -496,17 +496,9 @@ export function readSessionActorMemoryHistoryFacts(
     case "session.history.accounting": {
       const { options } = query.input;
       const contextRows = options.includeByteSize ? contextAccountingRows(navigation) : [];
-      const limit = resolveIntegerOption(
-        options.usageEventLimit ?? SQLITE_USAGE_TAIL_MAX_EVENTS,
-        0,
-        { min: 0 },
-      );
-      const tail =
-        limit === 0
-          ? []
-          : navigation.active
-              .filter((row) => transcriptEventContextEligibility(row.event) === 1)
-              .slice(-limit);
+      const tail = navigation.active
+        .filter((row) => transcriptEventContextEligibility(row.event) === 1)
+        .slice(-SQLITE_USAGE_TAIL_MAX_EVENTS);
       return {
         ...(options.includeByteSize
           ? {

@@ -121,8 +121,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     listError: page.cron().cronJobsError,
     /** Canonical gateway capability for every mutation-capable cron control. */
     canManage,
-    canManageJob: page.canManageJob,
-    canCreate: page.canCreateCron(),
     ownerOptions,
     connected: page.cron().connected,
     status: page.cron().cronStatus,

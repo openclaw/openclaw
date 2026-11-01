@@ -6676,16 +6676,19 @@ jobs:
 
       - *android_toolchain_checkout_step
 
+      - name: Setup Node environment for native resources
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          # A full workspace store competes with the emulator image for hosted disk.
+          cache-mode: "off"
+          install-bun: "false"
+          install-deps: "false"
+
       - name: Setup Android toolchain
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
           cache-mode: *cache_mode
-
-      - name: Setup Node environment for native resources
-        uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
-          cache-mode: *cache_mode
-          install-bun: "false"
+          install-native-deps: "true"
 
       - name: Run packaged Access crypto and production TLS on Android
         shell: bash

@@ -580,6 +580,8 @@ it.each(captures)(
     const baseline = baselineTransport
       ? baselineTransport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    // Bind the FIFO baseline before another filesystem probe can overtake it.
+    await baselineTask.submitted;
     const result = transport
       ? transport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, fixture.command);

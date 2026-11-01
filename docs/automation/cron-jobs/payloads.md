@@ -389,6 +389,8 @@ openclaw automations create "*/15 * * * *" \
 
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution without shell parsing. Optional `--command-env KEY=VALUE` (repeatable), `--command-input`, `--timeout-seconds` (default 10 minutes), `--no-output-timeout-seconds`, and `--output-max-bytes` control the process environment, stdin, and output bounds.
 
+On `automations edit`, `--command-env` replaces all stored environment overrides; repeat every variable you want to keep. After a successful edit, the CLI warns on stderr with the dropped key names, never their values. This warning is best effort if the stored job cannot be read.
+
 Delivered text is derived from process output: non-empty stdout wins; if stdout is empty and stderr is non-empty, stderr is delivered; if both are present, the scheduler sends a small `stdout:` / `stderr:` block. Exit code `0` records the run `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal automation silent-token suppression and posts nothing back to chat.
 
 When the run deadline stops a command, run history retains its captured output and command timeout reason after bounded process cleanup. Completion delivery does not start after that deadline.

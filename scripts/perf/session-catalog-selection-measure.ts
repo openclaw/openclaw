@@ -6,12 +6,7 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -20,8 +15,9 @@ import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../src/gateway/server-methods/types.js";
 import type { SessionCatalogProvider } from "../../src/plugins/session-catalog.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -69,15 +65,10 @@ process.env = {
   TMPDIR: path.join(stateDir, "tmp"),
 };
 const profilePath = path.join(stateDir, "allocation.heapprofile");
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 // Identify the main isolate before imports can start database workers.
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 
 const [
   { setRuntimeConfigSnapshot },
@@ -300,17 +291,9 @@ let inspectorConnected = false;
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 try {
   // Two small sequential transactions; no transcripts or copied databases.
@@ -510,7 +493,7 @@ try {
   const before = process.memoryUsage();
   const cpu = process.cpuUsage();
   loop.reset();
-  marker("heap-start");
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   for (let index = 0; index < operations; index++) {
     if (!values.unchanged) {
@@ -545,12 +528,12 @@ try {
     await (yieldMs ? delay(yieldMs) : nextTurn());
   }
   measuredEnd = performance.now();
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
   const usedCpu = process.cpuUsage(cpu);
   const after = process.memoryUsage();
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile

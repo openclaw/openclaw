@@ -47,7 +47,6 @@ const enSidebarAttention = {
       all: "All",
       approvals: "Approvals",
       mentions: "Mentions",
-      automations: "Automations",
       system: "System",
     },
     mentions: {

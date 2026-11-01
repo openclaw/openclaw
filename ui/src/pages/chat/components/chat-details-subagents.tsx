@@ -87,7 +87,8 @@ function SubagentRow(props: ChatDetailsSubagentsProps & { row: Subagent }) {
             {
               "sr-only":
                 props.row.status === "done" || (props.mobile && props.row.status === "running"),
-              "chat-details-subagents__working": !props.mobile && props.row.status === "running",
+              "chat-details-subagents__working text-shimmer":
+                !props.mobile && props.row.status === "running",
             },
           ]}
         >

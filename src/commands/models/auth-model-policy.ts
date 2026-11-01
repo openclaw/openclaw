@@ -112,7 +112,7 @@ export function allowProviderModelsInConfig(
 export type ProviderModelAccess = { message: string; applied: boolean };
 
 /** Applies {@link allowProviderModelsInConfig} after a sign-in saved provider credentials. */
-export async function allowProviderModels(params: {
+async function allowProviderModels(params: {
   config: OpenClawConfig;
   agentId: string;
   provider: string;

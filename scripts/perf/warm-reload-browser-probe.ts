@@ -11,7 +11,7 @@ export const proofRegions = {
 };
 
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = false) {
+export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint = false) {
   if (window !== window.top) {
     return undefined;
   }
@@ -38,6 +38,23 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     }>,
     shifts: [] as Array<{ atMs: number; value: number }>,
     domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
+    sidebarFrames: [] as Array<{
+      atMs: number;
+      host: boolean;
+      frame: boolean;
+      state: string | null;
+      saved: string | null;
+      rows: number;
+      sections: number;
+    }>,
+    textStates: [] as Array<{
+      atMs: number;
+      hash: string;
+      characters: number;
+      truncated: boolean;
+      height: number;
+      width: number;
+    }>,
     animationSamples: [] as ReloadAnimationSample[],
     animationProbeMs: 0,
     animationPolicy:
@@ -58,7 +75,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     stopped: false,
   };
   Reflect.set(window, "__warmReloadProof", data);
-  if (traceIndexedDb) {
+  if (transcriptLatePaint) {
     for (const operation of ["get", "getAll", "getAllKeys", "put"] as const) {
       const original = IDBObjectStore.prototype[operation];
       Object.defineProperty(IDBObjectStore.prototype, operation, {
@@ -265,7 +282,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
       );
       const shimmer =
         animation instanceof CSSAnimation &&
-        /shimmer|skeleton-sweep/u.test(animation.animationName) &&
+        /shimmer/u.test(animation.animationName) &&
         /skeleton/u.test(target.className);
       const fade =
         properties.size > 0 &&
@@ -376,10 +393,48 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     }
     Reflect.get(window, "__paneChrome").sample(performance.now());
     sampleAnimations();
+    const answer = transcriptLatePaint
+      ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
+      : undefined;
+    if (answer) {
+      const text = answer.textContent ?? "";
+      const box = answer.getBoundingClientRect();
+      const textHash = hash(text);
+      const previousText = data.textStates.at(-1);
+      if (
+        box.width > 0 &&
+        box.height > 0 &&
+        (previousText?.hash !== textHash ||
+          previousText.height !== box.height ||
+          previousText.width !== box.width)
+      ) {
+        data.textStates.push({
+          atMs: performance.now(),
+          hash: textHash,
+          characters: text.length,
+          truncated: text.includes("...(truncated)..."),
+          height: box.height,
+          width: box.width,
+        });
+      }
+    }
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
     const rows = rowElements.length;
-    const sidebarRows = document.querySelectorAll("openclaw-app-sidebar [data-session-key]").length;
+    const sidebarRowElements = [
+      ...document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
+    ];
+    const sidebarRows = sidebarRowElements.length;
     const board = Boolean(document.querySelector("openclaw-board-view iframe"));
+    const sidebar = document.querySelector("aside.sidebar");
+    data.sidebarFrames.push({
+      atMs: performance.now(),
+      host: Boolean(document.querySelector("openclaw-app-sidebar")),
+      frame: Boolean(sidebar),
+      state: sidebar?.getAttribute("data-snapshot-state") ?? null,
+      saved: sidebar?.getAttribute("data-snapshot-saved") ?? null,
+      rows: new Set(sidebarRowElements.map((row) => row.getAttribute("data-session-key"))).size,
+      sections: document.querySelectorAll("openclaw-app-sidebar [data-session-section]").length,
+    });
     if (document.querySelector("openclaw-app-shell")) {
       data.firstAppDomMs ??= performance.now();
     }

@@ -103,6 +103,13 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Active accounting uses the independent history reader without reserving the
+agent database writer. Byte totals advance with actor appends and travel in its
+existing receipts, including when the full transcript is not resident. A reader
+borrows those totals only when the transcript version matches its native SQL
+snapshot; cold or changed snapshots retain their own accounting. Usage reads
+stay bounded and never expand to the complete active history.
+
 Entry reclamation derives each surviving row's transcript references once per
 synchronous deletion, even when several retained generations need a new owner.
 Those reference lists expire with the deletion; direct current-generation matches
@@ -739,6 +746,13 @@ repair backfill to finish: exact reads run before the next bounded bulk batch.
 An already-running batch finishes before priority work starts. Background scope
 drain still owns the complete backfill, and a failed or cancelled refresh rejects
 its pending exact reads instead of returning stale totals.
+
+Refresh discovery reuses the durable rollup's raw transcript statistics only when
+the transcript owner's mutation timestamp and rewrite generation still match.
+Changed or missing checkpoints use canonical statistics; unchanged histories do
+not scan event payload rows merely to confirm their recorded byte totals.
+Imports that append rows advance that logical timestamp even when the source
+file has an equal or older modification time; idempotent imports leave it intact.
 
 ## Transactions and query shape
 

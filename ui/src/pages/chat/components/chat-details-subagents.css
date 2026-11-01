@@ -83,8 +83,8 @@
   display: block;
   width: 8px;
   height: 8px;
-  border: 1.5px solid currentColor;
-  border-right-color: transparent;
+  background: currentColor;
+  mask: var(--spinner-mask-small);
   border-radius: 50%;
   animation: btn-spinner-spin 1.5s linear infinite;
 }
@@ -115,8 +115,6 @@
 .chat-details-subagents:not(.chat-details-subagents--mobile)
   .chat-details-subagents__badge
   > .chat-details-subagents__spinner {
-  border: 1.25px solid color-mix(in srgb, var(--accent) 30%, var(--details-subagent-surface));
-  border-top-color: var(--accent);
   corner-shape: round;
 }
 
