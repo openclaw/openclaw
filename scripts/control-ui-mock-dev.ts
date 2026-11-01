@@ -66,6 +66,7 @@ import {
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
+import { buildMeetingsMocks } from "./control-ui-mock-meetings.ts";
 import { mentionMockInitScript } from "./control-ui-mock-mentions.ts";
 import {
   buildPluginCatalogMock,
@@ -99,6 +100,7 @@ const FIXTURES = [
   "goal",
   "header-idle",
   "header-waiting",
+  "meetings",
   "plugins-dense",
   "reactions",
   "session-design",
@@ -3351,6 +3353,12 @@ async function createChatPickerScenario(
     scenario.sessions = rosterSessions;
     scenario.repeatingSessionEvents = { events: [] };
     scenario.sessionGroups = [];
+  }
+  if (fixture === "meetings") {
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      ...buildMeetingsMocks(Date.now()),
+    };
   }
   if (fixture === "backgrounds") {
     scenario.featureMethods = [
