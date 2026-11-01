@@ -355,6 +355,11 @@
   gap: 6px;
 }
 
+/* The tiles already read as their own group; keep the separator's space, not its line. */
+.agent-chat__attachment-sources + .agent-chat__capability-menu-divider {
+  background: transparent;
+}
+
 .agent-chat__attachment-sources .agent-chat__attach-menu-option {
   flex-direction: column;
   justify-content: center;
