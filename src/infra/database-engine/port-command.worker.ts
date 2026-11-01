@@ -1,20 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { parentPort, workerData } from "node:worker_threads";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  readBackupEngine,
-  readBackupEngineImage,
-  type BackupEngine,
-} from "../../snapshot/database-backup.js";
 import { hasErrnoCode } from "../errno.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { getPostgresPool } from "../postgres-sync/pool.js";
+import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
 import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
+import { getScopedDatabaseEngineSelection } from "./context.js";
+import { readBackupEngine, readBackupEngineImage, type BackupEngine } from "./physical-store.js";
 import {
   assertDatabasePortNamespaceOwner,
   databasePortProviders,
@@ -33,12 +33,18 @@ import {
   type PortDescriptor,
   type PortVerification,
 } from "./port.worker.js";
+import {
+  refreshPostgresPlannerStatistics,
+  type PostgresPlannerStatistics,
+} from "./postgres-planner-statistics.js";
 
 type Common = { sourcePath: string; config: OpenClawConfig };
 type Identity = { storeId: string; namespace: string };
 export type DatabasePortTask =
+  | ({ operation: "analyze" } & Common)
   | ({ operation: "inspect"; to: "sqlite" | "postgres" } & Common)
   | { operation: "preflight"; config: OpenClawConfig; probe: boolean; namespace?: string }
+  // Migration and staging consume an exclusively owned private SQLite image.
   | { operation: "migrate"; sourcePath: string; config?: OpenClawConfig }
   | ({
       operation: "stage";
@@ -56,22 +62,25 @@ export type DatabasePortTask =
       Identity)
   | { operation: "checkpoint"; sourcePath: string };
 export type DatabasePortInspection = Partial<Identity> & {
+  family: string;
   engine: "sqlite" | "postgres";
   version: number;
   descriptorHash: string;
   targetVersion: number;
   migrationRequired: boolean;
+  notes?: readonly string[];
   verification?: PortVerification;
 };
 type ReplyMap = {
   inspect: DatabasePortInspection;
   preflight: Awaited<ReturnType<typeof preflight>>;
   migrate: { descriptorHash: string; verification: PortVerification };
-  stage: ReplyMap["migrate"];
+  stage: ReplyMap["migrate"] & { plannerStatistics?: PostgresPlannerStatistics };
+  analyze: PostgresPlannerStatistics | undefined;
   verify: void;
   checkpoint: void;
 };
-type Reply = ReplyMap[keyof ReplyMap];
+export type DatabasePortReply = ReplyMap[keyof ReplyMap];
 type Scope = { assertCurrent: () => void; signal?: AbortSignal };
 export class DatabasePortError extends Error {}
 function refuse(fact: string): never {
@@ -87,20 +96,35 @@ async function inspectSqliteImage(
   descriptor: PortDescriptor,
   allowMigration = false,
 ) {
-  const { version, migrationRequired, pendingColumns } = descriptor.inspectSqliteSource?.(db) ?? {
+  const {
+    version,
+    migrationRequired: schemaMigrationRequired,
+    pendingColumns,
+  } = descriptor.inspectSqliteSource?.(db) ?? {
     version: (await import("../sqlite-user-version.js")).readSqliteUserVersion(db),
     migrationRequired: false,
     pendingColumns: {},
   };
+  // Port preparation also fills first-use columns that the live store may omit.
+  const migrationRequired =
+    schemaMigrationRequired || Object.values(pendingColumns).some((columns) => columns.length > 0);
   if (allowMigration && migrationRequired) {
-    // The family owner validates its historical shape before the private migration.
-    if (!descriptor.migrateSqliteSource) {
-      inspectSqlitePortSchema(db, descriptor, pendingColumns);
-    }
-    return { version, migrationRequired };
+    // Historical repairs use family admission; current first-use repairs still
+    // need the port's complete layout before preparing a private copy.
+    const admitted =
+      !schemaMigrationRequired || !descriptor.migrateSqliteSource
+        ? inspectSqlitePortSchema(db, descriptor, pendingColumns)
+        : descriptor;
+    return { version, migrationRequired, notes: admitted.notes };
   }
-  const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
-  return { version, migrationRequired, verification: { tables, allocations } };
+  const admitted = inspectSqlitePortSchema(db, descriptor);
+  const { tables, allocations } = await inspectDatabasePort({ engine: "sqlite", db }, admitted);
+  return {
+    version,
+    migrationRequired,
+    notes: admitted.notes,
+    verification: { tables, allocations },
+  };
 }
 async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
   const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
@@ -132,7 +156,7 @@ async function preflight(
   assertCurrent: () => void,
 ) {
   return withDatabasePortConnection(task.config, async (db) => {
-    const facts = await readPostgresPortCapabilities(db, {
+    await readPostgresPortCapabilities(db, {
       minimumPostgresVersion: Math.max(
         ...databasePortProviders.map((provider) => provider.minimumPostgresVersion),
       ),
@@ -153,7 +177,6 @@ async function preflight(
         await db.query("ROLLBACK");
       }
     }
-    return { ...facts, privilegesChecked: task.probe };
   });
 }
 async function stage(
@@ -161,8 +184,9 @@ async function stage(
   descriptor: PortDescriptor,
   assertCurrent: () => void,
   source: Awaited<ReturnType<typeof inspectSqliteImage>>,
-): Promise<PortVerification> {
+): Promise<{ verification: PortVerification; plannerStatistics?: PostgresPlannerStatistics }> {
   const { migrationRequired, verification } = source;
+  let plannerStatistics: PostgresPlannerStatistics | undefined;
   if (migrationRequired || !verification) {
     refuse("observed unmigrated private source; required migrate phase before staging");
   }
@@ -195,7 +219,7 @@ async function stage(
     const { targetPath: sourcePath, to: engine } = task;
     try {
       await verify({ ...task, operation: "verify", sourcePath, engine, verification }, descriptor);
-      return verification;
+      return { verification };
     } catch {
       // Only unverified private staging is rebuilt; occupied namespaces are checked below.
       for (const suffix of ["", "-wal", "-shm", "-journal"]) {
@@ -215,12 +239,9 @@ async function stage(
             refuse("observed occupied target namespace; required fresh namespace");
           }
           compare(await inspectPostgres(db, descriptor, task), verification);
+          plannerStatistics = await refreshPostgresPlannerStatistics(db, task.namespace);
           return;
         }
-        await preflight(
-          { operation: "preflight", config: task.config, probe: true, namespace: task.namespace },
-          assertCurrent,
-        );
         using image = openNodeSqliteDatabase(task.sourcePath, {
           readOnly: true,
           readBigInts: true,
@@ -232,6 +253,9 @@ async function stage(
             descriptor,
             storeId: task.storeId,
             assertCurrent,
+            onPlannerStatistics: (result) => {
+              plannerStatistics = result;
+            },
           }),
           verification,
         );
@@ -241,10 +265,10 @@ async function stage(
         throw error;
       }
       // COMMIT may have succeeded despite a lost reply; the fresh connection below decides.
+      await withDatabasePortConnection(task.config, async (db) =>
+        compare(await inspectPostgres(db, descriptor, task), verification),
+      );
     }
-    await withDatabasePortConnection(task.config, async (db) =>
-      compare(await inspectPostgres(db, descriptor, task), verification),
-    );
     assertCurrent();
     await fs.writeFile(task.targetPath, "", { flag: "wx", mode: 0o600 });
     using anchor = openNodeSqliteDatabase(task.targetPath);
@@ -260,17 +284,26 @@ async function stage(
       sourcePath: task.sourcePath,
       targetPath: task.targetPath,
       preserveRowIds: true,
+      sourceAcquisition: {
+        mode: "isolated-process",
+        stagingRoot: path.dirname(task.targetPath),
+        preserveSourceArtifacts: true,
+      },
     });
   }
   assertCurrent();
   await descriptor.admit?.(
     task.targetPath,
-    task.to === "postgres" ? await resolveDatabaseEngineInput(task.config) : undefined,
+    task.to === "postgres"
+      ? (getScopedDatabaseEngineSelection()?.postgres ??
+          (await resolveDatabaseEngineInput(task.config)))
+      : undefined,
   );
   if (task.to === "sqlite") {
-    compare((await inspectSqlite(task.targetPath, descriptor)).verification!, verification);
+    using image = openNodeSqliteDatabase(task.targetPath, { readOnly: true });
+    compare((await inspectSqliteImage(image, descriptor)).verification!, verification);
   }
-  return verification;
+  return { verification, plannerStatistics };
 }
 async function verify(
   task: Extract<DatabasePortTask, { operation: "verify" }>,
@@ -293,7 +326,26 @@ async function verify(
       : (source?.facts ?? (await inspectSqlite(task.sourcePath, descriptor))).verification!;
   compare(actual, task.verification);
 }
-async function execute(task: DatabasePortTask, assertCurrent: () => void): Promise<Reply> {
+export async function executeDatabasePortTask(
+  task: DatabasePortTask,
+  assertCurrent: () => void,
+): Promise<DatabasePortReply> {
+  if (task.operation === "analyze") {
+    const anchor = readBackupEngine(task.sourcePath);
+    if (anchor.engine === "postgres") {
+      return withDatabasePortConnection(
+        task.config,
+        async (db) => {
+          await assertDatabasePortNamespaceOwner(db, anchor.namespace);
+          assertCurrent();
+          return refreshPostgresPlannerStatistics(db, anchor.namespace);
+        },
+        process.env,
+        { connectionTimeoutMillis: 5_000, query_timeout: 15_000 },
+      );
+    }
+    return;
+  }
   if (task.operation === "preflight") {
     return preflight(task, assertCurrent);
   }
@@ -309,9 +361,14 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
   }
   const { loadDatabasePortDescriptor } = await import("./port-provider-descriptor.js");
   const source = await (async () => {
-    const prepared = prepareSqliteReadOnlyLocationSync(task.sourcePath);
+    // Published sources still need process isolation; private phase inputs already have it.
+    const prepared =
+      task.operation === "migrate" || task.operation === "stage"
+        ? undefined
+        : prepareSqliteReadOnlyLocationSync(task.sourcePath);
+    const imagePath = prepared?.location ?? task.sourcePath;
     try {
-      const engine = readBackupEngineImage(prepared.location, task.sourcePath);
+      const engine = readBackupEngineImage(imagePath, task.sourcePath);
       if (engine.engine === "postgres") {
         if (task.operation === "migrate" || task.operation === "stage") {
           refuse("private migration and staging require a SQLite image");
@@ -323,7 +380,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
         );
         return { engine, descriptor, facts: undefined };
       }
-      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      using db = openNodeSqliteDatabase(imagePath, { readOnly: true });
       const descriptor = await loadDatabasePortDescriptor(
         sqliteDatabasePortProvider(db).id,
         "config" in task ? task.config : undefined,
@@ -335,7 +392,7 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
       );
       return { engine, descriptor, facts };
     } finally {
-      prepared.cleanup();
+      prepared?.cleanup();
     }
   })();
   const { engine, descriptor } = source;
@@ -349,19 +406,27 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
             verification: await inspectPostgres(db, descriptor, engine, false),
           }))
         : source.facts!;
-    return { ...engine, ...facts, descriptorHash, targetVersion: descriptor.version };
+    return {
+      ...engine,
+      ...facts,
+      family: descriptor.id,
+      descriptorHash,
+      targetVersion: descriptor.version,
+    };
   }
   if (task.operation === "migrate" || task.operation === "stage") {
-    const verification =
+    const result =
       task.operation === "stage"
         ? await stage(task, descriptor, assertCurrent, source.facts!)
-        : await migrateDatabasePortSource(
-            task.sourcePath,
-            descriptor,
-            source.facts!.version,
-            assertCurrent,
-          );
-    return { descriptorHash, verification };
+        : {
+            verification: await migrateDatabasePortSource(
+              task.sourcePath,
+              descriptor,
+              source.facts!.version,
+              assertCurrent,
+            ),
+          };
+    return { descriptorHash, ...result };
   }
   return verify(task, descriptor, source);
 }
@@ -371,13 +436,19 @@ export function runDatabasePortTask<T extends DatabasePortTask>(
   scope: Scope,
 ): Promise<ReplyMap[T["operation"]]>;
 /** Joins the one-shot native worker before the caller may publish any active pathname. */
-export async function runDatabasePortTask(task: DatabasePortTask, scope: Scope): Promise<Reply> {
+export async function runDatabasePortTask(
+  task: DatabasePortTask,
+  scope: Scope,
+): Promise<DatabasePortReply> {
   scope.assertCurrent();
+  // Target schema admission needs PostgreSQL while the caller still selects SQLite.
+  if (task.operation === "stage" && task.to === "postgres") {
+    getPostgresPool();
+  }
   const { WorkerTaskPool } = await import("../worker-task-pool.js");
-  const pool = new WorkerTaskPool<DatabasePortTask, Reply>({
-    workerUrl: new URL(import.meta.url),
+  const pool = new WorkerTaskPool<DatabasePortTask, DatabasePortReply>({
+    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databasePortCommand),
     maxWorkers: 1,
-    workerOptions: { workerData: { openclawPortCommand: true } },
   });
   try {
     const result = await pool.run(task, { signal: scope.signal });
@@ -395,25 +466,4 @@ export async function runDatabasePortTask(task: DatabasePortTask, scope: Scope):
   } finally {
     await pool.close();
   }
-}
-if (parentPort && workerData?.openclawPortCommand === true) {
-  const { serveWorkerTasks } = await import("../worker-task-server.js");
-  serveWorkerTasks((value, _channel, control) =>
-    control.runNativeSection(async () => {
-      // SAFETY: The private one-shot host exclusively supplies this structured-clone task.
-      const task = value as DatabasePortTask;
-      try {
-        return await execute(task, control.throwIfCancelled);
-      } catch (error) {
-        const fact =
-          error instanceof DatabasePortDataError
-            ? error.message
-            : "observed database validation or I/O failure; required readable, valid data and namespace privileges";
-        throw new Error(
-          `${task.operation}: ${"sourcePath" in task ? task.sourcePath : databasePortProviders.map((provider) => provider.id).join(", ")}: ${fact}. Stop the Gateway, correct the source or connection, then retry or use the retained recovery manifest.`,
-          { cause: error },
-        );
-      }
-    }),
-  );
 }

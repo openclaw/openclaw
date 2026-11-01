@@ -1,22 +1,25 @@
 import type { Selectable } from "kysely";
-import { jsonArrayFrom } from "kysely/helpers/sqlite";
+import { jsonArrayFrom } from "../../infra/database-engine/json-values.js";
+import {
+  getPostgresPhysicalFacts,
+  type PostgresPhysicalFacts,
+} from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { parseSqliteTableDefinition } from "../../infra/sqlite-schema-contract-assembly.js";
 import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { readTableColumns, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
-import { workerPlacementMoveFromRow } from "./placement-move-intent.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
+import { workerPlacementMoveFromRow } from "./placement-move-row-codec.js";
 import type {
   WorkerEnvironmentPlacementFacts,
   WorkerPlacementConflictBinding,
@@ -35,8 +38,8 @@ import { isCurrentJournalOwner } from "./placement-workspace-journal.js";
 import {
   isWorkerWorkspaceResultReconciling,
   matchesWorkspaceResultClaim,
+  pendingResultFromRow,
 } from "./placement-workspace-result-owner.js";
-import { pendingResultFromRow } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { decodeWorkerEnvironmentRow } from "./store-row-codec.js";
 
@@ -63,23 +66,22 @@ type ProjectionSchema = {
   moves?: { machineClass: boolean; os: boolean; abandonSource: boolean };
 };
 
-const projectionSchemas = new WeakMap<SqliteSchemaFacts, ProjectionSchema>();
+const projectionSchemas = new WeakMap<
+  SqliteSchemaFacts | PostgresPhysicalFacts,
+  ProjectionSchema
+>();
 const PROJECTION_BATCH_SIZE = 250;
 
 function readProjectionSchema(db: EngineConnection): ProjectionSchema {
-  const schema = getAdmittedSqliteSchemaFacts(db);
+  const schema = getPostgresPhysicalFacts(db) ?? getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Worker placement projection requires admitted schema facts");
   }
   let projectionSchema = projectionSchemas.get(schema);
   if (!projectionSchema) {
-    const pendingColumns = parseSqliteTableDefinition(
-      schema.tableSql.get("worker_workspace_pending_results") ?? null,
-      "worker_workspace_pending_results",
-    ).columns;
-    const moveSql = schema.tableSql.get("worker_session_placement_moves");
-    const moveColumns = moveSql
-      ? parseSqliteTableDefinition(moveSql, "worker_session_placement_moves").columns
+    const pendingColumns = readTableColumns(db, "worker_workspace_pending_results");
+    const moveColumns = tableExists(db, "worker_session_placement_moves")
+      ? readTableColumns(db, "worker_session_placement_moves")
       : undefined;
     projectionSchema = {
       repositoryWorkspace: pendingColumns.has("repository_workspace_id"),
@@ -145,6 +147,7 @@ function readProjectionRows(
       "recovery_requested_at_ms",
       "workspace_accepted_at_ms",
       "staged_result_ref",
+      "repository_disk_authority_json",
       "created_at_ms",
     ])
     .select((eb) =>
@@ -172,10 +175,12 @@ function readProjectionRows(
       "preparation_key",
       "preparation_purpose",
       "provision_operation_id",
+      "resource_receipt_json",
       "node_setup_id",
       "node_device_id",
       "shared_host",
       "lease_id",
+      "resource_receipt_json",
       "ssh_host",
       "ssh_port",
       "ssh_user",
@@ -206,17 +211,20 @@ function readProjectionRows(
         .select("environment_id")
         .where("session_id", "in", ids)
         .where("environment_id", "is not", null),
-    );
+    )
+    .$assertType<Selectable<StateDatabase["worker_environments"]>>();
   // Each recovery table contributes independently, including local and terminal placements.
   // The native sync executor returns JSON text without Kysely's result plugins.
   return executeSqliteQuerySync(
     db,
     query.selectNoFrom((eb) => [
-      jsonArrayFrom(placements).$castTo<string>().as("placements"),
-      jsonArrayFrom(pendingResults).$castTo<string>().as("pendingResults"),
-      jsonArrayFrom(journals).$castTo<string>().as("journals"),
-      schema.moves ? jsonArrayFrom(moves).$castTo<string>().as("moves") : eb.val("[]").as("moves"),
-      jsonArrayFrom(environments).$castTo<string>().as("environments"),
+      jsonArrayFrom(db, placements, []).$castTo<string>().as("placements"),
+      jsonArrayFrom(db, pendingResults, []).$castTo<string>().as("pendingResults"),
+      jsonArrayFrom(db, journals, []).$castTo<string>().as("journals"),
+      schema.moves
+        ? jsonArrayFrom(db, moves, []).$castTo<string>().as("moves")
+        : eb.val("[]").as("moves"),
+      jsonArrayFrom(db, environments, []).$castTo<string>().as("environments"),
     ]),
   ).rows[0]!;
 }
@@ -335,15 +343,13 @@ export function readWorkerSessionPlacementProjectionInDatabase(
     return { projection, conflictSessionIds };
   };
   // One SELECT has its own snapshot; multiple batches must retain the same read transaction.
-  return sessionIds.length <= PROJECTION_BATCH_SIZE
-    ? read()
-    : runSqliteDeferredTransactionSync(db, read);
+  return sessionIds.length <= PROJECTION_BATCH_SIZE ? read() : runSqliteReadSnapshotSync(db, read);
 }
 
 export function readWorkerPlacementRecoveryCandidatesInDatabase(
   db: EngineConnection,
 ): WorkerPlacementRecoveryCandidate[] {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     const query = getNodeSqliteKysely<StateDatabase>(db);
     const placements = new Map(
       executeSqliteQuerySync(

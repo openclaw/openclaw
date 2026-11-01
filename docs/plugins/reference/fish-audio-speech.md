@@ -15,7 +15,7 @@ Fish Audio hosted text-to-speech with streaming, voice notes, and telephony outp
 ## Distribution
 
 - Package: `@openclaw/fish-audio-speech`
-- Install route: npm or ClawHub: `clawhub:@openclaw/fish-audio-speech`
+- Install route: npm or ClawHub: `@openclaw/fish-audio-speech`
 
 ## Surface
 

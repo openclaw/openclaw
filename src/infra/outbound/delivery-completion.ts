@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { getOwedHarnessCompletionTask } from "../../agents/agent-harness-completion-recovery.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   ConversationDeliveryMissingError,
@@ -41,24 +40,18 @@ import {
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
-import { SqliteWorkerError } from "../sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../sqlite-worker-contract.js";
 import {
   countPhysicalOutboundSends,
+  type OutboundDeliveryBatch as DeliveryEvidenceBatch,
   type OutboundDeliveryResult,
-  type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import {
   captureDeliveryPlacementEvidence,
+  deliveryPlacementMatchesContext,
   type DeliveryPlacementEvidence,
 } from "./delivery-placement-evidence.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
-import { normalizeTargetForProvider } from "./target-normalization.js";
-
-type DeliveryEvidenceBatch = {
-  results: readonly OutboundDeliveryResult[];
-  payloadCount: number;
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-};
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<
@@ -159,11 +152,10 @@ export async function settlePendingFinalDelivery(
     identifiedResult?: OutboundDeliveryResult;
     batch?: DeliveryEvidenceBatch;
     /** Delivery has settled; durable queue owners must retain their receipt until ACK. */
-    clearAfterSettled?: { recoveryRunId?: string };
+    clearAfterSettled?: true;
   } = {},
 ): Promise<DurableDeliveryCompletionResult> {
   let settled: DurableDeliveryCompletionResult["state"] = "stale";
-  let wakeRecovery = false;
   const scope = {
     agentId: completion.agentId,
     sessionKey: completion.sessionKey,
@@ -180,7 +172,6 @@ export async function settlePendingFinalDelivery(
       ? {
           cleanup: {
             sessionKey: completion.sessionKey,
-            recoveryRunId: options.clearAfterSettled.recoveryRunId,
             now: Date.now(),
             preserveActivity: options.preserveActivity,
           },
@@ -188,7 +179,6 @@ export async function settlePendingFinalDelivery(
       : {}),
   };
   const authority = completion.sessionWriterDeliveryAuthority;
-  const claim = authority?.harnessCompletion;
   if (
     completion.agentId !== undefined &&
     authority?.agentId !== undefined &&
@@ -197,41 +187,24 @@ export async function settlePendingFinalDelivery(
     return { state: "stale" };
   }
   let refused = false;
-  let preimage: SessionEntry | undefined;
-  const hasCurrentClaim = (entry: SessionEntry | undefined, previous = entry) =>
-    !claim ||
-    Boolean(
-      entry &&
-      previous &&
-      entry.sessionId === completion.sessionId &&
-      entry.pendingFinalDelivery?.intentId === completion.intentId &&
-      entry.pendingFinalDelivery.deliveries?.some(({ id }) => id === completion.deliveryId) &&
-      authority &&
-      authority.sessionKey === completion.sessionKey &&
-      (authority.storePath === undefined || authority.storePath === completion.storePath) &&
-      claim.requesterSessionKey === completion.sessionKey &&
-      claim.sessionId === completion.sessionId &&
-      authority.expectedSessionId === completion.sessionId &&
-      (authority.agentId === undefined || authority.agentId === claim.requesterAgentId) &&
-      (completion.agentId === undefined ||
-        normalizeAgentId(claim.requesterAgentId) === normalizeAgentId(completion.agentId)) &&
-      (authority.expectedLifecycleRevision === undefined ||
-        authority.expectedLifecycleRevision === entry.lifecycleRevision) &&
-      (authority.expectedWriterRunId === undefined ||
-        authority.expectedWriterRunId === entry.activeWriterRunId) &&
-      getOwedHarnessCompletionTask(claim, previous),
-    );
   const evidence = (entry: SessionEntry | undefined): SessionActorDeliveryEvidence => ({
-    ...(claim ? { claim } : {}),
     result: resolvePendingFinalResultEvidence(options, entry?.pendingFinalDelivery?.context),
   });
   const live: SessionActorAuthority = {
     assertCurrent() {},
-    authorize(stage, facts) {
-      if (stage === "transaction" || !preimage) {
-        preimage = facts.entry;
-      }
-      if (!hasCurrentClaim(facts.entry, preimage)) {
+    authorize(_stage, facts) {
+      const entry = facts.entry;
+      if (
+        authority &&
+        (!entry ||
+          authority.sessionKey !== completion.sessionKey ||
+          (authority.storePath !== undefined && authority.storePath !== completion.storePath) ||
+          authority.expectedSessionId !== entry.sessionId ||
+          (authority.expectedLifecycleRevision !== undefined &&
+            authority.expectedLifecycleRevision !== entry.lifecycleRevision) ||
+          (authority.expectedWriterRunId !== undefined &&
+            authority.expectedWriterRunId !== entry.activeWriterRunId))
+      ) {
         refused = true;
         throw new Error("Pending final delivery authority was revoked");
       }
@@ -266,31 +239,20 @@ export async function settlePendingFinalDelivery(
       if (outcome.kind === "rolled-back" && (refused || outcome.reason === "stale-state")) {
         return;
       }
-      throw new SqliteWorkerError(
+      throw wrapSqliteWorkerError(
         outcome.error.message,
         outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+        outcome.error,
       );
     }
     if (!("state" in outcome.value)) {
       throw new Error("Pending final delivery returned another settlement");
     }
     settled = outcome.value.state;
-    wakeRecovery = outcome.value.wakeRecovery;
     if (outcome.failure) {
       throw new Error(outcome.failure.message);
     }
   });
-  if (wakeRecovery) {
-    const { scheduleMainSessionRecoveryPendingTarget } =
-      await import("../../agents/main-session-recovery/main-session-recovery-owner-release.js");
-    scheduleMainSessionRecoveryPendingTarget({
-      ...(completion.agentId !== undefined ? { agentId: completion.agentId } : {}),
-      sessionId: completion.sessionId,
-      sessionKey: completion.sessionKey,
-      ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
-      storePath: completion.storePath,
-    });
-  }
   return { state: settled };
 }
 
@@ -302,15 +264,9 @@ function resolvePendingFinalResultEvidence(
   if (!context?.channel || !context.to || !options.identifiedResult) {
     return undefined;
   }
-  const expectedTarget = normalizeTargetForProvider(context.channel, context.to);
+  const destination = { channel: context.channel, to: context.to, threadId: context.threadId };
   const matchesPlacement = (placement: DeliveryPlacementEvidence | undefined): boolean =>
-    !placement ||
-    (!placement.invalid &&
-      placement.channels.every((channel) => channel === context.channel) &&
-      placement.targets.every(
-        (target) => normalizeTargetForProvider(context.channel!, target) === expectedTarget,
-      ) &&
-      placement.threads.every((thread) => thread === String(context.threadId ?? "").trim()));
+    deliveryPlacementMatchesContext(placement, destination);
   const matches = (result: OutboundDeliveryResult): boolean =>
     result.channel === context.channel &&
     result.outcome !== "not_sent" &&

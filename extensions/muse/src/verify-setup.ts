@@ -3,7 +3,27 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MusePool } from "./runtime.js";
 
 type AgentHarnessSetupVerificationContext = Parameters<NonNullable<AgentHarness["verifySetup"]>>[0];
-type MuseCatalogEntry = { id: string; name: string; provider: string; nativeRuntime: string };
+
+function museDisplayName(modelId: string, displayLabel: unknown): string {
+  const label = typeof displayLabel === "string" ? displayLabel : modelId;
+  // Muse Code 1.3.0 returns raw IDs for these native-only offerings, and gives
+  // Full Contributor its sibling's ID as a label. Correct presentation only;
+  // model/list remains the authority for executable IDs and account access.
+  if (
+    label === modelId ||
+    (modelId === "muse-wonder-full-1.0-contributor" && label === "muse-wonder-1.0-contributor")
+  ) {
+    switch (modelId) {
+      case "muse-wonder-1.0-contributor":
+        return "Muse Wonder Contributor";
+      case "muse-wonder-full-1.0":
+        return "Muse Wonder Full";
+      case "muse-wonder-full-1.0-contributor":
+        return "Muse Wonder Full Contributor";
+    }
+  }
+  return label;
+}
 
 /** One lifecycle owner for read-only catalog hosts; every read still asks Meta for live access. */
 export class MuseCatalogReader {
@@ -11,7 +31,7 @@ export class MuseCatalogReader {
 
   async read(
     ctx: Pick<AgentHarnessSetupVerificationContext, "config" | "signal" | "assertCurrent">,
-  ): Promise<MuseCatalogEntry[]> {
+  ): Promise<{ id: string; name: string; provider: string; nativeRuntime: string }[]> {
     ctx.signal.throwIfAborted();
     ctx.assertCurrent();
     const config = ctx.config.plugins?.entries?.muse?.config;
@@ -49,7 +69,7 @@ export class MuseCatalogReader {
           ? [
               {
                 id: model.modelId,
-                name: typeof model.displayLabel === "string" ? model.displayLabel : model.modelId,
+                name: museDisplayName(model.modelId, model.displayLabel),
                 provider: "meta",
                 nativeRuntime: "muse",
               },

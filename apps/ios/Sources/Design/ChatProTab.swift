@@ -4,18 +4,6 @@ import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
-private struct ChatScrollEdgeTreatment: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            // The shared canvas supplies color for the native blur. Automatic
-            // edge effects harden to black when the host inserts an opaque fill.
-            content.scrollEdgeEffectStyle(.soft, for: .vertical)
-        } else {
-            content
-        }
-    }
-}
-
 struct ChatProTab: View {
     enum GatewayStatusTone: Equatable {
         case success
@@ -83,60 +71,58 @@ struct ChatProTab: View {
 
     private var content: some View {
         self.chatSurface
-            .modifier(ChatScrollEdgeTreatment())
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if let headerSidebarAction {
-                    OpenClawSidebarToolbarItem(
-                        action: headerSidebarAction,
-                        placement: .topBarLeading)
-                }
-                if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .topBarLeading) {
-                        self.headerAgentIdentity
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .topBarLeading) {
-                        self.headerAgentIdentity
+            // The shared canvas supplies color for the native blur. Automatic
+            // edge effects harden to black when the host inserts an opaque fill.
+                .scrollEdgeEffectStyle(.soft, for: .vertical)
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    if #available(iOS 27.1, *) {
+                        // Custom controls must explicitly support the system's side bar.
+                        self.chatToolbar.axisBehavior(.verticalPreferred)
+                    } else {
+                        self.chatToolbar
                     }
                 }
-                if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.chatActionsMenu
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        self.chatActionsMenu
+                .sheet(item: self.$transcriptShareItem) { item in
+                    OpenClawChatFileShareSheet(fileURL: item.fileURL)
+                }
+                .sheet(isPresented: self.$showsNewSessionOptions) {
+                    if let viewModel {
+                        ChatNewSessionOptionsPopover(viewModel: viewModel) {
+                            self.showsNewSessionOptions = false
+                        }
+                        .presentationDetents([.medium])
+                        .presentationDragIndicator(.visible)
                     }
                 }
-            }
-            .sheet(item: self.$transcriptShareItem) { item in
-                OpenClawChatFileShareSheet(fileURL: item.fileURL)
-            }
-            .sheet(isPresented: self.$showsNewSessionOptions) {
-                if let viewModel {
-                    ChatNewSessionOptionsPopover(viewModel: viewModel) {
-                        self.showsNewSessionOptions = false
+                .alert(
+                    String(localized: "Unable to Export Transcript"),
+                    isPresented: self.$showsTranscriptExportError)
+                {
+                    Button(role: .cancel) {} label: {
+                        Text("OK")
+                            .font(OpenClawType.body)
                     }
-                    .presentationDetents([.medium])
-                    .presentationDragIndicator(.visible)
-                }
-            }
-            .alert(
-                String(localized: "Unable to Export Transcript"),
-                isPresented: self.$showsTranscriptExportError)
-            {
-                Button(role: .cancel) {} label: {
-                    Text("OK")
+                } message: {
+                    Text("OpenClaw could not prepare the Markdown file.")
                         .font(OpenClawType.body)
                 }
-            } message: {
-                Text("OpenClaw could not prepare the Markdown file.")
-                    .font(OpenClawType.body)
-            }
+    }
+
+    @ToolbarContentBuilder
+    private var chatToolbar: some ToolbarContent {
+        if let headerSidebarAction {
+            OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            self.headerAgentIdentity
+        }
+        .sharedBackgroundVisibility(.hidden)
+        ToolbarItem(placement: .topBarTrailing) {
+            self.chatActionsMenu
+        }
+        .sharedBackgroundVisibility(.hidden)
     }
 
     @ViewBuilder
@@ -229,29 +215,32 @@ struct ChatProTab: View {
         .accessibilityHidden(true)
     }
 
+    @ViewBuilder
     private var headerAgentIdentity: some View {
-        HStack { self.headerAgentIdentityControl }
-            .frame(minHeight: 44)
-            .accessibilityElement(children: .contain) // Keep the parent reachable and its child actionable.
-            .accessibilityIdentifier("chat-agent-identity")
-            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
-            .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+        if #available(iOS 27.1, *) {
+            self.headerAgentIdentityButton.modifier(ChatToolbarStatusPopover(
+                isExpanded: self.$isGatewayStatusManuallyExpanded,
+                status: self.expandedGatewayStatusLabel))
+        } else {
+            self.headerAgentIdentityButton
+        }
     }
 
-    private var headerAgentIdentityControl: some View {
+    private var headerAgentIdentityButton: some View {
         Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
         }
+        .frame(minHeight: 44)
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
         .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
         .accessibilityHint(self.gatewayStatusAccessibilityHint)
-        .accessibilityIdentifier("chat-gateway-status")
+        .accessibilityIdentifier("chat-agent-identity")
+        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
     private var headerAgentIdentityLabel: some View {
-        HStack(spacing: 7) {
-            self.headerIdentityBadge
+        Label {
             VStack(alignment: .leading, spacing: 2) {
                 if self.showsExpandedGatewayStatus {
                     self.expandedGatewayStatusLabel
@@ -266,6 +255,8 @@ struct ChatProTab: View {
                     self.headerSessionTitle(session)
                 }
             }
+        } icon: {
+            self.headerIdentityBadge
         }
     }
 
@@ -432,14 +423,20 @@ struct ChatProTab: View {
         Button {
             self.showsChatActions.toggle()
         } label: {
-            Image(systemName: "ellipsis.circle")
-                .foregroundStyle(OpenClawBrand.accent)
+            Label {
+                Text("Chat actions")
+                    .font(OpenClawType.body)
+            } icon: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 22))
+            }
+            .foregroundStyle(OpenClawBrand.accent)
         }
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
-        .popover(isPresented: self.$showsChatActions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+        .popover(isPresented: self.$showsChatActions) {
             self.chatActionsPopover
                 .onDisappear {
                     self.performPendingChatAction()
@@ -731,4 +728,26 @@ struct ChatProTab: View {
             title: String(localized: "Help me start voice chat"),
             prompt: String(localized: "Help me start a realtime voice session from this phone.")),
     ]
+}
+
+@available(iOS 27.1, *)
+private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var verticalEdge
+    @Binding var isExpanded: Bool
+    let status: Status
+
+    func body(content: Content) -> some View {
+        content.popover(isPresented: self.isPresented) {
+            self.status
+                .padding(16)
+                .accessibilityIdentifier("chat-gateway-status-details")
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { self.verticalEdge != nil && self.isExpanded },
+            set: { self.isExpanded = $0 })
+    }
 }

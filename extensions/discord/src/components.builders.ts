@@ -1,5 +1,14 @@
 import crypto from "node:crypto";
-import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
+import {
+  ButtonStyle,
+  ComponentType,
+  MessageFlags,
+  type APIActionRowComponent,
+  type APIButtonComponent,
+  type APIComponentInMessageActionRow,
+  type APIComponentInContainer,
+  type APISectionComponent,
+} from "discord-api-types/v10";
 import { buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl } from "./component-custom-id.js";
 import { mapButtonStyle, normalizeModalFieldName } from "./components.parse.js";
 import type {
@@ -7,93 +16,41 @@ import type {
   DiscordComponentButtonSpec,
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
-  DiscordComponentSelectSpec,
   DiscordComponentSelectType,
   DiscordModalEntry,
 } from "./components.types.js";
-import { AnySelectMenu } from "./internal/components.message.js";
-import {
-  Button,
-  ChannelSelectMenu,
-  Container,
-  File,
-  LinkButton,
-  MediaGallery,
-  MentionableSelectMenu,
-  RoleSelectMenu,
-  Row,
-  Section,
-  Separator,
-  StringSelectMenu,
-  TextDisplay,
-  Thumbnail,
-  UserSelectMenu,
-  type TopLevelComponents,
-} from "./internal/discord.js";
+import { colorToNumber } from "./internal/components.base.js";
+import { asSerializableComponent, type TopLevelComponents } from "./internal/payload.js";
 import { stripUndefinedFields } from "./internal/undefined-fields.js";
 
 function createShortId(prefix: string) {
   return `${prefix}${crypto.randomBytes(6).toString("base64url")}`;
 }
 
-const selectMenuConstructors = {
-  string: class extends StringSelectMenu {
-    customId = "";
-    override options: NonNullable<DiscordComponentSelectSpec["options"]> = [];
-  },
-  user: class extends UserSelectMenu {
-    customId = "";
-  },
-  role: class extends RoleSelectMenu {
-    customId = "";
-  },
-  mentionable: class extends MentionableSelectMenu {
-    customId = "";
-  },
-  channel: class extends ChannelSelectMenu {
-    customId = "";
-  },
-};
-type DiscordSelectMenuByType = {
-  [Type in keyof typeof selectMenuConstructors]: InstanceType<
-    (typeof selectMenuConstructors)[Type]
-  >;
-};
-type DiscordSelectMenu = DiscordSelectMenuByType[DiscordComponentSelectType];
-
-export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>(
-  type: Type,
-  customId: string,
-  options?: DiscordComponentSelectSpec["options"],
-): DiscordSelectMenuByType[Type] {
-  // SAFETY: the instance map is derived from these constructors.
-  const SelectMenu = selectMenuConstructors[type] as new () => DiscordSelectMenuByType[Type];
-  const select = new SelectMenu();
-  select.customId = customId;
-  if (select instanceof StringSelectMenu) {
-    select.options = options ?? [];
-  }
-  return select;
-}
+type DiscordActionRow = APIActionRowComponent<APIComponentInMessageActionRow>;
+type DiscordContainerChild =
+  | Exclude<APIComponentInContainer, APISectionComponent>
+  | (Omit<APISectionComponent, "accessory"> & { accessory?: APISectionComponent["accessory"] });
 
 function createButtonComponent(params: { spec: DiscordComponentButtonSpec; modalId?: string }): {
-  component: Button | LinkButton;
+  component: APIButtonComponent;
   entry?: DiscordComponentEntry;
 } {
   const style = mapButtonStyle(params.spec.style);
-  const isLink = style === ButtonStyle.Link || Boolean(params.spec.url);
-  if (isLink) {
+  if (style === ButtonStyle.Link || params.spec.url) {
     if (!params.spec.url) {
       throw new Error("Link buttons require a url");
     }
-    const linkUrl = params.spec.url;
-    class DynamicLinkButton extends LinkButton {
-      label = params.spec.label;
-      url = linkUrl;
-      override emoji = params.spec.emoji;
-      override disabled = params.spec.disabled ?? false;
-    }
-    return { component: new DynamicLinkButton() };
+    return {
+      component: stripUndefinedFields({
+        type: ComponentType.Button,
+        style: ButtonStyle.Link,
+        label: params.spec.label,
+        url: params.spec.url,
+        emoji: params.spec.emoji,
+        disabled: params.spec.disabled || undefined,
+      }),
+    };
   }
   const componentId = createShortId("btn_");
   const internalCustomId = params.spec.internalCustomId?.trim() || undefined;
@@ -103,70 +60,27 @@ function createButtonComponent(params: { spec: DiscordComponentButtonSpec; modal
       componentId,
       modalId: params.modalId,
     });
-  class DynamicButton extends Button {
-    label = params.spec.label;
-    customId = customId;
-    override style = style;
-    override emoji = params.spec.emoji;
-    override disabled = params.spec.disabled ?? false;
-  }
-  if (internalCustomId) {
-    return {
-      component: new DynamicButton(),
-    };
-  }
   return {
-    component: new DynamicButton(),
-    entry: stripUndefinedFields<DiscordComponentEntry>({
-      id: componentId,
-      kind: params.modalId ? "modal-trigger" : "button",
+    component: stripUndefinedFields({
+      type: ComponentType.Button,
+      style,
       label: params.spec.label,
-      callbackData: params.spec.callbackData,
-      callbackDataKind: params.spec.callbackDataKind,
-      modalId: params.modalId,
-      reusable: params.spec.reusable,
-      allowedUsers: params.spec.allowedUsers,
+      custom_id: customId,
+      emoji: params.spec.emoji,
+      disabled: params.spec.disabled || undefined,
     }),
-  };
-}
-
-function createSelectComponent(params: { spec: DiscordComponentSelectSpec }): {
-  component: DiscordSelectMenu;
-  entry: DiscordComponentEntry;
-} {
-  const type = params.spec.type ?? "string";
-  const componentId = createShortId("sel_");
-  const customId = buildDiscordComponentCustomIdImpl({ componentId });
-  const options = params.spec.options ?? [];
-  if (type === "string" && options.length === 0) {
-    throw new Error("String select menus require options");
-  }
-  const select = createDiscordSelectMenu(type, customId, options);
-  select.minValues = params.spec.minValues;
-  select.maxValues = params.spec.maxValues;
-  select.placeholder = params.spec.placeholder;
-  const labels: Record<DiscordComponentSelectType, string> = {
-    string: "select",
-    user: "user select",
-    role: "role select",
-    mentionable: "mentionable select",
-    channel: "channel select",
-  };
-  return {
-    component: select,
-    entry: stripUndefinedFields<DiscordComponentEntry>({
-      id: componentId,
-      kind: "select",
-      label: params.spec.placeholder ?? labels[type],
-      callbackData: params.spec.callbackData,
-      callbackDataKind: params.spec.callbackDataKind,
-      selectType: type,
-      options:
-        type === "string"
-          ? options.map((option) => ({ value: option.value, label: option.label }))
-          : undefined,
-      allowedUsers: params.spec.allowedUsers,
-    }),
+    entry: internalCustomId
+      ? undefined
+      : stripUndefinedFields<DiscordComponentEntry>({
+          id: componentId,
+          kind: params.modalId ? "modal-trigger" : "button",
+          label: params.spec.label,
+          callbackData: params.spec.callbackData,
+          callbackDataKind: params.spec.callbackDataKind,
+          modalId: params.modalId,
+          reusable: params.spec.reusable,
+          allowedUsers: params.spec.allowedUsers,
+        }),
   };
 }
 
@@ -180,7 +94,7 @@ export function buildDiscordComponentMessage(params: {
   const entries: DiscordComponentEntry[] = [];
   const consumptionGroupId = createShortId("grp_");
   const modals: DiscordModalEntry[] = [];
-  const containerChildren: Container["components"] = [];
+  const containerChildren: DiscordContainerChild[] = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
     const reusable = entry.reusable ?? params.spec.reusable;
@@ -196,7 +110,7 @@ export function buildDiscordComponentMessage(params: {
 
   const buildButton = (
     options: Parameters<typeof createButtonComponent>[0],
-    row?: Array<Button | LinkButton | DiscordSelectMenu>,
+    row?: DiscordActionRow["components"],
   ) => {
     const { component, entry } = createButtonComponent(options);
     row?.push(component);
@@ -208,44 +122,67 @@ export function buildDiscordComponentMessage(params: {
 
   const text = params.spec.text ?? params.fallbackText;
   if (text) {
-    containerChildren.push(new TextDisplay(text));
+    containerChildren.push({ type: ComponentType.TextDisplay, content: text });
   }
 
   for (const block of params.spec.blocks ?? []) {
     if (block.type === "text") {
-      containerChildren.push(new TextDisplay(block.text));
+      containerChildren.push({ type: ComponentType.TextDisplay, content: block.text });
       continue;
     }
     if (block.type === "section") {
       const displays = (block.texts?.length ? block.texts : block.text ? [block.text] : []).map(
-        (entry) => new TextDisplay(entry),
+        (content) => ({ type: ComponentType.TextDisplay as const, content }),
       );
       if (displays.length > 3) {
         throw new Error("Section blocks support up to 3 text displays");
       }
-      let accessory: Thumbnail | Button | LinkButton | undefined;
+      let accessory: APISectionComponent["accessory"] | undefined;
       if (block.accessory?.type === "thumbnail") {
-        accessory = new Thumbnail(block.accessory.url);
+        accessory = { type: ComponentType.Thumbnail, media: { url: block.accessory.url } };
       } else if (block.accessory?.type === "button") {
         accessory = buildButton({ spec: block.accessory.button });
       }
-      containerChildren.push(new Section(displays, accessory));
+      containerChildren.push(
+        stripUndefinedFields({
+          type: ComponentType.Section,
+          components: displays,
+          accessory,
+        }),
+      );
       continue;
     }
     if (block.type === "separator") {
-      containerChildren.push(new Separator({ spacing: block.spacing, divider: block.divider }));
+      containerChildren.push({
+        type: ComponentType.Separator,
+        spacing: block.spacing === "large" || block.spacing === 2 ? 2 : 1,
+        divider: block.divider ?? true,
+      });
       continue;
     }
     if (block.type === "media-gallery") {
-      containerChildren.push(new MediaGallery(block.items));
+      containerChildren.push({
+        type: ComponentType.MediaGallery,
+        items: block.items.map(({ url, description, spoiler }) => ({
+          media: { url },
+          description,
+          spoiler,
+        })),
+      });
       continue;
     }
     if (block.type === "file") {
-      containerChildren.push(new File(block.file, block.spoiler));
+      containerChildren.push(
+        stripUndefinedFields({
+          type: ComponentType.File,
+          file: { url: block.file },
+          spoiler: block.spoiler || undefined,
+        }),
+      );
       continue;
     }
     if (block.type === "actions") {
-      const rowComponents: Array<Button | LinkButton | DiscordSelectMenu> = [];
+      const rowComponents: DiscordActionRow["components"] = [];
       if (block.buttons) {
         if (block.buttons.length > 5) {
           throw new Error("Action rows support up to 5 buttons");
@@ -254,11 +191,58 @@ export function buildDiscordComponentMessage(params: {
           buildButton({ spec: button }, rowComponents);
         }
       } else if (block.select) {
-        const { component, entry } = createSelectComponent({ spec: block.select });
-        rowComponents.push(component);
+        const selectSpec = block.select;
+        const type = selectSpec.type ?? "string";
+        const componentId = createShortId("sel_");
+        const customId = buildDiscordComponentCustomIdImpl({ componentId });
+        const options = selectSpec.options ?? [];
+        if (type === "string" && options.length === 0) {
+          throw new Error("String select menus require options");
+        }
+        const fields = stripUndefinedFields({
+          custom_id: customId,
+          min_values: selectSpec.minValues,
+          max_values: selectSpec.maxValues,
+          placeholder: selectSpec.placeholder,
+        });
+        const select =
+          type === "string"
+            ? { ...fields, type: ComponentType.StringSelect as const, options }
+            : {
+                ...fields,
+                type: (
+                  {
+                    user: ComponentType.UserSelect,
+                    role: ComponentType.RoleSelect,
+                    mentionable: ComponentType.MentionableSelect,
+                    channel: ComponentType.ChannelSelect,
+                  } as const
+                )[type],
+              };
+        const labels: Record<DiscordComponentSelectType, string> = {
+          string: "select",
+          user: "user select",
+          role: "role select",
+          mentionable: "mentionable select",
+          channel: "channel select",
+        };
+        const entry = stripUndefinedFields<DiscordComponentEntry>({
+          id: componentId,
+          kind: "select",
+          label: selectSpec.placeholder ?? labels[type],
+          callbackData: selectSpec.callbackData,
+          callbackDataKind: selectSpec.callbackDataKind,
+          selectType: type,
+          options:
+            type === "string"
+              ? options.map((option) => ({ value: option.value, label: option.label }))
+              : undefined,
+          allowedUsers: selectSpec.allowedUsers,
+        });
+        rowComponents.push(select);
         addEntry(entry);
       }
-      containerChildren.push(new Row(rowComponents));
+      containerChildren.push({ type: ComponentType.ActionRow, components: rowComponents });
     }
   }
 
@@ -305,13 +289,13 @@ export function buildDiscordComponentMessage(params: {
 
     const lastChild = containerChildren.at(-1);
     if (
-      lastChild instanceof Row &&
+      lastChild?.type === ComponentType.ActionRow &&
       lastChild.components.length < 5 &&
-      !lastChild.components.some((child) => child instanceof AnySelectMenu)
+      lastChild.components.every((child) => child.type === ComponentType.Button)
     ) {
-      lastChild.addComponent(component);
+      lastChild.components.push(component);
     } else {
-      containerChildren.push(new Row([component]));
+      containerChildren.push({ type: ComponentType.ActionRow, components: [component] });
     }
   }
 
@@ -319,7 +303,14 @@ export function buildDiscordComponentMessage(params: {
     throw new Error("components must include at least one block, text, or modal trigger");
   }
 
-  const container = new Container(containerChildren, params.spec.container);
+  const container = asSerializableComponent(
+    stripUndefinedFields({
+      type: ComponentType.Container,
+      components: containerChildren,
+      accent_color: colorToNumber(params.spec.container?.accentColor),
+      spoiler: params.spec.container?.spoiler || undefined,
+    }),
+  );
   const consumptionGroupEntryIds = entries.map((entry) => entry.id);
   for (const entry of entries) {
     entry.consumptionGroupEntryIds = consumptionGroupEntryIds;

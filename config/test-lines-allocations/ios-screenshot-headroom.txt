@@ -1,0 +1,2 @@
+# Screenshot admission and timeout preserve completed captures without booting a busy host.
+17

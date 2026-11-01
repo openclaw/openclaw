@@ -342,6 +342,7 @@ type ServiceWorkerPushPayload = {
   renotify?: boolean;
   tag?: string;
   url?: string;
+  icon?: string;
 };
 
 type ServiceWorkerNotificationOptions = {
@@ -470,3 +471,17 @@ function createNotificationServiceWorker(
     },
   };
 }
+
+describe("notification avatars", () => {
+  it.each([
+    ["data:image/png;base64,iVBORw0KGgo=", true],
+    ["https://example.test/avatar.png", false],
+    ["data:image/svg+xml,<svg/>", false],
+    [`data:image/png;base64,${"A".repeat(2_400)}`, false],
+  ])("accepts only bounded inline raster icons (%s)", async (icon, accepted) => {
+    const worker = createNotificationServiceWorker("https://gateway.example.test/control/", []);
+    const notification = await worker.dispatchPush({ title: "Agent finished", body: "Done", icon });
+    expect(notification.options.icon).toBe(accepted ? icon : "./apple-touch-icon.png");
+    expect(notification.options.badge).toBe("./favicon-32.png");
+  });
+});

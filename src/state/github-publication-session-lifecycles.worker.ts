@@ -5,7 +5,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import type { GitHubPublicationSessionLifecycle } from "./github-publication-read.types.js";
-import { githubPublicationReceipts } from "./github-publication-receipts.js";
+import {
+  githubPublicationReceipts,
+  type captureGitHubPublicationLifecycle,
+} from "./github-publication-receipts.js";
 import {
   encodeGitHubPublicationRequester,
   type GitHubPublicationRequesterSnapshot,
@@ -15,7 +18,7 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 const table = "github_publication_session_lifecycles";
-type PublicationIdentity = { publicationKind: "shared" | "personal"; requestId: string };
+type PublicationIdentity = Parameters<typeof captureGitHubPublicationLifecycle>[1];
 const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
 /** The receipt and its captured generation commit together; replay never rebinds it. */

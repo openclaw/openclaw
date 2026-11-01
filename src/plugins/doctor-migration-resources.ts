@@ -12,6 +12,7 @@ import type {
   PluginDoctorMigrationBackupWarning,
   PluginDoctorStateMigration,
 } from "./doctor-contract-module.js";
+import { sqliteOnlyMigrationNotice } from "./doctor-migration-applicability.js";
 import type { PluginStateRetentionContract } from "./doctor-retired-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
@@ -33,8 +34,14 @@ export async function preparePluginDoctorMigrationResources(
 ) {
   const rehearsalRoot = resolveUpdateRehearsalRoot(params.env);
   const resources = new Map<string, PluginDoctorMigrationBackupResource>();
+  const notices: string[] = [];
   const pluginResources = new Map<string, Set<string>>();
   for (const { pluginId, migration } of entries) {
+    const notice = sqliteOnlyMigrationNotice(migration, params.config);
+    if (notice) {
+      notices.push(notice);
+      continue;
+    }
     if (migration.collectBackupResources === undefined) {
       if (!params.warnings.some((warning) => warning.pluginId === pluginId)) {
         params.warnings.push({
@@ -110,10 +117,13 @@ export async function preparePluginDoctorMigrationResources(
   return {
     resources: selectedResources,
     deferredPluginIds,
-    notices: [...deferredPluginIds].map(
-      (pluginId) =>
-        `rehearsal: ${pluginId} state migrations deferred; declared data outside the rehearsal root left untouched`,
-    ),
+    notices: [
+      ...notices,
+      ...[...deferredPluginIds].map(
+        (pluginId) =>
+          `rehearsal: ${pluginId} state migrations deferred; declared data outside the rehearsal root left untouched`,
+      ),
+    ],
     assertCurrent,
   };
 }

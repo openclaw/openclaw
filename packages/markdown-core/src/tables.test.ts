@@ -1,32 +1,29 @@
-// Markdown Core tests cover tables behavior.
 import MarkdownIt from "markdown-it";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { markdownToIR } from "./ir.js";
+import { describe, expect, it, vi } from "vitest";
+import * as ir from "./ir.js";
 import { convertMarkdownTables } from "./tables.js";
 
-const markdownToIRWithMetaMock = vi.hoisted(() => vi.fn());
+const markdownToIRWithMetaMock = vi.spyOn(ir, "markdownToIRWithMeta");
+const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+const toHtml = (markdown: string) => new MarkdownIt().render(markdown);
 
-vi.mock("./ir.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./ir.js")>();
-  markdownToIRWithMetaMock.mockImplementation(actual.markdownToIRWithMeta);
-  return { ...actual, markdownToIRWithMeta: markdownToIRWithMetaMock };
-});
+function expectCodeTable(input: string, prefix: string, fragments: string[]) {
+  const rendered = convertMarkdownTables(input, "code");
+  expect(rendered.startsWith(prefix)).toBe(true);
+  const html = toHtml(rendered);
+  for (const fragment of fragments) {
+    expect(html).toContain(fragment);
+  }
+}
 
 describe("convertMarkdownTables", () => {
-  beforeEach(() => {
-    markdownToIRWithMetaMock.mockClear();
-  });
-
-  it.each(["code"] as const)("preserves non-table Markdown source in %s mode", (mode) => {
-    const before = "# Heading\n\nKeep \\*stars\\* and ``a`b`` literal.\n\n";
-    const after = "\n\n> Keep this quote.\n";
-    const rendered = convertMarkdownTables(
-      `${before}| A | B |\n| --- | --- |\n| 1 | 2 |${after}`,
-      mode,
-    );
-
-    expect(rendered.startsWith(before)).toBe(true);
-    expect(rendered.endsWith(after)).toBe(true);
+  it.each([
+    ["\n", "# Heading\n\nKeep \\*stars\\* and ``a`b`` literal.\n\n", "\n\n> Keep this quote.\n"],
+    ["\r\n", "Keep \\*literal\\*.\r\n\r\n", "\r\n\r\nAfter.\r\n"],
+  ])("preserves surrounding source with %j line endings", (newline, before, after) => {
+    const source = before + table.replaceAll("\n", newline) + after;
+    const rendered = convertMarkdownTables(source, "code");
+    expect([rendered.startsWith(before), rendered.endsWith(after)]).toEqual([true, true]);
   });
 
   it("preserves escaped literals, code delimiters and reference links in bullet cells", () => {
@@ -36,7 +33,7 @@ describe("convertMarkdownTables", () => {
         references,
       "bullets",
     );
-    const html = new MarkdownIt().render(rendered);
+    const html = toHtml(rendered);
 
     expect(html).toContain("*stars*");
     expect(html).not.toContain("<em>stars</em>");
@@ -46,72 +43,45 @@ describe("convertMarkdownTables", () => {
   });
 
   it.each([
-    ["single-column rows", "| A |\n| --- |\n| x |\n| y |", "• A: x\n\n• A: y"],
-    [
-      "empty labeled row",
-      "| A | B |\n| --- | --- |\n| x | 1 |\n| | |\n| y | 2 |",
-      "**x**\n• B: 1\n\n\n**y**\n• B: 2",
-    ],
-  ])("preserves existing bullet spacing for %s", (_name, input, expected) => {
+    ["| A |\n| --- |\n| x |\n| y |", "• A: x\n\n• A: y"],
+    ["| A | B |\n| --- | --- |\n| x | 1 |\n| | |\n| y | 2 |", "**x**\n• B: 1\n\n\n**y**\n• B: 2"],
+  ])("preserves existing bullet spacing: %s", (input, expected) => {
     expect(convertMarkdownTables(input, "bullets")).toBe(expected);
-    expect(markdownToIR(input, { tableMode: "bullets" }).text).toBe(expected.replaceAll("**", ""));
+    expect(ir.markdownToIR(input, { tableMode: "bullets" }).text).toBe(
+      expected.replaceAll("**", ""),
+    );
   });
 
   it("keeps the existing table recognition for list-like headers", () => {
     const rendered = convertMarkdownTables("- A | B\n---|---\nx|y", "code");
-
     expect(rendered).toContain("| - A | B   |");
-    expect(new MarkdownIt().render(rendered)).toContain("<pre><code>");
+    expect(toHtml(rendered)).toContain("<pre><code>");
   });
-
   it("preserves escaped pipes and backtick runs in code cells", () => {
-    const rendered = convertMarkdownTables(
+    expectCodeTable(
       "| Name | Value |\n| --- | --- |\n| Entry | a\\|b and ````x```y```` |",
-      "code",
+      "````\n",
+      ["a|b", "x```y"],
     );
-    const html = new MarkdownIt().render(rendered);
-
-    expect(html).toContain("a|b");
-    expect(html).toContain("x```y");
-    expect(rendered.startsWith("````\n")).toBe(true);
   });
 
   it.each([
     ["blockquote", "> ", "> ", "<blockquote>"],
     ["quoted list", "> - ", ">   ", "<blockquote>\n<ul>"],
   ])("keeps a converted table in its %s container", (_label, first, continuation, container) => {
-    const input = [
-      `${first}| A | B |`,
-      `${continuation}| --- | --- |`,
-      `${continuation}| 1 | 2 |`,
-    ].join("\n");
-    const rendered = convertMarkdownTables(input, "code");
-    const html = new MarkdownIt().render(rendered);
-
-    expect(rendered.startsWith(`${first}\`\`\``)).toBe(true);
-    expect(html).toContain(container);
-    expect(html).toContain("<pre><code>| A   | B   |");
-  });
-
-  it("preserves CRLF source around a table", () => {
-    const before = "Keep \\*literal\\*.\r\n\r\n";
-    const after = "\r\n\r\nAfter.\r\n";
-    const rendered = convertMarkdownTables(
-      `${before}| A | B |\r\n| --- | --- |\r\n| 1 | 2 |${after}`,
-      "code",
-    );
-
-    expect(rendered.startsWith(before)).toBe(true);
-    expect(rendered.endsWith(after)).toBe(true);
+    expectCodeTable(first + table.replaceAll("\n", `\n${continuation}`), `${first}\`\`\``, [
+      container,
+      "<pre><code>| A   | B   |",
+    ]);
   });
 
   it("leaves table-shaped text inside fences untouched", () => {
-    const input = "```markdown\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```\n";
-
+    const input = `\`\`\`markdown\n${table}\n\`\`\`\n`;
     expect(convertMarkdownTables(input, "bullets")).toBe(input);
   });
 
   it("does not parse ordinary text that cannot contain a table", () => {
+    markdownToIRWithMetaMock.mockClear();
     const text = "Ordinary iMessage reply with **bold** and _emphasis_.";
 
     expect(convertMarkdownTables(text, "code")).toBe(text);

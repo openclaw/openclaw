@@ -1,8 +1,10 @@
 // Preemptive compaction tests cover token-pressure estimates before prompt
 // submission and the route chosen to compact, truncate, or proceed.
+import type { ToolResultMessage } from "@openclaw/llm-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
@@ -11,6 +13,7 @@ let estimateToolSchemaTokenPressure: typeof import("./preemptive-compaction.js")
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
+let resolveProjectedRequestPressure: typeof import("./preemptive-compaction.js").resolveProjectedRequestPressure;
 
 beforeAll(async () => {
   // Import after the session-token mock is installed so token estimates match
@@ -23,6 +26,7 @@ beforeAll(async () => {
     estimateToolSchemaTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
+    resolveProjectedRequestPressure,
   } = await import("./preemptive-compaction.js"));
 });
 
@@ -36,6 +40,16 @@ function makeAssistantHistory(text: string): AgentMessage {
   } as AgentMessage;
 }
 
+function shortHistoryInput() {
+  return {
+    messages: [makeAssistantHistory("short history")],
+    systemPrompt: "sys",
+    prompt: "hello",
+    contextTokenBudget: 10_000,
+    reserveTokens: 1_000,
+  };
+}
+
 function makeProviderAssistant(params: {
   promptTokens: number;
   totalTokens: number;
@@ -45,17 +59,15 @@ function makeProviderAssistant(params: {
     role: "assistant",
     content: [{ type: "text", text: params.text ?? "provider answer" }],
     usage: {
+      ...createZeroUsageFixture(),
       input: params.promptTokens,
       output: params.totalTokens - params.promptTokens,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: params.totalTokens,
       contextUsage: {
         state: "available",
         promptTokens: params.promptTokens,
         totalTokens: params.totalTokens,
       },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     timestamp: timestamp++,
@@ -71,20 +83,17 @@ function makeUnavailableAssistant(params: {
     content: [{ type: "text", text: "usage unavailable" }],
     api: params.legacyCli ? "cli" : "anthropic-messages",
     usage: {
+      ...createZeroUsageFixture(),
       input: params.totalTokens,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: params.totalTokens,
       ...(params.legacyCli ? {} : { contextUsage: { state: "unavailable" as const } }),
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     timestamp: timestamp++,
   } as AgentMessage;
 }
 
-function makeToolResultMessage(...texts: string[]): AgentMessage {
+function makeToolResultMessage(...texts: string[]): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId: `call_${timestamp}`,
@@ -92,7 +101,7 @@ function makeToolResultMessage(...texts: string[]): AgentMessage {
     content: texts.map((text) => ({ type: "text", text })),
     isError: false,
     timestamp: timestamp++,
-  } as AgentMessage;
+  };
 }
 
 function makeJsonToolResultMessage(payload: unknown): AgentMessage {
@@ -124,6 +133,41 @@ function makeAssistantToolCall(args: unknown): AgentMessage {
 }
 
 describe("preemptive-compaction", () => {
+  it.each([
+    ["synthetic tool result ", 11_051, true],
+    ["a9f32c078db41e65", 50_215, false],
+  ] as const)(
+    "admits prose but protects dense pending data: %s",
+    (pattern, measuredTokens, fits) => {
+      // gpt-4.1-mini input counts from the real Responses serializer, with a
+      // 107-token prior response and five 16,031-character synthetic result blocks.
+      const text = pattern.repeat(Math.ceil(16_031 / pattern.length)).slice(0, 16_031);
+      const decision = resolveProjectedRequestPressure({
+        context: { messages: [makeToolResultMessage(...Array<string>(5).fill(text))] },
+        previousRequest: { requestIndex: 1, messageCount: 0, contextTokens: 107 },
+        contextTokenBudget: 32_768,
+        reserveTokens: 0,
+      });
+      expect(decision.estimatedPromptTokens).toBeGreaterThanOrEqual(measuredTokens);
+      expect(decision.route === "fits").toBe(fits);
+    },
+  );
+
+  it("rejects short-key JSON that exceeds the measured provider window", () => {
+    // Real Responses input count: 26,806 tokens, versus 114 with an empty result.
+    const text = '{"id":123,"ok":false,"path":"src/a.ts","value":[1,2,3]}\n'
+      .repeat(1300)
+      .slice(0, 65_000);
+    const decision = resolveProjectedRequestPressure({
+      context: { messages: [makeToolResultMessage(text)] },
+      previousRequest: { requestIndex: 1, messageCount: 0, contextTokens: 107 },
+      contextTokenBudget: 20_000,
+      reserveTokens: 0,
+    });
+    expect(decision.estimatedPromptTokens).toBeGreaterThanOrEqual(26_806);
+    expect(decision.route).not.toBe("fits");
+  });
+
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
   const verboseSystem =
@@ -184,11 +228,7 @@ describe("preemptive-compaction", () => {
 
   it("does not scan past a zero unavailable context marker", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 0 }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 0 }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -200,11 +240,7 @@ describe("preemptive-compaction", () => {
 
   it("treats legacy CLI usage without context provenance as a barrier", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 1_000, legacyCli: true }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 1_000, legacyCli: true }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -216,11 +252,7 @@ describe("preemptive-compaction", () => {
 
   it("can reuse an older provider boundary past nonzero unavailable billing usage", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
-        makeUnavailableAssistant({ totalTokens: 927_907 }),
-      ],
+      messages: createUnavailableUsageHistory({ totalTokens: 927_907 }),
       prompt: "continue",
       contextTokenBudget: 210_000,
       reserveTokens: 20_000,
@@ -231,13 +263,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("formats all-route pre-prompt diagnostics for a fits decision", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 10_000,
-      reserveTokens: 1_000,
-    });
+    const result = shouldPreemptivelyCompactBeforePrompt(shortHistoryInput());
     const line = formatPrePromptPrecheckLog({
       result,
       sessionKey: "discord:channel:thread",
@@ -267,13 +293,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("builds a durable estimated context budget status snapshot", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 10_000,
-      reserveTokens: 1_000,
-    });
+    const result = shouldPreemptivelyCompactBeforePrompt(shortHistoryInput());
 
     const status = buildPrePromptContextBudgetStatus({
       result,
@@ -365,13 +385,14 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(estimatedPromptTokens).toBeGreaterThan(80_000);
+    // The bodies alone contain 180k characters, beyond this 40k-token window.
+    expect(estimatedPromptTokens).toBeGreaterThan(40_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 96_000,
+      contextTokenBudget: 40_000,
       reserveTokens: 20_000,
     });
 
@@ -470,9 +491,9 @@ describe("preemptive-compaction", () => {
       reserveTokens,
     });
 
-    expect(potential.oversizedReducibleChars).toBeGreaterThan(0);
+    expect(potential.oversizedCount).toBeGreaterThan(0);
     expect(potential.aggregateReducibleChars).toBeGreaterThan(0);
-    expect(potential.oversizedReducibleChars).toBeLessThan(potential.maxReducibleChars);
+    expect(potential.maxReducibleChars).toBeGreaterThan(potential.aggregateReducibleChars);
     expect(potential.maxReducibleChars).toBeGreaterThan(desiredOverflowTokens * 4);
     expect(result.route).toBe("truncate_tool_results_only");
     expect(result.shouldCompact).toBe(false);
@@ -604,3 +625,11 @@ describe("preemptive-compaction", () => {
     expect(Number.isFinite(result.estimatedPromptTokens)).toBe(true);
   });
 });
+
+function createUnavailableUsageHistory(params: Parameters<typeof makeUnavailableAssistant>[0]) {
+  return [
+    { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
+    makeProviderAssistant({ promptTokens: 179_900, totalTokens: 180_000 }),
+    makeUnavailableAssistant(params),
+  ];
+}

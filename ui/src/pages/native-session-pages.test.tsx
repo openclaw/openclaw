@@ -12,7 +12,7 @@ import { createNavigationPreferencesFixture } from "../test-helpers/application-
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { ActivityPage } from "./activity/activity-page.ts";
+import { page as activityRoute } from "./activity/route.ts";
 import { pageContext } from "./agents/agents-page.test-support.ts";
 import { AgentsPage } from "./agents/agents-page.tsx";
 
@@ -20,6 +20,7 @@ describe("native session pages", () => {
   it.each(["agents", "activity"] as const)(
     "%s retains its host and releases inherited shell layout traits on unmount",
     async (page) => {
+      const { renderSolid: ActivityRoute } = await activityRoute.component();
       const { gateway } = createGatewayStoreTestStore();
       const agents = createAgentCapability(gateway);
       const channels = createChannelCapability(gateway);
@@ -28,7 +29,7 @@ describe("native session pages", () => {
       const context = Object.assign(pageContext(gateway, agents, { sessions }), {
         basePath: "",
         config: createApplicationConfigCapability({ resourceBasePath: "" }),
-        channels,
+        acquireChannels: () => channels,
         runtimeConfig,
         navigation: createNavigationPreferencesFixture(),
       });
@@ -39,6 +40,11 @@ describe("native session pages", () => {
       const layout = new ShellLayoutOwner();
       layout.contentRef(content);
       const [visible, setVisible] = createSignal(true);
+      const [activityLocation, setActivityLocation] = createSignal({
+        pathname: "/activity",
+        search: "?view=live",
+        hash: "",
+      });
       const mounted = mountSolid(
         () => (
           <ShellLayoutProvider value={{ owner: layout, host: content }}>
@@ -46,27 +52,32 @@ describe("native session pages", () => {
               {page === "agents" ? (
                 <AgentsPage />
               ) : (
-                <ActivityPage
-                  routeLocation={{ pathname: "/activity", search: "?view=live", hash: "" }}
-                />
+                <ActivityRoute data={activityLocation()} loaderPending={false} presented />
               )}
             </Show>
           </ShellLayoutProvider>
         ),
         { container: content, wrapper: provider.wrapper },
       );
+      // Settings Agents keeps the toolbar-row title; Activity uses the stacked page header.
+      const headerTrait = page === "agents" ? "content--toolbar-header" : "content--hub-header";
       try {
-        await waitForSolid(() =>
-          expect(content.classList.contains("content--toolbar-header")).toBe(true),
-        );
+        await waitForSolid(() => expect(content.classList.contains(headerTrait)).toBe(true));
         const host = content.querySelector(`openclaw-${page}-page`);
         expect(host).not.toBeNull();
         expect(host?.querySelector(".content-header")).not.toBeNull();
-        expect(content.classList.contains("content--toolbar-header")).toBe(true);
+        expect(content.classList.contains(headerTrait)).toBe(true);
         expect(content.classList.contains("content--settings-workspace")).toBe(true);
         if (page === "activity") {
           expect(content.classList.contains("content--activity-page")).toBe(true);
           expect(host?.querySelector("#activity-live-panel")).not.toBeNull();
+          setActivityLocation({ pathname: "/activity", search: "", hash: "" });
+          await waitForSolid(() =>
+            expect(
+              host?.querySelector("#activity-mode-panel")?.getAttribute("aria-labelledby"),
+            ).toBe("activity-mode-tab-sessions"),
+          );
+          expect(content.querySelector("openclaw-activity-page")).toBe(host);
         }
         setVisible(false);
         await waitForSolid(() => expect(content.querySelector(`openclaw-${page}-page`)).toBeNull());

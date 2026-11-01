@@ -2,82 +2,60 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
-import type { SkillEntry, SkillInstallSpec } from "../types.js";
+import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import { installSkill } from "./install.js";
 
-const { runCommandWithTimeoutMock } = vi.hoisted(() => ({
-  runCommandWithTimeoutMock: vi.fn<typeof import("../../process/exec.js").runCommandWithTimeout>(),
-}));
-
-vi.mock("../loading/workspace-skill-loader.js", () => ({
-  prepareWorkspaceSkills: vi.fn(),
-}));
-
-vi.mock("../../process/exec.js", () => ({
-  runCommandWithTimeout: runCommandWithTimeoutMock,
-}));
+// mock-isolation: use only fixture recipes without loading host skill discovery or caches.
+vi.mock("../loading/workspace-skill-loader.js", () => ({ prepareWorkspaceSkills: vi.fn() }));
+// mock-isolation: emulate bootstrap and recipe commands without spawning package installers.
+vi.mock("../../process/exec.js", () => ({ runCommandWithTimeout: vi.fn() }));
 
 vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: vi.fn(async () => undefined),
 }));
 
 afterEach(() => {
-  vi.mocked(prepareWorkspaceSkills).mockReset();
-  runCommandWithTimeoutMock.mockReset();
+  vi.resetAllMocks();
   vi.restoreAllMocks();
 });
 
 describe.each(["uv", "go"] as const)("%s bootstrap cache freshness", (kind) => {
   it.each([0, 1])("reuses the prerequisite after the first recipe exits %i", async (firstCode) => {
-    await withOpenClawTestState({ label: "skill-bootstrap-probe" }, async (state) => {
-      vi.spyOn(os, "homedir").mockReturnValue(state.home);
-      const prefix = path.join(state.home, ".local");
-      const binDir = path.join(prefix, "bin");
+    await withOpenClawTestState({ label: "bootstrap" }, async ({ home, workspaceDir }) => {
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+      const binDir = path.join(home, ".local", "bin");
       await fs.mkdir(binDir, { recursive: true });
       const writeExecutable = async (name: string) => {
-        const executable = path.join(binDir, name);
-        await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
-        await fs.chmod(executable, 0o755);
+        await fs.writeFile(path.join(binDir, name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       };
       await writeExecutable("brew");
 
-      const entries: SkillEntry[] = ["first", "second"].map((name) => {
-        const filePath = path.join(state.workspaceDir, name, "SKILL.md");
-        const spec: SkillInstallSpec =
+      const entries = ["first", "second"].map((name) => {
+        const spec =
           kind === "uv"
             ? { kind, package: `fixture-${name}` }
             : { kind, module: `example.com/fixture-${name}@latest` };
-        return {
-          skill: {
-            name,
-            description: "Binary probe fixture",
-            filePath,
-            baseDir: path.dirname(filePath),
-            source: "openclaw-workspace",
-            sourceInfo: { path: filePath, source: "test", scope: "temporary", origin: "top-level" },
-            disableModelInvocation: false,
-          },
-          frontmatter: {},
+        return Object.assign(createFixtureSkillEntry(name), {
           metadata: { install: [{ id: "deps", ...spec }] },
-        };
+        });
       });
       vi.mocked(prepareWorkspaceSkills).mockResolvedValue(entries);
 
-      let bootstraps = 0;
-      let recipes = 0;
+      let [bootstraps, recipes] = [0, 0];
       await withEnvAsync({ PATH: binDir }, async () => {
-        runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-          let stdout = "";
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
           let code = 0;
+          let stdout = "";
           let stderr = "";
           if (argv[0] === "brew" && argv[1] === "install" && argv[2] === kind) {
             bootstraps += 1;
             await writeExecutable(kind);
           } else if (argv[0] === "brew" && argv[1] === "--prefix") {
-            stdout = prefix;
+            stdout = path.dirname(binDir);
           } else {
             const name = recipes === 0 ? "first" : "second";
             expect(argv).toEqual(
@@ -98,22 +76,16 @@ describe.each(["uv", "go"] as const)("%s bootstrap cache freshness", (kind) => {
 
         for (const [index, skillName] of ["first", "second"].entries()) {
           const code = index === 0 ? firstCode : 0;
-          const result = await installSkill({
-            workspaceDir: state.workspaceDir,
-            skillName,
-            installId: "deps",
-          });
-          expect(result).toMatchObject({
-            ok: code === 0,
-            code,
-            stdout: `recipe ${skillName}`,
-            stderr: code === 0 ? "" : "fixture recipe failed",
-          });
+          const result = await installSkill({ workspaceDir, skillName, installId: "deps" });
+          expect(result).toMatchObject({ ok: code === 0, ...recipeResult(skillName, code) });
           expect(process.env.PATH).toBe(binDir);
         }
-        expect(recipes).toBe(2);
-        expect(bootstraps).toBe(1);
+        expect({ recipes, bootstraps }).toEqual({ recipes: 2, bootstraps: 1 });
       });
     });
   });
 });
+
+function recipeResult(name: string, code: number) {
+  return { code, stdout: `recipe ${name}`, stderr: code === 0 ? "" : "fixture recipe failed" };
+}

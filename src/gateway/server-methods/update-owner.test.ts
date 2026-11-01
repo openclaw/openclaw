@@ -221,7 +221,7 @@ it.each(promptUpdateCases)(
         "hosting Gateway guidance",
       );
       const action = expectDefined(
-        guidance.match(/Update OpenClaw: `gateway` action ([\w.]+)/u)?.[1],
+        guidance.match(/perform the work with `gateway`: ([\w.]+)/u)?.[1],
         "prompt-advertised update action",
       );
       const result = await tool.execute("update", {
@@ -279,12 +279,9 @@ it.each(promptUpdateCases)(
           }),
         );
       }
-      expect(guidance).toContain("only on an explicit owner request");
-      expect(guidance).toContain("relay the tool's exact recovery instructions");
-      expect(guidance).toContain("operator to run outside the Gateway service");
-      expect(guidance).toContain(
-        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
-      );
+      expect(guidance).toContain("On an explicit owner request");
+      expect(guidance).toContain("Do not redirect the owner to slash commands or a terminal");
+      expect(guidance).toContain("must retain a working restart path before it stops");
     });
   },
 );

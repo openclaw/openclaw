@@ -1,11 +1,13 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
@@ -21,6 +23,7 @@ import {
 } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
+import { phraseQueryPattern } from "../../lib/text-match.ts";
 import {
   messageRecoveryKey,
   resolveCappedMessageId,
@@ -28,6 +31,7 @@ import {
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
@@ -53,7 +57,7 @@ export function appendCanvasBlockToAssistantMessage(
   ) {
     return message;
   }
-  return {
+  const projection = {
     ...raw,
     content: [
       ...existingContent,
@@ -64,38 +68,64 @@ export function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
+  copyLiveTerminalIdentity(message, projection);
+  return projection;
 }
 
-export function messageMatchesSearchQuery(
-  message: unknown,
+export function createChatSearchMatcher(
   query: string,
   recovery?: ChatMessageRecovery,
-): boolean {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+): (message: unknown) => boolean {
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
-    return true;
+    return () => true;
   }
-  const messageId = recovery && resolveSourceMessageId(message);
-  const expansion =
-    recovery && messageId
-      ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
-      : undefined;
-  if (expansion?.status === "loaded") {
-    const role = normalizeRoleForGrouping(normalizeMessage(message).role);
-    if (resolveCappedMessageId(message, role)) {
-      return normalizeLowercaseStringOrEmpty(
-        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
-      ).includes(normalizedQuery);
+  const phrase = phraseQueryPattern(query);
+  const sourceMatches = (markdown: string | null) =>
+    normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
+  return (message) => {
+    const messageId = recovery && resolveSourceMessageId(message);
+    const expansion =
+      recovery && messageId
+        ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
+        : undefined;
+    // Keep source syntax and link destinations searchable, then compare the same
+    // display preparation used by message rendering.
+    if (expansion?.status === "loaded") {
+      const role = normalizeRoleForGrouping(normalizeMessage(message).role);
+      if (resolveCappedMessageId(message, role)) {
+        const markdown =
+          role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
+        const recovered = expansion.message
+          ? prepareChatMessageRender(expansion.message)
+          : undefined;
+        return (
+          sourceMatches(markdown) ||
+          (phrase !== null &&
+            markdownVisibleText(expansion, markdown, {
+              mode: "document",
+              humanMentions:
+                recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
+              assistantTranscriptRoleHeaders: role === "assistant",
+            }).search(phrase) >= 0)
+        );
+      }
     }
-  }
-  return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
+    if (sourceMatches(extractTextCached(message))) {
+      return true;
+    }
+    const prepared = prepareChatMessageRender(message);
+    return (
+      phrase !== null &&
+      markdownVisibleText(message, prepared.displayMarkdown, {
+        humanMentions: prepared.humanMentions,
+        assistantTranscriptRoleHeaders: prepared.normalizedMessage.role === "assistant",
+      }).search(phrase) >= 0
+    );
+  };
 }
 
-type ChatMessagePreview = {
-  preview: CanvasToolPreview;
-  text: string | null;
-  timestamp: number | null;
-};
+type ChatMessagePreview = NonNullable<ReturnType<typeof readChatMessagePreview>>;
 
 const chatMessagePreviews = new WeakMap<object, ChatMessagePreview | null>();
 
@@ -114,7 +144,11 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
   return preview;
 }
 
-function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessagePreview | null {
+function readChatMessagePreview(toolMessage: Record<string, unknown>) {
+  // Recorded Canvas references are text, not views created by this OpenClaw session.
+  if (asRecord(toolMessage["__openclaw"])?.catalogSource === true) {
+    return null;
+  }
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
@@ -123,6 +157,8 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessa
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
       return {
+        runId: card.runId,
+        parentToolCallId: card.parentToolCallId,
         preview: card.preview,
         text: card.outputText ?? null,
         timestamp: rawMessageTimestamp(toolMessage),
@@ -141,13 +177,16 @@ export function canvasPreviewBaseIdentity(
   message: unknown,
   source: ChatMessagePreview,
 ): string | null {
-  const toolCallId = resolveMessageToolUseId(asRecord(message) ?? {});
+  // A nested result and its wrapper are receipts for the same invocation.
+  const toolCallId = source.parentToolCallId ?? resolveMessageToolUseId(asRecord(message) ?? {});
   const previewId = source.preview.viewId
     ? `viewId:${source.preview.viewId}`
     : source.preview.url
       ? `url:${source.preview.url}`
       : null;
-  return toolCallId && previewId ? JSON.stringify([toolCallId, previewId]) : null;
+  return toolCallId && previewId
+    ? JSON.stringify([source.runId ?? null, toolCallId, previewId])
+    : null;
 }
 
 export function createCanvasAssistantMessage(
@@ -158,6 +197,7 @@ export function createCanvasAssistantMessage(
     {
       role: "assistant",
       content: [],
+      ...(source.runId ? { runId: source.runId } : {}),
       ...(timestamp != null ? { timestamp } : {}),
     },
     source.preview,
@@ -292,7 +332,14 @@ export function isPendingSendMessage(message: unknown): boolean {
 export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
-  state: "failed" | "unconfirmed" | "held" | "waiting-reconnect";
+  state:
+    | "failed"
+    | "held"
+    | "waiting-reconnect"
+    | "waiting-model"
+    | "waiting-idle"
+    | "submitting"
+    | "sending";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
@@ -300,9 +347,12 @@ export function readPendingSendStatus(message: unknown): {
   if (
     metadata?.kind !== "pending-send" ||
     (state !== "failed" &&
-      state !== "unconfirmed" &&
       state !== "held" &&
-      state !== "waiting-reconnect") ||
+      state !== "waiting-reconnect" &&
+      state !== "waiting-model" &&
+      state !== "waiting-idle" &&
+      state !== "submitting" &&
+      state !== "sending") ||
     typeof id !== "string"
   ) {
     return null;
@@ -312,21 +362,6 @@ export function readPendingSendStatus(message: unknown): {
     state,
     ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
   };
-}
-
-export function readChatThreadMessageIdentity(message: unknown) {
-  const record = asRecord(message);
-  const surfaceId =
-    typeof record?.messageId === "string" && record.messageId.trim()
-      ? record.messageId
-      : record?.id;
-  return readSessionMessageIdentity(message, { messageId: surfaceId });
-}
-
-/** Causal boundaries follow execution ownership, which can differ from the submit key. */
-export function userTurnRunId(message: unknown): string | null {
-  const identity = readChatThreadMessageIdentity(message);
-  return identity?.role === "user" ? identity.runId : null;
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {

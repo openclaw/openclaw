@@ -89,8 +89,11 @@ For manual configuration, route one Meta model through the Muse runtime:
 ```
 
 Set `agentRuntime.id` on one model entry to route only that model, or on the
-`meta` provider to route every Meta model. Models without this routing use the
-built-in OpenClaw runtime through the [Meta provider](/providers/meta).
+`meta` provider to route every Meta model. Without explicit routing, a model
+discovered by exactly one native runtime can use that runtime when no authored
+API binding or host credential takes precedence. An API catalog row alone is
+not an API credential. Explicit runtime choices and required cloud workers
+keep their existing runtime policy.
 
 Choosing **Muse Code** in Model Setup routes the selected model through Muse
 for the agent being set up. It writes that agent's model entry, replacing any
@@ -102,13 +105,40 @@ endpoint (`https://api.meta.ai/v1`). A `meta` provider entry with another
 `baseUrl` or with request transport overrides is refused, because Muse Code
 calls Meta itself.
 
+### Model identities and names
+
+Muse's `model/list` response owns account availability and executable
+`modelId` values. OpenClaw sends the selected ID unchanged to Muse. Display
+names are metadata, never routing aliases. Exact same-provider API metadata
+can supply a readable name without transferring API capabilities or credentials
+to the native offering. The Muse adapter corrects known raw or incorrect labels
+for native-only Wonder variants; meaningful upstream labels remain authoritative.
+
+[Meta distinguishes](https://dev.meta.ai/docs/models#muse-wonder-availability)
+Wonder from the higher-capability Wonder Full, and Standard from Contributor
+mode. These are separate offerings: selecting Wonder, changing reasoning effort,
+or recommending Wonder does not select or recommend Full or Contributor variants.
+
+Provider slugs remain scoped to their provider and runtime. For example,
+`openrouter/meta/muse-wonder` executes OpenRouter's `meta/muse-wonder`, while
+`meta/muse-wonder-1.0` with Muse executes `muse-wonder-1.0`. Similar branding
+does not establish equivalence. When provider evidence establishes that two rows
+serve the same upstream model, the existing manifest
+[`upstreamModel` authoring field](/plugins/manifest/models#modelcatalog-reference)
+can record that relationship. It is not a runtime alias and must not rewrite
+executable IDs or transfer account readiness. Recommendations
+target the intended provider-local IDs independently. Unknown future IDs retain
+their supplied label (or raw ID) and remain selectable when discovered, without
+guessed relationships or inherited recommendations.
+
 ## Auth
 
 Use **Model Setup → Meta → Muse Code** in either **Provider Access** or **AI Setup**
 in the Control UI for browser sign-in.
-The credential stays in Muse Code's own credential store; OpenClaw does not
-copy it into an auth profile. This sign-in authorizes the Muse runtime, not
-the direct Meta API route.
+The credential is saved in a Muse credential file under the OpenClaw state
+directory, separate from the default sign-in that the `muse` CLI uses on the
+same host; OpenClaw does not copy it into an auth profile. This sign-in
+authorizes the Muse runtime, not the direct Meta API route.
 
 Keep the sign-in dialog open while it shows **Waiting for approval in your
 browser…**. The device code and **Open sign-in** link remain available during
@@ -134,7 +164,8 @@ credential directory when its credential file exists.
 
 Before the first sign-in for an agent, OpenClaw asks you to accept Muse Code's
 native permissions. Continuing remembers this choice for that agent, so future
-Muse chats do not ask again. Muse runs on the Gateway host with its own tools;
+Muse chats do not ask again, including your own channel chats. Other senders
+still need a chat set to Full access. Muse runs on the Gateway host with its own tools;
 OpenClaw's optional native tool and sandbox restrictions do not apply to it.
 OpenClaw-hosted tools retain their policy checks. Revoke consent by removing
 `muse` from the agent's **Remembered native runtime permissions** setting.

@@ -30,6 +30,9 @@ it("keeps a catalog's active animation across unread changes and shows later sta
   ]).catalogs;
   sidebar.sessionData.requestSessionDataUpdate();
   await settleRoster(sidebar);
+  // The header spinner only summarizes a closed group.
+  sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set(["catalog:codex"]));
+  await settleRoster(sidebar);
   const header = sidebar.querySelector<HTMLElement>(
     '[data-session-section="catalog:codex"] .sidebar-session-group-toggle',
   )!;

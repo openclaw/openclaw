@@ -16,18 +16,3 @@ export function pointMenuTriggerAttributes(
     },
   };
 }
-
-export function renderMenuTrigger(
-  position: { x: number; y: number },
-  label: string,
-  edge: "top" | "bottom" = "top",
-) {
-  return (
-    <button
-      {...pointMenuTriggerAttributes(position, edge)}
-      slot="trigger"
-      type="button"
-      aria-label={label}
-    />
-  );
-}

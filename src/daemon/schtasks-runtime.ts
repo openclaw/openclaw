@@ -10,8 +10,15 @@ import {
 } from "../infra/windows-install-roots.js";
 import { readWindowsPortUsageSync } from "../infra/windows-port-pids.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { spawnWithFallback } from "../process/spawn-utils.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../process/exec-result.js";
+import { spawnAndWait } from "../process/spawn-utils.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+} from "../process/windows-command.js";
 import { sleep } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
@@ -158,14 +165,14 @@ function createStartupEntryRemovalError(error: unknown): Error {
 export async function waitForScheduledTaskRunningEvidence(
   env: GatewayServiceEnv,
 ): Promise<boolean> {
-  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  const deadline = performance.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (true) {
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) {
       return false;
     }
     const probe = probeScheduledTaskState(resolveTaskName(env), remaining);
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       return false;
     }
     // Only Scheduler supervision, not an old Startup process, proves takeover.
@@ -214,6 +221,17 @@ export async function launchFallbackTaskScript(
       cwd: command.workingDirectory || undefined,
       env: mergeProcessEnv([process.env, command.environment]),
     };
+    const executable = argv[0];
+    if (executable && isWindowsBatchCommand(executable)) {
+      argv = [
+        getWindowsCmdExePath(),
+        "/d",
+        "/s",
+        "/c",
+        buildWindowsCmdExeCommandLine(executable, argv.slice(1)),
+      ];
+      options = { ...options, shell: false, windowsVerbatimArguments: true };
+    }
   } else {
     // Preserve native missing-script errors before testing the actual cmd.exe access contract.
     await (await fs.open(scriptPath, "r")).close();
@@ -250,7 +268,7 @@ export async function launchFallbackTaskScript(
       windowsVerbatimArguments: true,
     };
   }
-  const { child } = await spawnWithFallback({
+  const child = await spawnAndWait({
     assertCurrent,
     argv,
     options: { detached: true, stdio: "ignore", windowsHide: true, ...options },
@@ -265,11 +283,17 @@ export async function readStartupEntryState(
 ): Promise<GatewayServiceState> {
   const deadline = args.timeoutMs === undefined ? undefined : performance.now() + args.timeoutMs;
   let command: GatewayServiceCommandConfig | null = null;
+  let effectiveExecutable: string | undefined;
   let env = args.env ?? process.env;
   let runtime: GatewayServiceRuntime;
   let loadState: GatewayServiceState["loadState"] = { status: "loaded" };
   try {
-    command = await readStartupEntryCommand(startupEntryPath, { deadline });
+    command = await readStartupEntryCommand(startupEntryPath, {
+      deadline,
+      onEffectiveExecutable: (executable) => {
+        effectiveExecutable = executable;
+      },
+    });
     env = mergeGatewayServiceEnv(env, command);
     args.validateEnvBeforeStatusRead?.(env);
     runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
@@ -296,6 +320,9 @@ export async function readStartupEntryState(
     env,
     command,
     runtime,
+    ...(command && runtime.status !== "unknown" && effectiveExecutable
+      ? { effectiveExecutable }
+      : {}),
     ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
   };
 }
@@ -341,12 +368,7 @@ export async function resolveFallbackRuntime(
   }
   const command =
     installedCommand === undefined
-      ? await readScheduledTaskCommand(env).catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return null;
-        })
+      ? await readScheduledTaskCommand(env).catch(ignoreNonCleanupCommandError)
       : installedCommand;
   const port = resolveScheduledTaskCommandPort(env, command);
   if (!port) {
@@ -394,12 +416,9 @@ export async function resolveFallbackRuntime(
     }
   }
   const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
-  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    return null;
-  });
+  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(
+    ignoreNonCleanupCommandError,
+  );
   if (!diagnostics) {
     return unknownRuntime(`could not inspect port ${port}.`);
   }
@@ -466,8 +485,8 @@ export async function waitForFallbackTakeoverRuntime(
   previousRuntime: GatewayServiceRuntime,
 ): Promise<GatewayServiceRuntime> {
   let runtime = initialRuntime;
-  const deadline = Date.now() + FALLBACK_TAKEOVER_REPROBE_TIMEOUT_MS;
-  while (runtime.status !== "running" && Date.now() < deadline) {
+  const deadline = performance.now() + FALLBACK_TAKEOVER_REPROBE_TIMEOUT_MS;
+  while (runtime.status !== "running" && performance.now() < deadline) {
     await sleep(FALLBACK_TAKEOVER_REPROBE_INTERVAL_MS);
     runtime = await resolveFallbackRuntime(env, installedCommand, "control").catch(
       (err: unknown) => {
@@ -529,7 +548,6 @@ export async function terminateInstalledStartupRuntime(
   if (runtime.pid) {
     if (beforeMutation) {
       await beforeMutation();
-      assertCurrent?.();
     }
     await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }

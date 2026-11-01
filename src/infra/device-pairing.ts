@@ -77,7 +77,7 @@ export async function withPairedDeviceRecords<T>(
       invalidatePairedCardRendererCache();
     }
     return outcome.value;
-  });
+  }, "devicePairing.migrate");
 }
 
 export function listDevicePairing(baseDir?: string) {
@@ -113,7 +113,7 @@ export async function requestDevicePairing(
     refreshDevicePairingResolutionWaiters(pairing.request, pairing.expiresAtMs, baseDir);
     onPending?.(pairing);
     return pairing;
-  });
+  }, "devicePairing.request");
 }
 
 export async function rejectDevicePairing(requestId: string, baseDir?: string) {
@@ -126,15 +126,13 @@ export async function rejectDevicePairing(requestId: string, baseDir?: string) {
       publishDevicePairingResolution(rejected, "rejected", baseDir);
     }
     return rejected;
-  });
+  }, "devicePairing.reject");
 }
 
 export async function removePairedDevice(deviceId: string, baseDir?: string) {
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      { type: "devicePairing.remove", input: { deviceId, nowMs: Date.now() } },
-      { baseDir },
-    ),
+  return await executeDevicePairingMutation(
+    { type: "devicePairing.remove", input: { deviceId, nowMs: Date.now() } },
+    { baseDir },
   );
 }
 
@@ -145,48 +143,37 @@ export async function pruneSupersededSilentPairedDevices(params: {
   isDeviceConnected?: (deviceId: string) => boolean;
   nowMs?: number;
 }): Promise<PrunedSupersededPairedDevice[]> {
-  return await withDevicePairingLock(async () => {
-    return await executeDevicePairingMutation(
-      {
-        type: "devicePairing.pruneSilent",
-        input: {
-          deviceId: params.deviceId,
-          protectedDeviceIds: params.protectedDeviceIds ?? [],
-          nowMs: params.nowMs ?? Date.now(),
-        },
+  return await executeDevicePairingMutation(
+    {
+      type: "devicePairing.pruneSilent",
+      input: {
+        deviceId: params.deviceId,
+        protectedDeviceIds: params.protectedDeviceIds ?? [],
+        nowMs: params.nowMs ?? Date.now(),
       },
-      {
-        baseDir: params.baseDir,
-        onAuthorityRefused: () => [],
-        admit: (facts) => {
-          if (
-            facts.kind === "pairing-prune" &&
-            facts.deviceIds.some((deviceId) => params.isDeviceConnected?.(deviceId))
-          ) {
-            throw new DevicePairingAuthorityRefusedError(
-              "Pairing prune candidate connected before commit",
-            );
-          }
-        },
+    },
+    {
+      baseDir: params.baseDir,
+      onAuthorityRefused: () => [],
+      admit: (facts) => {
+        if (
+          facts.kind === "pairing-prune" &&
+          facts.deviceIds.some((deviceId) => params.isDeviceConnected?.(deviceId))
+        ) {
+          throw new DevicePairingAuthorityRefusedError(
+            "Pairing prune candidate connected before commit",
+          );
+        }
       },
-    );
-  });
+    },
+  );
 }
 
-export async function removePairedDeviceRole(params: {
-  deviceId: string;
-  role: string;
-  baseDir?: string;
-}) {
-  return await withDevicePairingLock(() =>
-    executeDevicePairingMutation(
-      {
-        type: "devicePairing.removeRole",
-        input: { deviceId: params.deviceId, role: params.role, nowMs: Date.now() },
-      },
-      { baseDir: params.baseDir },
-    ),
-  );
+export async function removePairedDeviceRole(params: { deviceId: string }) {
+  return await executeDevicePairingMutation({
+    type: "devicePairing.removeRole",
+    input: { deviceId: params.deviceId, role: "node", nowMs: Date.now() },
+  });
 }
 
 export async function updatePairedDeviceMetadata(
@@ -277,6 +264,6 @@ export function recordPairedDeviceAccess(
         );
       }
     }
-  }).finally(() => reconnects.delete(key));
+  }, "devicePairing.updateMetadata").finally(() => reconnects.delete(key));
   return entry.done;
 }

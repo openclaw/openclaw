@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+import { resolveGeneratedImageDownloadMaxBytes } from "../media/configured-max-bytes.js";
 import { resolveApiKeyForProvider } from "../plugin-sdk/provider-auth-runtime.js";
 import {
   assertOkOrThrowHttpError,
@@ -138,6 +138,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
+        signal: req.signal,
       });
       if (!auth.apiKey) {
         throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
@@ -207,6 +208,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         url: `${baseUrl.replace(/\/+$/u, "")}/images/${mode === "edit" ? "edits" : "generations"}`,
         headers: new Headers(headers),
         timeoutMs,
+        signal: req.signal,
         fetchFn: fetch,
         allowPrivateNetwork: resolvedAllowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
@@ -230,7 +232,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
           { bodyTimeoutMs: remainingTimeoutMs },
         );
         const maxImages = options.capabilities[mode].maxCount ?? count;
-        const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
+        const maxBytes = resolveGeneratedImageDownloadMaxBytes(req.cfg);
         const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(maxImages, maxBytes),
           timeoutMs: remainingTimeoutMs,
@@ -245,6 +247,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
           maxDownloads: maxImages,
           maxBytes,
           timeoutMs: remainingTimeoutMs,
+          signal: req.signal,
           // A loopback API endpoint does not authorize arbitrary private image hosts.
           allowPrivateNetwork: configuredRequest?.allowPrivateNetwork,
           ssrfPolicy: req.ssrfPolicy,

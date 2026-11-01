@@ -208,8 +208,10 @@ caches, or relax resource caps to manufacture a favorable comparison. The recipe
 creates only a new benchmark directory and leaves normal caches untouched.
 
 For CPU/heap investigation, reuse `OPENCLAW_TSGO_PPROF_DIR` with a distinct directory
-per measured invocation, or use `tsgo:profile --deep`. Profiling changes measurement
-overhead: enable it for both comparison sides or keep it outside timing pairs.
+per measured invocation, or use `tsgo:profile --deep`. Go profiling requests select
+tsgo even when tsrs is the default checker. An explicit `OPENCLAW_TYPECHECKER=tsrs`
+combined with `--pprofDir` fails rather than silently omitting profiles. Keep Go-only
+profiling outside tsrs-versus-tsgo timing pairs.
 The evidence records the effective `--pprofDir`; it does not manage or delete those
 profiles. These measurements are developer evidence, not a CI pass/fail threshold.
 
@@ -295,17 +297,68 @@ in partial clones.
 Main-push CI does not run the PR growth comparison; ordinary lint still reports
 all unsuppressed over-cap files.
 
-The max-lines suppression inventory and environment-variable count budget use
-the same severity policy. After removing a suppression, remove its stale entry
-from `config/max-lines-baseline.txt`, or run
-`pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking; warning
-status does not authorize new suppressions or higher caps. The environment
-budget counts distinct `OPENCLAW_*` names in production `src/`, `packages/`, and
-`extensions/` source, excluding tests and QA Lab. Update
-`config/env-var-count-budget.txt` when cleanup reduces that count.
+`pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
+ratchets in two managed child slots, retaining all results after ordinary
+failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
+The database-worker inventory starts first and shares the runner with at most
+one smaller check; it never runs two semantic inventories concurrently. When
+the complete current and historical source snapshots have identical paths and
+contents, its fresh current analysis also supplies the comparison counts.
+Changed snapshots retain both full analyses and historical-cache validation.
+Frozen targets without the aggregate command retain their original commands.
+
+<a id="test-line-budget" />
+
+`pnpm check:test-lines-ratchet` compares total tracked test lines with the
+fixed integer in `config/test-lines-baseline.txt` plus the sum of tracked
+`config/test-lines-allocations/*.txt` records. Each record contains one
+non-negative integer, with optional `#` comments. For justified net regression
+growth, use a unique record and explain its necessity in the PR. Independent
+changes use separate records instead of editing the shared scalar.
+
+The checker counts literal newline bytes, like `wc -l`, in
+`*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
+`*test-helpers*`, and `**/test-support/**`. In `checks-fast-baseline-ratchets`, an
+over-ceiling tree fails only when this change's net test-line delta against the
+comparison base is positive; non-growing changes pass with an over-ceiling notice,
+while runs without a base retain the absolute ceiling check.
+
+When allocation keys or values change, positive effective-ceiling growth must
+not exceed positive net test-line growth against the same comparison base.
+This includes scalar changes in the same diff, prevents overlapping grants
+from counting the same growth twice, and does not forgive inherited debt.
+Comments do not change credit. Untracked records are ignored; `--staged` reads
+the index exactly. Scalar-only raises retain the explicit review-owned warning
+route and need approval under the
+[testing policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#baseline-and-expected-failure-exceptions).
+
+`pnpm check:test-lines-ratchet --prune` folds the measured total into the scalar
+and removes tracked allocation records, even at zero slack. The effective ceiling
+never increases; the scalar can rise when it absorbs existing allocations.
+Commit the scalar and record deletions together. Pruning refuses an over-budget
+tree or `--staged`, and preserves untracked files. A branch based before pruning
+can add credit only for its new test growth, not reuse the folded allocations.
+
+The max-lines suppression inventory and the environment-variable count budget
+must describe the tree, and that check blocks in GitHub Actions as well as
+locally: an unlisted suppression, a stale inventory entry, or an `OPENCLAW_*`
+count that differs from the budget fails everywhere. Warning-only drift on
+`main` would otherwise fail every later local check for unrelated branches.
+Growth of either inventory relative to the merge base follows the severity
+policy above. A renamed suppressed file moves its inventory entry. After removing
+a suppression, remove its stale entry from `config/max-lines-baseline.txt`, or
+run `pnpm check:max-lines-ratchet --prune`. Keep the inventory shrinking;
+warning status does not authorize new suppressions or higher caps. The
+environment budget counts distinct `OPENCLAW_*` names in production `src/`,
+`packages/`, and `extensions/` source, excluding tests and QA Lab. Update
+`config/env-var-count-budget.txt` in the change that adds or removes a name;
+raising it needs owner approval.
 
 The policy also covers numeric bundle, declaration, package, startup memory,
 CPU, timing, and test-root budgets. Measurements and thresholds are unchanged.
+The core test shard root budget is a shared cost signal that no single change
+owns, so it warns locally as well as in CI; rebalance the shard configurations
+in `test/tsconfig/` when it reports.
 When a file or artifact exceeds a cap, extract a coherent module or investigate
 the added cost. Do not trim coverage, disable rules, or raise thresholds just
 to silence a warning.
@@ -397,9 +450,9 @@ For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
 That workflow hydrates credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.77.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.80.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.77.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.80.0 release
 before provider discovery or lease work. The original binary stays untouched.
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
@@ -421,7 +474,7 @@ The outer GitHub deadline can terminate active SSH commands. Both profiles have
 a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
 job deadline. Individual test deadlines also remain separate limits. The standard
 workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
-managed Crabbox 0.77.0 does not forward arbitrary workflow inputs, including
+managed Crabbox 0.80.0 does not forward arbitrary workflow inputs, including
 `timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
 within its total-job budget rather than treating TTL or a larger runner as a
 deadline override.
@@ -458,7 +511,7 @@ without downloading pnpm again. These archives do not replace the frozen-lockfil
 dependency install.
 
 With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
-Bun 1.4.3 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+Bun 1.4.4 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
 It authenticates a private copy before extracting a fresh job-private `bun`
 and `bunx`, then publishes their directory after the Node PATH entry.
 The baseline archive is the default; the optimized x64 archive requires AVX
@@ -479,7 +532,7 @@ For an explicitly authorized admin-only PR landing fallback, set
 `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
 The mode does not replace the default hosted aggregate gate. After the exact
 prep head is pushed, the wrapper synchronously dispatches the protected-main
-publisher. That trusted workflow checksum-installs Crabbox v0.77.0, resolves its
+publisher. That trusted workflow checksum-installs Crabbox v0.79.2, resolves its
 service principal through `/v1/whoami`, then runs sanitized brokered AWS with
 `umask 022`, the standard untrusted bootstrap, `pnpm build`, `pnpm check`, and
 a PR-derived test plan that rejects incomplete selection. The existing changed-test owner evaluates
@@ -685,7 +738,7 @@ Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-cl
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
-Direct leases require Crabbox 0.77.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+Direct leases require Crabbox 0.80.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
 
 Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 

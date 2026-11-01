@@ -21,6 +21,7 @@ import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { formatInjectedWorkspaceFileLabel } from "../../config/sessions/session-system-prompt-report.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry,
@@ -314,6 +315,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
+    const label = formatInjectedWorkspaceFileLabel(f, report.injectedWorkspaceFiles);
     const nativeUnverified = f.injectionStatus === "native_unverified";
     const status = nativeUnverified
       ? "NATIVE/UNVERIFIED"
@@ -328,7 +330,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       : f.missing
         ? "0"
         : formatCharsAndTokens(f.injectedChars);
-    return `- ${f.name}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
+    return `- ${label}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
   });
 
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;

@@ -11,11 +11,11 @@ import {
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
+import { classifyWorkerRequest } from "./sqlite-worker-request-class.js";
 import {
   captureSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
 } from "./sqlite-worker-state-context.js";
-import { classifyWorkerRequest } from "./worker-request-diagnostics.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
   client: StoreClient | undefined,
@@ -98,7 +98,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     isAvailable: owner.isAvailable,
     scopes: new Set(),
     execute: (command, options, scope) => {
-      if (scope ? !scope.active : closed || client.sealed || owner.isDraining()) {
+      if (scope ? !scope.active : client.sealed || owner.isDraining()) {
         return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
       }
       if (options.signal?.aborted) {

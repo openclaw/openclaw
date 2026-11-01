@@ -46,7 +46,8 @@ export type ChatMetadataProjectionFacts = {
 export type PreparedChatMetadataProjection = Awaited<
   ReturnType<typeof prepareChatMetadataModelProjection>
 > & {
-  agent: ChatMetadataProjectionFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
+  agent: ChatMetadataProjectionFacts &
+    Pick<ChatMetadataResult, "commands" | "swarmEnabled"> & { revision: string };
 };
 
 export function readPreparedChatMetadata(
@@ -236,7 +237,7 @@ export function hasSessionCatalogContext(
   );
 }
 
-function resolveRequiredWorkerInferenceProfileId(
+export function resolveRequiredWorkerInferenceProfileId(
   readParams: ChatMetadataReadParams,
   config: OpenClawConfig,
 ): string | undefined {
@@ -263,6 +264,7 @@ export function projectSessionModelCatalog(
   models: ModelChoice[],
   config: OpenClawConfig,
   ownership: AgentHarnessSessionRuntimeOwnership | undefined,
+  availability: "hidden" | "admitted" = "hidden",
 ): ModelChoice[] {
   const requiredWorker = resolveRequiredWorkerInferenceProfileId(readParams, config);
   const nativeAuth = ownership?.auth === "native";
@@ -300,6 +302,7 @@ export function projectSessionModelCatalog(
       unavailableUntil: _until,
       ...available
     } = model;
-    return available;
+    // Gateway hides host-auth status; requester catalogs need explicit admission evidence.
+    return availability === "admitted" ? { ...available, available: true } : available;
   });
 }

@@ -111,6 +111,24 @@ function patchCopilotAnthropicPayload(payload: unknown): void {
   applyAnthropicEphemeralCacheControlMarkers(record);
 }
 
+/** Direct completions skip the agent wrapper but still need Copilot's request identity. */
+export function wrapCopilotSimpleCompletionStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  const stream = ctx.streamFn;
+  if (!stream) {
+    return undefined;
+  }
+  return (model, context, options) =>
+    stream(model, context, {
+      ...options,
+      headers: buildCopilotRuntimeHeaders({
+        config: ctx.config,
+        headers: { ...model.headers, ...options?.headers },
+      }),
+    });
+}
+
 export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const stream = ctx.streamFn;
   if (!stream) {

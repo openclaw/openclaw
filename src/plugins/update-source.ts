@@ -49,21 +49,11 @@ export type PluginUpdateLogger = {
 
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-type PluginUpdateChannelFallback = {
-  requestedSpec: string;
-  usedSpec: string;
-  requestedLabel: string;
-  usedLabel: string;
-  reason: "unavailable" | "failed";
-  message: string;
-};
-
 type BasePluginUpdateOutcome = {
   pluginId: string;
   message: string;
   currentVersion?: string;
   nextVersion?: string;
-  channelFallback?: PluginUpdateChannelFallback;
   warning?: string;
 };
 
@@ -129,7 +119,6 @@ export type UpdateInstalledPluginsParams = {
   skipIds?: Set<string>;
   skipDisabledPlugins?: boolean;
   syncOfficialPluginInstalls?: boolean;
-  disableOnFailure?: boolean;
   retainOnUnavailable?: boolean;
   timeoutMs?: number;
   /** Null removes the forward-work deadline while metadata remains bounded. */

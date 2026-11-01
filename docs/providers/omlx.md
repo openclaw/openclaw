@@ -79,6 +79,15 @@ a chat model cannot produce memory embeddings.
 }
 ```
 
+If an existing index uses the generic `openai-compatible` provider, keep that
+provider, URL, model, and current credentials for the first search after upgrading.
+A successful search migrates a compatible legacy cache identity without rebuilding
+or embedding your notes again. You can then rotate declared request-auth
+credentials without invalidating the index. `memory status` is read-only and does
+not perform this migration.
+
+Switching from `openai-compatible` to the named `omlx` provider changes the index
+identity and requires a rebuild, even when both use the same server and model.
 After switching embedding providers or models, rebuild the index and verify it:
 
 ```bash

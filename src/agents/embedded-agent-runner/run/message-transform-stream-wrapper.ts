@@ -21,12 +21,10 @@ export function wrapStreamFnWithMessageTransform(
   materializeProviderContext?: ProviderContextMaterializer,
 ): StreamFn {
   return (model, context, options) => {
-    const messages = context?.messages;
-    const nextMessages = Array.isArray(messages)
-      ? transform(messages as AgentMessage[], model)
-      : messages;
+    const messages = context.messages;
+    const nextMessages = transform(messages, model);
     const nextContext =
-      Array.isArray(messages) && nextMessages !== messages
+      nextMessages !== messages
         ? {
             ...context,
             messages: nextMessages as typeof context.messages,

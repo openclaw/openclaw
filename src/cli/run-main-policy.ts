@@ -1,4 +1,3 @@
-// Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -10,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { PROXY_ENV_KEYS as CLI_PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type {
   resolveManifestCommandAliasOwner,
@@ -27,8 +27,8 @@ import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
-import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
-import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
+import { getCoreCliCommandDescriptors } from "./program/core-command-descriptors.js";
+import { getSubCliCommandMetadata } from "./program/subcli-command-metadata.js";
 import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
 export const TUI_REQUIRES_TTY =
@@ -36,18 +36,13 @@ export const TUI_REQUIRES_TTY =
 const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
-  ...getCoreCliParentDefaultHelpCommands(),
-  ...getSubCliParentDefaultHelpCommands(),
+  ...getCoreCliCommandDescriptors()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name),
+  ...getSubCliCommandMetadata()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name),
 ]);
-const CLI_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
-
 export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
   const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {

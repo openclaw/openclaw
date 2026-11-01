@@ -36,7 +36,11 @@ import {
 } from "./session-actor-memory-history-navigation.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { readSessionActorMemoryTranscriptStats } from "./session-actor-memory-usage.js";
-import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import {
+  assertCurrentSessionTranscriptHeader,
+  findSessionTranscriptHeader,
+  isIndexedSessionEntry,
+} from "./session-entry-codec.js";
 import { extractSessionBranchHeadline } from "./session-message-cut-content.js";
 import { readSessionTranscriptAccountingTail } from "./session-transcript-accounting-policy.js";
 import { SQLITE_USAGE_TAIL_MAX_EVENTS } from "./session-transcript-accounting.types.js";
@@ -45,6 +49,8 @@ import type {
   SessionTranscriptMaintenanceRead,
 } from "./session-transcript-hydration.types.js";
 import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
+import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
+import { TranscriptReportNavigation } from "./session-transcript-report-policy.js";
 import { projectAssistantTranscriptText } from "./transcript-assistant-delivery-read.js";
 import {
   selectSessionTranscriptTreePathNodes,
@@ -155,10 +161,41 @@ function contextAccountingRows(navigation: Navigation): SessionActorMemoryHistor
 
 function maintenance(
   window: SessionActorMemoryWindow,
-  navigation: Navigation,
   request: SessionTranscriptMaintenanceRead,
 ): SessionTranscriptMaintenanceFacts {
   const kind = "transcript-maintenance";
+  if (request.operation === "custom-branch") {
+    const events = new Map<number, unknown>();
+    let header: ReturnType<typeof findSessionTranscriptHeader>;
+    const navigation = new TranscriptReportNavigation(
+      (function* () {
+        for (const row of window.events) {
+          if (!header) {
+            header = findSessionTranscriptHeader([row.event]);
+            if (header) {
+              assertCurrentSessionTranscriptHeader(header);
+            }
+          }
+          const facts = projectSessionTranscriptReportFacts(row.event);
+          if (facts.kind === "canonical" && facts.entry.type === "custom") {
+            events.set(row.rawSeq, row.event);
+          }
+          yield { seq: row.rawSeq, facts };
+        }
+      })(),
+    );
+    if (window.events.length > 0) {
+      assertCurrentSessionTranscriptHeader(header);
+    }
+    return {
+      kind: "transcript-maintenance",
+      version: { ...window.hot.transcript.version },
+      events: navigation.readCustomBranch(request.leafEntryId, request.customType, (seq) =>
+        asOptionalRecord(events.get(seq)),
+      ),
+    };
+  }
+  const navigation = createSessionActorMemoryHistoryNavigation(window);
   switch (request.operation) {
     case "previous":
       return {
@@ -269,6 +306,8 @@ export function readSessionActorMemoryHistoryFacts(
   query: SessionActorMemoryHistoryFactsQuery,
 ): SessionActorMemoryHistoryFactsReads[keyof SessionActorMemoryHistoryFactsReads]["output"] {
   switch (query.type) {
+    case "session.history.maintenance":
+      return maintenance(window, query.input.request);
     case "session.history.stats":
       return readSessionActorMemoryTranscriptStats(window);
     case "session.history.watermark":
@@ -419,10 +458,12 @@ export function readSessionActorMemoryHistoryFacts(
             : undefined,
       };
     }
-    case "session.history.maintenance":
-      return maintenance(window, navigation, query.input.request);
     case "session.history.match": {
       const match = query.input.match;
+      if (match.kind === "canvas-widget") {
+        const row = navigation.active.findLast(({ event }) => matchesTranscriptEvent(event, match));
+        return { kind: "transcript-match", result: row ? { event: row.event } : undefined };
+      }
       const matchesVisibleFinal =
         match.kind === "visible-final"
           ? createVisibleAssistantResultEventMatcher(match.runId)
@@ -455,17 +496,9 @@ export function readSessionActorMemoryHistoryFacts(
     case "session.history.accounting": {
       const { options } = query.input;
       const contextRows = options.includeByteSize ? contextAccountingRows(navigation) : [];
-      const limit = resolveIntegerOption(
-        options.usageEventLimit ?? SQLITE_USAGE_TAIL_MAX_EVENTS,
-        0,
-        { min: 0 },
-      );
-      const tail =
-        limit === 0
-          ? []
-          : navigation.active
-              .filter((row) => transcriptEventContextEligibility(row.event) === 1)
-              .slice(-limit);
+      const tail = navigation.active
+        .filter((row) => transcriptEventContextEligibility(row.event) === 1)
+        .slice(-SQLITE_USAGE_TAIL_MAX_EVENTS);
       return {
         ...(options.includeByteSize
           ? {

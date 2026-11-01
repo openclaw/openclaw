@@ -1,8 +1,9 @@
 import { render } from "@solidjs/testing-library";
-import { createEffect, createRoot, flush, onSettled } from "solid-js";
+import { createComponent, createRoot, flush, onSettled } from "solid-js";
 import { onTestFinished } from "vitest";
 import { ShellOwner } from "./app-host.tsx";
-import { renderApplicationShell } from "./app-shell-view.tsx";
+import type { ShellChromeOwner } from "./app-shell-chrome.ts";
+import { ApplicationShell } from "./app-shell-view.tsx";
 
 export function createShellOwner(): ShellOwner {
   const { shell, dispose } = createRoot((disposeRoot) => ({
@@ -16,14 +17,24 @@ export function createShellOwner(): ShellOwner {
   return shell;
 }
 
+export function connectShellEvents(shell: object): void {
+  // SAFETY: ShellOwner fixtures retain the real private event owner, without its runtime subscriptions.
+  const { shellChrome } = shell as { shellChrome: ShellChromeOwner };
+  shellChrome.connect();
+  onTestFinished(() => shellChrome.disconnect());
+}
+
+export function createConnectedShellOwner(): ShellOwner {
+  const shell = createShellOwner();
+  connectShellEvents(shell);
+  return shell;
+}
+
 export function mountShellView(shell: ShellOwner) {
   const view = render(
     () => {
-      createEffect(
-        () => shell.shellRevision(),
-        () => shell.afterCommit(),
-      );
-      return renderApplicationShell(shell);
+      onSettled(() => shell.mountPresentation());
+      return createComponent(ApplicationShell, { host: shell });
     },
     { container: shell.element },
   );

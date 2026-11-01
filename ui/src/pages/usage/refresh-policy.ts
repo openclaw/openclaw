@@ -14,7 +14,8 @@ type UsageRefreshPolicyOptions = {
 /** Owns Usage's page-specific TTL, interruption, and refresh coalescing policy. */
 export class UsageRefreshPolicy {
   private lastLoadedAtMs: number | null = null;
-  private pendingAutomaticRefresh = false;
+  // A deferred refresh keeps its reason: a provider-only retry must not replay as a full reload.
+  private pendingAutomaticRefresh: UsageRefreshReason | null = null;
   private publicationPending = false;
   private reloadPending = false;
   private retryTimer: number | null = null;
@@ -123,10 +124,14 @@ export class UsageRefreshPolicy {
       this.reloadPending = true;
     }
     if (this.options.isLoading() && reason !== "manual") {
-      this.pendingAutomaticRefresh = true;
+      // Any broader reason outranks a deferred provider-only retry.
+      this.pendingAutomaticRefresh =
+        this.pendingAutomaticRefresh && this.pendingAutomaticRefresh !== "poll"
+          ? this.pendingAutomaticRefresh
+          : reason;
       return;
     }
-    this.pendingAutomaticRefresh = false;
+    this.pendingAutomaticRefresh = null;
     if (
       reason !== "manual" &&
       (document.visibilityState !== "visible" ||
@@ -145,10 +150,11 @@ export class UsageRefreshPolicy {
   }
 
   flushPending(): void {
-    if (!this.pendingAutomaticRefresh) {
+    const pending = this.pendingAutomaticRefresh;
+    if (!pending) {
       return;
     }
-    this.pendingAutomaticRefresh = false;
-    void this.request("focus");
+    this.pendingAutomaticRefresh = null;
+    void this.request(pending === "poll" ? "poll" : "focus");
   }
 }

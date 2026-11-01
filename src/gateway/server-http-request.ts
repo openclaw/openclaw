@@ -43,6 +43,7 @@ import {
 import type { authorizePluginGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import {
   finishFailedGatewayHttpResponse,
+  finishGatewayHttpDatabaseAdmissionError,
   sendGatewayAuthFailure,
   setDefaultSecurityHeaders,
   isWebSocketUpgradeRequest,
@@ -57,6 +58,7 @@ import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
 } from "./ingress-attribution.js";
+import { isTrustedProxyAddress } from "./net.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   handleProviderOAuthCallback,
@@ -139,9 +141,7 @@ export function createGatewayHttpRequestHandler(
       ),
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
-      if (!res.destroyed) {
-        res.destroy(error instanceof Error ? error : undefined);
-      }
+      res.destroy(error instanceof Error ? error : undefined);
     });
   };
 
@@ -160,7 +160,10 @@ export function createGatewayHttpRequestHandler(
           res.end();
         }
       } catch (error) {
-        if (finishGatewayHttpAuthorityError(res, error)) {
+        if (
+          finishGatewayHttpAuthorityError(res, error) ||
+          finishGatewayHttpDatabaseAdmissionError(res, error)
+        ) {
           return undefined;
         }
         console.error("[gateway-http] legacy plugin request failed:", error);
@@ -272,6 +275,27 @@ export function createGatewayHttpRequestHandler(
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
+      const resolvedAuthValue = getResolvedAuth();
+      // Configured proxies can probe without a client identity; diagnostic details
+      // still require attribution and authorization in the probe owner.
+      if (
+        !remoteIngress &&
+        (ingressAttribution.kind !== "unattributable-proxy" ||
+          isTrustedProxyAddress(ingressAttribution.remoteAddress, trustedProxies)) &&
+        (await handleGatewayProbeRequest(
+          req,
+          res,
+          scopedRequestPath,
+          resolvedAuthValue,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+          getReadiness,
+          getStartup,
+        ))
+      ) {
+        return undefined;
+      }
       if (ingressAttribution.kind === "unattributable-proxy") {
         opts.reportUnattributableProxy?.(ingressAttribution);
         if (
@@ -288,7 +312,6 @@ export function createGatewayHttpRequestHandler(
         return undefined;
       }
       const requestClientIp = ingressAttribution.clientIp;
-      const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
         cfg: configSnapshot,
@@ -336,22 +359,7 @@ export function createGatewayHttpRequestHandler(
         }
         return true;
       };
-      const requestStages: GatewayHttpRequestStage[] = remoteIngress
-        ? []
-        : [
-            () =>
-              handleGatewayProbeRequest(
-                req,
-                res,
-                scopedRequestPath,
-                resolvedAuthValue,
-                trustedProxies,
-                allowRealIpFallback,
-                rateLimiter,
-                getReadiness,
-                getStartup,
-              ),
-          ];
+      const requestStages: GatewayHttpRequestStage[] = [];
       const addRequestStage = (
         enabled: boolean,
         stage: GatewayHttpRequestStage,
@@ -712,7 +720,10 @@ export function createGatewayHttpRequestHandler(
       respondNotFound(res);
       return undefined;
     } catch (err) {
-      if (finishGatewayHttpAuthorityError(res, err)) {
+      if (
+        finishGatewayHttpAuthorityError(res, err) ||
+        finishGatewayHttpDatabaseAdmissionError(res, err)
+      ) {
         return undefined;
       }
       console.error("[gateway-http] unhandled error in request handler:", err);

@@ -1,4 +1,5 @@
 import type { Block } from "@slack/web-api";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
@@ -151,7 +152,7 @@ function parseSlackDataVisualizationBlock(block: Record<string, unknown>) {
   }
   const axisConfig = asOptionalRecord(chart.axis_config);
   const categories = axisConfig?.categories;
-  if (!Array.isArray(categories) || !categories.every((category) => typeof category === "string")) {
+  if (!isStringArray(categories)) {
     return undefined;
   }
   if (!Array.isArray(chart.series)) {

@@ -58,7 +58,6 @@ it("warns once from loaded legacy state before dispatch, without rewriting jobs 
       defaultAgentId: "main",
       log: { warn, error: vi.fn(), debug: vi.fn(), info: vi.fn() },
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: execute,
       describeJobLoadWarning: (job) => describeCronInferenceMigration(cfg, job),
     });

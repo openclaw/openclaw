@@ -9,7 +9,7 @@ import {
 } from "./chat-message-group-view.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 
 export function createGroupedMessageHarness(container: HTMLElement) {
   type Props = Parameters<typeof GroupedMessage>[0];
@@ -113,14 +113,12 @@ export function createMessageGroupHarness(
   };
 }
 
-export function createChatThreadHarness(
-  container: HTMLElement,
-  transcript: ChatTranscriptController,
-) {
+export function createChatThreadHarness(container: HTMLElement, transcript: ChatTranscript) {
   let root: ReturnType<typeof mountSolid> | undefined;
   let update: (props: ChatThreadProps) => void;
   return {
     render(props: ChatThreadProps) {
+      transcript.start();
       const next = { ...props };
       if (root) {
         update(next);
@@ -137,6 +135,7 @@ export function createChatThreadHarness(
       if (!getOwner()) {
         flush();
       }
+      transcript.update();
     },
     unmount() {
       root?.unmount();

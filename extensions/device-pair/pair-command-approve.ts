@@ -1,4 +1,3 @@
-// Device Pair plugin module implements pair command approve behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -48,7 +47,6 @@ export function selectPendingApprovalRequest(params: {
 
   return {
     pending: params.pending.find((entry) => entry.requestId === params.requested),
-    reply: undefined,
   };
 }
 

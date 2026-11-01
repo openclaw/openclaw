@@ -7,7 +7,7 @@ const CACHE_VERSION =
   (EMBEDDED_CACHE_VERSION !== "__OPENCLAW_CONTROL_UI_BUILD_ID__"
     ? EMBEDDED_CACHE_VERSION
     : URL_CACHE_VERSION) || "dev";
-// Replaced by Vite with generic HTML and its measured, integrity-bound boot graph.
+// Replaced by Vite with generic HTML and integrity-bound boot/deferred inventories.
 const OFFLINE_BOOT = null;
 const NAVIGATION_TIMEOUT_MS = 10_000;
 const NATIVE_AUTH_PARAM = "openclaw_http_auth";
@@ -35,10 +35,38 @@ function isControlUiChatClient(url) {
 // A resumed/BFCache document may have missed activation entirely. Build identity
 // belongs to the running worker, not its potentially old sw.js?v= registration URL.
 self.addEventListener("message", (event) => {
+  if (
+    event.data?.type === "openclaw-foreground-activity" &&
+    event.source?.type === "window" &&
+    controlUiPathname(new URL(event.source.url)) !== null
+  ) {
+    if (event.data.active === true) {
+      foregroundClients.add(event.source.id);
+      offlineController?.abort();
+      deferredController?.abort();
+    } else if (foregroundClients.delete(event.source.id)) {
+      foregroundSettledAt = Date.now();
+    }
+  }
   if (event.data?.type === "sw-version-probe") {
     event.ports[0]?.postMessage({ type: "sw-updated", version: CACHE_VERSION });
     if (OFFLINE_BOOT) {
       event.waitUntil(prepareOfflineShell());
+      if (event.data.offlinePrecache) {
+        const { saveData, effectiveType } = event.data.offlinePrecache;
+        const skip = saveData
+          ? "save-data"
+          : /^(slow-)?2g$/u.test(effectiveType)
+            ? "slow-connection"
+            : null;
+        deferredAllowed = !skip;
+        if (skip) {
+          deferredController?.abort();
+          console.info("OpenClaw deferred offline download skipped:", skip);
+        } else {
+          event.waitUntil(prepareDeferredAssets());
+        }
+      }
     }
   }
 });
@@ -60,22 +88,37 @@ function cacheableResponse(response) {
 }
 
 let offlinePreparation;
+let offlineController;
 function prepareOfflineShell() {
   if (!OFFLINE_BOOT || !self.navigator.onLine) {
     return Promise.resolve();
   }
   // Registration/resume probes share the install work; a failed attempt remains
   // retryable without a retry timer or delaying the build-identity reply.
+  // Only activation retires caches: an older worker can still answer probes
+  // while its replacement is installing.
   if (!offlinePreparation) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
-    offlinePreparation = precacheOfflineShell(controller.signal)
-      .then(retireOldCaches)
+    offlinePreparation = (async () => {
+      const deadline = Date.now() + 60_000;
+      while (await waitForForeground(deadline)) {
+        const controller = new AbortController();
+        offlineController = controller;
+        const timeout = setTimeout(() => controller.abort(), deadline - Date.now());
+        try {
+          await precacheOfflineShell(controller.signal);
+        } finally {
+          clearTimeout(timeout);
+          offlineController = undefined;
+        }
+        if (!controller.signal.aborted) {
+          return;
+        }
+      }
+    })()
       .catch(() => {
         // Cache storage is optional; updates and notifications must still work.
       })
       .finally(() => {
-        clearTimeout(timeout);
         offlinePreparation = undefined;
       });
   }
@@ -98,11 +141,22 @@ async function retireOldCaches() {
   // Keep one complete predecessor for open documents still importing its chunks.
   // Even an incomplete replacement must retain the last usable shell.
   const previous = complete.find((name) => name !== CACHE_NAME);
-  await Promise.all(
-    (await caches.keys())
-      .filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME && name !== previous)
-      .map((name) => caches.delete(name)),
+  const retired = (await caches.keys()).filter(
+    (name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME && name !== previous,
   );
+  if (OFFLINE_BOOT && retired.length) {
+    // Promote unchanged content-addressed files before their only copy disappears.
+    // No network work here: installation never waits for deferred downloads.
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      for (const asset of [...OFFLINE_BOOT.assets, ...OFFLINE_BOOT.deferredAssets]) {
+        await reuseOfflineAsset(cache, asset, retired);
+      }
+    } catch {
+      // Optional reuse must not block quota recovery or update announcements.
+    }
+  }
+  await Promise.all(retired.map((name) => caches.delete(name)));
 }
 
 async function matchOfflineShell(fallback = Response.error()) {
@@ -123,13 +177,13 @@ async function matchOfflineShell(fallback = Response.error()) {
   return fallback;
 }
 
-async function isCachedBootAsset(response, integrity) {
+async function isCachedOfflineAsset(response, integrity) {
   if (!response || !cacheableResponse(response)) {
     return false;
   }
   try {
     // Runtime asset writes also enter this cache. Reuse bytes only if they match
-    // the boot graph, not just a successful response under the expected URL.
+    // the inventory, not just a successful response under the expected URL.
     const digest = await crypto.subtle.digest("SHA-256", await response.arrayBuffer());
     return "sha256-" + btoa(String.fromCharCode(...new Uint8Array(digest))) === integrity;
   } catch {
@@ -137,42 +191,165 @@ async function isCachedBootAsset(response, integrity) {
   }
 }
 
+async function reuseOfflineAsset(cache, asset, previous) {
+  const url = new URL(asset.path, new URL(SCOPE_PATH, SCOPE_URL)).href;
+  for (const name of [CACHE_NAME, ...previous]) {
+    const cached = await caches.match(url, { cacheName: name });
+    if (await isCachedOfflineAsset(cached?.clone(), asset.integrity)) {
+      if (name !== CACHE_NAME) {
+        await cache.put(url, cached);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+async function cacheOfflineAsset(cache, asset, signal, previous) {
+  try {
+    if (await reuseOfflineAsset(cache, asset, previous)) {
+      return true;
+    }
+    if (!self.navigator.onLine || signal.aborted) {
+      return false;
+    }
+    const url = new URL(asset.path, new URL(SCOPE_PATH, SCOPE_URL)).href;
+    // Reuse proxy sign-in for static assets, never follow login redirects.
+    // Fetch enforces SRI; cache reuse above verifies bytes from cache-on-use too.
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      redirect: "error",
+      integrity: asset.integrity,
+      signal,
+      priority: "low",
+    });
+    if (!cacheableResponse(response) || signal.aborted) {
+      return false;
+    }
+    await cache.put(url, response);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let deferredAllowed = false;
+let deferredPreparation;
+let deferredController;
+let foregroundRequests = 0;
+let foregroundSettledAt = 0;
+const foregroundClients = new Set();
+
+async function waitForForeground(deadline, initialQuietUntil = 0) {
+  while (Date.now() < deadline) {
+    if (foregroundClients.size) {
+      // A closed document cannot send its final idle hint, including during installation.
+      const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const liveIds = new Set(clients.map((client) => client.id));
+      for (const id of foregroundClients) {
+        if (!liveIds.has(id)) {
+          foregroundClients.delete(id);
+          foregroundSettledAt = Date.now();
+        }
+      }
+    }
+    const quietMs = Math.max(initialQuietUntil, foregroundSettledAt + 1_000) - Date.now();
+    if (!foregroundClients.size && !foregroundRequests && quietMs <= 0) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(deadline - Date.now(), Math.max(quietMs, 1_000)));
+    });
+  }
+  return false;
+}
+
+function prepareDeferredAssets() {
+  if (!deferredPreparation) {
+    deferredPreparation = (async () => {
+      await prepareOfflineShell();
+      if (!(await caches.match(OFFLINE_SHELL_URL, { cacheName: CACHE_NAME }))) {
+        return;
+      }
+      const cache = await caches.open(CACHE_NAME);
+      const previous = (await completeCacheNames()).filter((name) => name !== CACHE_NAME);
+      const deadline = Date.now() + 60_000;
+      const initialQuietUntil = Date.now() + 1_000;
+      for (let index = 0; index < OFFLINE_BOOT.deferredAssets.length;) {
+        if (!deferredAllowed || !self.navigator.onLine || Date.now() >= deadline) {
+          return;
+        }
+        // Wait for a quiet second after page traffic. Foreground requests abort
+        // the batch; verified writes survive and the same batch resumes.
+        if (!(await waitForForeground(deadline, initialQuietUntil))) {
+          return;
+        }
+        const controller = new AbortController();
+        deferredController = controller;
+        const timeout = setTimeout(() => controller.abort(), deadline - Date.now());
+        let ready;
+        try {
+          ready = await Promise.all(
+            OFFLINE_BOOT.deferredAssets
+              .slice(index, index + 4)
+              .map((asset) => cacheOfflineAsset(cache, asset, controller.signal, previous)),
+          );
+        } finally {
+          clearTimeout(timeout);
+          deferredController = undefined;
+        }
+        if (controller.signal.aborted) {
+          continue;
+        }
+        if (!ready.every(Boolean)) {
+          return; // A later startup/resume probe retries partial or failed work.
+        }
+        index += 4;
+      }
+    })()
+      .catch(() => {
+        // Optional storage/download failure must not affect boot or page requests.
+      })
+      .finally(() => {
+        deferredPreparation = undefined;
+      });
+  }
+  return deferredPreparation;
+}
+
+function respondToControlUiRequest(event, respond) {
+  foregroundRequests++;
+  offlineController?.abort();
+  deferredController?.abort();
+  event.respondWith(
+    respond().finally(() => {
+      foregroundRequests--;
+      foregroundSettledAt = Date.now();
+    }),
+  );
+}
+
 async function precacheOfflineShell(signal) {
   if (await caches.match(OFFLINE_SHELL_URL, { cacheName: CACHE_NAME })) {
     return;
   }
   const cache = await caches.open(CACHE_NAME);
-  const ready = await Promise.all(
-    OFFLINE_BOOT.assets.map(async (asset) => {
-      try {
-        const url = new URL(asset.path, new URL(SCOPE_PATH, SCOPE_URL)).href;
-        const cached = await caches.match(url, { cacheName: CACHE_NAME });
-        if (await isCachedBootAsset(cached, asset.integrity)) {
-          return true;
-        }
-        if (!self.navigator.onLine) {
-          return false;
-        }
-        // Reuse same-origin proxy sign-in for static assets, never follow a login
-        // redirect. Integrity and response policy still admit only exact build bytes.
-        const response = await fetch(url, {
-          credentials: "same-origin",
-          redirect: "error",
-          integrity: asset.integrity,
-          signal,
-        });
-        if (!cacheableResponse(response)) {
-          return false;
-        }
-        await cache.put(url, response);
-        return true;
-      } catch {
-        return false;
-      }
-    }),
+  const previous = (await caches.keys()).filter(
+    (name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME,
   );
-  if (!ready.every(Boolean)) {
-    return;
+  // Bound already-buffered bytes when a foreground operation interrupts installation.
+  for (let index = 0; index < OFFLINE_BOOT.assets.length; index += 4) {
+    if (signal.aborted) {
+      return;
+    }
+    const ready = await Promise.all(
+      OFFLINE_BOOT.assets
+        .slice(index, index + 4)
+        .map((asset) => cacheOfflineAsset(cache, asset, signal, previous)),
+    );
+    if (!ready.every(Boolean)) {
+      return;
+    }
   }
   // A deep chat URL must resolve the portable bundle against the registered app
   // root. No fetched document, credential, or route-specific metadata is retained.
@@ -221,7 +398,8 @@ self.addEventListener("activate", (event) => {
 });
 
 async function reportControlUiHttpFailure(event) {
-  if (!event.clientId) {
+  // Reachability owns expected outage failures; they are not failed app reads.
+  if (!event.clientId || event.request.headers.get("X-OpenClaw-Reachability-Probe") === "1") {
     return;
   }
   try {
@@ -356,12 +534,35 @@ self.addEventListener("fetch", (event) => {
     if (url.searchParams.has(NATIVE_AUTH_PARAM)) {
       return;
     }
+    const navigationKeys = url.searchParams.getAll("__openclawSessionKey");
+    const composerFocus = url.searchParams.getAll("__openclawComposerFocus");
     const sessionEntry =
       new URL(self.location.href).searchParams.get("session-entry") === "1" &&
       pathname.startsWith("/chat/") &&
       pathname !== "/chat/" &&
+      navigationKeys.length <= 1 &&
+      navigationKeys.every((key) => {
+        if (!key.trim()) {
+          return false;
+        }
+        for (let index = 0; index < key.length; index += 1) {
+          const code = key.charCodeAt(index);
+          if (code <= 0x1f || code === 0x7f) {
+            return false;
+          }
+        }
+        return true;
+      }) &&
+      composerFocus.length <= 1 &&
+      composerFocus.every((value) => value === "1") &&
       [...url.searchParams.keys()].every(
-        (key) => key === "dashboard" || key === "draft" || key === "openclaw_mount_recovery",
+        (key) =>
+          key === "dashboard" ||
+          key === "draft" ||
+          key === "openclaw_mount_recovery" ||
+          key === "__openclawSessionFacePreference" ||
+          key === "__openclawSessionKey" ||
+          key === "__openclawComposerFocus",
       );
     const route = pathname.replace(/\/$/u, "") || "/";
     // Static routes and dedicated dynamic namespaces come from the router.
@@ -373,7 +574,7 @@ self.addEventListener("fetch", (event) => {
       OFFLINE_BOOT?.routes.includes(route.toLowerCase()) ||
       OFFLINE_BOOT?.routePrefixes.some((prefix) => pathname.startsWith(prefix))
     ) {
-      event.respondWith(fetchNavigation(event.request, url, sessionEntry));
+      respondToControlUiRequest(event, () => fetchNavigation(event.request, url, sessionEntry));
     }
     return;
   }
@@ -385,20 +586,18 @@ self.addEventListener("fetch", (event) => {
   const permitsCache =
     event.request.cache !== "no-store" && !event.request.headers.has("Authorization");
 
-  event.respondWith(
-    (async () => {
-      const cacheable = permitsCache && (hashedAsset || isVersionedPublicAsset(url, pathname));
-      // Prior documents retain versioned fonts/themes too. Only exact cached
-      // URLs are reusable; new network writes still require the current version.
-      const publicAsset =
-        OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
-      const cached =
-        permitsCache && (hashedAsset || publicAsset)
-          ? await matchControlUiAsset(event.request, cacheable)
-          : undefined;
-      return cached || fetchControlUiRequest(event, cacheable);
-    })(),
-  );
+  respondToControlUiRequest(event, async () => {
+    const cacheable = permitsCache && (hashedAsset || isVersionedPublicAsset(url, pathname));
+    // Prior documents retain versioned fonts/themes too. Only exact cached
+    // URLs are reusable; new network writes still require the current version.
+    const publicAsset =
+      OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
+    const cached =
+      permitsCache && (hashedAsset || publicAsset)
+        ? await matchControlUiAsset(event.request, cacheable)
+        : undefined;
+    return cached || fetchControlUiRequest(event, cacheable);
+  });
 });
 
 // --- Web Push ---
@@ -418,7 +617,12 @@ self.addEventListener("push", (event) => {
   const title = data.title || "OpenClaw";
   const options = {
     body: data.body || "",
-    icon: "./apple-touch-icon.png",
+    icon:
+      typeof data.icon === "string" &&
+      data.icon.length <= 2400 &&
+      /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(data.icon)
+        ? data.icon
+        : "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
     renotify: data.renotify === true,

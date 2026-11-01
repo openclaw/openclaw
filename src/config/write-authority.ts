@@ -1,3 +1,5 @@
+import type { ConfigWriteOptions } from "./io.types.js";
+
 type ConfigWriteAssertion = () => void;
 type AssertionRun = (checked: Set<ConfigWriteAssertion>) => void;
 
@@ -31,6 +33,43 @@ export function composeConfigWriteAssertions(
   const assertion = () => run(new Set());
   composedAssertions.set(assertion, run);
   return assertion;
+}
+
+/** Caller authority can narrow the captured destination, never replace it. */
+export function mergeConfigWriteOptions(
+  prepared: ConfigWriteOptions,
+  caller?: ConfigWriteOptions,
+): ConfigWriteOptions {
+  const merged = { ...prepared, ...caller };
+  const capturedGuard = prepared.assertConfigPathForWrite;
+  const callerGuard = caller?.assertConfigPathForWrite;
+  if (capturedGuard && callerGuard && capturedGuard !== callerGuard) {
+    merged.assertConfigPathForWrite = composeConfigWriteAssertions(capturedGuard, callerGuard);
+  } else if (capturedGuard) {
+    merged.assertConfigPathForWrite = capturedGuard;
+  }
+  return merged;
+}
+
+/** The physical writer retains lock authority after the caller's pre-commit work. */
+export function bindConfigWriteLockGuard(
+  options: ConfigWriteOptions,
+  sourceGuard: ConfigWriteAssertion | undefined,
+): ConfigWriteOptions {
+  if (!sourceGuard) {
+    return options;
+  }
+  return {
+    ...options,
+    assertConfigPathForWrite: composeConfigWriteAssertions(
+      sourceGuard,
+      options.assertConfigPathForWrite,
+    ),
+    beforeCommit: async () => {
+      await options.beforeCommit?.();
+      sourceGuard();
+    },
+  };
 }
 
 /** Keep a refused operation terminal, even when another composition retained this guard. */

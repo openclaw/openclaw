@@ -204,9 +204,9 @@ Catalogs containing visible sessions remain present when another host fails.
 The Control UI requests progressive catalog updates. Each local or paired host
 appears when its own App Server listing settles; the aggregate response remains
 the compatibility and recovery snapshot. The visible page reconciles after
-connectivity changes, on focus, and at most every 30 seconds, with a faster pass
-after changes. Native Codex sessions created in another client are therefore
-eventually discovered without importing them into OpenClaw storage.
+connectivity changes, when the page becomes visible, and every two minutes while
+visible. Discovery pauses while hidden. Native Codex sessions created in another
+client are therefore eventually discovered without importing them into OpenClaw storage.
 
 Catalog discovery is passive. Listing or reading metadata must not call
 `thread/resume`, subscribe the OpenClaw client to live thread requests, or

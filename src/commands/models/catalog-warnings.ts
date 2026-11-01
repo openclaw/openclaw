@@ -50,11 +50,10 @@ export function getModelCatalogWarnings(result: ModelsListResult | undefined) {
 }
 
 /** Diagnostic reads consume a prepared publication; they never discover or probe providers. */
-export async function readModelCatalogWarnings(config: OpenClawConfig, agentId?: string) {
-  const result = await readSelectedGatewayModelCatalog(
+export async function readModelCatalog(config: OpenClawConfig, agentId?: string) {
+  return readSelectedGatewayModelCatalog(
     config,
     { view: "all", includeDetails: true, preparedOnly: true, ...(agentId ? { agentId } : {}) },
     5000,
   ).catch(() => undefined);
-  return getModelCatalogWarnings(result);
 }

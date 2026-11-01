@@ -3,6 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { validateReleaseManifestAdvisoryJobs } from "./full-release-validation-policy.mjs";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
 import { changelogFormat, findReleaseChangelog } from "./lib/release-changelog.mjs";
 import {
   compactReleaseNotes,
@@ -489,24 +490,17 @@ function parseArgs(argv: string[]) {
   ] as const satisfies ReadonlyArray<readonly [string, string]>;
   type ValueOption = (typeof valueOptions)[number][1];
   const options: Partial<Record<ValueOption, string>> & { help?: true } = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--help" || arg === "-h") {
-      options.help = true;
-      continue;
-    }
-    const option = valueOptions.find(([flag]) => flag === arg);
-    if (option) {
-      const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
-        fail(`${arg} requires a value`);
-      }
-      options[option[1]] = value;
-      index += 1;
-      continue;
-    }
-    fail(`unknown argument: ${arg}`);
-  }
+  parseFlagArgs(
+    argv,
+    options,
+    [
+      ...valueOptions.map(([flag, key]) =>
+        stringFlag(flag, key, { allowInline: false, repeatable: true }),
+      ),
+      ...["--help", "-h"].map((flag) => booleanFlag(flag, "help", true, { repeatable: true })),
+    ],
+    { ignoreDoubleDash: false, onUnhandledArg: (arg) => fail(`unknown argument: ${arg}`) },
+  );
   if (!options.help) {
     for (const name of ["tag", "repository"] as const) {
       if (!options[name]) {

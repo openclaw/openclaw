@@ -1,12 +1,12 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import * as codexRuntimePlugin from "../commands/runtime-plugin-install.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as records from "../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as update from "../plugins/update.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import * as worker from "../state/openclaw-state-lease-worker-operation.js";
@@ -15,69 +15,76 @@ import { prepareAutomaticSetupCodex, stageCodexCandidate } from "./setup-inferen
 import {
   SetupInferenceCancelledError,
   throwIfSetupInferenceCancelled,
+  type StageContext,
 } from "./setup-inference-core.js";
 import { pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("binds automatic Codex path trust to the selected bundle", async () => {
-  await withOpenClawTestState(
-    {
-      label: "codex-bundled-path-trust",
-      env: {
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
-      },
+const isolatedPlugins = {
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+};
+
+function stageContext(
+  state: { workspaceDir: string; agentDir: () => string },
+  cfg: OpenClawConfig,
+  snapshot: StageContext["snapshot"],
+  isCancelled?: () => boolean,
+): StageContext {
+  return {
+    cfg,
+    snapshot,
+    workspace: state.workspaceDir,
+    agentDir: state.agentDir(),
+    routeAgentId: "main",
+    params: {
+      kind: "codex-cli",
+      automaticSetup: true,
+      surface: "gateway",
+      runtime: createNonExitingRuntime(),
+      isCancelled,
     },
+    effects: { credentialsSaved: false, configPersisted: false },
+    beforePersistentEffect: async () => {},
+  };
+}
+
+it("binds automatic Codex path trust to the selected bundle", () =>
+  withOpenClawTestState(
+    { label: "codex-bundled-path-trust", env: isolatedPlugins },
     async (state) => {
       const rootDir = state.statePath("bundled", "codex");
       const cfg: OpenClawConfig = {};
       await state.writeConfig(cfg);
       const snapshot = await readConfigFileSnapshot();
       const metadata = createEmptyPluginMetadataSnapshot(state.workspaceDir);
+      const resolveMetadata = vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot");
+      vi.spyOn(codexRuntimePlugin, "ensureCodexRuntimePluginForModelSelection").mockImplementation(
+        async ({ cfg: config }) => ({ ok: true, cfg: config, required: false }),
+      );
       for (const { sourceMatches, installMatches, origin, accepted } of [
         { sourceMatches: true, installMatches: true, origin: "bundled", accepted: true },
         { sourceMatches: false, installMatches: true, origin: "bundled", accepted: false },
         { sourceMatches: true, installMatches: false, origin: "bundled", accepted: false },
         { sourceMatches: true, installMatches: true, origin: "config", accepted: false },
       ] as const) {
-        const staged = await stageCodexCandidate(
-          {
-            cfg,
-            snapshot,
-            workspace: state.workspaceDir,
-            agentDir: state.agentDir(),
-            routeAgentId: "main",
-            params: {
-              kind: "codex-cli",
-              automaticSetup: true,
-              surface: "gateway",
-              runtime: createNonExitingRuntime(),
+        resolveMetadata.mockReturnValue({
+          ...metadata,
+          index: {
+            ...metadata.index,
+            plugins: [pluginRecord("codex", { origin, rootDir })],
+            installRecords: {
+              codex: {
+                source: "path",
+                sourcePath: sourceMatches ? rootDir : state.statePath("foreign", "codex"),
+                installPath: installMatches ? rootDir : state.statePath("foreign", "codex"),
+              },
             },
-            deps: {
-              resolvePluginMetadataSnapshot: () => ({
-                ...metadata,
-                index: {
-                  ...metadata.index,
-                  plugins: [pluginRecord("codex", { origin, rootDir })],
-                  installRecords: {
-                    codex: {
-                      source: "path",
-                      sourcePath: sourceMatches ? rootDir : state.statePath("foreign", "codex"),
-                      installPath: installMatches ? rootDir : state.statePath("foreign", "codex"),
-                    },
-                  },
-                },
-              }),
-              ensureCodexRuntimePlugin: async ({ cfg: config }) => ({
-                ok: true,
-                cfg: config,
-                required: false,
-              }),
-            },
-            effects: { credentialsSaved: false },
-            beforePersistentEffect: async () => {},
           },
+        });
+        const staged = await stageCodexCandidate(
+          stageContext(state, cfg, snapshot),
           "openai/fixture",
         );
         if (accepted) {
@@ -92,8 +99,7 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
         }
       }
     },
-  );
-});
+  ));
 
 it.each([
   { candidate: false, revoke: false },
@@ -102,50 +108,45 @@ it.each([
   { candidate: true, revoke: true },
 ])(
   "fences Codex repair publication (candidate=$candidate, revoked=$revoke)",
-  async ({ candidate, revoke }) => {
-    await withOpenClawTestState(
+  ({ candidate, revoke }) =>
+    withOpenClawTestState(
       {
         label: "codex-repair-authority",
         env: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
+          ...isolatedPlugins,
           OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.10.2",
         },
       },
       async (state) => {
-        const installPath = state.statePath("npm", "node_modules", "@openclaw", "codex");
-        await fs.mkdir(installPath, { recursive: true });
-        await fs.writeFile(
-          path.join(installPath, "package.json"),
-          JSON.stringify({
-            name: "@openclaw/codex",
-            version: "2026.10.2",
-            dependencies: { "@fixture/missing-dependency": "1.0.0" },
-            openclaw: { extensions: ["./index.js"] },
-          }),
-        );
-        await fs.writeFile(path.join(installPath, "index.js"), "export {};");
-        await fs.writeFile(
-          path.join(installPath, "openclaw.plugin.json"),
-          JSON.stringify({ id: "codex", configSchema: { type: "object" } }),
-        );
+        const packageDir = "npm/node_modules/@openclaw/codex";
+        const installPath = state.statePath(packageDir);
+        await state.writeJson(`${packageDir}/package.json`, {
+          name: "@openclaw/codex",
+          version: "2026.10.2",
+          dependencies: { "@fixture/missing-dependency": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        });
+        await state.writeText(`${packageDir}/index.js`, "export {};");
+        await state.writeJson(`${packageDir}/openclaw.plugin.json`, {
+          id: "codex",
+          configSchema: { type: "object" },
+        });
         const cfg: OpenClawConfig = {
           agents: { defaults: { models: { "openai/fixture": { agentRuntime: { id: "codex" } } } } },
           plugins: { entries: { codex: { enabled: true } } },
         };
         await state.writeConfig(cfg);
+        const installedRecord = {
+          source: "npm" as const,
+          spec: "@openclaw/codex@2026.10.2",
+          resolvedName: "@openclaw/codex",
+          resolvedVersion: "2026.10.2",
+          integrity: "sha512-before-repair",
+          installPath,
+        };
         await withPluginLifecycleLease({}, async (lease) => {
           await records.writePersistedInstalledPluginIndexInstallRecordsWithLease(
-            {
-              codex: {
-                source: "npm",
-                spec: "@openclaw/codex@2026.10.2",
-                resolvedName: "@openclaw/codex",
-                resolvedVersion: "2026.10.2",
-                integrity: "sha512-before-repair",
-                installPath,
-              },
-            },
+            { codex: installedRecord },
             { config: cfg, lease },
           );
         });
@@ -153,25 +154,15 @@ it.each([
         // Package acquisition is synthetic; Doctor, leases and SQLite publication stay real.
         vi.spyOn(update, "updateNpmInstalledPlugins").mockImplementation(async (params) => {
           repaired = true;
+          const config = structuredClone(params.config);
+          const installs = ((config.plugins ??= {}).installs ??= {});
+          installs.codex = {
+            ...installs.codex,
+            ...installedRecord,
+            integrity: "sha512-after-repair",
+          };
           return {
-            config: {
-              ...params.config,
-              plugins: {
-                ...params.config.plugins,
-                installs: {
-                  ...params.config.plugins?.installs,
-                  codex: {
-                    ...params.config.plugins?.installs?.codex,
-                    source: "npm",
-                    spec: "@openclaw/codex@2026.10.2",
-                    resolvedName: "@openclaw/codex",
-                    resolvedVersion: "2026.10.2",
-                    integrity: "sha512-after-repair",
-                    installPath,
-                  },
-                },
-              },
-            },
+            config,
             outcomes: [{ pluginId: "codex", status: "updated", message: "Repaired fixture" }],
             changed: true,
           };
@@ -189,77 +180,39 @@ it.each([
         });
         let revoked = false;
         const isCancelled = () => revoked;
-        const beforePersistentApply = () => throwIfSetupInferenceCancelled({ isCancelled });
-        const beforePersistentEffect = async () => {};
-        const runtime = createNonExitingRuntime();
         const snapshot = await readConfigFileSnapshot();
+        const context = stageContext(state, cfg, snapshot, isCancelled);
         const preparing = candidate
-          ? stageCodexCandidate(
-              {
-                cfg,
-                snapshot,
-                workspace: state.workspaceDir,
-                agentDir: state.agentDir(),
-                routeAgentId: "main",
-                params: {
-                  kind: "codex-cli",
-                  automaticSetup: true,
-                  surface: "gateway",
-                  runtime,
-                  isCancelled,
-                },
-                deps: {},
-                effects: { credentialsSaved: false },
-                beforePersistentEffect,
-              },
-              "openai/fixture",
-            )
+          ? stageCodexCandidate(context, "openai/fixture")
           : prepareAutomaticSetupCodex({
               cfg,
-              runtime,
-              workspace: state.workspaceDir,
-              beforePersistentEffect,
-              beforePersistentApply,
+              runtime: context.params.runtime,
+              workspace: context.workspace,
+              beforePersistentEffect: context.beforePersistentEffect,
+              beforePersistentApply: () => throwIfSetupInferenceCancelled(context.params),
             });
-        const checked = preparing.then((value) => {
-          if ("error" in value) {
-            throw new Error(value.error);
-          }
-          return value;
-        });
-        const settled = checked.then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+        const settled = preparing.catch(() => {});
         try {
           await awaitGateBeforeSettlement(
             entered.promise,
-            checked,
+            preparing,
             "repair never reached index preparation",
           );
           revoked = revoke;
           release.resolve();
-          const outcome = await settled;
+          if (revoke) {
+            await expect(preparing).rejects.toBeInstanceOf(SetupInferenceCancelledError);
+          } else {
+            expect(await preparing).not.toHaveProperty("error");
+          }
           const persisted = await records.readPersistedInstalledPluginIndexInstallRecordsAsync();
           expect(persisted?.codex?.integrity).toBe(
             revoke ? "sha512-before-repair" : "sha512-after-repair",
           );
-          if (revoke) {
-            expect(outcome).toMatchObject({
-              ok: false,
-              error: expect.any(SetupInferenceCancelledError),
-            });
-          } else {
-            expect(outcome).toMatchObject({ ok: true });
-            if (outcome.ok) {
-              expect(outcome.value).not.toHaveProperty("error");
-            }
-          }
         } finally {
           release.resolve();
           await settled;
         }
       },
-    );
-  },
+    ),
 );

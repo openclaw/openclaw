@@ -12,17 +12,10 @@ type IsoBmffTrack = {
   sampleEntryTypes: string[];
 };
 
-type IsoBmffInspection = "audio-only-aac" | "video" | "ambiguous" | "not-isobmff";
-
-type Box = {
-  type: string;
-  payloadStart: number;
-  end: number;
-};
+type IsoBmffInspection = "audio-only-aac" | "ambiguous" | "not-isobmff";
 
 type InspectionState = {
   boxCount: number;
-  sawFtyp: boolean;
   tracks: IsoBmffTrack[];
 };
 
@@ -45,7 +38,7 @@ async function readBox(
   handle: Awaited<ReturnType<typeof fs.open>>,
   offset: number,
   parentEnd: number,
-): Promise<Box> {
+) {
   if (parentEnd - offset < BOX_HEADER_BYTES) {
     throw new Error("truncated ISO-BMFF box header");
   }
@@ -77,7 +70,7 @@ async function readBox(
 
 async function readSampleEntryTypes(
   handle: Awaited<ReturnType<typeof fs.open>>,
-  box: Box,
+  box: Awaited<ReturnType<typeof readBox>>,
   state: InspectionState,
 ): Promise<string[]> {
   if (box.end - box.payloadStart < 8) {
@@ -123,9 +116,6 @@ async function inspectBoxes(params: {
       throw new Error("ISO-BMFF box count exceeded");
     }
     const box = await readBox(params.handle, offset, params.end);
-    if (params.depth === 0 && box.type === "ftyp") {
-      params.state.sawFtyp = true;
-    }
     if (box.type === "trak") {
       const track: IsoBmffTrack = { sampleEntryTypes: [] };
       await inspectBoxes({
@@ -169,17 +159,10 @@ async function inspectIsoBmff(filePath: string, expectedSize: number): Promise<I
     if (firstHeader.toString("ascii", 4, 8) !== "ftyp") {
       return "not-isobmff";
     }
-    const firstBox = await readBox(handle, 0, stat.size);
-    if (firstBox.type !== "ftyp") {
-      return "ambiguous";
-    }
-    const state: InspectionState = { boxCount: 0, sawFtyp: false, tracks: [] };
+    const state: InspectionState = { boxCount: 0, tracks: [] };
     await inspectBoxes({ handle, start: 0, end: stat.size, depth: 0, state });
-    if (!state.sawFtyp || state.tracks.length === 0) {
+    if (state.tracks.length === 0) {
       return "ambiguous";
-    }
-    if (state.tracks.some((track) => track.handlerType === "vide")) {
-      return "video";
     }
     return state.tracks.every(
       (track) =>

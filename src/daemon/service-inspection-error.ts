@@ -7,7 +7,7 @@ const SERVICE_INSPECTION_MESSAGES = {
   "service-membership-unverified": UPDATE_PREFLIGHT_DETAILS["service-membership-unverified"],
   "service-ancestry-unverified": UPDATE_PREFLIGHT_DETAILS["service-ancestry-unverified"],
   "service-manager-unavailable":
-    "No supported service manager detected. Restart the Gateway you launched manually after the update.",
+    "No supported service manager detected. Manage the Gateway through the supervisor or terminal that started it.",
   "systemd-user-bus-unavailable":
     "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR for the service account. Log in once or enable the user manager with sudo loginctl enable-linger <user>, then verify systemctl --user status. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket if the runtime bus is missing. Verify busctl --user list with DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus, then retry.",
   "systemd-inspection-deadline-exceeded":
@@ -84,7 +84,7 @@ function formatServiceInspectionDiagnostic(
 
 export class ServiceInspectionError extends Error {
   constructor(
-    readonly reason: ServiceInspectionReason,
+    readonly reason: ServiceInspectionReason | undefined,
     diagnostic?: ServiceInspectionDiagnostic,
   ) {
     const detail =
@@ -92,10 +92,17 @@ export class ServiceInspectionError extends Error {
         ? formatServiceInspectionDiagnostic(diagnostic)
         : undefined;
     super(
-      [detail, formatServiceInspectionReason(reason)].filter(Boolean).join(" "),
+      [detail, reason && formatServiceInspectionReason(reason)].filter(Boolean).join(" "),
       diagnostic ? { cause: diagnostic } : undefined,
     );
     this.name = "ServiceInspectionError";
+  }
+}
+
+export class SystemdInspectionTimeout extends ServiceInspectionError {
+  constructor(check: string, detail = "") {
+    super("systemd-inspection-deadline-exceeded");
+    this.message = `${detail ? `${detail}\n` : ""}Stalled check: ${check}. ${this.message}`;
   }
 }
 

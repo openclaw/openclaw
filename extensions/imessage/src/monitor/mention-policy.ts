@@ -16,9 +16,6 @@ export async function resolveIMessageInboundMentionPolicy(params: {
   isGroup: boolean;
   message: IMessagePayload;
   requireMentionOverride?: boolean;
-  isKnownFromMeMessageId?: Parameters<
-    typeof isKnownFromMeIMessageTarget
-  >[0]["isKnownFromMeMessageId"];
 }): Promise<
   ReturnType<typeof resolveBotThreadMentionPolicy> & { enforceMentionRequirement: boolean }
 > {
@@ -47,7 +44,6 @@ export async function resolveIMessageInboundMentionPolicy(params: {
       chatId: params.message.chat_id ?? undefined,
       chatGuid: params.message.chat_guid ?? undefined,
       chatIdentifier: params.message.chat_identifier ?? undefined,
-      isKnownFromMeMessageId: params.isKnownFromMeMessageId,
     })),
   );
   return {

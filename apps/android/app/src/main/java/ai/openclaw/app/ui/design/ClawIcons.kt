@@ -9,7 +9,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.unit.dp
 
-// Native counterparts of ui/src/components/icons.ts and icons-tools.ts. Keep the
+// Native counterparts of ui/src/components/icon-data.ts and icon-data-tools.ts. Keep the
 // canonical paths and 24-unit, rounded 2-unit strokes aligned with the Web UI.
 // Lucide/Feather notices: apps/android/THIRD_PARTY_LICENSES/openclaw/licenses/Lucide.txt.
 internal object ClawIcons {

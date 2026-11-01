@@ -1,22 +1,28 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   createNativeShowEarlierPane,
   nativeHistoryMessage,
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
 
+const page = (seq: number, nextOffset: number, hasMore = true): ChatHistoryResult => ({
+  messages: [nativeHistoryMessage(seq)],
+  hasMore,
+  ...(hasMore ? { olderCursor: `older-${nextOffset}` } : {}),
+});
+
 function setup(notifyOnObserve = false) {
-  const request = vi.fn(async (_method: string, params: { offset: number }) => ({
-    messages: [nativeHistoryMessage(-params.offset)],
-    hasMore: true,
-    nextOffset: params.offset + 1,
-  }));
+  const request = vi.fn(async (_method: string, { cursor }: { cursor: string }) =>
+    page(-Number(cursor.replace("older-", "")), Number(cursor.replace("older-", "")) + 1),
+  );
   const fixture = createNativeShowEarlierPane(request);
   const { pane, thread } = fixture;
   const sentinel = thread.appendChild(document.createElement("div"));
   sentinel.className = "chat-history-sentinel";
+  pane.historySentinel = sentinel;
   let height = 400;
   Object.defineProperty(thread, "scrollHeight", { configurable: true, get: () => height });
   let notify: (() => void) | undefined;
@@ -30,11 +36,7 @@ function setup(notifyOnObserve = false) {
           this as unknown as IntersectionObserver,
         );
     }
-    observe() {
-      if (notifyOnObserve) {
-        notify?.();
-      }
-    }
+    observe = notifyOnObserve ? () => notify?.() : () => {};
     disconnect() {}
   }
   vi.stubGlobal("IntersectionObserver", HistoryObserver);
@@ -48,7 +50,7 @@ function setup(notifyOnObserve = false) {
       pane.syncHistoryObserver();
       notify?.();
       // Join the production load rather than waiting on timers.
-      if (pane.loadingOlder) {
+      if (pane.history.loadingOlder) {
         await pane.loadOlderMessages();
       }
     },
@@ -60,101 +62,102 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("fills a settled short window without input, stopping beyond the prefetch edge", async () => {
+it("fills one page until reopened, without filling the prefetch margin", async () => {
   const { intersect, pane, state, request, setHeight } = setup();
-  await intersect();
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-2, 3, 4]);
-  setHeight(900);
-  await intersect();
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-3, -2, 3, 4]);
-  setHeight(1800);
-  await intersect();
-  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2, 3]);
-  expect(pane.stagedOlder.page).toBeNull();
-  expect(pane.stagedOlder.load).toBeNull();
-});
-
-it("caps automatic requests at three pages and renews the allowance for another open", async () => {
-  const { intersect, pane, request } = setup();
   for (let index = 0; index < 5; index += 1) {
     await intersect();
   }
-  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2, 3, 4]);
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-2, 3, 4]);
+  for (const height of [900, 1800]) {
+    setHeight(height);
+    await intersect();
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-2, 3, 4]);
+  }
+  expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual(["older-2"]);
+  expect(pane.stagedOlder).toMatchObject({ page: null, load: null });
   pane.resetOlderMessagesViewport();
+  setHeight(400);
   await intersect();
-  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2, 3, 4, 5]);
-});
-
-it("does not bootstrap a first page that already overflows", async () => {
-  const { intersect, request, setHeight } = setup();
-  setHeight(501);
-  await intersect();
-  expect(request).not.toHaveBeenCalled();
+  expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual(["older-2", "older-3"]);
 });
 
 it.each([
-  "placement",
-  "programmatic",
-  "maintenance",
-  "hidden",
-  "unpresented",
-  "background tab",
-] as const)("does not fill during %s, including queued intersection delivery", async (gate) => {
+  "isPositionSettled",
+  "isProgrammaticScroll",
+  "isMaintenanceScroll",
+  "visuallyPresented",
+  "presented",
+  "visibilityState",
+] as const)("does not fill when %s blocks a queued intersection", async (key) => {
   const { pane, request, intersect } = setup();
-  // Install an observer first so the notification can also arrive after hiding.
   pane.syncHistoryObserver();
-  if (gate === "placement") {
-    vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(false);
-  }
-  if (gate === "programmatic") {
-    vi.spyOn(pane.transcript, "isProgrammaticScroll", "get").mockReturnValue(true);
-  }
-  if (gate === "maintenance") {
-    vi.spyOn(pane.transcript, "isMaintenanceScroll", "get").mockReturnValue(true);
-  }
-  if (gate === "hidden") {
+  if (key === "visibilityState") {
+    vi.spyOn(document, key, "get").mockReturnValue("hidden");
+  } else if (key === "visuallyPresented") {
     pane.visuallyPresented = false;
-  }
-  if (gate === "background tab") {
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-  }
-  if (gate === "unpresented") {
-    vi.spyOn(pane, "presented", "get").mockReturnValue(false);
+  } else if (key === "presented") {
+    vi.spyOn(pane, key, "get").mockReturnValue(false);
+  } else {
+    vi.spyOn(pane.transcript, key, "get").mockReturnValue(key !== "isPositionSettled");
   }
   await intersect();
   expect(request).not.toHaveBeenCalled();
 });
 
-it("keeps a failed automatic fill blocked until reader retry", async () => {
+it.each(["failure", "exhaustion"] as const)("stops automatic fills after %s", async (outcome) => {
   const { intersect, pane, request } = setup();
-  request.mockRejectedValue(new Error("history unavailable"));
+  if (outcome === "failure") {
+    request.mockRejectedValue(new Error("history unavailable"));
+  } else {
+    request.mockResolvedValue(page(1, 3, false));
+  }
   await intersect();
   await intersect();
   expect(request).toHaveBeenCalledOnce();
-  expect(pane.historyAutoLoadBlocked).toBe(true);
+  if (outcome === "failure") {
+    expect(pane.historyAutoLoadBlocked).toBe(true);
+  }
 });
 
-it("stops filling when older history is exhausted", async () => {
-  const { intersect, request } = setup();
-  request.mockResolvedValue({ messages: [nativeHistoryMessage(1)], hasMore: false, nextOffset: 3 });
-  await intersect();
-  await intersect();
-  expect(request).toHaveBeenCalledOnce();
-});
-
-it("pages on reader intent when an overflowing first page already intersects the margin", async () => {
+it.each([
+  ["bounded snapshot", 0, 400],
+  ["overflowing first page", 2, 501],
+] as const)("reserves %s refill for reader intent", async (_name, offset, height) => {
   vi.useFakeTimers();
-  const { pane, thread, request, setHeight, intersect } = setup(true);
-  request.mockResolvedValue({ messages: [nativeHistoryMessage(1)], hasMore: false, nextOffset: 3 });
-  setHeight(501);
+  const { pane, state, thread, request, setHeight, intersect } = setup(true);
+  const pagination = {
+    hasMore: true,
+    ...(offset === 0 ? { needsBoundary: true as const } : { olderCursor: "older-2" }),
+    totalMessages: offset === 0 ? 1_100 : 4,
+  };
+  if (offset === 0) {
+    state.currentSessionId = "current";
+    state.chatMessages[0] = { ...nativeHistoryMessage(3), __openclaw: { id: "source-3", seq: 3 } };
+  }
+  state.chatHistoryPagination = { ...pagination };
+  request.mockResolvedValue(
+    offset === 0
+      ? { messages: [state.chatMessages[0]], sessionId: "current" }
+      : page(1, offset + 1, false),
+  );
+  setHeight(height);
   try {
     await intersect();
+    if (offset === 0) {
+      await intersect();
+    }
     expect(request).not.toHaveBeenCalled();
+    expect(state.chatHistoryPagination).toEqual(pagination);
     thread.addEventListener("wheel", (event) => pane.handleTranscriptHistoryIntent(event));
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-    expect(request).toHaveBeenCalledOnce();
+    if (offset === 2) {
+      expect(request).toHaveBeenCalledOnce();
+    }
     await pane.loadOlderMessages();
-    expect(request.mock.calls[0]?.[1].offset).toBe(2);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1]).toMatchObject(
+      offset === 0 ? { messageId: "source-3", limit: 1 } : { cursor: "older-2" },
+    );
   } finally {
     pane.resetOlderMessagesViewport();
     vi.useRealTimers();

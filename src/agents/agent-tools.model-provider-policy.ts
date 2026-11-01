@@ -13,6 +13,7 @@ export function applyModelProviderToolPolicy(
     modelProvider?: string;
     modelApi?: string;
     modelBaseUrl?: string;
+    modelParams?: Record<string, unknown>;
     modelId?: string;
     agentId?: string;
     sessionKey?: string;
@@ -40,6 +41,7 @@ export function applyModelProviderToolPolicy(
       modelProvider: params?.modelProvider,
       modelApi: params?.modelApi,
       modelBaseUrl: params?.modelBaseUrl,
+      modelParams: params?.modelParams,
       modelId: params?.modelId,
       agentId: params?.agentId,
       sessionKey: params?.sessionKey,

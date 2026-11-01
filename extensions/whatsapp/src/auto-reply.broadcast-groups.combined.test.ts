@@ -1,7 +1,6 @@
 import "./test-helpers.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   monitorWebChannelWithCapture,
@@ -15,7 +14,6 @@ import {
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
-import { maybeBroadcastMessage } from "./auto-reply/monitor/broadcast.js";
 import { createTestWebAudioInboundMessage } from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
@@ -57,30 +55,26 @@ describe("broadcast groups", () => {
     expect(seen[0]).toContain("agent:alfred:");
   });
 
-  it("keeps caption mentions when selecting participants for transcribed audio", async () => {
+  it("keeps audio caption mentions when selecting broadcast participants", async () => {
     const mentioned = (id: string) => ({ groupChat: { mentionPatterns: [`@${id}\\b`] } });
-    const peer = { kind: "direct", id: "+15550000002" } as const;
-    const cfg: OpenClawConfig = {
+    setLoadConfigMock({
+      channels: { whatsapp: { allowFrom: ["*"] } },
       agents: { entries: { alfred: mentioned("alfred"), carla: mentioned("carla") } },
       bindings: [{ agentId: "alfred", match: { channel: "whatsapp", accountId: "default" } }],
       broadcast: { "whatsapp:+15550000002": { agents: ["alfred", "carla"] } },
-    };
+    } satisfies OpenClawConfig);
     const participants: string[] = [];
-    const transcript = "Please review the attached voice note.";
-    await maybeBroadcastMessage({
-      cfg,
-      msg: createTestWebAudioInboundMessage({ payload: { body: "@carla please review" } }),
-      peerId: peer.id,
-      route: resolveAgentRoute({ cfg, channel: "whatsapp", accountId: "default", peer }),
-      groupHistoryKey: "caption-history",
-      groupHistories: new Map(),
-      preflightAudioTranscript: transcript,
-      processMessage: async (_msg, route, _historyKey, opts) => {
-        participants.push(route.agentId);
-        expect(opts?.preflightAudioTranscript).toBe(transcript);
-        return true;
-      },
+    const resolver = vi.fn(async (ctx: { SessionKey?: string }) => {
+      participants.push(String(ctx.SessionKey).split(":")[1] ?? "");
+      return { text: "ok" };
     });
+    const { onMessage } = await monitorWebChannelWithCapture(resolver);
+    await onMessage(
+      createTestWebAudioInboundMessage({
+        payload: { body: "@carla please review" },
+        admission: { conversation: { kind: "direct", id: "+15550000002" } },
+      }),
+    );
     expect(participants).toEqual(["carla"]);
   });
 

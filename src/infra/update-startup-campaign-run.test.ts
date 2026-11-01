@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -10,18 +10,27 @@ import {
 import * as sentinelStore from "./restart-sentinel.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   listUpdateRuns,
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import {
   runAutoUpdateCommand,
   runCampaignUpdate,
   type AutoUpdateRunner,
 } from "./update-startup-auto-run.js";
+import {
+  matchingObject,
+  containingObject,
+  startedHandoff,
+  expectIncludes,
+  updateResult,
+  recordedFailureReport,
+} from "./update-startup-suite.test-support.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const { cancel, start, transfer, restart } = vi.hoisted(() => ({
@@ -57,8 +66,44 @@ vi.mock("./restart.js", async (importOriginal) => ({
   scheduleGatewayRestart: restart,
 }));
 
+const campaigns = new Set<UpdateCampaignController>();
+const successor = {
+  kind: "managed-update-handoff",
+  handoffId: "auto-handoff-id",
+  installRoot: "/opt/openclaw",
+};
+
+function runAdmittedUpdate(runId: string, log = { info: vi.fn() }) {
+  return runAutoUpdateCommand(
+    {
+      runId,
+      channel: "beta",
+      mode: "npm",
+      root: "/opt/openclaw",
+      timeoutMs: 1_000,
+      restartDrainTimeoutMs: undefined,
+    },
+    log,
+  );
+}
+
+function doctorFacts(message: string) {
+  return [{ check: "doctor", code: "doctor-failed", message }];
+}
+
+async function failWorkerWrite(message: string, afterStateWrite = false) {
+  const worker = await import("../state/openclaw-state-worker-store.js");
+  const execute = worker.runOpenClawStateWorkerOperation;
+  const record = vi.spyOn(worker, "runOpenClawStateWorkerOperation");
+  if (afterStateWrite) {
+    record.mockImplementationOnce(execute);
+  }
+  record.mockRejectedValueOnce(Object.assign(new Error(message), { code: "SQLITE_READONLY" }));
+}
+
 function createApplyingCampaign(version = "2.0.0-beta.1") {
   const campaign = new UpdateCampaignController(createTestGatewayScheduler());
+  campaigns.add(campaign);
   campaign.announce({
     target: { kind: "package", version },
     inspect: { getQueueSize: () => 1 },
@@ -67,6 +112,24 @@ function createApplyingCampaign(version = "2.0.0-beta.1") {
   });
   campaign.adopt();
   return campaign;
+}
+
+function runBetaCampaign(
+  params: Pick<Parameters<typeof runCampaignUpdate>[0], "campaign" | "runAuto"> &
+    Partial<Parameters<typeof runCampaignUpdate>[0]>,
+) {
+  return runCampaignUpdate({
+    channel: "beta",
+    mode: "npm",
+    version: "2.0.0-beta.1",
+    tag: "beta",
+    forced: false,
+    root: "/opt/openclaw",
+    log: { info: vi.fn() },
+    canApply: () => true,
+    onAttempt: () => {},
+    ...params,
+  });
 }
 
 describe("automatic campaign handoff failure", () => {
@@ -81,19 +144,43 @@ describe("automatic campaign handoff failure", () => {
     cancel.mockReset();
     transfer.mockReset();
     restart.mockClear();
-    start.mockReset().mockResolvedValue({
-      status: "started",
-      pid: 12345,
-      command: "openclaw update --yes --channel beta",
-      logPath: "/tmp/openclaw-handoff.log",
-      handoffId: "auto-handoff-id",
-      installRoot: "/opt/openclaw",
-    });
+    start.mockReset().mockResolvedValue(startedHandoff());
   });
 
   afterEach(async () => {
+    for (const campaign of campaigns) {
+      campaign.clear();
+    }
+    campaigns.clear();
+    vi.restoreAllMocks();
     await closeStateDatabaseForTest();
     await state.cleanup();
+  });
+
+  it("records the refusal in the failed phase even when later diagnostics are unavailable", async () => {
+    const reason = "update-recovery-pending";
+    const message = "Package publication recovery permissions are unsafe: activation mode 0750.";
+    const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+    start.mockImplementationOnce(async () => {
+      await failWorkerWrite("diagnostic ledger is read-only", true);
+      throw new UpdatePreMutationError(reason, message);
+    });
+    const outcome = await runAdmittedUpdate(runId);
+    expect(outcome).toMatchObject({ status: "failed", result: { reason } });
+    expect(outcome).toHaveProperty("message", expect.stringContaining(`${reason}: ${message}`));
+    finishUpdateRun(runId, { status: "failed", reason });
+    const recorded = expectDefined(listUpdateRuns()[0], "failed automatic update run");
+    expect(recorded.steps).toContainEqual(
+      expect.objectContaining({
+        step: "requested",
+        status: "failed",
+        detail: `${reason}: ${message}`,
+        failureFacts: [{ check: reason, code: reason, message }],
+      }),
+    );
+    expectIncludes(renderUpdateRunReport(recorded).markdown, reason, message);
+    const report = await recordedFailureReport(recorded);
+    expectIncludes(report.body, reason);
   });
 
   it.each([
@@ -119,43 +206,19 @@ describe("automatic campaign handoff failure", () => {
       const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
         status: "failed",
         message: "Candidate Doctor failed.",
-        result: {
-          status: "error",
-          mode: "npm",
-          reason: "doctor-failed",
-          steps: [step],
-          durationMs: 10,
-        },
+        result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
       };
       const runAuto = vi.fn<AutoUpdateRunner>(async () => structuredClone(outcome));
       const attempt = async (version = "2.0.0-beta.1") => {
         const campaign = createApplyingCampaign(version);
         try {
-          return await runCampaignUpdate({
-            channel: "beta",
-            mode: "npm",
-            version,
-            tag: "beta",
-            forced: false,
-            root: "/opt/openclaw",
-            log,
-            canApply: () => true,
-            campaign,
-            onAttempt: () => {},
-            runAuto,
-          });
+          return await runBetaCampaign({ version, log, campaign, runAuto });
         } finally {
           campaign.clear();
         }
       };
       if (resume === "transient metadata") {
-        step.failureFacts = [
-          {
-            check: "doctor",
-            code: "doctor-failed",
-            message: "Check failed in openclaw-update-canary-Abc123 (5ms)",
-          },
-        ];
+        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Abc123 (5ms)");
       }
       await attempt();
       if (resume === "different reason") {
@@ -165,13 +228,7 @@ describe("automatic campaign handoff failure", () => {
       } else if (resume === "different detail") {
         step.stderrTail = "A different dependency is unavailable: kerberos";
       } else if (resume === "transient metadata") {
-        step.failureFacts = [
-          {
-            check: "doctor",
-            code: "doctor-failed",
-            message: "Check failed in openclaw-update-canary-Def456 (19ms)",
-          },
-        ];
+        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Def456 (19ms)");
       }
       await attempt();
       expect(runAuto).toHaveBeenCalledTimes(2);
@@ -217,27 +274,13 @@ describe("automatic campaign handoff failure", () => {
         await release.promise;
         return result;
       });
-    const operation = runCampaignUpdate({
-      channel: "beta",
-      mode: "npm",
-      version: "2.0.0-beta.1",
-      tag: "beta",
-      forced: false,
-      root: "/opt/openclaw",
-      log: { info: vi.fn() },
+    const operation = runBetaCampaign({
       campaign,
       onAttempt: vi.fn(),
-      canApply: () => true,
       runAuto: async () => ({
         status: "skipped",
         message: "Already current",
-        result: {
-          status: "skipped",
-          mode: "npm",
-          reason: "already-current",
-          steps: [],
-          durationMs: 0,
-        },
+        result: updateResult({ status: "skipped", reason: "already-current" }),
       }),
     });
     try {
@@ -268,66 +311,32 @@ describe("automatic campaign handoff failure", () => {
   it.each(["state", "diagnostics"] as const)(
     "cancels a rejected transfer when %s persistence fails",
     async (failure) => {
-      const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+      const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
       const log = { info: vi.fn() };
       cancel.mockResolvedValueOnce("restored-in-process");
-      let record:
-        | MockInstance<
-            typeof import("../state/openclaw-state-worker-store.js").runOpenClawStateWorkerOperation
-          >
-        | undefined;
       transfer.mockImplementationOnce(async () => {
-        const worker = await import("../state/openclaw-state-worker-store.js");
-        const execute = worker.runOpenClawStateWorkerOperation;
-        record = vi.spyOn(worker, "runOpenClawStateWorkerOperation");
-        if (failure === "diagnostics") {
-          record.mockImplementationOnce(execute);
-        }
-        record.mockRejectedValueOnce(
-          Object.assign(new Error("diagnostic ledger is read-only"), {
-            code: "SQLITE_READONLY",
-          }),
-        );
+        await failWorkerWrite("diagnostic ledger is read-only", failure === "diagnostics");
         throw new Error("pipe closed");
       });
-      try {
-        const outcome = await runAutoUpdateCommand(
-          {
-            runId: run.runId,
-            channel: "beta",
-            mode: "npm",
-            root: "/opt/openclaw",
-            timeoutMs: 1_000,
-            restartDrainTimeoutMs: undefined,
-          },
-          log,
-        );
-        expect(cancel).toHaveBeenCalledExactlyOnceWith({
-          kind: "managed-update-handoff",
-          handoffId: "auto-handoff-id",
-          installRoot: "/opt/openclaw",
-        });
-        expect(outcome).toMatchObject({
-          status: "failed",
-          result: {
-            reason: "managed-service-handoff-failed",
-            steps: [
-              expect.objectContaining({
-                failureFacts: [expect.objectContaining({ message: "pipe closed" })],
-              }),
-            ],
-          },
-        });
-        expect(log.info).toHaveBeenCalledWith(
-          expect.stringContaining(
-            failure === "state"
-              ? "Update failure state could not be recorded"
-              : "Update diagnostics could not be recorded (SQLITE_READONLY)",
-          ),
-        );
-      } finally {
-        record?.mockRestore();
-      }
+
+      const outcome = await runAdmittedUpdate(runId, log);
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
+      expect(outcome).toMatchObject({
+        status: "failed",
+        result: {
+          reason: "managed-service-handoff-failed",
+          steps: matchingObject({
+            failureFacts: matchingObject({ message: "pipe closed" }),
+          }),
+        },
+      });
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          failure === "state"
+            ? "Update failure state could not be recorded"
+            : "Update diagnostics could not be recorded (SQLITE_READONLY)",
+        ),
+      );
     },
   );
 
@@ -347,9 +356,7 @@ describe("automatic campaign handoff failure", () => {
         const run = expectDefined(listUpdateRuns()[0], "admitted campaign run");
         expect(run).toMatchObject({
           reason: "managed-service-handoff-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({ step: "requested", status: "failed" }),
-          ]),
+          steps: containingObject({ step: "requested", status: "failed" }),
         });
         stepsBeforeCancellation = run.steps;
         recordUpdateRunVerification(run.runId, {
@@ -364,91 +371,56 @@ describe("automatic campaign handoff failure", () => {
       const campaign = createApplyingCampaign();
       const log = { info: vi.fn() };
       const onAttempt = vi.fn();
-      let restoreDiagnosticFailure: (() => void) | undefined;
-      try {
-        await expect(
-          runCampaignUpdate({
-            channel: "beta",
-            mode: "npm",
-            version: "2.0.0-beta.1",
-            tag: "beta",
-            forced: false,
-            root: "/opt/openclaw",
-            log,
-            runAuto: async (params) => {
-              const outcome = await runAutoUpdateCommand(params, log);
-              if (diagnosticFailure) {
-                const worker = await import("../state/openclaw-state-worker-store.js");
-                const fault = vi
-                  .spyOn(worker, "runOpenClawStateWorkerOperation")
-                  .mockRejectedValueOnce(
-                    Object.assign(new Error("summary diagnostics unavailable"), {
-                      code: "SQLITE_READONLY",
-                    }),
-                  );
-                restoreDiagnosticFailure = () => fault.mockRestore();
-              }
-              return outcome;
-            },
-            canApply: () => true,
-            campaign,
-            onAttempt,
-          }),
-        ).resolves.toBe("failed");
-        expect(onAttempt).toHaveBeenCalledExactlyOnceWith("2.0.0-beta.1");
-        expect(stepsBeforeCancellation).toContainEqual(
-          expect.objectContaining({
-            step: "managed-service",
-            status: "failed",
-            failureFacts: [expect.objectContaining({ code: "Error" })],
-          }),
-        );
-        expect(cancel).toHaveBeenCalledExactlyOnceWith({
-          kind: "managed-update-handoff",
-          handoffId: "auto-handoff-id",
-          installRoot: "/opt/openclaw",
-        });
-        expect(restart).not.toHaveBeenCalled();
-        const run = expectDefined(listUpdateRuns()[0], "finished campaign run");
-        expect(run).toMatchObject({
+
+      await expect(
+        runBetaCampaign({
+          log,
+          runAuto: async (params) => {
+            const outcome = await runAutoUpdateCommand(params, log);
+            if (diagnosticFailure) {
+              await failWorkerWrite("summary diagnostics unavailable");
+            }
+            return outcome;
+          },
+          campaign,
+          onAttempt,
+        }),
+      ).resolves.toBe("failed");
+      expect(onAttempt).toHaveBeenCalledExactlyOnceWith("2.0.0-beta.1");
+      expect(stepsBeforeCancellation).toContainEqual(
+        expect.objectContaining({
+          step: "managed-service",
           status: "failed",
-          reason: "managed-service-handoff-failed",
-          phase: "finished",
-          verification: {
-            rollbackOutcome: {
-              status: "not-needed",
-              reason: "The handoff owner verified no package mutation",
-            },
+          failureFacts: matchingObject({ code: "Error" }),
+        }),
+      );
+      expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
+      expect(restart).not.toHaveBeenCalled();
+      const run = expectDefined(listUpdateRuns()[0], "finished campaign run");
+      expect(run).toMatchObject({
+        status: "failed",
+        reason: "managed-service-handoff-failed",
+        phase: "finished",
+        verification: {
+          rollbackOutcome: {
+            status: "not-needed",
+            reason: "The handoff owner verified no package mutation",
           },
-        });
-        expect((await readRestartSentinel())?.payload).toMatchObject({
-          status: "error",
-          stats: { reason: "managed-service-handoff-failed" },
-        });
-        const report = await prepareUpdateFailureReport({
-          attemptId: run.runId,
-          recordedRun: run,
-          result: {
-            status: "error",
-            mode: "npm",
-            reason: run.reason ?? undefined,
-            steps: [],
-            durationMs: 0,
-          },
-        });
-        expect(report.body).toContain(
-          throws ? "pipe closed" : "managed update ownership transfer failed",
+        },
+      });
+      expect((await readRestartSentinel())?.payload).toMatchObject({
+        status: "error",
+        stats: { reason: "managed-service-handoff-failed" },
+      });
+      const report = await recordedFailureReport(run);
+      expect(report.body).toContain(
+        throws ? "pipe closed" : "managed update ownership transfer failed",
+      );
+      expectIncludes(report.body, "managed-service", "Rollback outcome: not needed");
+      if (diagnosticFailure) {
+        expect(log.info).toHaveBeenCalledWith(
+          expect.stringContaining("Update diagnostics could not be recorded"),
         );
-        expect(report.body).toContain("managed-service");
-        expect(report.body).toContain("Rollback outcome: not needed");
-        if (diagnosticFailure) {
-          expect(log.info).toHaveBeenCalledWith(
-            expect.stringContaining("Update diagnostics could not be recorded"),
-          );
-        }
-      } finally {
-        restoreDiagnosticFailure?.();
-        campaign.clear();
       }
     },
   );
@@ -459,66 +431,51 @@ describe("automatic campaign handoff failure", () => {
       const campaign = createApplyingCampaign();
       const original = new Error("automatic update failed");
       const log = { info: vi.fn() };
-      let restoreRead: (() => void) | undefined;
-      try {
-        await expect(
-          runCampaignUpdate({
-            channel: "beta",
-            mode: "npm",
-            version: "2.0.0-beta.1",
-            tag: "beta",
-            forced: false,
-            root: "/opt/openclaw",
-            log,
-            canApply: () => true,
-            campaign,
-            onAttempt: () => {},
-            runAuto: async () => {
-              const fail = () => {
-                throw new Error("diagnostic persistence unavailable");
-              };
-              const read =
-                failure === "read"
-                  ? vi
-                      .spyOn(await import("./update-run-reader.js"), "getUpdateRunAsync")
-                      .mockImplementationOnce(fail)
-                  : vi
-                      .spyOn(
-                        await import("../state/openclaw-state-worker-store.js"),
-                        "runOpenClawStateWorkerOperation",
-                      )
-                      .mockImplementationOnce(fail);
-              restoreRead = () => read.mockRestore();
-              throw original;
-            },
-          }),
-        ).rejects.toBe(original);
-        const run = expectDefined(listUpdateRuns()[0], "failed campaign run");
-        expect(run).toMatchObject({
-          status: "failed",
-          reason: "unexpected-error",
-          ...(failure === "read"
-            ? {
-                steps: expect.arrayContaining([
-                  expect.objectContaining({
-                    step: "requested",
-                    failureFacts: [expect.objectContaining({ message: "automatic update failed" })],
-                  }),
-                ]),
-              }
-            : {}),
-        });
-        expect(log.info).toHaveBeenCalledWith(
-          expect.stringContaining(
-            failure === "read"
-              ? "Update history could not be read"
-              : "Update diagnostics could not be recorded",
-          ),
-        );
-      } finally {
-        restoreRead?.();
-        campaign.clear();
-      }
+
+      await expect(
+        runBetaCampaign({
+          log,
+          campaign,
+          runAuto: async () => {
+            const fail = () => {
+              throw new Error("diagnostic persistence unavailable");
+            };
+
+            if (failure === "read") {
+              vi.spyOn(
+                await import("./update-run-reader.js"),
+                "getUpdateRunAsync",
+              ).mockImplementationOnce(fail);
+            } else {
+              vi.spyOn(
+                await import("../state/openclaw-state-worker-store.js"),
+                "runOpenClawStateWorkerOperation",
+              ).mockImplementationOnce(fail);
+            }
+            throw original;
+          },
+        }),
+      ).rejects.toBe(original);
+      const run = expectDefined(listUpdateRuns()[0], "failed campaign run");
+      expect(run).toMatchObject({
+        status: "failed",
+        reason: "unexpected-error",
+        ...(failure === "read"
+          ? {
+              steps: containingObject({
+                step: "requested",
+                failureFacts: matchingObject({ message: "automatic update failed" }),
+              }),
+            }
+          : {}),
+      });
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          failure === "read"
+            ? "Update history could not be read"
+            : "Update diagnostics could not be recorded",
+        ),
+      );
     },
   );
 });

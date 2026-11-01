@@ -3,49 +3,73 @@ import { createComponent, createSignal } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidComponent } from "../../test-helpers/solid-render.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
-import { createComposerContainer } from "./chat-composer.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { composerContextWrapper, createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { ChatView, type ChatProps } from "./chat-view.tsx";
-import {
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./components/chat-message-markdown.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import { registerMessageActionElements } from "./components/chat-message-action-elements.ts";
+import { resolveMessageActionDetails } from "./components/chat-message-markdown-view.tsx";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
-import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import {
+  createChatTranscript,
+  type ChatTranscript,
+} from "./components/chat-transcript-controller.ts";
 
 type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
 
-export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+export async function renderChatModelControls(
+  props: ChatModelControlsProps,
+  container: HTMLDivElement,
+) {
+  installModelPickerLayout();
+  const renderProps: ChatModelControlsProps = {
+    ...props,
+    modelPickerOpen: props.modelPickerOpen ?? true,
+  };
+  if (renderProps.modelPickerOpen) {
+    await import("./components/chat-model-picker-panel.tsx");
+  }
   const update = modelControlsUpdates.get(container);
   if (update) {
-    update(props);
+    update(renderProps);
   } else {
     if (!container.isConnected) {
       document.body.append(container);
       onTestFinished(() => container.remove());
     }
-    const view = mountSolidComponent(ChatModelControls, props, container);
+    const view = mountSolidComponent(ChatModelControls, renderProps, container);
     modelControlsUpdates.set(container, (next) => view.update(next));
+  }
+  if (renderProps.modelPickerOpen) {
+    // The first open compiles the lazy panel under the full CI shard's load.
+    await waitForSolid(
+      () => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      { timeout: 5_000 },
+    );
   }
   return container;
 }
 
 export function requireElement(container: Element, selector: string, label: string): Element {
-  const element = container.querySelector(selector);
-  if (element === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return element;
+  return expectDefined(container.querySelector(selector), label);
+}
+
+export function waitForElement(container: Element, selector: string, label = selector) {
+  return waitForSolid(() => requireElement(container, selector, label));
 }
 
 export function getComposerTextarea(container: Element): HTMLTextAreaElement {
@@ -60,16 +84,8 @@ let nextTestTranscriptId = 0;
 
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
-): ChatTranscriptController {
-  return new ChatTranscriptController(
-    {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: () => undefined,
-      updateComplete: Promise.resolve(true),
-    } satisfies ConstructorParameters<typeof ChatTranscriptController>[0],
-    () => paneId,
-  );
+): ChatTranscript {
+  return createChatTranscript(() => paneId);
 }
 
 export function createPasteEvent(
@@ -137,18 +153,20 @@ export function appendChatBubble(
 }
 
 export function stubAnimationFrames() {
-  const callbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }),
-  );
+  const { frames: callbacks, request } = createFrameQueue();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
   return () => {
     for (const callback of callbacks.splice(0)) {
       callback(0);
     }
+  };
+}
+
+export function stubSettledAnimationFrames() {
+  const frame = stubAnimationFrames();
+  return () => {
+    frame();
+    flush();
   };
 }
 
@@ -191,6 +209,7 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     realtimeTalkDetail: null,
     connected: true,
     canSend: true,
+    canDismissPendingInputs: true,
     disabledReason: null,
     error: null,
     runError: null,
@@ -213,7 +232,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onScrollToBottom: () => undefined,
     onRefresh: () => undefined,
     onDraftChange: () => undefined,
-    onRequestUpdate: () => undefined,
     onSend: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeCamera: () => undefined,
@@ -238,7 +256,7 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
   return container;
 }
 
-const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscriptController>();
+const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscript>();
 const mountedViews = new WeakMap<
   HTMLElement,
   { update: (props: ChatProps, application?: ApplicationContext) => void; unmount: () => void }
@@ -247,7 +265,7 @@ const mountedViews = new WeakMap<
 export function disposeChatView(container: HTMLElement) {
   mountedViews.get(container)?.unmount();
   mountedViews.delete(container);
-  renderedTranscripts.get(container)?.hostDisconnected();
+  renderedTranscripts.get(container)?.dispose();
   renderedTranscripts.delete(container);
 }
 
@@ -264,8 +282,10 @@ export function renderChatPropsInto(
     }
     const [current, setCurrent] = createSignal({ props, application });
     const view = mountSolid(
-      () =>
-        createComponent(ChatView, {
+      () => {
+        const questions = createComposerQuestions(props.paneId, () => current().props);
+        return createComponent(ChatView, {
+          questions,
           get props() {
             return current().props;
           },
@@ -273,8 +293,9 @@ export function renderChatPropsInto(
             const value = current().application;
             return value && normalizeApplicationContext(value);
           },
-        }),
-      { container },
+        });
+      },
+      { container, wrapper: composerContextWrapper(container) },
     );
     mountedViews.set(container, {
       update: (nextProps, nextApplication) =>
@@ -288,15 +309,15 @@ export function renderChatPropsInto(
       }
     });
   } else if (previous !== props.transcript) {
-    previous.hostDisconnected();
+    previous.dispose();
   }
   renderedTranscripts.set(container, props.transcript);
   if (previous) {
     mountedViews.get(container)?.update(props, application);
   }
   flush();
-  props.transcript.hostConnected();
-  props.transcript.hostUpdated();
+  props.transcript.start();
+  props.transcript.update();
   flush();
 }
 
@@ -311,11 +332,11 @@ export function renderChatInto(container: HTMLElement, overrides: Partial<ChatPr
 }
 
 export function getChatModelSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-model-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-model-select="true"]'),
+    "chat model control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat model control");
-  }
   return select;
 }
 
@@ -324,11 +345,11 @@ export function getChatThinkingValue(control: HTMLElement): string {
 }
 
 export function getThinkingSelect(container: Element): HTMLElement {
-  const select = container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]');
+  const select = expectDefined(
+    container.querySelector<HTMLElement>('[data-chat-thinking-select="true"]'),
+    "chat thinking control",
+  );
   expect(select).toBeInstanceOf(HTMLElement);
-  if (!(select instanceof HTMLElement)) {
-    throw new Error("Expected chat thinking control");
-  }
   return select;
 }
 
@@ -386,11 +407,13 @@ export function replaceSkillCommands(
   ]);
 }
 
+// Separate user gestures run in separate browser tasks, after Solid has settled.
 export function inputDraft(container: HTMLElement, value: string) {
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
   expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
   textarea!.value = value;
   textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
 }
 
 export function inputDraftAtEnd(container: HTMLElement, value: string) {
@@ -398,6 +421,7 @@ export function inputDraftAtEnd(container: HTMLElement, value: string) {
   textarea.value = value;
   textarea.setSelectionRange(value.length, value.length);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  flush();
 }
 
 export function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
@@ -405,6 +429,7 @@ export function keydownComposer(container: HTMLElement, key: string, init: Keybo
   expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
   const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
   textarea!.dispatchEvent(event);
+  flush();
   return event;
 }
 
@@ -416,6 +441,16 @@ export function createReactiveDraftHarness({
   let currentOverrides = overrides;
   let active = true;
   const container = createComposerContainer();
+  const draftSource = createComposerDraftSource(() => ({
+    draft: currentOverrides.getDraft?.() ?? draft,
+    mentions: currentOverrides.getMentions?.() ?? currentOverrides.mentions ?? [],
+    attachments: currentOverrides.getAttachments?.() ?? currentOverrides.attachments ?? [],
+    pendingAttachmentReads:
+      currentOverrides.getPendingAttachmentReads?.() ??
+      currentOverrides.pendingAttachmentReads ??
+      0,
+    goalDraftMode: currentOverrides.goalDraftMode,
+  }));
   onTestFinished(() => {
     active = false;
     disposeChatView(container);
@@ -423,18 +458,25 @@ export function createReactiveDraftHarness({
   const onDraftChange = vi.fn((next: string) => {
     draft = next;
     observeDraftChange?.(next);
+    draftSource.publish();
   });
   const renderCurrent = (nextOverrides: Partial<ChatProps> = {}) => {
     if (!active) {
       return;
     }
     currentOverrides = { ...currentOverrides, ...nextOverrides };
+    draftSource.publish();
     renderChatInto(container, {
       draft,
       getDraft: () => draft,
       onDraftChange,
-      onRequestUpdate: renderCurrent,
       ...currentOverrides,
+      draftSource: currentOverrides.draftSource ?? draftSource,
+      onGoalDraftModeChange: (mode) => {
+        currentOverrides.onGoalDraftModeChange?.(mode);
+        currentOverrides = { ...currentOverrides, goalDraftMode: mode };
+        draftSource.publish();
+      },
     });
   };
   renderCurrent();
@@ -468,12 +510,11 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
   const onDraftChange = vi.fn((next: string) => {
     host.draft = next;
   });
-  const onRequestUpdate = vi.fn(() => redraw());
   const onClearReply = vi.fn(() => {
     host.replyTarget = null;
     redraw();
   });
-  function redraw() {
+  const redraw = vi.fn(() => {
     renderChatInto(container, {
       paneId,
       sessionKey: `agent:main:${paneId}`,
@@ -483,18 +524,16 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       canAbort: true,
       runActive: true,
       onDraftChange,
-      onRequestUpdate,
       onClearReply,
       onSend,
       onAbort,
     });
-  }
+  });
   return {
     container,
     host,
     redraw,
     onDraftChange,
-    onRequestUpdate,
     onClearReply,
     onSend,
     onAbort,
@@ -504,4 +543,21 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       resetChatViewState(paneId, container);
     },
   };
+}
+
+export function appendMessageActionFixture(
+  group: HTMLElement,
+  messageKey: string,
+  onCopy?: () => void,
+) {
+  const element = document.createElement("div");
+  element.dataset.messageActionsFor = messageKey;
+  const copy = onCopy ? document.createElement("button") : undefined;
+  if (copy) {
+    copy.className = "chat-copy-btn";
+    copy.addEventListener("click", () => onCopy?.());
+    element.append(copy);
+  }
+  group.append(element);
+  onTestFinished(registerMessageActionElements(element, () => messageKey, { copy }));
 }

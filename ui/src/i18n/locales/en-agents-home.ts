@@ -1,73 +1,26 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const enAgentsHome = {
   agentsHome: {
-    manage: "Manage agents",
-    create: "New agent",
-    openChat: "Open chat",
-    openMainChat: "Open main chat",
-    allSessions: "All sessions",
-    collapseOthers: "Collapse others",
+    pinnedAgents: "Pinned agents",
+    noAssistantMessage: "No assistant reply yet",
+    viewSessions: "Sessions",
+    deleteAgentConfirm: "Delete {agent}?",
+    deleteAgentDetails:
+      "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
-    expandAgent: "Expand {agent}",
-    collapseAgent: "Collapse {agent}",
     working: "Working now",
-    workingPreview: "Working: {preview}",
-    seeAll: "See all",
-    seeAllCount: "See all {count} agents",
-    lastActive: "Active {time}",
-    neverActive: "No recent activity",
-    noMessage: "No messages yet",
-    loading: "Loading agents…",
-    disconnected: "Connect to the Gateway to see your agents.",
-    loadFailed: "Could not load agents. Try again.",
-    empty: "Your team starts here. Add an agent to get started.",
   },
-  clawsCatalog: {
-    explore: "Explore Claws",
-    exploreDescription: "Purpose-built agents for your team.",
-    title: "Explore Claws",
-    search: "Search Claws",
-    searchPlaceholder: "Search Claws",
-    loading: "Loading Claws...",
-    empty: "No Claws found.",
-    unavailable: "ClawHub discovery is unavailable. Try again.",
-    retry: "Retry",
-    add: "Add",
-    adding: "Adding...",
-    addAnyway: "Add anyway",
-    addFailed: "The agent could not be added. Try again.",
-    openChatFailed: "The agent was added, but its chat is not available yet. Try again.",
-    openChat: "Open chat",
-    installed: "Installed",
-    back: "Back to Claws",
-    close: "Close",
-    review: "Claw details",
-    publisher: "@openclaw",
-    workspaceFiles: "Workspace files",
-    viewAll: "View all",
-    skillsSection: "Skills",
-    automations: "Automations",
-    integrations: "Integrations",
-    instructionAdded: "Added to the workspace",
-    trustReview: "ClawHub flagged this package for review. Read the warning before adding.",
-    reviewTitle: "Review before adding",
-    reviewDescription: "This Claw needs permission to add the following plugins or skills.",
-    version: "Version {version}",
-    contentsLoading: "Loading Claw contents",
-    noVersion: "This Claw has no published release yet.",
-  },
-  clawsTrustWarning: {
-    title: "ClawHub security review",
-    reviewRequired: "Security review needed",
-    details: "View security report",
+  templatesDraft: {
+    title: "Create Template",
   },
 } satisfies TranslationMap;
 
 export const registerAgentsHomeEnglish = Object.assign(
   () => {
-    Object.assign(en, enAgentsHome);
+    mergeCatalog(en, enAgentsHome);
   },
   { catalog: enAgentsHome },
 );

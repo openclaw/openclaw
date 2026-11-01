@@ -113,11 +113,8 @@ function sdkPrepareSqliteQuerySync<Params, Row = unknown>(
   database: DatabaseSync,
   build: Parameters<typeof queries.prepareSqliteQuerySync<Params, Row>>[1],
 ): (params: Params) => QueryResult<Row> {
-  const execute = queries.prepareSqliteQuerySync(database, build);
-  return (params) => {
-    warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.prepareSqliteQuerySync" });
-    return execute(params);
-  };
+  warnPluginSdkDeprecation({ ...legacy, method: "sqlite-runtime.prepareSqliteQuerySync" });
+  return queries.prepareSqliteQuerySync(database, build);
 }
 
 /** @deprecated Use sqlite-worker-runtime.runSqliteImmediateTransactionSync inside a worker backend; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */

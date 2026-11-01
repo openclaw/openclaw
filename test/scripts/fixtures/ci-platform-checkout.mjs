@@ -34,6 +34,7 @@ let leaseChannel;
 let actorChannel;
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
+const hostEnv = { ...process.env, PATH: options.hostPath };
 const localGit = options.localGit ?? options.performance;
 const refsFile = path.join(root, "refs.json");
 
@@ -636,7 +637,10 @@ async function command() {
       process.exit(result.status ?? 1);
     }
     if (mode === "gh" && options.publisher) {
-      const result = spawnSync("bash", [options.publisher.gh, ...args], { stdio: "inherit" });
+      const result = spawnSync("bash", [options.publisher.gh, ...args], {
+        stdio: "inherit",
+        env: hostEnv,
+      });
       process.exit(result.status ?? 1);
     }
     if (mode === "gh" && options.docsAgent) {
@@ -933,7 +937,7 @@ async function command() {
         const pushed = spawnSync(
           options.performance.git,
           ["-C", cwd, "push", options.performance.remote, "HEAD:main"],
-          { stdio: "inherit" },
+          { stdio: "inherit", env: hostEnv },
         );
         if (pushed.status !== 0)
           throw new Error("Fixture ambiguous push did not reach local remote");
@@ -968,7 +972,7 @@ async function command() {
             operation,
             ...commandArgs,
           ],
-          { stdio: "inherit" },
+          { stdio: "inherit", env: hostEnv },
         );
         if (operation === "init" && result.status === 0) {
           const directory = args.at(-1) === "main" ? cwd : insideOwnedPath(args.at(-1));
@@ -989,7 +993,7 @@ async function command() {
         const result = spawnSync(
           options.publisher.git,
           ["-C", cwd, ...configuration.flatMap((value) => ["-c", value]), operation, ...args],
-          { stdio: "inherit" },
+          { stdio: "inherit", env: hostEnv },
         );
         if (
           result.status === 0 &&
@@ -1006,7 +1010,7 @@ async function command() {
               "refs/heads/automation/locale",
               options.env.FAKE_INITIAL_MAIN,
             ],
-            { stdio: "inherit" },
+            { stdio: "inherit", env: hostEnv },
           );
           if (update.status !== 0) process.exit(update.status ?? 1);
         }
@@ -1157,6 +1161,9 @@ async function command() {
 }
 
 async function supervise() {
+  // Configured Git wrappers can resolve Git through PATH again. Host delegates
+  // must retain this path rather than re-enter the fixture's instrumented Git.
+  publish("fixture-options.json", { ...options, hostPath: process.env.PATH });
   if (options.docsPublish && options.workingDirectory === "publish") {
     prepareDocsPublisher();
   }

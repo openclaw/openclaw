@@ -8,6 +8,7 @@ import {
   readStateLeaseProcessOwnerStatus,
   type StateLeaseProcessOwner,
 } from "../../infra/state-lease-process-owner.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createOpenClawStateSchemaEnsurer } from "../../state/openclaw-state-feature-schema-ensure.js";
@@ -103,35 +104,47 @@ function hasTemplateReaders(db: EngineConnection, id: string): boolean {
   return retained;
 }
 
-export const worktreeTemplateOperations = {
-  "worktrees.templates.read": ({ cacheKey }: { cacheKey: string }, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    const row = executeSqliteQuerySync(
-      db,
-      kyselyFor(db).selectFrom("worktree_templates").selectAll().where("cache_key", "=", cacheKey),
-    ).rows[0];
-    return row ? rowToRecord(row) : undefined;
+export const worktreeTemplateReadOperations = {
+  "worktrees.templates.read": ({ cacheKey }: { cacheKey: string }, db) => {
+    const row = tableExists(db, "worktree_templates")
+      ? executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .selectFrom("worktree_templates")
+            .selectAll()
+            .where("cache_key", "=", cacheKey),
+        ).rows[0]
+      : undefined;
+    return {
+      type: "worktrees.templates.read" as const,
+      record: row ? rowToRecord(row) : undefined,
+    };
   },
-  "worktrees.templates.has": (_input: undefined, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    return (
+  "worktrees.templates.has": (_input: undefined, db) => ({
+    type: "worktrees.templates.has" as const,
+    has:
+      tableExists(db, "worktree_templates") &&
       executeSqliteQuerySync(
         db,
         kyselyFor(db).selectFrom("worktree_templates").select("cache_key").limit(1),
-      ).rows.length > 0
-    );
-  },
-  "worktrees.templates.list": (_input: undefined, context) => {
-    const { db } = openTemplateDatabase(context).database;
-    return executeSqliteQuerySync(
-      db,
-      kyselyFor(db)
-        .selectFrom("worktree_templates")
-        .selectAll()
-        .orderBy("last_used_at", "asc")
-        .orderBy("id", "asc"),
-    ).rows.map(rowToRecord);
-  },
+      ).rows.length > 0,
+  }),
+  "worktrees.templates.list": (_input: undefined, db) => ({
+    type: "worktrees.templates.list" as const,
+    records: tableExists(db, "worktree_templates")
+      ? executeSqliteQuerySync(
+          db,
+          kyselyFor(db)
+            .selectFrom("worktree_templates")
+            .selectAll()
+            .orderBy("last_used_at", "asc")
+            .orderBy("id", "asc"),
+        ).rows.map(rowToRecord)
+      : [],
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
+
+export const worktreeTemplateOperations = {
   "worktrees.templates.reserve": worktreeTemplateMutation(
     "worktrees.templates.reserve",
     (db, record: WorktreeTemplateRecord & { status: "preparing" }) => {

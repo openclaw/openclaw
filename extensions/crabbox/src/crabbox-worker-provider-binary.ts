@@ -6,25 +6,28 @@ import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-manage
 export function createCrabboxWorkerBinaryResolver(dependencies: {
   openclawRoot: string;
   signal: AbortSignal;
+  warn: (message: string) => void;
 }) {
   const pathEnv = process.env.PATH;
   const binaries = new Map<string, Promise<CrabboxBinary>>();
+  const reportedFallbacks = new Set<string>();
   let defaultCandidate: string | undefined;
+  const discoverDefault = () =>
+    (defaultCandidate ??= resolveCrabboxBinary({
+      openclawRoot: dependencies.openclawRoot,
+      pathEnv,
+    }));
   return {
     async resolve(this: void, explicit?: string, signal?: AbortSignal): Promise<CrabboxBinary> {
       signal?.throwIfAborted();
-      const candidate =
-        explicit ??
-        (defaultCandidate ??= resolveCrabboxBinary({
-          openclawRoot: dependencies.openclawRoot,
-          pathEnv,
-        }));
+      const candidate = explicit ?? discoverDefault();
       // Completed acquisition remains usable by cleanup after provider disposal.
       let resolution = binaries.get(candidate);
       if (!resolution) {
         dependencies.signal.throwIfAborted();
         resolution = ensureManagedCrabboxBinary({
           binary: candidate,
+          ...(explicit ? { fallbackBinary: discoverDefault() } : {}),
           signal: dependencies.signal,
         })
           .then((resolved) => {
@@ -42,6 +45,11 @@ export function createCrabboxWorkerBinaryResolver(dependencies: {
         toErrorObject(reason, "Crabbox acquisition aborted"),
       );
       signal?.throwIfAborted();
+      // Implicit discovery may populate the cache before an explicit profile consumes it.
+      if (explicit && resolved.rejected && !reportedFallbacks.has(candidate)) {
+        reportedFallbacks.add(candidate);
+        dependencies.warn(resolved.rejected);
+      }
       return resolved;
     },
     async settle() {

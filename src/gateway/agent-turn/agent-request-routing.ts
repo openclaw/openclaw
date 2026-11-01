@@ -104,6 +104,7 @@ export async function prepareAgentRequestRouting(params: {
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
+      params.assertCurrent?.();
       params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
@@ -130,9 +131,14 @@ export async function prepareAgentRequestRouting(params: {
         threadId: params.request.threadId,
       });
     } catch (error) {
+      params.assertCurrent?.();
       params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
+  }
+  // A route result cannot revive a request canceled while its provider was pending.
+  if (sessionIdTarget || explicitRecipient) {
+    params.assertCurrent?.();
   }
   if (explicitRecipientSession?.error) {
     params.clearDedupe();

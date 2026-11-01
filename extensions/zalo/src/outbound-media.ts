@@ -91,7 +91,6 @@ export async function tryHandleHostedZaloMediaRequest(
   res: ServerResponse,
 ): Promise<boolean> {
   const store = getHostedZaloMediaStore();
-  await store.cleanupExpired();
 
   const method = req.method ?? "GET";
   if (method !== "GET" && method !== "HEAD") {

@@ -11,7 +11,7 @@ defineDiscordVoiceTests(
     joinVoiceChannelMock,
     entersStateMock,
     realtimeSessionMock,
-    managerModule,
+    listenersModule,
     configureVoiceStateGateway,
     createClient,
     createManager,
@@ -143,7 +143,7 @@ defineDiscordVoiceTests(
           member: { user: { id: "u-owner", bot: false } },
         },
       ];
-      const { DiscordVoiceGuildCreateListener } = managerModule;
+      const { DiscordVoiceGuildCreateListener } = listenersModule;
       const listener = new DiscordVoiceGuildCreateListener(manager);
       await listener.handle({ id: "g1", unavailable: false } as never, client as never);
 

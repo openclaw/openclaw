@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
-          openclaw_ensure_node "24.x"
+          openclaw_ensure_node "24.22.1"
 
       - &crabbox_retire_dependency_link_step
         name: Retire legacy Crabbox dependencies
@@ -331,15 +331,15 @@ jobs:
             case "$arch" in
               aarch64|arm64)
                 buildx_arch=arm64
-                buildx_sha256=38e890e1a162bfdbf32fbe91404991dc4fc28e55b0de901b34374a061bab4d2c
+                buildx_sha256=3b83b3731916ba433feccaaa689fe5bcdc81c641d92c8e6c2ea865dfa141c97a
                 ;;
               x86_64|amd64)
                 buildx_arch=amd64
-                buildx_sha256=4fe4cc38adf48169132749b6ca22a990928db0118e3407584ee553723115d287
+                buildx_sha256=e25d5cd675092bb5d1d03632fdc46cdf3fede7b514dc5f023a105e00d3ce5ad4
                 ;;
               *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
             esac
-            buildx_version="v0.38.0"
+            buildx_version="v0.38.1"
             mkdir -p "$HOME/.docker/cli-plugins"
             curl --fail --show-error --location \
               --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
@@ -357,7 +357,8 @@ jobs:
           docker buildx version
           docker compose version || true
 
-      - name: Ensure SSH is available
+      - &crabbox_ensure_ssh_step
+        name: Ensure SSH is available
         shell: bash
         run: |
           set -euo pipefail
@@ -420,7 +421,8 @@ jobs:
           } > "$tmp"
           mv "$tmp" "$state"
 
-      - name: Keep Crabbox job alive
+      - &crabbox_keep_alive_step
+        name: Keep Crabbox job alive
         shell: bash
         env:
           CRABBOX_ID: ${{ inputs.crabbox_id }}
@@ -459,7 +461,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.1"
 
       - name: Fetch main ref
         shell: powershell
@@ -733,15 +735,7 @@ jobs:
 
       - *crabbox_prepare_control_ui_e2e_step
       - *crabbox_ensure_docker_step
-      - name: Ensure SSH is available
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v systemctl >/dev/null 2>&1; then
-            sudo systemctl start ssh || sudo systemctl start sshd || true
-          elif command -v service >/dev/null 2>&1; then
-            sudo service ssh start || sudo service sshd start || true
-          fi
+      - *crabbox_ensure_ssh_step
 
       - name: Hydrate provider env helper
         shell: bash
@@ -844,28 +838,4 @@ jobs:
           } > "$tmp"
           mv "$tmp" "$state"
 
-      - name: Keep Crabbox job alive
-        shell: bash
-        env:
-          CRABBOX_ID: ${{ inputs.crabbox_id }}
-          CRABBOX_KEEP_ALIVE_MINUTES: ${{ inputs.crabbox_keep_alive_minutes }}
-        run: |
-          set -euo pipefail
-          case "$CRABBOX_ID" in
-            ''|*[!A-Za-z0-9._-]*)
-              echo "Invalid crabbox_id" >&2
-              exit 2
-              ;;
-          esac
-          minutes="${CRABBOX_KEEP_ALIVE_MINUTES}"
-          case "$minutes" in
-            ''|*[!0-9]*) minutes=90 ;;
-          esac
-          stop="$HOME/.crabbox/actions/${CRABBOX_ID}.stop"
-          deadline=$(( $(date +%s) + minutes * 60 ))
-          while [ "$(date +%s)" -lt "$deadline" ]; do
-            if [ -f "$stop" ]; then
-              exit 0
-            fi
-            sleep 15
-          done
+      - *crabbox_keep_alive_step

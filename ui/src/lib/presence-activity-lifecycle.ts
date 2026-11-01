@@ -3,6 +3,7 @@ import {
   presenceViewerLastActivity,
   type PresenceViewer,
 } from "./presence-users.ts";
+import { listen } from "./reactive/listener.ts";
 
 /** Refreshes presentation at interaction expiry, without network polling. */
 export function createPresenceActivityLifecycle(
@@ -12,6 +13,7 @@ export function createPresenceActivityLifecycle(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let deadline: number | undefined;
   let connected = false;
+  let stopVisibility: (() => void) | undefined;
   const clear = () => {
     clearTimeout(timer);
     timer = undefined;
@@ -54,12 +56,12 @@ export function createPresenceActivityLifecycle(
     sync,
     connect() {
       connected = true;
-      document.addEventListener("visibilitychange", visibilityChanged);
+      stopVisibility = listen(document, "visibilitychange", visibilityChanged);
       tick();
     },
     disconnect() {
       connected = false;
-      document.removeEventListener("visibilitychange", visibilityChanged);
+      stopVisibility?.();
       clear();
     },
   };

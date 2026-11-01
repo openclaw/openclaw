@@ -1,5 +1,8 @@
-import { expect, it } from "vitest";
+import path from "node:path";
+import { afterAll, expect, it } from "vitest";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   adoptCronRunSessionMetadata,
   createCronRunContinuationSession,
@@ -10,7 +13,7 @@ it("keeps successive exact-run rows limited to their own provider rollover linea
   const baseSessionKey = "agent:main:cron:job";
   const entry: SessionEntry = { sessionId: "previous-run", updatedAt: 1000 };
   const cronSession: MutableCronSession = {
-    storePath: "/tmp/sessions.json",
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
     store: {},
     sessionEntry: entry,
     lifecycleRevision: "previous-revision",
@@ -20,7 +23,7 @@ it("keeps successive exact-run rows limited to their own provider rollover linea
     resetBoundaryPending: undefined,
     initialSessionEntry: entry,
   };
-  const store: Record<string, SessionEntry> = {};
+  const familySizes: Array<number | undefined> = [];
   for (let run = 0; run < 4; run += 1) {
     const sessionId = `run-${run}`;
     adoptCronRunSessionMetadata({
@@ -33,14 +36,15 @@ it("keeps successive exact-run rows limited to their own provider rollover linea
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
-      persistSessionEntry: async ({ sessionKey, update }) => {
-        store[sessionKey] = update(store[sessionKey]);
-      },
     });
 
     await continuation.initialize();
-    expect(store[runSessionKey]?.usageFamilySessionIds).toBeUndefined();
-    expect(store[runSessionKey]?.usageFamilyKey).toBe(baseSessionKey);
+    let persisted = loadSessionEntry({
+      storePath: cronSession.storePath,
+      sessionKey: runSessionKey,
+    });
+    expect(persisted?.usageFamilySessionIds).toBeUndefined();
+    expect(persisted?.usageFamilyKey).toBe(baseSessionKey);
 
     for (const phase of ["sync", "seal"] as const) {
       adoptCronRunSessionMetadata({
@@ -49,17 +53,19 @@ it("keeps successive exact-run rows limited to their own provider rollover linea
         runMeta: { sessionId: `${sessionId}-${phase}` },
       });
       await continuation[phase]();
-      expect(store[runSessionKey]?.usageFamilySessionIds).toEqual(
+      persisted = loadSessionEntry({ storePath: cronSession.storePath, sessionKey: runSessionKey });
+      expect(persisted?.usageFamilySessionIds).toEqual(
         phase === "sync"
           ? [sessionId, `${sessionId}-sync`]
           : [sessionId, `${sessionId}-sync`, `${sessionId}-seal`],
       );
-      expect(store[runSessionKey]?.usageFamilyKey).toBe(baseSessionKey);
+      expect(persisted?.usageFamilyKey).toBe(baseSessionKey);
     }
+    familySizes.push(persisted?.usageFamilySessionIds?.length);
     expect(cronSession.sessionEntry.usageFamilySessionIds).toHaveLength(1 + (run + 1) * 3);
     expect(cronSession.sessionEntry.usageFamilyKey).toBe(baseSessionKey);
   }
-  expect(Object.values(store).map((runEntry) => runEntry.usageFamilySessionIds?.length)).toEqual([
-    3, 3, 3, 3,
-  ]);
+  expect(familySizes).toEqual([3, 3, 3, 3]);
 });
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-lineage-");

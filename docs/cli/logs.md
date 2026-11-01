@@ -22,6 +22,9 @@ Tail Gateway file logs over RPC. Works in remote mode.
 - `--local-time`: render timestamps in your local timezone (default)
 - `--utc`: render timestamps in UTC
 
+`--local-time` and `--utc` are mutually exclusive. Passing both fails before a log
+query; omitting both keeps local timestamps.
+
 Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid timer overflow.
 
 ## Shared Gateway RPC options
@@ -29,10 +32,11 @@ Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid
 - `--url <url>`: Gateway WebSocket URL
 - `--port <port>`: select a local Gateway port, overriding the configured remote URL and `OPENCLAW_GATEWAY_URL`; cannot be combined with `--url`
 - `--token <token>`: Gateway token
+- `--password <password>`: Gateway password
 - `--timeout <ms>`: timeout in ms (default `30000`)
 - `--expect-final`: wait for a final response when the Gateway call is agent-backed
 
-Passing `--url` skips auto-applied config credentials; include `--token` explicitly if the target Gateway requires auth.
+Passing `--url` skips auto-applied config credentials; include `--token` or `--password` explicitly if the target Gateway requires auth.
 
 `--port` requires an integer from `1` to `65535`; empty or whitespace-only values are invalid. Omit the option to use the configured or environment target.
 
@@ -52,6 +56,7 @@ openclaw logs --utc
 openclaw logs --follow --local-time
 openclaw logs --port 19083 --json
 openclaw logs --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
+openclaw logs --url ws://127.0.0.1:18789 --password "$OPENCLAW_GATEWAY_PASSWORD"
 ```
 
 The selected root profile matches the Gateway's rolling file: the default

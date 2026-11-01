@@ -1,4 +1,3 @@
-// Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
@@ -9,6 +8,7 @@ import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
+import { canAccess } from "./path-existence.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
@@ -169,7 +169,9 @@ export async function resolveExtendedStablePackage(params: {
   timeoutMs?: number;
   packageName?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }): Promise<ExtendedStableResolutionResult> {
+  params.signal?.throwIfAborted();
   if (params.installKind === "git") {
     return { status: "failed", reason: "unsupported_git_channel" };
   }
@@ -179,8 +181,10 @@ export async function resolveExtendedStablePackage(params: {
   const selector = await fetchNpmPackageTargetStatus({
     target: "extended-stable",
     timeoutMs,
+    signal: params.signal,
     ...registryTarget,
   });
+  params.signal?.throwIfAborted();
   if (!selector.version) {
     return {
       status: "failed",
@@ -191,8 +195,10 @@ export async function resolveExtendedStablePackage(params: {
   const exact = await fetchNpmPackageTargetStatus({
     target: selector.version,
     timeoutMs,
+    signal: params.signal,
     ...registryTarget,
   });
+  params.signal?.throwIfAborted();
   if (exact.version !== selector.version) {
     return { status: "failed", reason: "exact_package_mismatch" };
   }
@@ -218,15 +224,6 @@ export function formatGitInstallLabel(update: UpdateCheckResult): string | null 
     shortSha ? `@ ${shortSha}` : null,
   ].filter(Boolean);
   return parts.join(" · ");
-}
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Classify installation ownership without reading Git history or dependency state. */
@@ -292,14 +289,12 @@ async function resolveUpdateInstallOwnership(
 export async function resolveUpdateInstallIdentity(params: {
   root: string | null;
   timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<UpdateInstallIdentity> {
   const { root, ...options } = params;
   const identity = await resolveUpdateInstallOwnership(root, options);
   const { installKind } = identity;
   const git =
     installKind === "git" && root ? await readGitUpdateIdentity(root, options) : undefined;
-  options.signal?.throwIfAborted();
   return { ...identity, git };
 }
 
@@ -526,7 +521,7 @@ async function checkDepsStatus(params: {
       ? "pnpm-lock.yaml"
       : manager === "npm"
         ? "package-lock.json"
-        : (await exists(path.join(root, "bun.lock")))
+        : (await canAccess(path.join(root, "bun.lock")))
           ? "bun.lock"
           : "bun.lockb";
   const lockfilePath = path.join(root, lockfile);
@@ -535,8 +530,8 @@ async function checkDepsStatus(params: {
     "node_modules",
     ...(manager === "pnpm" ? [".modules.yaml"] : []),
   );
-  const lockExists = await exists(lockfilePath);
-  const markerExists = await exists(markerPath);
+  const lockExists = await canAccess(lockfilePath);
+  const markerExists = await canAccess(markerPath);
   return {
     manager,
     lockfilePath,
@@ -576,6 +571,7 @@ export async function resolveNpmChannelTag(
     const resolved = await resolveExtendedStablePackage({
       installKind: "package",
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
     });
     return resolved.status === "resolved"
       ? { tag: resolved.selector, version: resolved.version }
@@ -618,13 +614,10 @@ export async function checkUpdateStatus(params: {
   useDetachedDevUpstream?: boolean;
   gitSourceHint?: GitUpdateSourceHint | null;
   includeRegistry?: boolean;
-  registryChannel?: UpdateChannel;
   resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
 }): Promise<UpdateCheckResult> {
   params.signal?.throwIfAborted();
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
-    params.registryChannel ?? params.resolveRegistryChannel?.(status);
   const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
     const result = await resolveNpmChannelTag({
       channel: channel ?? "stable",
@@ -640,7 +633,7 @@ export async function checkUpdateStatus(params: {
   };
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
-    const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind: "unknown" });
     const registry = params.includeRegistry ? await fetchRegistry(registryChannel) : undefined;
     params.signal?.throwIfAborted();
     return {
@@ -705,7 +698,7 @@ export async function checkUpdateStatus(params: {
     if (params.signal?.aborted) {
       return undefined;
     }
-    const registryChannel = resolveRegistryChannel({ installKind, git });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind, git });
     return params.includeRegistry
       ? registryChannel === "extended-stable" && isGit
         ? {

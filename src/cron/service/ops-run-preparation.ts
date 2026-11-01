@@ -13,7 +13,7 @@ import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { refreshCronScheduler } from "./scheduler-actor.js";
 import { recordSkippedCronRuns } from "./skipped-runs.js";
 import type { CronRunMode, CronServiceState } from "./state.js";
-import { isImmediateCronRunMode } from "./state.js";
+import { assertCronHostExecutionAllowed, isImmediateCronRunMode } from "./state.js";
 import {
   captureCronServiceMutationSource,
   ensureLoaded,
@@ -146,7 +146,7 @@ export async function inspectManualRunPreflight(
   // Classify source retirement before the generic service-generation fence.
   opts?.commitGuard?.();
   source.assertCurrent();
-  await ensureLoaded(state, { forceReload: true });
+  await ensureLoaded(state);
   opts?.commitGuard?.();
   source.assertCurrent();
   if (state.stopped) {
@@ -178,6 +178,7 @@ export async function inspectManualRunPreflight(
   ) {
     return { ok: true, ran: false, reason: "not-due" };
   }
+  assertCronHostExecutionAllowed(state, job);
   assertCanonicalCronDeliveryMode(job.delivery);
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };

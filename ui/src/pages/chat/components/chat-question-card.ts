@@ -1,7 +1,10 @@
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
-import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-types.ts";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import "./chat-question-card-view.tsx";
+import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-types.ts";
+
+registerChatQuestionsEnglish();
 
 export type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-types.ts";
 
@@ -34,9 +37,13 @@ export function createGatewayQuestionPanelProps(
       submitting: prompt.submitting,
       drafts: prompt.drafts,
       error: prompt.error,
+      requestedBySession: options.requestedBySession,
+      requestedBySessionHref: options.requestedBySessionHref,
+      autoFocus: options.requestedBySession ? false : undefined,
       requestPosition: options.requestPosition,
     },
     onChange,
+    onOpenSession: options.onOpenSession,
     onSecretStoreAllowedHostsChange: (allowedHosts) => {
       prompt.secretStoreAllowedHostsDraft = allowedHosts;
       onChange?.();

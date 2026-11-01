@@ -45,13 +45,16 @@ export type MSTeamsApp = {
   };
   api: {
     serviceUrl?: string;
+    fromServiceUrl(options: { serviceUrl: string }): MSTeamsApp["api"];
     teams: {
       getById(teamId: string): Promise<{ aadGroupId?: string }>;
     };
     conversations: {
       activities(conversationId: string): {
         create(activity: unknown): Promise<{ id?: string }>;
+        createTargeted(activity: unknown): Promise<{ id?: string }>;
         update(activityId: string, activity: unknown): Promise<unknown>;
+        updateTargeted(activityId: string, activity: unknown): Promise<unknown>;
         delete(activityId: string): Promise<unknown>;
       };
     };

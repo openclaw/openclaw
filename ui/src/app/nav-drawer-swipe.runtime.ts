@@ -1,3 +1,4 @@
+import { listen } from "../lib/reactive/listener.ts";
 import { isMobileNavLayout } from "./mobile-nav-layout.ts";
 
 const MIN_OPEN_DISTANCE_PX = 44;
@@ -12,14 +13,16 @@ type Swipe = {
   lockedHorizontal: boolean;
 };
 
-export type NavDrawerHost = Pick<HTMLElement, "querySelector" | "isConnected"> & {
+export type NavDrawerHost = Pick<HTMLElement, "isConnected"> & {
   readonly element: HTMLElement;
+  readonly navDrawerElement?: HTMLElement;
   readonly onboardingMode: boolean;
   readonly navDrawerOpen: boolean;
 };
 
 export class NavDrawerSwipeOwner {
   private swipe: Swipe | null = null;
+  private stops: (() => void)[] = [];
 
   constructor(
     private readonly host: NavDrawerHost,
@@ -36,17 +39,16 @@ export class NavDrawerSwipeOwner {
   }
 
   connect(): void {
-    this.host.element.addEventListener("touchstart", this.handleStart, { passive: true });
-    this.host.element.addEventListener("touchmove", this.handleMove, { passive: false });
-    this.host.element.addEventListener("touchend", this.handleEnd, { passive: true });
-    this.host.element.addEventListener("touchcancel", this.cancel, { passive: true });
+    this.stops = [
+      listen(this.host.element, "touchstart", this.handleStart, { passive: true }),
+      listen(this.host.element, "touchmove", this.handleMove, { passive: false }),
+      listen(this.host.element, "touchend", this.handleEnd, { passive: true }),
+      listen(this.host.element, "touchcancel", this.cancel, { passive: true }),
+    ];
   }
 
   disconnect(): void {
-    this.host.element.removeEventListener("touchstart", this.handleStart);
-    this.host.element.removeEventListener("touchmove", this.handleMove);
-    this.host.element.removeEventListener("touchend", this.handleEnd);
-    this.host.element.removeEventListener("touchcancel", this.cancel);
+    this.stops.forEach((stop) => stop());
     this.reset();
   }
 
@@ -55,8 +57,7 @@ export class NavDrawerSwipeOwner {
   }
 
   private openAfterSwipe(deltaX: number): void {
-    const width =
-      this.host.querySelector<HTMLElement>(".shell-nav")?.getBoundingClientRect().width ?? 0;
+    const width = this.host.navDrawerElement?.getBoundingClientRect().width ?? 0;
     if (deltaX >= Math.max(MIN_OPEN_DISTANCE_PX, width * OPEN_RATIO)) {
       // Commit once intent is clear; a held gesture must not leave clipped
       // navigation text and a non-interactive scrim sitting over the chat.

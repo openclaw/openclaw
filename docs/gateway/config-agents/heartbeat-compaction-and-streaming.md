@@ -1,7 +1,7 @@
 ---
-summary: "Heartbeat runs, system agent, compaction, context pruning, block streaming, and typing indicators"
+summary: "Heartbeat migration, system agent, compaction, context pruning, block streaming, and typing indicators"
 read_when:
-  - Scheduling heartbeat runs or the system agent
+  - Migrating heartbeat settings or configuring the system agent
   - Tuning auto-compaction or context pruning
   - Changing how partial replies and typing indicators are sent
 title: "Configuration — agent heartbeat, compaction, and streaming"
@@ -11,46 +11,17 @@ title: "Configuration — agent heartbeat, compaction, and streaming"
 
 ## `agents.defaults.heartbeat`
 
-Periodic heartbeat runs.
+Heartbeat configuration has moved to ordinary automation jobs. Run
+`openclaw doctor --fix` to migrate supported `agents.defaults.heartbeat` and
+`agents.entries.<id>.heartbeat` settings before starting the upgraded Gateway.
+Doctor preserves the job's schedule, scratch, model policy, and delivery settings;
+edit or disable the resulting job in Automations instead of restoring this key.
 
-```json5
-{
-  agents: {
-    defaults: {
-      heartbeat: {
-        agentId: "ops", // ambient owner when no per-agent heartbeat is configured
-        every: "30m", // 0m disables recurring cadence
-        activeHours: { start: "08:00", end: "24:00" },
-        model: "openai/gpt-5.4-mini",
-        session: "main",
-        target: "owner", // default | options: last | none | whatsapp | telegram | discord | ...
-        directPolicy: "allow", // allow (default) | block
-        to: "+15555550123",
-        accountId: "ops-bot",
-        prompt: "Follow the heartbeat monitor scratch context...",
-        timeoutSeconds: 45,
-        lightContext: false, // default: false; true skips workspace bootstrap files for heartbeat runs
-        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
-      },
-    },
-  },
-}
-```
-
-- `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable recurring cadence. Targeted event-driven wakes, including background exec completion follow-ups, can still run one agent turn.
-- `agentId`: explicit owner for ambient heartbeat runs when no `agents.entries.*.heartbeat` block exists. A shared heartbeat block without `agentId` keeps the existing all-agent enrollment behavior.
-- Cadence is written into a system-owned cron monitor row. Run `openclaw doctor --fix` to materialize a missing or stale row. If cron is disabled, scheduled heartbeats do not run and the gateway logs a startup warning.
-- The heartbeat object is strict. Its supported fields are `agentId`, `every`, `activeHours`, `model`, `session`, `target`, `directPolicy`, `to`, `accountId`, `prompt`, `timeoutSeconds`, `lightContext`, and `isolatedSession`.
-- `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
-- `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
-- `target`: `owner` (default) sends only to a direct-message identity from `commands.ownerAllowFrom` or channel `allowFrom`. `last` explicitly follows the latest conversation, including groups. `none` keeps results internal.
-- `to`: used only with an explicit channel target. `owner` and an unset target ignore it.
-- `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
-- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
-- Busy deferral is automatic: scheduled heartbeats wait for main/cron activity, same-agent active runs, and target-session work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
-- Heartbeat runs use the ordinary agent system prompt. Acknowledgment suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
-- Per-agent: set `agents.entries.*.heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
-- Heartbeats run full agent turns — shorter intervals burn more tokens.
+Use each job's `activeHours`, `idleOnly`, `payload.skipIfScratchEmpty`, and
+delivery policies for monitoring. New setup provisions one ordinary proactive
+check for the ambient owner; reloads and restarts do not recreate deleted jobs.
+See [Heartbeat migration](/gateway/heartbeat) and
+[Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies).
 
 ## `agents.defaults.systemAgent`
 
@@ -108,11 +79,10 @@ inherited credentials and `agents.defaults.sessionStore.agentId` for retired
         postIndexSync: "async", // off | async | await
         postCompactionSections: ["Session Startup", "Red Lines"],
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
-        maxActiveTranscriptBytes: "20mb", // opt in to preflight local compaction
+        maxActiveTranscriptBytes: "20mb", // built-in preflight / Codex fresh-seed limit
         notifyUser: true, // notices when compaction starts/completes and on memory-flush degradation (default: false)
         memoryFlush: {
           enabled: true,
-          model: "ollama/qwen3:8b", // optional memory-flush-only model override
           softThresholdTokens: 6000,
           forceFlushTranscriptBytes: "2mb",
         },
@@ -131,13 +101,13 @@ inherited credentials and `agents.defaults.sessionStore.agentId` for retired
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
 - `identifierPolicy`: `strict` (default) or `off`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `qualityGuard`: bounded validation for built-in safeguard summaries. Enabled by default in safeguard mode. Checks the finalized summary's structure, pending asks, and exact identifiers, with at most `maxRetries` corrective attempts. If audits are exhausted or required facts cannot fit, OpenClaw stores the best available summary marked `details.qualityDegraded` so the session can continue. A failed corrective generation can reuse an earlier summary. Retention is best-effort on this path; `/status` shows degradation and the user receives a warning even when `notifyUser` is `false`. See [Compaction](/concepts/compaction#how-it-works) for losses and the separate automatic timeout fallback. Set `enabled: false` to skip the audit. Configured compaction-provider output keeps its provider-owned validation behavior.
-- `midTurnPrecheck`: optional tool-loop pressure check. When `enabled: true`, OpenClaw checks the projected provider prompt after tool results are appended and before the next model call. When the previous call reported context usage and its prefix, system prompt, tools, and model are unchanged, the check reuses its measured prompt and completion occupancy, including opaque reasoning. Matching assistant fragments are counted once; new tool results and other appended content receive a conservative estimate. Retained completion usage keeps opaque reasoning covered after context changes. Missing usage or changed context uses conservative prompt estimation. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
+- `midTurnPrecheck`: optional estimated-pressure threshold between tool rounds, disabled by default. Enabling it reserves configured compaction headroom against the prepared request estimate. Independently, provider-measured usage triggers client maintenance at the smaller of 75% of the window and the reserve-based threshold, and every embedded request is checked against the full window. Matching prior provider usage accounts for the covered prefix; only pending items are estimated. Text uses CJK-aware sizing, and dense encoded data receives separate density accounting. Over-window requests stop before submission and reuse safe truncation or compaction recovery. Works with `default` and `safeguard` modes; unsettled tools and unsafe replay still prevent forced compaction.
 - `postIndexSync`: post-compaction session-memory reindex mode. Default: `"async"`. Use `"await"` for strongest freshness, `"async"` for lower compaction latency, or `"off"` only when session-memory sync is handled elsewhere. Async mode starts indexing before compaction returns but does not wait for it to finish; cold memory initialization can still add latency.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Safeguard summaries read these sections from the effective agent workspace and log a warning if the file cannot be read or configured sections are missing. Leave unset or use `[]` to disable.
 - `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
-- `maxActiveTranscriptBytes`: byte threshold (`number` or strings like `"20mb"`) that opts in to normal local compaction before a run when the transcript window the model sees (everything since the latest compaction or reset, plus its kept tail) reaches the threshold. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Disabled when unset or `0`. When a context engine returns an explicit compacted successor identity, OpenClaw adopts it; the built-in SQLite compactor keeps the current identity.
+- `maxActiveTranscriptBytes`: optional positive bytes or a size string such as `"20mb"`. For the built-in runtime, triggers preflight compaction when the active transcript window (since the last compaction/reset, including its kept tail) reaches the limit. Direct Anthropic API-key routes discount cleared temporary runtime-context contents; raw storage and history hydration limits remain unchanged. For [Codex app-server](/plugins/codex-harness-runtime/compaction), bounds fresh-thread seeds instead of triggering ordinary-turn host compaction. Unset or `0` disables the guard. Owning engines can return a compacted successor identity; the built-in SQLite compactor keeps the current identity.
 - `notifyUser`: when `true`, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, "Compacting context..." and "Compaction complete"), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, "Memory maintenance temporarily failed; continuing your reply."). Disabled by default. A degraded-summary warning is always shown, regardless of this setting.
-- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. The host resolves these settings with the active context window and fills timing fields that the selected memory provider omits from its plan. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when the model-visible transcript window reaches the threshold even if token counters are stale; after compaction, that window includes the retained tail and subsequent turns rather than discarded history. File-arm providers require writable workspace access; tools-arm providers do not.
+- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. The host resolves these settings with the active context window and fills timing fields that the selected memory provider omits from its plan. The flush uses the active session model and its normal fallback chain. `forceFlushTranscriptBytes` forces the flush when the model-visible transcript window reaches the threshold even if token counters are stale; after compaction, that window includes the retained tail and subsequent turns rather than discarded history. File-arm providers require writable workspace access; tools-arm providers do not.
 
 Custom compaction instructions are code-owned. Implement a compaction provider
 plugin with `summarize()` for custom summary construction, and use

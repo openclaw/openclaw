@@ -10,6 +10,7 @@ afterEach(() => fixture.cleanup());
 it.for([
   ["native-source", 2],
   ["question-cleanup", 2],
+  ["worker-pool", 3],
 ] as const)(
   "releases completed caller context from %s",
   async ([resource, collected], { signal }) => {
@@ -26,11 +27,22 @@ it.for([
         ],
         { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root, NODE_OPTIONS: "" },
         undefined,
-        { signal, requireProcessTreeExit: process.platform !== "win32", maxBuffer: 64 * 1024 },
+        {
+          signal,
+          requireProcessTreeExit: process.platform !== "win32",
+          maxBuffer: 64 * 1024,
+          ...(resource === "worker-pool" ? { executable: process.execPath } : {}),
+        },
       ),
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ resource, collected, reused: true });
+    expect(JSON.parse(result.stdout)).toEqual({
+      resource,
+      collected,
+      ...(resource === "worker-pool"
+        ? { runtime: process.versions.bun ? "bun" : "node" }
+        : { reused: true }),
+    });
   },
 );

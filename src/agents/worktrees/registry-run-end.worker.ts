@@ -46,6 +46,18 @@ import type {
 const query = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
 
+const BINDING_FIELDS = [
+  "path",
+  "repoRoot",
+  "repoFingerprint",
+  "branch",
+  "ownerKind",
+  "ownerId",
+  "createdAt",
+  "lastActiveAt",
+  "removedAt",
+] as const;
+
 export type WorktreeRegistryPatch = Partial<
   Pick<ManagedWorktreeRecord, "lastActiveAt" | "removedAt" | "runEndCleanup" | "snapshotRef">
 > & {
@@ -133,7 +145,27 @@ export function updateRegistryWorktreeInDatabase(
     values.provisioned_paths_json = JSON.stringify(patch.provisionedPaths);
   }
   assertRegistryMutationCustody(db, query(db), id, input.removalToken);
-  let update = query(db).updateTable("worktrees").set(values).where("id", "=", id);
+  const changedColumns = (
+    [
+      "last_active_at",
+      "removed_at",
+      "snapshot_ref",
+      "run_end_cleanup_json",
+      "repo_root",
+      "repo_fingerprint",
+      "provisioned_paths_json",
+    ] as const
+  ).filter((column) => values[column] !== undefined);
+  if (changedColumns.length === 0) {
+    return;
+  }
+  let update = query(db)
+    .updateTable("worktrees")
+    .set(values)
+    .where("id", "=", id)
+    .where((eb) =>
+      eb.or(changedColumns.map((column) => eb(column, "is distinct from", values[column]!))),
+    );
   // Retained/failed outcomes belong only to the observed live lifecycle.
   if (input.onlyIfLive) {
     update = update.where("removed_at", "is", null);
@@ -232,22 +264,13 @@ function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredic
       }
       return;
     case "binding":
+    case "exact-snapshot":
       if (
         !current ||
-        (
-          [
-            "path",
-            "repoRoot",
-            "repoFingerprint",
-            "branch",
-            "baseRef",
-            "ownerKind",
-            "ownerId",
-            "createdAt",
-            "lastActiveAt",
-            "removedAt",
-          ] as const
-        ).some((key) => current[key] !== predicate.record[key])
+        BINDING_FIELDS.some((key) => current[key] !== predicate.record[key]) ||
+        (predicate.kind === "binding"
+          ? current.baseRef !== predicate.record.baseRef
+          : current.snapshotRef !== predicate.record.snapshotRef)
       ) {
         throw registryAuthorityChanged(predicate.kind);
       }
@@ -262,25 +285,6 @@ function assertPredicate(db: EngineConnection, predicate: WorktreeRegistryPredic
         throw registryAuthorityChanged(predicate.kind);
       }
       return;
-    case "exact-snapshot": {
-      const record = predicate.record;
-      if (
-        !current ||
-        current.ownerKind !== record.ownerKind ||
-        current.ownerId !== record.ownerId ||
-        current.createdAt !== record.createdAt ||
-        current.lastActiveAt !== record.lastActiveAt ||
-        current.removedAt !== record.removedAt ||
-        current.path !== record.path ||
-        current.repoRoot !== record.repoRoot ||
-        current.repoFingerprint !== record.repoFingerprint ||
-        current.branch !== record.branch ||
-        current.snapshotRef !== record.snapshotRef
-      ) {
-        throw registryAuthorityChanged(predicate.kind);
-      }
-      return;
-    }
     case "exact-owner": {
       const record = predicate.record;
       if (

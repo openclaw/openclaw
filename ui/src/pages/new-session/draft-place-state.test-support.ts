@@ -78,9 +78,7 @@ export function createRepositoryFixture(
     onProjectMissing: vi.fn(),
     onSelectProject: vi.fn(),
     onApprovedListing: vi.fn(),
-    querySelector: () => null,
     activeElement: () => null,
-    body: () => null,
   });
   const state = new DraftPlaceState(
     gateway,

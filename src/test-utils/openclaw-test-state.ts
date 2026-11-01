@@ -76,6 +76,8 @@ const ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
   "OPENCLAW_SERVICE_REPAIR_POLICY",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ] as const;
 
 function resetConfigRuntimeStateForTest(): void {
@@ -353,7 +355,10 @@ export async function createOpenClawTestState(
             import("../agents/auth-profiles/external-auth.js"),
           ]);
         const { saveAuthProfileStore } = createAuthProfileStoreRuntime(
-          createExternalAuthRuntime(() => []),
+          createExternalAuthRuntime(
+            () => [],
+            async (_params, run) => run(),
+          ),
         );
         withEnv(env, () => {
           const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(env));

@@ -22,19 +22,21 @@ import {
   withDaemonRuntimePinMigration,
   readDaemonRuntimePinForInstall,
 } from "./runtime-pin-state.js";
-import { stopStalledGatewayStartup } from "./schtasks-process.js";
+import { restartScheduledTask, startScheduledTask, stopScheduledTask } from "./schtasks-control.js";
 import {
   installScheduledTask,
+  stageScheduledTask,
+  uninstallScheduledTask,
+} from "./schtasks-install.js";
+import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { stopStalledGatewayStartup } from "./schtasks-process.js";
+import {
   isScheduledTaskEnabled,
   isScheduledTaskInstalled,
-  readScheduledTaskCommand,
   readScheduledTaskRuntime,
-  restartScheduledTask,
-  startScheduledTask,
-  stageScheduledTask,
-  stopScheduledTask,
-  uninstallScheduledTask,
-} from "./schtasks.js";
+} from "./schtasks-runtime.js";
+import { recoverForegroundGatewayForService } from "./service-foreground-recovery.js";
+import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
 import { collectGatewayServiceStartRepairIssues } from "./service-start-repair.js";
@@ -123,6 +125,7 @@ export async function startGatewayService(
     await service.start({ ...args, env: state.env });
     nextState = await readGatewayServiceState(service, { env: state.env });
   } catch (err) {
+    assertServiceInspectionFallbackAllowed(err);
     const recoveryState = await readGatewayServiceState(service, { env: state.env });
     if (!recoveryState.installed) {
       return {
@@ -455,7 +458,14 @@ function withGatewayServiceMutationGuards(
       kind,
       `restart the ${kind} service`,
       true,
-      service.restart,
+      async (args) => {
+        if (kind === "gateway" && args.preserveDefinition) {
+          await recoverForegroundGatewayForService(service, args);
+        }
+        await args.prepareRestart?.();
+        args.assertCurrent?.();
+        return await service.restart(args);
+      },
     ),
   };
 }

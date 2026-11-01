@@ -32,9 +32,16 @@ function captureCalls(owner) {
       node.type === "CallExpression" &&
       node.callee.type === "Identifier" &&
       node.arguments.length === 2 &&
-      node.arguments[0].type === "LogicalExpression" &&
-      node.arguments[0].operator === "||" &&
-      node.arguments[1].type === "Identifier"
+      node.arguments.every(
+        (argument) =>
+          argument.type === "MemberExpression" &&
+          !argument.computed &&
+          argument.object.type === "Identifier" &&
+          argument.property.type === "Identifier",
+      ) &&
+      node.arguments[0].object.name === node.arguments[1].object.name &&
+      node.arguments[0].property.name === "rootDir" &&
+      node.arguments[1].property.name === "source"
     ) {
       captures.push(node);
     }
@@ -43,21 +50,19 @@ function captureCalls(owner) {
 }
 
 /** The compiled image already owns bundled bytes; editable plugins retain their capture owner. */
-export function createStandaloneArtifactAdapter({
-  runtimeRoot,
-  embeddedPaths,
-  parse,
-  buildIdentity,
-}) {
-  if (typeof buildIdentity !== "string" || !buildIdentity) {
-    throw new Error("Standalone artifacts require an immutable build identity");
-  }
+export function createStandaloneArtifactAdapter({ runtimeRoot, embeddedPaths, parse }) {
   if (!Object.keys(embeddedPaths).some((entry) => entry.startsWith("dist/extensions/"))) {
     throw new Error("Standalone artifacts require embedded bundled plugin entries");
   }
+  const bundledEntries = Object.keys(embeddedPaths).filter((entry) =>
+    /^dist(?:-runtime)?\/extensions\/[^/]+\/.+\.[cm]?js$/.test(entry),
+  );
   const bootstrap = `(() => {
-  const bundledEntries = new Set(Object.keys(entries).filter((entry) =>
-    /^dist(?:-runtime)?\\/extensions\\/[^/]+\\/.+\\.[cm]?js$/.test(entry)));
+  const buildIdentity = globalThis.__openclawStandaloneBuildInfo?.build?.id;
+  if (typeof buildIdentity !== "string" || !buildIdentity) {
+    throw new Error("Standalone artifacts require an immutable build identity");
+  }
+  const bundledEntries = new Set(${JSON.stringify(bundledEntries)});
   const pluginRoots = new Set([...bundledEntries].map((entry) => entry.split("/").slice(0, 3).join("/")));
   const physical = (value) => {
     if (typeof value !== "string") return;
@@ -74,7 +79,7 @@ export function createStandaloneArtifactAdapter({
     if (!bundledEntries.has(entry)) return;
     requireEmbedded ??= globalThis.__openclawStandaloneCreateRequire(
       import.meta.require("node:module").createRequire, path.join(root, "openclaw.mjs"));
-    return { moduleExport: requireEmbedded(entries[entry]) };
+    return { moduleExport: requireEmbedded(entries(entry)) };
   };
   globalThis.__openclawStandaloneCaptureOperationArtifact = (capture, rootDir, selected, ...rest) => {
     const sources = typeof selected === "string" ? [selected] : selected;
@@ -118,7 +123,7 @@ export function createStandaloneArtifactAdapter({
       : undefined;
     if (record.source && (!bundledEntries.has(source) || !source.startsWith(pluginRoot + "/"))) return;
     const key = JSON.stringify([pluginRoot, source ?? null]);
-    return ${JSON.stringify(buildIdentity)} + ":" + key;
+    return buildIdentity + ":" + key;
   };
 })();
 `;

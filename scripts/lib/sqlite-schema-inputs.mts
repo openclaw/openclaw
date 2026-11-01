@@ -6,6 +6,13 @@ import {
   MEMORY_INLINE_RECALL_COLUMNS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from "../../src/daemon/runtime-pin-schema.js";
+import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "../../src/infra/client-credential-schema.js";
+import {
+  buildSqliteMemoryBodyFtsSchema,
+  buildSqliteMemoryPathFtsSchema,
+  buildSqliteMemoryVectorSchema,
+} from "../../src/infra/database-engine/sqlite-memory-search-fragments.js";
+import { loadSqliteVecExtension } from "../../src/infra/database-engine/sqlite-vec.js";
 import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
 import {
@@ -29,7 +36,10 @@ import {
   RETIRED_COMMITMENTS_SCHEMA_SQL,
   SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
 } from "../../src/state/openclaw-state-schema-retired.js";
-import { getOpenClawStateRuntimeSchema } from "../../src/state/openclaw-state-schema-runtime.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  getOpenClawStatePredecessorSchema,
+} from "../../src/state/openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 
 export type SqliteSchemaInput = {
@@ -47,8 +57,12 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
+  for (const version of [38, 37, 36, 35, 31, 27, 26]) {
+    add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
+  }
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);
   add("daemon-runtime-pins-v1", "daemon", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
+  add("client-credentials-v1", "client", CLIENT_CREDENTIAL_SCHEMA_SQL);
 
   for (const includeEmbeddingCache of [false, true]) {
     add(
@@ -90,6 +104,26 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
       }
     }
   }
+
+  for (const tokenizer of ["unicode61", "trigram"] as const) {
+    add(
+      `memory-body-fts-v1-${tokenizer}`,
+      "memory",
+      buildSqliteMemoryBodyFtsSchema({ tableName: "memory_index_chunks_fts", tokenizer }),
+    );
+    add(`memory-path-fts-v1-${tokenizer}`, "memory", buildSqliteMemoryPathFtsSchema({ tokenizer }));
+  }
+  inputs.push({
+    id: "memory-vector-v1",
+    store: "memory",
+    sql: buildSqliteMemoryVectorSchema({ tableName: "memory_index_chunks_vec", dimensions: 1 }),
+    prepare: async (db) => {
+      const loaded = await loadSqliteVecExtension({ db });
+      if (!loaded.ok) {
+        throw new Error(loaded.error ?? "Could not load sqlite-vec for schema generation");
+      }
+    },
+  });
 
   for (const feature of listOpenClawStateFeatureSchemas()) {
     add(`fragment-${feature.id}`, "state", feature.sql());
@@ -155,6 +189,7 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
   for (const tables of [
     ["schema_meta", "state_leases"],
     ["schema_meta", "state_leases", "agent_database_leases"],
+    ["schema_meta", "migration_runs"],
   ]) {
     add(
       `state-existing-${tables.at(-1)}`,

@@ -3,10 +3,8 @@ import { fingerprintMessage } from "./prompt-cache-history.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import type { PromptPreparationTask, PromptPreparationResult } from "./provider-prompt-state.js";
 
-serveWorkerTasks<PromptPreparationResult>(
-  (input) => {
-    // SAFETY: The prompt preparation pool is the only sender of this task union.
-    const task = input as PromptPreparationTask;
+serveWorkerTasks<PromptPreparationResult, PromptPreparationTask>(
+  (task) => {
     return "history" in task
       ? {
           kind: "history",

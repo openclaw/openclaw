@@ -58,12 +58,6 @@ export async function withControlUiSessionPrSource<T>(
     }
     const sourceIdentity = identity.key;
     const paths = [...new Set([candidate.path, candidate.physicalPath])];
-    const assertSource = () => {
-      const current = readDatabasePathIdentitySync(candidate.path);
-      if (current.key !== identity.key || current.canonicalPath !== candidate.physicalPath) {
-        throw changed();
-      }
-    };
     // Both lexical and physical close paths retire this capture before another await can publish.
     for (const pathname of paths) {
       unregister.push(
@@ -79,13 +73,12 @@ export async function withControlUiSessionPrSource<T>(
         }),
       );
     }
+    // Each load captures physical identity; the owner revokes every later read synchronously.
     const assertCurrent = () => {
       if (!active) {
         throw changed();
       }
-      assertSource();
     };
-    assertCurrent();
     return await operation(assertCurrent, sourceIdentity);
   } finally {
     active = false;

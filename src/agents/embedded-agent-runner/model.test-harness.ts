@@ -2,20 +2,17 @@
 import { vi } from "vitest";
 import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import { buildCatalogModel } from "../../plugin-sdk/provider-catalog.test-support.js";
 
 type DiscoverModelsMock = typeof import("../agent-model-discovery.js").discoverModelsAsync;
 
-export const makeModel = (id: string): ModelDefinitionConfig => ({
-  // Smallest valid model row used when tests only care about inheritance or
-  // provider routing.
-  id,
-  name: id,
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1,
-  maxTokens: 1,
-});
+export const makeModel = (id: string): ModelDefinitionConfig =>
+  buildCatalogModel(id, {
+    // Smallest valid model row used when tests only care about inheritance or
+    // provider routing.
+    contextWindow: 1,
+    maxTokens: 1,
+  });
 
 export function makeOpenClawConfigFixture(input: OpenClawConfigInput = {}): OpenClawConfig {
   return input as OpenClawConfig;
@@ -99,6 +96,7 @@ export function buildOpenAICodexForwardCompatExpectation(
 
 export function resetMockDiscoverModels(discoverModelsMock: DiscoverModelsMock): void {
   vi.mocked(discoverModelsMock).mockResolvedValue({
+    getProviderMetadataOwners: () => undefined,
     find: vi.fn(() => null),
   } as unknown as Awaited<ReturnType<DiscoverModelsMock>>);
 }
@@ -114,6 +112,7 @@ export function mockDiscoveredModel(
   // Discovery mock returns exactly one template row so fallback tests cannot
   // accidentally pass by matching a sibling model.
   vi.mocked(discoverModelsMock).mockResolvedValue({
+    getProviderMetadataOwners: () => undefined,
     find: vi.fn((provider: string, modelId: string) => {
       if (provider === params.provider && modelId === params.modelId) {
         return params.templateModel;

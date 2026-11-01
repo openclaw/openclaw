@@ -119,13 +119,16 @@ maximum `reasoning_effort`; both map to `"max"`.
 
 ## Thinking and tools
 
-When a DeepSeek-format endpoint emits DSML tool markup as text, OpenClaw recovers
+When a DeepSeek model emits DSML tool markup as text, including through OpenRouter
+or another OpenAI-compatible provider, OpenClaw recovers
 valid `calls`, `tool_calls`, `tool_call`, and `function_calls` blocks into tool
 calls instead of showing their payloads in chat. This includes doubled fullwidth
 markers with a separator space. Direct provider calls and tool-free finalization
 hide these blocks without recovering tools. Malformed or unfinished blocks are
 also hidden without executing them; existing tool permissions still apply to
-recovered calls.
+recovered calls. Native tool calls take precedence when the same response also
+contains DSML, so recovered duplicates do not execute. Routing through OpenRouter
+keeps OpenRouter's reasoning request format.
 
 DeepSeek V4 thinking sessions require replayed assistant messages from a
 thinking-enabled turn to include `reasoning_content` on follow-up requests.
@@ -194,3 +197,87 @@ the selected model.
     Full config reference for agents, models, and providers.
   </Card>
 </CardGroup>
+
+## Web search
+
+The same plugin can provide `web_search` for any model. Search uses DeepSeek's
+search engine directly, not a chat completion. Install the plugin as above, then
+choose **DeepSeek** in **Settings → Search** or `openclaw configure --section web`.
+
+```json5
+{
+  tools: {
+    web: {
+      search: { provider: "deepseek" },
+    },
+  },
+  plugins: {
+    entries: {
+      deepseek: {
+        config: {
+          webSearch: {
+            apiKey: "YOUR_DEEPSEEK_API_KEY", // pragma: allowlist secret
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The key is optional when `DEEPSEEK_API_KEY` is set in the Gateway environment
+or `models.providers.deepseek.apiKey` is configured for DeepSeek's own API. Credential precedence is
+plugin search key, environment key, then model-provider key. Search treats
+`DEEPSEEK_API_KEY` as a DeepSeek key. It reuses the model-provider key only while
+`models.providers.deepseek.baseUrl` and every model `baseUrl` under it are unset
+or use `https://api.deepseek.com` (any path); a key configured for another base
+URL is not sent to DeepSeek and does not make DeepSeek eligible for
+auto-detection. Only routes in `models.providers` are checked, not routes that
+come only from an agent's `models.json`. The plugin search key and model-provider
+fallback support SecretRefs through the standard secret preparation flow. Search
+does not reuse API keys stored only in model auth profiles.
+
+With DeepSeek selected as the search provider, changing its search key or SecretRef
+hot-applies through the Gateway's secrets runtime without replacing the plugin or
+waiting for unrelated agent turns. Plugin enablement and explicit plugin reloads
+still use normal lifecycle settlement.
+
+With no explicit search provider, credential auto-detection considers DeepSeek
+after Parallel (order 80), before configured endpoint providers. Select
+`provider: "deepseek"` to prevent automatic fallback to another search service.
+
+Search always calls `https://api.deepseek.com/v1/tools/search`; a configured chat
+base URL does not redirect search to a proxy. When chat uses a proxy, store the
+proxy key in a DeepSeek auth profile or in `models.providers.deepseek.apiKey`
+with `auth: "api-key"` (otherwise DeepSeek auth profiles and `DEEPSEEK_API_KEY`
+take precedence over the config key), and give search a DeepSeek key through the
+plugin search key or `DEEPSEEK_API_KEY`. A proxy that forwards a DeepSeek key
+also needs that key set for search.
+
+### Queries and results
+
+- `query`: 1–128 Unicode characters. Oversized queries are rejected, never truncated.
+- `count`: 1–10 results, defaulting to `tools.web.search.maxResults` or 5.
+- Use query operators such as `site:`, `-site:`, `lang:`, `after:`, `before:`, and
+  quoted phrases directly in `query`. Separate structured filter parameters are
+  not supported and return an error rather than being ignored.
+- Results contain titles, URLs, model-oriented summaries (falling back to short
+  snippets), publication dates, and site names. Core validates URLs/dates and
+  wraps returned prose as untrusted web content. Full page content is not requested.
+
+```javascript
+await web_search({
+  query: "OpenClaw site:github.com lang:en after:2026-10-01",
+  count: 5,
+});
+```
+
+Search uses the shared timeout and cache settings. Cached results are separated
+by query, result count, and credential. Errors are not cached or automatically
+retried by the DeepSeek adapter.
+
+DeepSeek documents a limit of 5 search requests per second per account and a
+price of $0.75 per 1,000 successful non-empty search requests. Empty results and
+failed requests are not billed. See [DeepSeek Search & Fetch](https://api-docs.deepseek.com/guides/search/)
+for current pricing and account limits. This plugin integration adds search only;
+`web_fetch` continues to use its existing local extraction and configured fallbacks.

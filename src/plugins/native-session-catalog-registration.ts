@@ -47,9 +47,6 @@ function guardCatalogListOperation(
       return step;
     },
     close() {
-      if (closed) {
-        return;
-      }
       closed = true;
       const closing = operation;
       operation = undefined;
@@ -103,10 +100,7 @@ export function createNativeSessionCatalogGate(params: {
                 ),
             }
           : {}),
-        read: async (request) => {
-          assertEnabled();
-          return provider.read(request);
-        },
+        read: guard(provider.read),
         ...(continueSession
           ? {
               continueSession: guard(continueSession),

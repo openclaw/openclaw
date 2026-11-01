@@ -18,7 +18,7 @@ openclaw-modal-dialog {
   overflow: visible;
   border: 0;
   border-radius: var(--overlay-modal-radius);
-  background: transparent;
+  background: var(--overlay-modal-surface);
   color: var(--text);
   font: inherit;
   box-shadow: var(--overlay-modal-shadow);
@@ -29,6 +29,14 @@ openclaw-modal-dialog {
     scale var(--openclaw-modal-hide-duration) ease,
     display var(--openclaw-modal-hide-duration) allow-discrete,
     overlay var(--openclaw-modal-hide-duration) allow-discrete;
+}
+
+.oc-modal-dialog:has(
+  > .oc-modal-dialog__body > .exec-approval-modal-stack:not(.exec-approval-card)
+) {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .oc-modal-dialog[open] {
@@ -83,6 +91,7 @@ openclaw-modal-dialog {
   min-height: 0;
   padding: 0;
   overflow: auto;
+  border-radius: inherit;
 }
 
 .oc-modal-dialog__overlay-content {
@@ -117,6 +126,21 @@ openclaw-modal-dialog {
   overflow-wrap: anywhere;
 }
 
+/* Opted-in choice dialogs keep DOM, reading, and tab order aligned with the layout. */
+.oc-modal-dialog openclaw-modal-actions.confirm-dialog-actions--stacked {
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.oc-modal-dialog .confirm-dialog-choice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: inherit;
+  min-width: 0;
+  max-width: 100%;
+}
+
 openclaw-modal-dialog.fullscreen {
   --openclaw-modal-height-limit: calc(100dvh - 20px);
 }
@@ -133,6 +157,8 @@ openclaw-modal-dialog.viewport-edge-to-edge > .oc-modal-dialog {
   max-height: none;
   margin: 0;
   border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 openclaw-modal-dialog.viewport-edge-to-edge > .oc-modal-dialog > .oc-modal-dialog__body,
@@ -183,7 +209,6 @@ openclaw-modal-dialog.drawer--floating > .oc-modal-dialog {
   max-width: calc(100vw - var(--openclaw-drawer-inset) * 2);
   max-height: calc(100dvh - var(--openclaw-drawer-inset) * 2);
   margin: var(--openclaw-drawer-inset) var(--openclaw-drawer-inset) auto auto;
-  border-radius: var(--radius-xl);
 }
 
 @keyframes openclaw-drawer-in {
@@ -204,6 +229,13 @@ openclaw-modal-dialog.drawer--floating > .oc-modal-dialog {
 
   openclaw-modal-dialog.drawer > .oc-modal-dialog[open] {
     animation: none;
+  }
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .oc-modal-dialog,
+  .oc-modal-dialog__body {
+    corner-shape: superellipse(1.5);
   }
 }
 

@@ -1,3 +1,5 @@
+import { formatStateLeaseLoss, type StateLeaseLoss } from "../shared/state-lease-loss.js";
+
 export type OpenClawStateLeaseErrorCode =
   | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
   | "OPENCLAW_STATE_LEASE_HELD"
@@ -12,11 +14,16 @@ type OpenClawStateLeaseAcquisitionFailure =
 
 export class OpenClawStateLeaseError extends Error {
   readonly code: OpenClawStateLeaseErrorCode;
+  readonly loss?: StateLeaseLoss;
 
-  constructor(message: string, options: { code: OpenClawStateLeaseErrorCode; cause?: unknown }) {
+  constructor(
+    message: string,
+    options: { code: OpenClawStateLeaseErrorCode; cause?: unknown; loss?: StateLeaseLoss },
+  ) {
     super(message, { cause: options.cause });
     this.name = "OpenClawStateLeaseError";
     this.code = options.code;
+    this.loss = options.loss;
   }
 }
 
@@ -61,18 +68,30 @@ export function createOpenClawStateLeaseError(
   code: OpenClawStateLeaseErrorCode,
   message: string,
   cause?: unknown,
+  loss?: StateLeaseLoss,
 ): OpenClawStateLeaseError {
-  return new OpenClawStateLeaseError(message, { code, cause });
+  return new OpenClawStateLeaseError(message, { code, cause, loss });
 }
 
 export function createOpenClawStateLeaseLostError(
-  identity: { scope: string; key: string; leaseLabel?: string },
+  identity: {
+    scope: string;
+    key: string;
+    leaseLabel?: string;
+    renewalTimer?: { dueAt?: number; lateByMs: number };
+  },
   cause?: unknown,
+  loss?: StateLeaseLoss,
 ): OpenClawStateLeaseError {
-  return createOpenClawStateLeaseError(
-    "OPENCLAW_STATE_LEASE_LOST",
-    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost`,
-    cause,
+  const timer = identity.renewalTimer;
+  const lateByMs = timer
+    ? Math.max(timer.lateByMs, timer.dueAt === undefined ? 0 : Date.now() - timer.dueAt)
+    : 0;
+  const diagnostic =
+    loss?.reason === "expired" && lateByMs > 0 ? { ...loss, renewalTimerLateByMs: lateByMs } : loss;
+  return new OpenClawStateLeaseError(
+    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}`,
+    { code: "OPENCLAW_STATE_LEASE_LOST", cause, loss: diagnostic },
   );
 }
 
@@ -86,4 +105,20 @@ export function createOpenClawStateLeaseAbortError(
     `${leaseLabel} ${label} was aborted`,
     signal.reason,
   );
+}
+
+export function resolveOpenClawStateLeaseOperationError(
+  operationError: unknown,
+  settledError: unknown,
+  authorityError: unknown,
+): unknown {
+  if (!(authorityError instanceof Error)) {
+    return settledError;
+  }
+  if (settledError !== operationError && authorityError instanceof OpenClawStateLeaseError) {
+    // Nested owners retain the caller's authority code and all operation/drainage causes.
+    const { code, message, loss } = authorityError;
+    return createOpenClawStateLeaseError(code, message, settledError, loss);
+  }
+  return authorityError;
 }

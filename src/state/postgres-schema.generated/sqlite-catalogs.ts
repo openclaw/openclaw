@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { SqliteSchemaCatalog } from "../../infra/sqlite-schema-catalog-types.js";
 import type { GeneratedSqliteFingerprint } from "../../infra/sqlite-schema-fingerprint.js";
 import { readSqliteAgentCatalog, readSqliteAgentFingerprint } from "./sqlite-agent-catalogs.js";
+import { readSqliteClientCatalog, readSqliteClientFingerprint } from "./sqlite-client-catalogs.js";
 import { readSqliteDaemonCatalog, readSqliteDaemonFingerprint } from "./sqlite-daemon-catalogs.js";
 import { readSqliteMemoryCatalog, readSqliteMemoryFingerprint } from "./sqlite-memory-catalogs.js";
 import { readSqliteStateCatalog, readSqliteStateFingerprint } from "./sqlite-state-catalogs.js";
@@ -15,6 +16,7 @@ export function readGeneratedSqliteFingerprint(
     readSqliteStateFingerprint(hash) ??
     readSqliteAgentFingerprint(hash) ??
     readSqliteDaemonFingerprint(hash) ??
+    readSqliteClientFingerprint(hash) ??
     readSqliteMemoryFingerprint(hash)
   );
 }
@@ -25,6 +27,7 @@ export function readGeneratedSqliteCatalog(schemaSql: string): SqliteSchemaCatal
     readSqliteStateCatalog(hash) ??
     readSqliteAgentCatalog(hash) ??
     readSqliteDaemonCatalog(hash) ??
+    readSqliteClientCatalog(hash) ??
     readSqliteMemoryCatalog(hash)
   );
 }

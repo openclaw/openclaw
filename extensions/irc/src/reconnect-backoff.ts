@@ -13,20 +13,15 @@ const IRC_RECONNECT_BACKOFF = {
 // that registers successfully and is dropped immediately must keep growing the delay.
 const IRC_RECONNECT_STABLE_MS = 60_000;
 
-type IrcReconnectBackoff = {
-  markConnected: () => void;
-  nextDelayMs: () => number;
-};
-
-export function createIrcReconnectBackoff(now: () => number = Date.now): IrcReconnectBackoff {
+export function createIrcReconnectBackoff() {
   let attempt = 0;
   let connectedAt: number | undefined;
   return {
     markConnected: () => {
-      connectedAt = now();
+      connectedAt = performance.now();
     },
     nextDelayMs: () => {
-      if (connectedAt !== undefined && now() - connectedAt >= IRC_RECONNECT_STABLE_MS) {
+      if (connectedAt !== undefined && performance.now() - connectedAt >= IRC_RECONNECT_STABLE_MS) {
         attempt = 0;
       }
       // The next delay is owed to whichever connection ends now; a failed connect attempt must

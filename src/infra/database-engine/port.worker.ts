@@ -28,6 +28,10 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "./postgres-catalog.js";
+import {
+  refreshPostgresPlannerStatistics,
+  type PostgresPlannerStatistics,
+} from "./postgres-planner-statistics.js";
 export {
   admitDatabasePortDescriptor,
   DatabasePortDataError,
@@ -155,7 +159,7 @@ async function* readBatches(
       rows = statement.iterate(...params);
     } else {
       const result = await endpoint.db.query(sql, params.map(binding));
-      rows = decodePostgresRows({ ...result, rowCount: result.rowCount ?? 0 }, true);
+      rows = decodePostgresRows(result, true);
     }
     let count = 0,
       bytes = 0;
@@ -228,9 +232,10 @@ export async function readDatabasePortAllocations(
           qualified(endpoint, table.name),
           identity.column,
         ]);
+        // Matched backups retain resets and uncalled sequences, even below existing row IDs.
         const row = (
           await endpoint.db.query(
-            `SELECT greatest(last_value, coalesce(retained, last_value))::text AS value, is_called OR coalesce(retained >= last_value, false) AS called FROM ${sequence.rows[0].name} CROSS JOIN (SELECT max(${quote(identity.column)}) AS retained FROM ${qualified(endpoint, table.name)}) m`,
+            `SELECT last_value::text AS value, is_called AS called FROM ${sequence.rows[0].name}`,
           )
         ).rows[0];
         result[key] = { value: row.value, called: row.called };
@@ -256,7 +261,7 @@ export async function readDatabasePortAllocations(
   return result;
 }
 
-/** Plain INTEGER PRIMARY KEY allocation follows retained rows on SQLite, not PG sequences. */
+/** SQLite follows retained rows; AUTOINCREMENT also retains a called sequence high-watermark. */
 export function sqlitePortAllocations(
   descriptor: PortDescriptor,
   physical: PortVerification["allocations"],
@@ -265,8 +270,12 @@ export function sqlitePortAllocations(
   const expected = { ...source };
   for (const table of copiedTables(descriptor)) {
     for (const identity of table.identities) {
-      if (!identity.autoIncrement) {
-        const key = `${table.name}.${identity.column}`;
+      const key = `${table.name}.${identity.column}`;
+      if (
+        !identity.autoIncrement ||
+        !source[key]!.called ||
+        BigInt(physical[key]!.value) > BigInt(source[key]!.value)
+      ) {
         expected[key] = physical[key]!;
       }
     }
@@ -335,6 +344,7 @@ async function scan(
   maxRowBytes: number,
   destination?: Endpoint,
   assertCurrent = () => {},
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined,
 ) {
   const tables: PortVerification["tables"] = {};
   for (const table of copiedTables(descriptor)) {
@@ -356,7 +366,13 @@ async function scan(
         if (done) {
           break;
         }
-        for (const row of batch) {
+        const copied = transformRow
+          ? batch.flatMap((row) => {
+              const transformed = transformRow(table.name, row);
+              return transformed ? [transformed] : [];
+            })
+          : batch;
+        for (const row of copied) {
           hash.update(
             JSON.stringify(table.columns.map((c) => encodeSqliteValue(row[c.name]))) + "\n",
           );
@@ -367,8 +383,8 @@ async function scan(
         if (destination?.engine === "sqlite") {
           next = stream.next();
         }
-        if (destination) {
-          pending = insertBatch(destination, table, batch, assertCurrent);
+        if (destination && copied.length) {
+          pending = insertBatch(destination, table, copied, assertCurrent);
           void pending.catch(() => {});
         }
         if (destination?.engine !== "sqlite") {
@@ -401,6 +417,8 @@ async function catalogEvidence(
       (fact) =>
         fact.kind === "viewDefinition" ||
         (fact.kind === "triggerDefinition" &&
+          // Derived search tables carry only their generated maintenance triggers.
+          !descriptor.postgresDerivedTables?.includes(fact.table) &&
           !descriptor.triggers?.some(
             (trigger) =>
               fact.value !== null &&
@@ -565,6 +583,9 @@ export async function materializeDatabasePort(params: {
   maxRowBytes?: number;
   sourceAllocations?: PortVerification["allocations"];
   activeFragments?: readonly string[];
+  onPlannerStatistics?: (result: PostgresPlannerStatistics) => void;
+  /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined;
 }): Promise<PortVerification> {
   const { source, destination, assertCurrent } = params;
   if (source.engine === destination.engine) {
@@ -632,7 +653,14 @@ export async function materializeDatabasePort(params: {
     }
     const facts =
       params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
-    const tables = await scan(source, descriptor, maxRowBytes, destination, assertCurrent);
+    const tables = await scan(
+      source,
+      descriptor,
+      maxRowBytes,
+      destination,
+      assertCurrent,
+      params.transformRow,
+    );
     assertCurrent();
     await restoreAllocations(destination, descriptor, facts);
     for (const projection of descriptor.projections ?? []) {
@@ -676,6 +704,11 @@ export async function materializeDatabasePort(params: {
     if (destination.engine === "postgres") {
       assertCurrent();
       await destination.db.query("COMMIT");
+      const statistics = await refreshPostgresPlannerStatistics(
+        destination.db,
+        destination.namespace,
+      );
+      params.onPlannerStatistics?.(statistics);
     }
     return verified;
   } catch (error) {

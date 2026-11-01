@@ -68,8 +68,9 @@ function SearchConfigField(
 export function SearchSetup(
   props: SearchSettingsProps & {
     context: ApplicationContext;
-    gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected">;
+    gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
     provider: SearchProvider;
+    getPresentationLifetime: () => Promise<void>;
   },
 ) {
   const config = () => currentConfigObject(props.state());
@@ -135,7 +136,10 @@ export function SearchSetup(
                   baseHash: props.state().configSnapshot?.hash ?? null,
                   gateway: props.gateway,
                   canInspect: props.canEdit(),
-                  saveError: props.state().lastError,
+                  getPresentationLifetime: () => props.getPresentationLifetime(),
+                  get saveError() {
+                    return props.state().lastError;
+                  },
                   onCommit: props.commit,
                   onDiscard: () => props.context.runtimeConfig.discardFormValue(descriptor().path),
                 }}

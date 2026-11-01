@@ -457,8 +457,7 @@ final class AppState {
         self.onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
         self.debugPaneEnabled = AppDefaults.standard.bool(forKey: debugPaneEnabledKey)
         self.nativeExperienceEnabled = AppDefaults.standard.bool(forKey: nativeExperienceEnabledKey)
-        let savedVoiceWake = AppDefaults.standard.bool(forKey: swabbleEnabledKey)
-        self.swabbleEnabled = voiceEnvironment.appStatePermissions.supported() ? savedVoiceWake : false
+        self.swabbleEnabled = AppDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleTriggerWords = AppDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
         self.voiceWakeTriggerChime = Self.loadChime(
@@ -956,7 +955,7 @@ extension AppState {
         guard !Task.isCancelled, requestIsCurrent() else { return }
         self.voiceWakeEnableGeneration &+= 1
         let generation = self.voiceWakeEnableGeneration
-        var authorized = enabled && self.voiceEnvironment.appStatePermissions.supported() &&
+        var authorized = enabled &&
             SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
                 localeID: self.voiceWakeLocaleID)
         if authorized, self.voiceRuntime.isActive, !self.voiceEnvironment.appStatePermissions.granted() {
@@ -1016,7 +1015,7 @@ extension AppState {
     func setTalkEnabled(_ enabled: Bool) async {
         self.talkEnableGeneration &+= 1
         let generation = self.talkEnableGeneration
-        self.talkEnabled = enabled && self.voiceEnvironment.appStatePermissions.supported()
+        self.talkEnabled = enabled
         guard self.voiceRuntime.isActive else { return }
         var transition = self.talkTransitionTask
         var phase = self.talkEnabled ? "enabled" : "disabled"

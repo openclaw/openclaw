@@ -1,9 +1,10 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
-  updateAmbientTranscriptWatermark,
+  updateAmbientTranscriptWatermark as updateAccessorAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
@@ -24,6 +25,7 @@ import {
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
   patchSessionEntryCore as patchAccessorSessionEntry,
+  recordInboundSessionMeta,
   readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
@@ -42,6 +44,7 @@ import { preserveGenerationPrivateFields } from "../config/sessions/session-entr
 import {
   readSessionEntrySummariesInWorker,
   readSessionUpdatedAtInWorker,
+  withSessionEntriesFromStoresInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureExternalSessionCommitGuard,
@@ -53,10 +56,13 @@ import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "..
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import { filterSessionEntriesByProfile } from "../gateway/session-identity-projection.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { prepareCurrentUserProfileIdentity } from "../state/user-profile-reads.js";
 import {
+  copyMutableSessionEntry,
   getSessionEntryAsync,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
@@ -164,15 +170,14 @@ type SessionLifecycleArtifactsCleanupParams = {
   nowMs?: number;
 };
 
-type SessionLifecycleArtifactsCleanupResult = {
-  archivedTranscriptArtifacts: number;
-  removedEntries: number;
-};
+type SessionLifecycleArtifactsCleanupResult = Awaited<
+  ReturnType<typeof cleanupAccessorSessionLifecycleArtifacts>
+>;
 
 /** Resolves the configured session store path without selecting a row-operation agent. */
 export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 
-/** @deprecated Use getSessionEntryAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use getSessionEntryAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   warnPluginSdkDeprecation({
     family: "session-store",
@@ -183,7 +188,7 @@ export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | 
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** @deprecated Use getConversationSessionAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use getConversationSessionAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function getConversationSession(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
@@ -217,7 +222,7 @@ export async function getConversationSessionAsync(
  * Lists session entries for one agent. `readOnly` reads without joining the
  * agent database writable lifecycle (no create/register/migrate) — required
  * for detection/introspection paths that may run across the whole fleet.
- * @deprecated Use listSessionEntriesAsync for metadata reads. Final compatibility day: 2026-12-31.
+ * @deprecated Use listSessionEntriesAsync for metadata reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function listSessionEntries(
   params: SessionStoreListParams & { readOnly?: boolean } = {},
@@ -259,6 +264,81 @@ export async function listSessionEntriesAsync(params: {
   }));
 }
 
+export type SessionStoreSelectedEntries = {
+  agentId: string;
+  storePath: string;
+  sessionKeys: readonly string[];
+};
+
+export type SessionStoreSelectedEntry = SessionStoreEntrySummary & {
+  agentId: string;
+  storePath: string;
+};
+
+/**
+ * Prepare selected stores and a fresh profile snapshot off-thread, then consume synchronously.
+ * Final native session guards observe cross-process commits; stores are not one atomic snapshot.
+ * Profile matching uses current canonical owners/direct participants, never display references.
+ * Returned data carries no authority after the callback; caller policy must be checked inside it.
+ */
+export async function withSessionEntriesAsync<T>(
+  params: {
+    stores: readonly SessionStoreSelectedEntries[];
+    env?: NodeJS.ProcessEnv;
+    involvingProfileId?: string;
+  },
+  consume: (entries: SessionStoreSelectedEntry[]) => T,
+): Promise<T> {
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  const profileId = params.involvingProfileId;
+  const stores = params.stores.map((store) => ({
+    ...store,
+    sessionKeys: [...store.sessionKeys],
+  }));
+  let identity: Awaited<ReturnType<typeof prepareCurrentUserProfileIdentity>> | undefined;
+  return await withSessionEntriesFromStoresInWorker(
+    stores.map((store) => ({ ...store, env, projection: "list" as const })),
+    (reads) => {
+      identity?.assertCurrent();
+      // Writer queues cover this process only. Keep the selected-key native guard
+      // after all awaits so a separate Gateway's committed revocation is visible.
+      const entries = stores.flatMap((store) =>
+        listAccessorSessionEntriesReadOnly({
+          ...store,
+          env,
+          projection: "list",
+          includeParticipants: profileId !== undefined,
+        }).map(({ sessionKey, entry }) => ({
+          agentId: store.agentId,
+          storePath: store.storePath,
+          sessionKey,
+          entry: projectPluginSessionEntry(entry),
+        })),
+      );
+      const selected =
+        profileId !== undefined
+          ? filterSessionEntriesByProfile({
+              entries,
+              profile: identity?.profile,
+            })
+          : entries;
+      reads.forEach((read) => read.assertCurrent());
+      identity?.assertCurrent();
+      return consume(selected);
+    },
+    {
+      ordered: true,
+      ...(profileId !== undefined
+        ? {
+            prepareConsume: async () => {
+              identity = await prepareCurrentUserProfileIdentity(profileId, { env });
+            },
+          }
+        : {}),
+    },
+  );
+}
+
 type SessionStoreTranscriptReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -267,7 +347,7 @@ type SessionStoreTranscriptReadParams = {
   storePath?: string;
 };
 
-/** @deprecated Use loadTranscriptEvents. Final compatibility day: 2026-12-31. */
+/** @deprecated Use loadTranscriptEvents. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 function loadTranscriptEventsSyncLegacy(
   params: SessionStoreTranscriptReadParams,
 ): SessionStoreTranscriptEvent[] {
@@ -288,7 +368,7 @@ export function loadTranscriptEvents(
 
 export { loadTranscriptEventsSyncLegacy as loadTranscriptEventsSync };
 
-/** @deprecated Use readTranscriptStatsAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use readTranscriptStatsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 function readSessionStoreTranscriptStatsSync(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -314,7 +394,7 @@ export const readTranscriptStatsAsync: (
 
 export { readSessionStoreTranscriptStatsSync as readTranscriptStatsSync };
 
-/** @deprecated Await resolveTranscriptSessionKeyBySessionIdAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await resolveTranscriptSessionKeyBySessionIdAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveTranscriptSessionKeyBySessionId(
   params: Parameters<typeof resolveAccessorTranscriptSessionKeyBySessionId>[0],
 ): string | undefined {
@@ -331,7 +411,7 @@ export function resolveTranscriptSessionKeyBySessionId(
 /** Resolves the exact persisted transcript window, including historical session identities. */
 export { resolveTranscriptSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.js";
 
-/** @deprecated Use prepareSessionEntryPatch or applySessionEntryPatch. Final compatibility day: 2026-12-31. */
+/** @deprecated Use prepareSessionEntryPatch or applySessionEntryPatch. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function patchSessionEntry(
   params: PatchSessionEntryParams,
 ): Promise<SessionEntry | null> {
@@ -358,20 +438,11 @@ export async function patchSessionEntry(
       ...sessionEntryCommitGuardOptions(
         captureExternalSessionCommitGuard(params.assertCommitAllowed),
       ),
-      fallbackEntry: params.fallbackEntry
-        ? projectPluginSessionEntry(params.fallbackEntry)
-        : undefined,
-      maintenanceConfig:
-        params.maintenanceConfig !== undefined
-          ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-          : undefined,
-      preserveActivity: params.preserveActivity,
-      requireWriteSuccess: params.requireWriteSuccess,
-      replaceEntry: params.replaceEntry,
-      skipMaintenance: params.skipMaintenance,
+      ...sessionEntryPatchFields(params),
     },
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  // Public results stay mutable; internal patches share frozen nested facts.
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
 /** Prepare outside SQLite, then compare the exact snapshot and commit once in its worker. */
@@ -398,7 +469,7 @@ export async function prepareSessionEntryPatch(
     },
     sessionEntryPatchOptions(params),
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
 /** Reduce a data-only patch against the authoritative entry in one worker command. */
@@ -414,17 +485,11 @@ export async function applySessionEntryPatch(
     },
     sessionEntryPatchOptions(params),
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
-function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "prepare">) {
-  const authority = params.authority;
-  assertSessionEntryPatchAuthority(authority);
+function sessionEntryPatchFields(params: Omit<PatchSessionEntryParams, "update">) {
   return {
-    workerGuard: {
-      assertCurrent: authority?.kind === "host" ? () => authority.assertCurrent() : undefined,
-      source: authority?.kind === "source" ? authority.source : undefined,
-    },
     fallbackEntry: params.fallbackEntry
       ? projectPluginSessionEntry(params.fallbackEntry)
       : undefined,
@@ -439,7 +504,19 @@ function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "
   };
 }
 
-/** @deprecated Use readSessionUpdatedAtAsync. Final compatibility day: 2026-12-31. */
+function sessionEntryPatchOptions(params: Omit<PrepareSessionEntryPatchParams, "prepare">) {
+  const authority = params.authority;
+  assertSessionEntryPatchAuthority(authority);
+  return {
+    workerGuard: {
+      assertCurrent: authority?.kind === "host" ? () => authority.assertCurrent() : undefined,
+      source: authority?.kind === "source" ? authority.source : undefined,
+    },
+    ...sessionEntryPatchFields(params),
+  };
+}
+
+/** @deprecated Use readSessionUpdatedAtAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readSessionUpdatedAt(params: SessionStoreReadParams): number | undefined {
   warnPluginSdkDeprecation({
     family: "session-store",
@@ -456,10 +533,18 @@ export function readSessionUpdatedAtAsync(
   return readSessionUpdatedAtInWorker(toSessionAccessScope(params));
 }
 
-export { resolveAmbientTranscriptWatermarkKey, updateAmbientTranscriptWatermark };
+async function updateSessionStoreAmbientTranscriptWatermark(
+  params: Parameters<typeof updateAccessorAmbientTranscriptWatermark>[0],
+): ReturnType<typeof updateAccessorAmbientTranscriptWatermark> {
+  return copyMutableSessionEntry(await updateAccessorAmbientTranscriptWatermark(params));
+}
+export {
+  resolveAmbientTranscriptWatermarkKey,
+  updateSessionStoreAmbientTranscriptWatermark as updateAmbientTranscriptWatermark,
+};
 export type { AmbientTranscriptWatermarkScope };
 
-/** @deprecated Use readAmbientTranscriptWatermarkAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use readAmbientTranscriptWatermarkAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readAmbientTranscriptWatermark(
   params: ReadAmbientTranscriptWatermarkParams,
 ): AmbientTranscriptWatermark | undefined {
@@ -478,7 +563,7 @@ export async function readAmbientTranscriptWatermarkAsync(
   return readAmbientTranscriptWatermarkFromEntry(await getSessionEntryAsync(params), params.key);
 }
 
-/** @deprecated Use prepareSessionEntryPatch. Final compatibility day: 2026-12-31. */
+/** @deprecated Use prepareSessionEntryPatch. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function updateSessionStoreEntry(
   params: UpdateSessionStoreEntryParams,
 ): Promise<SessionEntry | null> {
@@ -503,7 +588,7 @@ export async function updateSessionStoreEntry(
       requireWriteSuccess: params.requireWriteSuccess,
     },
   );
-  return entry ? projectPluginSessionEntry(entry) : null;
+  return entry ? copyMutableSessionEntry(projectPluginSessionEntry(entry)) : null;
 }
 
 /** Replaces or creates one session entry by agent/session identity. */
@@ -512,7 +597,7 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
   await applySessionEntryOperation(
     toSessionAccessScope(params),
     { kind: "public-fields", patch: publicEntry },
-    { fallbackEntry: publicEntry, replaceEntry: true },
+    { result: "none", fallbackEntry: publicEntry, replaceEntry: true },
   );
 }
 
@@ -669,11 +754,15 @@ export { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 export { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
-export { recordInboundSessionMeta as recordSessionMetaFromInbound } from "../config/sessions/session-accessor.js";
+export async function recordSessionMetaFromInbound(
+  params: Parameters<typeof recordInboundSessionMeta>[0],
+): ReturnType<typeof recordInboundSessionMeta> {
+  return copyMutableSessionEntry(await recordInboundSessionMeta(params));
+}
 
 export function updateLastRoute(
   params: UpdateSessionLastRouteParams & {
-    /** @deprecated Use updateLastRouteWithAuthority. Final compatibility day: 2026-12-31. */
+    /** @deprecated Use updateLastRouteWithAuthority. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     assertCommitAllowed?: () => void;
   },
 ): Promise<SessionEntry | null> {
@@ -684,7 +773,7 @@ export function updateLastRoute(
       replacement: "updateLastRouteWithAuthority",
     });
   }
-  return updateSessionLastRoute(params);
+  return updateSessionLastRoute(params).then(copyMutableSessionEntry);
 }
 
 /** Route preparation runs before the worker's conditional commit. */
@@ -696,7 +785,7 @@ export function updateLastRouteWithAuthority(
   return updateSessionLastRouteInScope(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     { ...params, workerGuard: sessionEntryPatchOptions(params).workerGuard },
-  );
+  ).then(copyMutableSessionEntry);
 }
 export {
   evaluateSessionFreshness,

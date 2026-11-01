@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 /**
  * Gateway session store RPC tests.
  */
@@ -10,6 +11,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   loadTranscriptRows,
@@ -24,7 +26,8 @@ import {
   getSessionsHandlers,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
+  setupGatewaySessionsTestHarness();
 
 type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
 
@@ -105,8 +108,6 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
@@ -133,25 +134,31 @@ test("lists and patches session store via sessions.* RPC", async () => {
     await expectDefined(
       sessionsHandlers[method],
       "sessionsHandlers[method] test invariant",
-    )({
-      req: {} as never,
-      params,
-      respond: (ok, payload, error) => {
-        result = {
-          ok,
-          payload:
-            payload === undefined
-              ? undefined
-              : coercePayload
-                ? coercePayload(payload)
-                : (payload as TPayload),
-          error,
-        };
-      },
-      context: directContext as never,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    )(
+      bindInProcessRequestMutationAuthority(
+        {
+          req: { type: "req", id: method, method, params },
+          params,
+          respond: (ok, payload, error) => {
+            result = {
+              ok,
+              payload:
+                payload === undefined
+                  ? undefined
+                  : coercePayload
+                    ? coercePayload(payload)
+                    : (payload as TPayload),
+              error,
+            };
+          },
+          context: directContext as never,
+          client: null,
+          isWebchatConnect: () => false,
+        },
+        undefined,
+        undefined,
+      ),
+    );
     if (!result) {
       throw new Error(`${method} did not respond`);
     }
@@ -690,15 +697,12 @@ test("write-scoped operators manage chat organization but not admin session sett
           baseUrl: "https://openai.invalid/v1",
           agentRuntime: { id: "openclaw" },
           models: [
-            {
-              id: "gpt-test-a",
+            modelDefinition("gpt-test-a", {
               name: "A",
               reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 32768,
               maxTokens: 2048,
-            },
+            }),
           ],
         },
       },
@@ -950,81 +954,107 @@ test("chat.inject writes to the transcript owner after the requested row's facts
   }
 });
 
-test("archiving a session disables cron jobs bound to it", async () => {
-  await createSessionStoreDir();
-  const now = Date.now();
-  await writeSessionStore({
-    entries: {
-      main: { sessionId: "sess-main", updatedAt: now },
-      "agent:main:subagent:cronbound": {
-        sessionId: "sess-bound",
-        updatedAt: now,
-        spawnedBy: "agent:main:main",
+test.each([false, true])(
+  "archiving pauses named bindings and refuses the main session (global=%s)",
+  async (global) => {
+    const storePath = global
+      ? (await createSelectedGlobalSessionStore()).mainStorePath
+      : (await createSessionStoreDir()).storePath;
+    const key = global ? "global" : "agent:main:subagent:cronbound";
+    const now = Date.now();
+    await writeSessionStore({
+      storePath,
+      agentId: "main",
+      entries: {
+        ...(global ? {} : { main: { sessionId: "sess-main", updatedAt: now } }),
+        [key]: {
+          sessionId: "sess-bound",
+          updatedAt: now,
+          ...(global ? {} : { spawnedBy: "agent:main:main" }),
+        },
       },
-    },
-  });
-  const jobs = [
-    { id: "bound", enabled: true, sessionTarget: "session:agent:main:subagent:cronbound" },
-    { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
-  ] as unknown as CronJob[];
-  const update = vi.fn(
-    async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
-      const current = jobs.find((candidate) => candidate.id === id);
-      if (!current) {
-        throw new Error(`cron job not found: ${id}`);
-      }
-      precondition(current, Date.now());
-      return current;
-    },
-  );
-  const cron = {
-    list: async () => jobs,
-    updateWithPrecondition: update,
-    getDefaultAgentId: () => "main",
-  };
+    });
+    const jobs = [
+      { id: "bound", agentId: "main", enabled: true, sessionTarget: `session:${key}` },
+      { id: "other-agent", agentId: "work", enabled: true, sessionTarget: "session:global" },
+      {
+        id: "qualified",
+        agentId: "main",
+        enabled: true,
+        sessionTarget: "session:agent:main:global",
+      },
+      { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
+    ] as unknown as CronJob[];
+    const update = vi.fn(
+      async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
+        const current = jobs.find((candidate) => candidate.id === id);
+        if (!current) {
+          throw new Error(`cron job not found: ${id}`);
+        }
+        precondition(current, Date.now());
+        return current;
+      },
+    );
+    const cron = {
+      list: async () => jobs,
+      updateWithPrecondition: update,
+      getDefaultAgentId: () => "main",
+    };
 
-  const archived = await directSessionHandlerReq(
-    "sessions.patch",
-    {
-      key: "agent:main:subagent:cronbound",
-      archived: true,
-      expectedSessionId: "sess-bound",
-    },
-    { context: { cron } },
-  );
-  expect(archived.ok).toBe(true);
-  expect(update.mock.calls.map((call) => call.slice(0, 2))).toEqual([
-    ["bound", { enabled: false }],
-  ]);
+    const archived = await directSessionHandlerReq(
+      "sessions.patch",
+      {
+        key,
+        agentId: "main",
+        archived: true,
+        expectedSessionId: "sess-bound",
+      },
+      { context: { cron } },
+    );
+    if (global) {
+      expect(archived).toMatchObject({
+        ok: false,
+        error: { message: "Cannot archive an agent's main session." },
+      });
+      expect(update).not.toHaveBeenCalled();
+      return;
+    }
+    expect([archived.ok, archived.error]).toEqual([true, undefined]);
+    expect(update.mock.calls.map((call) => call.slice(0, 2))).toEqual([
+      ["bound", { enabled: false }],
+    ]);
 
-  // Restoring must not silently re-arm schedules that archive disabled.
-  update.mockClear();
-  const restored = await directSessionHandlerReq(
-    "sessions.patch",
-    {
-      key: "agent:main:subagent:cronbound",
-      archived: false,
-      expectedSessionId: "sess-bound",
-    },
-    { context: { cron } },
-  );
-  expect(restored.ok).toBe(true);
-  expect(update).not.toHaveBeenCalled();
+    // Restoring must not silently re-arm schedules that archive disabled.
+    update.mockClear();
+    const restored = await directSessionHandlerReq(
+      "sessions.patch",
+      {
+        key,
+        agentId: "main",
+        archived: false,
+        expectedSessionId: "sess-bound",
+      },
+      { context: { cron } },
+    );
+    expect(restored.ok).toBe(true);
+    expect(update).not.toHaveBeenCalled();
 
-  // Cron mutations are admin surface: a write-scoped operator can archive but
-  // must not cascade into disabling admin-managed schedules.
-  const writeScopedClient = {
-    connect: { scopes: ["operator.write"] },
-  } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
-  const writeScopedArchive = await directSessionHandlerReq(
-    "sessions.patch",
-    {
-      key: "agent:main:subagent:cronbound",
-      archived: true,
-      expectedSessionId: "sess-bound",
-    },
-    { context: { cron }, client: writeScopedClient },
-  );
-  expect(writeScopedArchive.ok).toBe(true);
-  expect(update).not.toHaveBeenCalled();
-});
+    // Cron mutations are admin surface: a write-scoped operator can archive but
+    // must not cascade into disabling admin-managed schedules.
+    const writeScopedClient = {
+      connect: { scopes: ["operator.write"] },
+    } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
+    const writeScopedArchive = await directSessionHandlerReq(
+      "sessions.patch",
+      {
+        key,
+        agentId: "main",
+        archived: true,
+        expectedSessionId: "sess-bound",
+      },
+      { context: { cron }, client: writeScopedClient },
+    );
+    expect(writeScopedArchive.ok).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+  },
+);

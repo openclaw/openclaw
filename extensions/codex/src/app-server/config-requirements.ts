@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseToml, type TomlTable } from "smol-toml";
 import type { CodexAppServerManagedApprovalPolicy, OpenClawExecMode } from "./config-contracts.js";
@@ -12,20 +13,16 @@ const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 export function readCodexRequirementsToml(params: {
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
-  requirementsPath?: string;
-  readRequirementsFile?: (path: string) => string | undefined;
   platform?: NodeJS.Platform;
 }): string | undefined {
   if (params.requirementsToml !== undefined) {
     return params.requirementsToml ?? undefined;
   }
-  const requirementsPath =
-    readNonEmptyString(params.requirementsPath) ??
-    resolveCodexRequirementsPath(params.env ?? process.env, params.platform ?? process.platform);
+  const requirementsPath = resolveCodexRequirementsPath(
+    params.env ?? process.env,
+    params.platform ?? process.platform,
+  );
   try {
-    if (params.readRequirementsFile) {
-      return params.readRequirementsFile(requirementsPath);
-    }
     return readFileSync(requirementsPath, "utf8");
   } catch {
     return undefined;
@@ -101,9 +98,7 @@ function parseCodexRequirements(content: string): TomlTable | undefined {
 }
 
 function readRequirementsStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
-    ? value
-    : undefined;
+  return isStringArray(value) ? value : undefined;
 }
 
 function normalizeRequirementsSandboxMode(value: string): CodexSandboxMode | undefined {

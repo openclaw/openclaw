@@ -29,6 +29,7 @@ export type PanelHostedTab = {
   statusLabel?: string | null;
   badge?: string | null;
   className?: string;
+  closeDisabled?: boolean;
 };
 
 export type PanelHostedTabsElement = HTMLElement & {

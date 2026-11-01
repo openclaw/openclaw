@@ -1,3 +1,4 @@
+import { ensureRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import { mergeMissing } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -5,16 +6,6 @@ type JsonRecord = Record<string, unknown>;
 
 const LEGACY_PATH = "models.bedrockDiscovery";
 const TARGET_PATH = "plugins.entries.amazon-bedrock.config.discovery";
-
-function ensureRecord(root: JsonRecord, key: string): JsonRecord {
-  const existing = root[key];
-  if (isRecord(existing)) {
-    return existing;
-  }
-  const next: JsonRecord = {};
-  root[key] = next;
-  return next;
-}
 
 function resolveLegacyBedrockDiscoveryConfig(raw: unknown): JsonRecord | undefined {
   if (!isRecord(raw)) {

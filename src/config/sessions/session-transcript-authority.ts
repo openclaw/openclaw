@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isSessionRowAssistantMessage } from "../../gateway/session-row-transcript-preview.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
@@ -37,17 +38,33 @@ const staged = resolveGlobalSingleton(
 );
 const prepared = resolveGlobalSingleton(
   Symbol.for("openclaw.transcriptAuthorityChanges"),
-  () => new WeakMap<object, SqliteCommittedFact<SessionTranscriptAuthority>>(),
+  () =>
+    new WeakMap<
+      object,
+      { fact: SqliteCommittedFact<SessionTranscriptAuthority>; publication: { final: boolean } }
+    >(),
 );
 
 export function readPreparedSessionTranscriptChange(change: SessionRowChange) {
-  return prepared.get(sessionRowChangeSource(change));
+  return prepared.get(sessionRowChangeSource(change))?.fact;
+}
+
+/** Only the final committed same-session postimage can release a projection waiter. */
+export function readFinalSessionTranscriptProjection(change: SessionRowChange) {
+  const entry = prepared.get(sessionRowChangeSource(change));
+  return !change.factsInvalidated &&
+    entry?.publication.final &&
+    entry.fact.kind === "postimage" &&
+    entry.fact.value.projectionReady
+    ? entry.fact.value
+    : undefined;
 }
 
 function receiptChanges(
   receipt: SessionTranscriptAuthorityReceipt,
   agentId: string | undefined,
   storePath: string,
+  publication = { final: true },
 ): SessionRowChange[] {
   return [...receipt.facts].map(([sessionKey, fact]) => {
     const change = sessionChanges.markFactsOnly(
@@ -60,7 +77,7 @@ function receiptChanges(
       },
       fact.kind === "unchanged" ? undefined : advanceSessionTranscriptUpdateVersion,
     );
-    prepared.set(change, fact);
+    prepared.set(change, { fact, publication });
     preparedSharingChanges.changes.set(change, {
       kind: "source",
       databaseIdentity: receipt.source.identity,
@@ -103,12 +120,17 @@ function publishTranscriptFact(
       staged.delete(database.db);
     }
   };
-  stageSqliteTransactionState(database.db, {
+  const publication = { final: false };
+  const stagedPublication = stageSqliteTransactionState(database.db, {
     stage() {
       staged.set(database.db, records);
       records.set(sessionKey, receipt);
     },
-    commit: remove,
+    commit() {
+      // Later same-session writes replace this receipt before any commit callback runs.
+      publication.final = records.get(sessionKey) === receipt;
+      remove();
+    },
     rollback() {
       if (previous) {
         records.set(sessionKey, previous);
@@ -117,7 +139,11 @@ function publishTranscriptFact(
       }
     },
   });
-  sessionChanges.emitBatch(receiptChanges(receipt, database.agentId, database.path), database.db);
+  publication.final = !stagedPublication;
+  sessionChanges.emitBatch(
+    receiptChanges(receipt, database.agentId, database.path, publication),
+    database.db,
+  );
 }
 
 /** Capture in the existing mutation statement, before COMMIT or savepoint release. */
@@ -125,9 +151,26 @@ export function publishSessionTranscriptAuthority(
   database: OpenClawAgentDatabase,
   context: SessionTranscriptAuthority,
 ): void {
+  let preparedContext = context;
+  if (context.lastAssistantMessage === "unchanged") {
+    const previous = staged
+      .get(database.db)
+      ?.get(context.sessionKey)
+      ?.facts.get(context.sessionKey);
+    // A turn can append several messages before its one committed receipt is published.
+    if (previous?.kind === "postimage" && previous.value.sessionId === context.sessionId) {
+      preparedContext = {
+        ...context,
+        lastAssistantMessage:
+          previous.value.lastAssistantMessage === undefined
+            ? "unknown"
+            : previous.value.lastAssistantMessage,
+      };
+    }
+  }
   publishTranscriptFact(database, context.sessionKey, {
     kind: "postimage",
-    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, context)),
+    value: Object.freeze(prepareSessionActorTranscriptAuthority(database, preparedContext)),
   });
 }
 
@@ -242,9 +285,15 @@ function isTranscriptReceipt(value: unknown): value is SessionTranscriptAuthorit
       (row.leafEventId !== null && typeof row.leafEventId !== "string") ||
       ![row.rawSeq, row.updatedAt, row.indexedSeq, row.activeMessageCount].every(nullableNumber) ||
       (row.needsRebuild !== null && row.needsRebuild !== 0 && row.needsRebuild !== 1) ||
+      (row.projectionReady !== undefined && row.projectionReady !== true) ||
       (row.lastMessagePreview !== undefined &&
         row.lastMessagePreview !== null &&
         typeof row.lastMessagePreview !== "string") ||
+      (row.lastAssistantMessage !== undefined &&
+        row.lastAssistantMessage !== null &&
+        row.lastAssistantMessage !== "unknown" &&
+        row.lastAssistantMessage !== "unchanged" &&
+        !isSessionRowAssistantMessage(row.lastAssistantMessage)) ||
       (row.terminalModel !== undefined &&
         row.terminalModel !== null &&
         !isSessionTranscriptTerminalModel(row.terminalModel))

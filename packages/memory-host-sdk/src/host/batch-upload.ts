@@ -1,7 +1,7 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { buildBatchHeaders, type BatchHttpClientConfig } from "./batch-utils.js";
 import { resolveEmbeddingEndpointUrl } from "./embeddings-remote-client.js";
 import { formatErrorMessage } from "./error-utils.js";
-import { hashText } from "./hash.js";
 import { createProviderHttpError } from "./openclaw-runtime-network.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 import {
@@ -25,7 +25,7 @@ export async function uploadBatchJsonlFile(params: {
   form.append(
     "file",
     new Blob([jsonl], { type: "application/jsonl" }),
-    `memory-embeddings.${hashText(String(Date.now()))}.jsonl`,
+    `memory-embeddings.${sha256Hex(String(Date.now()))}.jsonl`,
   );
 
   const filePayload = await withRemoteHttpResponse({

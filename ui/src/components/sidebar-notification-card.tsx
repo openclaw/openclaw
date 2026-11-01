@@ -2,23 +2,26 @@ import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { RelativeTime } from "./relative-time.tsx";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 
 export function SidebarDismissButton(props: {
   itemLabel: string;
   onDismiss?: () => void;
   dismissing?: boolean;
+  disabled?: boolean;
 }) {
   const label = () => t("attention.dismissItem", { item: props.itemLabel });
   return (
     <Show when={props.onDismiss}>
       <button
+        ref={sidebarAttentionFocusRef()}
         type="button"
         class="sidebar-issues-panel__dismiss"
         aria-label={label()}
         aria-busy={props.dismissing ? "true" : undefined}
         title={props.dismissing ? t("attention.mentions.dismissing") : label()}
-        disabled={props.dismissing}
+        disabled={props.disabled || props.dismissing}
         onClick={(event: Event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -39,6 +42,7 @@ export function SidebarNotificationCard(props: {
   severity?: "error" | "warning";
   critical?: boolean;
   dismissing?: boolean;
+  dismissDisabled?: boolean;
   onDismiss?: () => void;
   onToggle?: (open: boolean) => void;
   body: JSX.Element;
@@ -52,7 +56,11 @@ export function SidebarNotificationCard(props: {
       ]}
       onToggle={(event) => props.onToggle?.(event.currentTarget.open)}
     >
-      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
+      <summary
+        ref={sidebarAttentionFocusRef("row")}
+        class="sidebar-issues-panel__summary"
+        data-issue-row-focus
+      >
         <span
           class={[
             "sidebar-issues-panel__icon",
@@ -83,6 +91,7 @@ export function SidebarNotificationCard(props: {
           itemLabel={props.title}
           onDismiss={props.onDismiss}
           dismissing={props.dismissing}
+          disabled={props.dismissDisabled}
         />
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">
           <Icon name="chevronRight" />

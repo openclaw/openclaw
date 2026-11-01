@@ -1,7 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCreateOutcome, SessionCreateParams } from "../../lib/sessions/create.ts";
-import type { NewSessionCapabilities } from "./capability-controller.ts";
+import type { NewSessionCapabilities } from "./capabilities.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import type { RetainedNewSessionDraft } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";

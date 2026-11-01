@@ -38,7 +38,9 @@ type Workflow = {
 const source = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
 const workflow = parse(source) as Workflow;
 const jobs = workflow.jobs ?? {};
-const materializerSource = readFileSync("scripts/materialize-clawhub-cli.sh", "utf8");
+const materializerSource =
+  readFileSync("scripts/materialize-clawhub-cli.sh", "utf8") +
+  readFileSync("scripts/lib/materialize-pinned-cli.sh", "utf8");
 const clawhubCliPackage = JSON.parse(
   readFileSync(".github/release/clawhub-cli/package.json", "utf8"),
 ) as { dependencies?: Record<string, string> };
@@ -373,8 +375,8 @@ describe("Plugin ClawHub New workflow", () => {
     const lockSha256 = createHash("sha256").update(clawhubCliLockBytes).digest("hex");
     expect(materializerSource).toContain(`expected_lock_sha256="${lockSha256}"`);
     expect(materializerSource).toContain("lock_sha256=");
-    expect(materializerSource).toContain("integrity=${clawhub_integrity}");
-    expect(materializerSource).toContain("cli=${clawhub_cli}");
+    expect(materializerSource).toContain("integrity=${cli_integrity}");
+    expect(materializerSource).toContain("cli=${cli}");
     expect(source).not.toContain("npm exec");
     expect(source).not.toMatch(/\bnpm\s+install\b/u);
     expect(source).not.toContain("CLAWHUB_CLI_PACKAGE");

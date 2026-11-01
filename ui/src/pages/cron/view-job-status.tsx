@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -8,7 +8,7 @@ import {
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { runStatusLabel } from "./view-runs.tsx";
@@ -25,8 +25,24 @@ export function describeJobSchedule(job: CronJob): string {
     : `${t("cron.events.label")}: ${source}`;
 }
 
+/** Runtime facts, not the authored occurrence, decide what happens next. */
+export function describeJobNextRun(job: CronJob, absolute = false): string {
+  if (isCronJobRunning(job)) {
+    return t("cron.runs.runStatusRunning");
+  }
+  if (!job.enabled) {
+    return t("cron.list.paused");
+  }
+  const next = job.state?.nextRunAtMs;
+  return next === undefined
+    ? t("cron.form.noNextRun")
+    : absolute
+      ? t("cron.form.nextRunAt", { at: formatMs(next) })
+      : t("cron.jobState.nextRelative", { at: formatRelativeTimestamp(next) });
+}
+
 export function JobStateIndicator(props: { job: CronJob }) {
-  const presentation = createMemo((): [string, IconName | null, string] => {
+  const presentation = (): [string, IconName | null, string] => {
     const autoDisabled = props.job.state?.autoDisabled;
     return isCronJobRunning(props.job)
       ? ["running", "loader", t("cron.runs.runStatusRunning")]
@@ -37,7 +53,7 @@ export function JobStateIndicator(props: { job: CronJob }) {
           : !props.job.enabled
             ? ["paused", "pause", t("cron.list.paused")]
             : ["active", null, t("cron.detail.active")];
-  });
+  };
   return (
     <span
       class={["cron-table__state", `cron-table__state--${presentation()[0]}`]}
@@ -100,7 +116,7 @@ export function LastRunCell(props: { job: CronJob }) {
   const status = () => resolveCronJobLastRunStatus(props.job);
   const relative = () => {
     const time = props.job.state?.lastRunAtMs;
-    return typeof time === "number" && Number.isFinite(time) ? formatRelativeTimestamp(time) : null;
+    return time === undefined ? null : formatRelativeTimestamp(time);
   };
   return (
     <>

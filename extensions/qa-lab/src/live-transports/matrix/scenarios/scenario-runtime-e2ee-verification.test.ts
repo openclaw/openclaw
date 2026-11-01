@@ -70,11 +70,8 @@ describe("runMatrixQaE2eeStaleDeviceHygieneScenario", () => {
     expect(order).toEqual(["list", "delete"]);
     expect(driver.stop).not.toHaveBeenCalled();
     expect(driver.deleteOwnDevices).toHaveBeenCalledWith(["SECONDARY"]);
-    expect(result.artifacts).toMatchObject({
-      currentDeviceId: "DRIVER",
-      deletedDeviceIds: ["SECONDARY"],
-      remainingDeviceIds: ["DRIVER"],
-      secondaryDeviceId: "SECONDARY",
-    });
+    expect(result.details).toContain("current device: DRIVER");
+    expect(result.details).toContain("deleted device: SECONDARY");
+    expect(result.details).toContain("remaining devices: DRIVER");
   });
 });

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -137,9 +138,16 @@ export async function reconcileGatewayServiceDefinition(params: {
               .join(" "),
           );
         }
+        const preserveExecDelegation =
+          isUpdateOwnedGatewayServiceCommand() ||
+          isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
         keys =
           audit.definitionDrift
-            ?.filter((fact) => fact.kind === "outdated")
+            ?.filter(
+              (fact) =>
+                fact.kind === "outdated" &&
+                !(preserveExecDelegation && fact.key.startsWith("Service.Delegate")),
+            )
             .map((fact) => fact.key) ?? [];
       },
     }).catch((error: unknown) => {

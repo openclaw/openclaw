@@ -1,9 +1,19 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
-import { renderSidebarReorderMenu } from "./sidebar-reorder.tsx";
+
+// Only the header's trailing icon actions (new session, menus, filters) keep pure
+// click gestures; the label, toggle, and status surfaces drag the section like a
+// session row drags itself.
+const DRAG_EXEMPT_CONTROL = ".sidebar-session-group-actions";
+
+function startsOnHeaderAction(target: Element): boolean {
+  return target.closest(DRAG_EXEMPT_CONTROL) !== null;
+}
+
 export function renderSidebarSessionSectionHeader(params: {
   sectionId: string;
+  sectionHeaders: Map<string, HTMLElement>;
   content: JSX.Element;
   status?: {
     content: JSX.Element;
@@ -17,22 +27,35 @@ export function renderSidebarSessionSectionHeader(params: {
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
   onContextMenu?: JSX.EventHandler<HTMLDivElement, MouseEvent>;
-  reorder?: {
-    label: string;
-    onMove: (target: string, position: "before" | "after") => void | Promise<void>;
-  };
 }) {
   const draggable = createMemo(() => params.draggable !== false && !params.disabledReason);
+  let header!: HTMLElement;
+  onSettled(() => {
+    const sectionId = params.sectionId;
+    const sectionHeaders = params.sectionHeaders;
+    sectionHeaders.set(sectionId, header);
+    return () => {
+      if (sectionHeaders.get(sectionId) === header) {
+        sectionHeaders.delete(sectionId);
+      }
+    };
+  });
   return (
     <div
-      class={`sidebar-recent-sessions__head ${draggable() ? "sidebar-recent-sessions__head--draggable" : ""}`}
+      ref={(element) => {
+        header = element;
+      }}
+      class={[
+        "sidebar-recent-sessions__head",
+        draggable() && "sidebar-recent-sessions__head--draggable",
+      ]}
       draggable={draggable() ? "true" : "false"}
-      title={params.disabledReason ?? undefined}
+      title={params.disabledReason}
       onMouseDown={(event) => {
-        const header = event.currentTarget;
-        header.toggleAttribute(
+        const currentHeader = event.currentTarget;
+        currentHeader.toggleAttribute(
           "data-section-drag-blocked",
-          Boolean(event.target.closest("button, a")),
+          startsOnHeaderAction(event.target),
         );
       }}
       onMouseUp={(event) => {
@@ -43,11 +66,11 @@ export function renderSidebarSessionSectionHeader(params: {
           event.preventDefault();
           return;
         }
-        const header = event.currentTarget;
+        const currentHeader = event.currentTarget;
         const startedFromControl =
-          Boolean(event.target.closest("button, a")) ||
-          header.hasAttribute("data-section-drag-blocked");
-        header.removeAttribute("data-section-drag-blocked");
+          startsOnHeaderAction(event.target) ||
+          currentHeader.hasAttribute("data-section-drag-blocked");
+        currentHeader.removeAttribute("data-section-drag-blocked");
         if (startedFromControl) {
           event.preventDefault();
           return;
@@ -61,11 +84,9 @@ export function renderSidebarSessionSectionHeader(params: {
         event.currentTarget.removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
-      onContextMenu={params.onContextMenu ?? undefined}
+      onContextMenu={(event) => params.onContextMenu?.(event)}
     >
-      <span class="sidebar-session-group-drag-handle" aria-hidden="true" />
       {params.content}
-      {draggable() && params.reorder ? renderSidebarReorderMenu(params.reorder) : undefined}
       {params.status ? (
         <button
           type="button"
@@ -73,8 +94,8 @@ export function renderSidebarSessionSectionHeader(params: {
           tabindex="-1"
           aria-label={params.status.label}
           aria-expanded={params.status.expanded ? "true" : "false"}
-          title={params.status.title ?? undefined}
-          onClick={params.status.onToggle}
+          title={params.status.title}
+          onClick={() => params.status?.onToggle()}
         >
           {params.status.content}
         </button>

@@ -12,7 +12,7 @@ import {
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   buildReleaseModelConfigCommands,
-  managedGatewayRestartCommandTimeoutMs,
+  managedGatewayStartupCommandTimeoutMs,
 } from "./config.ts";
 import { waitForReleaseGateway, type GatewayReadinessParams } from "./gateway-readiness.ts";
 import { installedEntryPath } from "./install.ts";
@@ -82,7 +82,7 @@ export async function exerciseManagedGatewayLifecycle(
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-restart.log`,
-    timeoutMs: managedGatewayRestartCommandTimeoutMs(),
+    timeoutMs: managedGatewayStartupCommandTimeoutMs(),
   });
   await ensureManagedGatewayReady({
     lane: params.lane,
@@ -113,7 +113,7 @@ export async function exerciseManagedGatewayLifecycle(
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-start.log`,
-    timeoutMs: 2 * 60 * 1000,
+    timeoutMs: managedGatewayStartupCommandTimeoutMs(),
   });
   await ensureManagedGatewayReady({
     lane: params.lane,

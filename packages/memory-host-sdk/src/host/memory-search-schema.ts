@@ -45,3 +45,15 @@ export function memoryVectorSearchSchema(dimensions: number): SearchSchema {
     },
   };
 }
+
+/** Canonical standing-intent keywords have the same owner in live search and database ports. */
+export const memoryStandingIntentSearchSchema: SearchSchema = {
+  text: {
+    intents: {
+      table: "standing_intents",
+      alias: "intent",
+      fields: ["trigger_keywords"],
+      postgres: { identity: "intent_key" },
+    },
+  },
+};

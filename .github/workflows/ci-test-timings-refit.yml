@@ -24,6 +24,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Verify generated PR App permissions

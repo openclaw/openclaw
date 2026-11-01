@@ -1,16 +1,15 @@
 import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { App } from "@modelcontextprotocol/ext-apps";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ApplicationContext } from "../app/context.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { bindMcpAppResourceHandlers, OpenClawAppBridge } from "./mcp-app-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
-import { McpAppConfirm } from "./mcp-app-confirm.ts";
+import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
 import {
   buildMcpAppHostCapabilities,
   dispatchMcpAppMessage,
@@ -19,10 +18,54 @@ import {
   type McpAppFileOpenEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import type { McpAppViewElement } from "./mcp-app-view-controller.ts";
-import { McpAppView } from "./mcp-app-view.tsx";
+import { mockMcpSandboxProxyReady, mountView } from "./mcp-app-view.test-support.ts";
 
 const transportMocks = vi.hoisted(() => ({ next: undefined as (() => unknown) | undefined }));
+const recordSchema = z.record(z.string(), z.unknown());
+const hostInfo = { name: "OpenClaw", version: "test" };
+const requestRecord = (app: App, method: string, params: Record<string, unknown>) =>
+  app.request({ method, params }, recordSchema);
+type ResourceOwner = Parameters<typeof bindMcpAppResourceHandlers>[0];
+
+function bindResources(
+  owner: Pick<ResourceOwner, "bridge" | "request" | "iframe"> & Partial<ResourceOwner>,
+) {
+  return bindMcpAppResourceHandlers({
+    sessionKey: "one",
+    viewId: "app",
+    releaseResourceSubscription: async () => ({}),
+    confirmOpenFile: async () => false,
+    isDisposed: () => false,
+    addCleanup: () => {},
+    dispatchEvent: (event) => owner.iframe.dispatchEvent(event),
+    onModelContextChanged: () => {},
+    onConversationInputRequested: () => {},
+    subscribeEvents: () => undefined,
+    ...owner,
+  });
+}
+
+function createBridgePair(
+  capabilities: ReturnType<typeof buildMcpAppHostCapabilities>,
+  options?: ConstructorParameters<typeof OpenClawAppBridge>[3],
+  appCapabilities: ConstructorParameters<typeof App>[1] = {},
+) {
+  const [hostTransport, appTransport] = InMemoryTransport.createLinkedPair();
+  const bridge = new OpenClawAppBridge(null, hostInfo, capabilities, options);
+  const app = new App({ name: "proof", version: "1" }, appCapabilities, { autoResize: false });
+  return {
+    bridge,
+    app,
+    connect: async () => {
+      await bridge.connect(hostTransport);
+      await app.connect(appTransport);
+    },
+    close: async () => {
+      await app.close();
+      await bridge.close();
+    },
+  };
+}
 
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
@@ -42,35 +85,18 @@ afterEach(() => {
 });
 
 it("confirms file paths in the pane before requesting or opening a file", async () => {
-  const [hostTransport, appTransport] = InMemoryTransport.createLinkedPair();
-  const bridge = new OpenClawAppBridge(
-    null,
-    { name: "OpenClaw", version: "test" },
+  const { bridge, app, connect, close } = createBridgePair(
     buildMcpAppHostCapabilities(undefined, false, false, { openFiles: true }),
   );
-  const app = new App({ name: "file-proof", version: "1" }, {}, { autoResize: false });
   const root = document.createElement("div");
   const frame = document.createElement("iframe");
   document.body.append(root, frame);
   frame.checkVisibility = () => true;
   let disposed = false;
-  let prompted = createDeferred();
-  const [revision, setRevision] = createSignal(0);
-  const confirmation = new McpAppConfirm(() => {
-    setRevision((value) => value + 1);
-    flush();
-    prompted.resolve();
+  const confirmation = createMcpAppConfirm();
+  const mounted = mountSolid(() => createComponent(McpAppConfirmation, { confirmation }), {
+    container: root,
   });
-  const mounted = mountSolid(
-    () =>
-      createComponent(McpAppConfirmation, {
-        confirmation,
-        get revision() {
-          return revision();
-        },
-      }),
-    { container: root },
-  );
   const request = vi.fn(async () => ({ path: "/workspace/parts.txt", name: "parts.txt" }));
   const opened = vi.fn();
   root.addEventListener(MCP_APP_FILE_OPEN_EVENT, (event) => {
@@ -79,7 +105,7 @@ it("confirms file paths in the pane before requesting or opening a file", async 
     opened(detail);
     detail.respond(true);
   });
-  const owner = {
+  bindResources({
     bridge,
     request,
     sessionKey: "file-session",
@@ -95,39 +121,25 @@ it("confirms file paths in the pane before requesting or opening a file", async 
         isCurrent: () => !disposed,
       }),
     isDisposed: () => disposed,
-    addCleanup: vi.fn(),
     dispatchEvent: (event: Event) => root.dispatchEvent(event),
-    onModelContextChanged: vi.fn(),
-    onConversationInputRequested: vi.fn(),
-    subscribeEvents: () => undefined,
-  };
-  bindMcpAppResourceHandlers(owner);
+  });
   vi.spyOn(window, "confirm").mockReturnValue(false);
-  await bridge.connect(hostTransport);
-  await app.connect(appTransport);
-  const open = () =>
-    app.request(
-      { method: "openai/files/open", params: { path: "parts.txt" } },
-      z.record(z.string(), z.unknown()),
-    );
+  await connect();
+  const open = () => requestRecord(app, "openai/files/open", { path: "parts.txt" });
   try {
     for (const action of ["Cancel", "Open", "retire"] as const) {
       frame.focus();
-      prompted = createDeferred();
       const opening = open();
-      await Promise.race([prompted.promise, opening]);
-      const dialog = root.querySelector<HTMLElement>('[role="alertdialog"]');
-      expect(dialog).not.toBeNull();
-      expect(dialog!.textContent).toContain("Parts library");
-      expect(dialog!.querySelector('[title="parts.txt"]')).not.toBeNull();
+      await waitForSolid(() => expect(mounted.getByRole("alertdialog")).toBeDefined());
+      const dialog = mounted.getByRole("alertdialog");
+      expect(dialog.textContent).toContain("Parts library");
+      expect(dialog.querySelector('[title="parts.txt"]')).not.toBeNull();
       expect(request).toHaveBeenCalledTimes(action === "retire" ? 1 : 0);
       if (action === "retire") {
         disposed = true;
         confirmation.cancel();
       } else {
-        Array.from(dialog!.querySelectorAll("button"))
-          .find((button) => button.textContent?.trim() === action)!
-          .click();
+        mounted.getByRole("button", { name: action }).click();
       }
       expect(await opening).toEqual(action === "Open" ? {} : { isError: true });
       expect(opened).toHaveBeenCalledTimes(action === "Cancel" ? 0 : 1);
@@ -143,17 +155,13 @@ it("confirms file paths in the pane before requesting or opening a file", async 
     expect(window.confirm).not.toHaveBeenCalled();
   } finally {
     confirmation.cancel();
-    await app.close();
-    await bridge.close();
+    await close();
     mounted.unmount();
   }
 });
 
 it("negotiates extension capabilities and preserves rich request metadata over the actual AppBridge transport", async () => {
-  const [hostTransport, appTransport] = InMemoryTransport.createLinkedPair();
-  const bridge = new OpenClawAppBridge(
-    null,
-    { name: "OpenClaw", version: "test" },
+  const { bridge, app, connect, close } = createBridgePair(
     buildMcpAppHostCapabilities(undefined, true, true, {
       richModelContext: true,
       fileResources: true,
@@ -166,6 +174,7 @@ it("negotiates extension capabilities and preserves rich request metadata over t
         "openai/deepLink": { url: "/parts?q=bolt" },
       },
     },
+    { availableDisplayModes: ["inline", "fullscreen"] },
   );
   const frame = document.createElement("iframe");
   document.body.append(frame);
@@ -189,16 +198,11 @@ it("negotiates extension capabilities and preserves rich request metadata over t
   bridge.setUpdateModelContextHandler(context);
   const writes = vi.fn(async (_params: unknown) => ({ outcome: "saved", etag: "saved-1" }));
   bridge.setHostRequestHandler("openai/resources/write", writes);
-  const app = new App(
-    { name: "spec-proof", version: "1" },
-    { availableDisplayModes: ["inline", "fullscreen"] },
-    { autoResize: false },
-  );
-  await bridge.connect(hostTransport);
-  await app.connect(appTransport);
+  await connect();
   // The installed stable SDK helper omits extension metadata; exercise the documented wire method.
-  const sendMessage = (params: Parameters<typeof dispatchMcpAppMessage>[2]) =>
-    app.request({ method: "ui/message", params }, z.object({ isError: z.boolean().optional() }));
+  type Message = Parameters<typeof dispatchMcpAppMessage>[2];
+  const sendMessage = (content: Message["content"], _meta?: Message["_meta"]) =>
+    requestRecord(app, "ui/message", { role: "user", content, _meta });
   try {
     expect(app.getHostCapabilities()?.experimental).toMatchObject({
       "openai/modelContext": {},
@@ -219,10 +223,7 @@ it("negotiates extension capabilities and preserves rich request metadata over t
       { type: "resource", resource: { uri: "parts://bolt", blob: 1 } },
     ]) {
       await expect(
-        app.request(
-          { method: "ui/message", params: { role: "user", content: [block] } },
-          z.object({ isError: z.boolean().optional() }),
-        ),
+        requestRecord(app, "ui/message", { role: "user", content: [block] }),
       ).rejects.toThrow("Invalid params for ui/message");
     }
     expect(received).not.toHaveBeenCalled();
@@ -237,55 +238,34 @@ it("negotiates extension capabilities and preserves rich request metadata over t
       },
       { type: "image" as const, data: "AA==", mimeType: "image/png" },
     ];
-    const result = await app.updateModelContext({ content, structuredContent: { selected: 1 } });
+    const selection = { content, structuredContent: { selected: 1 } };
+    const result = await app.updateModelContext(selection);
     expect(result).toMatchObject({ _meta: { "openai/modelContext": { updateId: "update-1" } } });
-    expect(context.mock.calls[0]?.[0]).toMatchObject({
-      content,
-      structuredContent: { selected: 1 },
-    });
-    await sendMessage({
-      role: "user",
-      content,
-      _meta: { "openai/message": { target: "new" } },
-    });
+    expect(context.mock.calls[0]?.[0]).toMatchObject(selection);
+    await sendMessage(content, { "openai/message": { target: "new" } });
     expect(received).toHaveBeenCalledWith(expect.objectContaining({ target: "new", content }));
     for (const options of [null, [], 1, { target: "other" }, { send: false }]) {
       expect(
-        await sendMessage({
-          role: "user",
-          content: [{ type: "text", text: "invalid options" }],
-          _meta: { "openai/message": options },
+        await sendMessage([{ type: "text", text: "invalid options" }], {
+          "openai/message": options,
         }),
       ).toEqual({ isError: true });
     }
     for (const command of ["/reset", "!pwd"]) {
       expect(
-        await sendMessage({
-          role: "user",
-          content: [
-            { type: "text", text: "Harmless attachment", _meta: { "openai/title": "Note" } },
-            { type: "text", text: "  " + command },
-          ],
-        }),
+        await sendMessage([
+          { type: "text", text: "Harmless attachment", _meta: { "openai/title": "Note" } },
+          { type: "text", text: "  " + command },
+        ]),
       ).toEqual({ isError: true });
     }
     expect(received).toHaveBeenCalledTimes(1);
-    const saved = await app.request(
-      {
-        method: "openai/resources/write",
-        params: { uri: "openclaw-file://one", blob: "AA==", ifMatch: "v1" },
-      },
-      z.object({ outcome: z.literal("saved"), etag: z.string() }),
-    );
+    const write = { uri: "openclaw-file://one", blob: "AA==", ifMatch: "v1" };
+    const saved = await requestRecord(app, "openai/resources/write", write);
     expect(saved).toEqual({ outcome: "saved", etag: "saved-1" });
-    expect(writes.mock.calls[0]?.[0]).toEqual({
-      uri: "openclaw-file://one",
-      blob: "AA==",
-      ifMatch: "v1",
-    });
+    expect(writes.mock.calls[0]?.[0]).toEqual(write);
   } finally {
-    await app.close();
-    await bridge.close();
+    await close();
   }
 });
 
@@ -306,45 +286,20 @@ it("routes vendor links through the mounted view and AppBridge only for its focu
       toolResult: { content: [] },
     })),
   };
-  const hello = { type: "hello-ok" };
+  const hello = gatewayHelloForMethods(["mcp.app.view"]);
   const navigate = vi.fn();
   const gateway = {
     snapshot: { client, phase: "connected", hello },
     connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
     connectionRevision: 1,
     subscribe: () => () => {},
+    subscribeEvents: () => () => {},
   };
-  const provider = createSolidApplicationContextProvider({
-    gateway,
-    navigate,
-    theme: { subscribe: () => () => {} },
-  } as unknown as ApplicationContext);
-  vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
-  const frameSource = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src")!;
-  vi.spyOn(HTMLIFrameElement.prototype, "src", "set").mockImplementation(function (
-    this: HTMLIFrameElement,
-    value,
-  ) {
-    frameSource.set!.call(this, value);
-    queueMicrotask(() =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: window,
-          data: { method: "ui/notifications/sandbox-proxy-ready" },
-        }),
-      ),
-    );
-  });
-  const mounted = mountSolid(
-    () =>
-      createComponent(McpAppView, {
-        sessionKey: "agent:main:one",
-        agentId: "main",
-        viewId: "current-view",
-      }),
-    { wrapper: provider.wrapper },
+  mockMcpSandboxProxyReady();
+  const { view, unmount } = mountView(
+    { sessionKey: "agent:main:one", agentId: "main", viewId: "current-view" },
+    { gateway, navigate, theme: { subscribe: () => () => {} } },
   );
-  const view = mounted.container.querySelector<McpAppViewElement>("mcp-app-view")!;
   await transportReady.promise;
   await app.connect(appTransport);
   await waitForSolid(() => expect(view.querySelector("iframe")).not.toBeNull());
@@ -395,24 +350,20 @@ it("routes vendor links through the mounted view and AppBridge only for its focu
     gateway.connectionRevision = 2;
     await refused();
     gateway.connectionRevision = 1;
-    gateway.snapshot.hello = { type: "hello-ok" };
+    gateway.snapshot.hello = { ...hello, auth: { role: "operator", scopes: [] } };
     await refused();
     gateway.snapshot.hello = hello;
   } finally {
     await view.teardown();
-    mounted.unmount();
+    unmount();
     await app.close();
   }
 });
 
 it("forwards resource metadata and keeps subscriptions with the extracted bridge lifetime", async () => {
-  const [hostTransport, appTransport] = InMemoryTransport.createLinkedPair();
-  const bridge = new OpenClawAppBridge(
-    null,
-    { name: "OpenClaw", version: "test" },
+  const { bridge, app, connect, close } = createBridgePair(
     buildMcpAppHostCapabilities(undefined, true, false, { fileResources: true }),
   );
-  const app = new App({ name: "resources-proof", version: "1" }, {}, { autoResize: false });
   const frame = document.createElement("iframe");
   document.body.append(frame);
   let disposed = false;
@@ -435,21 +386,16 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
       return {};
     },
   );
-  const start = bindMcpAppResourceHandlers({
+  const notifications = bindResources({
     bridge,
     request,
-    sessionKey: "one",
-    viewId: "app",
+    releaseResourceSubscription: (uri) => request("mcp.app.unsubscribeResource", { uri }),
     iframe: frame,
     fileResourcesSupported: true,
-    confirmOpenFile: vi.fn(async () => false),
     isDisposed: () => disposed,
     addCleanup: (cleanup) => {
       cleanups.add(cleanup);
     },
-    dispatchEvent: (event) => frame.dispatchEvent(event),
-    onModelContextChanged: vi.fn(),
-    onConversationInputRequested: vi.fn(),
     subscribeEvents: (listener) => {
       listeners.add(listener);
       return () => {
@@ -463,51 +409,52 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
     { params: z.object({ uri: z.string() }) },
     () => {},
   );
-  await bridge.connect(hostTransport);
-  await app.connect(appTransport);
-  start();
+  await connect();
+  notifications.start();
   const emit = (viewId: string, uri: string) => {
     for (const listener of listeners) {
       listener({ type: "event", event: "mcp.app.resourceUpdated", payload: { viewId, uri } });
     }
   };
-  const rpc = (method: string, uri: string) =>
-    app.request({ method, params: { uri } }, z.record(z.string(), z.unknown()));
+  const rpc = (method: string, uri: string) => requestRecord(app, method, { uri });
+  const one = "openclaw-file://one";
+  const two = "openclaw-file://two";
+  const lateUri = "openclaw-file://late";
   try {
-    const read = await app.request(
-      {
-        method: "resources/read",
-        params: { uri: "openclaw-file://one", _meta: { "openai/representation": "text" } },
-      },
-      z.record(z.string(), z.unknown()),
-    );
-    expect(read).toEqual({ contents: [{ uri: "openclaw-file://one", text: "representation" }] });
-    expect(request).toHaveBeenLastCalledWith("mcp.app.readResource", {
-      uri: "openclaw-file://one",
+    const read = await requestRecord(app, "resources/read", {
+      uri: one,
       _meta: { "openai/representation": "text" },
     });
-    request.mockResolvedValueOnce({ contents: [{ uri: "openclaw-file://one", text: 42 }] });
-    await expect(rpc("resources/read", "openclaw-file://one")).rejects.toThrow(
-      "Invalid Gateway MCP result",
-    );
+    expect(read).toEqual({ contents: [{ uri: one, text: "representation" }] });
+    expect(request).toHaveBeenLastCalledWith("mcp.app.readResource", {
+      uri: one,
+      _meta: { "openai/representation": "text" },
+    });
+    request.mockResolvedValueOnce({ contents: [{ uri: one, text: 42 }] });
+    await expect(rpc("resources/read", one)).rejects.toThrow("Invalid Gateway MCP result");
     request.mockResolvedValueOnce(42);
     await expect(rpc("resources/subscribe", "openclaw-file://malformed")).rejects.toThrow();
     emit("app", "openclaw-file://malformed");
     expect(notification).not.toHaveBeenCalled();
-    await rpc("resources/subscribe", "openclaw-file://one");
-    emit("other", "openclaw-file://one");
+    await rpc("resources/subscribe", one);
+    emit("other", one);
     emit("app", "openclaw-file://unknown");
     expect(notification).not.toHaveBeenCalled();
-    emit("app", "openclaw-file://one");
+    emit("app", one);
     expect(notification).toHaveBeenCalledExactlyOnceWith({
       method: "notifications/resources/updated",
-      params: { uri: "openclaw-file://one" },
+      params: { uri: one },
     });
-    await rpc("resources/unsubscribe", "openclaw-file://one");
-    emit("app", "openclaw-file://one");
+    await rpc("resources/unsubscribe", one);
+    emit("app", one);
     expect(notification).toHaveBeenCalledTimes(1);
-    await rpc("resources/subscribe", "openclaw-file://two");
-    const late = rpc("resources/subscribe", "openclaw-file://late");
+    await rpc("resources/subscribe", two);
+    const beforeReconnect = request.mock.calls.length;
+    await notifications.reconnect();
+    expect(request.mock.calls.slice(beforeReconnect)).toEqual([
+      ["mcp.app.subscribeResource", { uri: two }],
+    ]);
+    const late = rpc("resources/subscribe", lateUri);
     await subscriptionEntered.promise;
     disposed = true;
     for (const cleanup of cleanups) {
@@ -516,12 +463,12 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
     cleanups.clear();
     expect(listeners.size).toBe(0);
     expect(request).toHaveBeenCalledWith("mcp.app.unsubscribeResource", {
-      uri: "openclaw-file://two",
+      uri: two,
     });
     subscriptionResult.resolve({});
     await late;
     expect(request).toHaveBeenLastCalledWith("mcp.app.unsubscribeResource", {
-      uri: "openclaw-file://late",
+      uri: lateUri,
     });
     expect(notification).toHaveBeenCalledTimes(1);
   } finally {
@@ -529,7 +476,6 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
     for (const cleanup of cleanups) {
       cleanup();
     }
-    await app.close();
-    await bridge.close();
+    await close();
   }
 });

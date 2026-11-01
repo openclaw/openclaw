@@ -1,18 +1,24 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../i18n/locales/en-session-placement.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../lib/session-owner.ts";
 import { customSnoozeStorageKey, readCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import type { SessionCommunicationMenuAction } from "./session-communication-options.ts";
-import { createSessionMenuSettings } from "./session-menu-settings.ts";
+import {
+  createPersonalSessionGroupActions,
+  personalSessionGroupCandidates,
+  personalSessionGroupCandidate,
+} from "./personal-session-group-actions.ts";
+import {
+  createSessionMenuSettings,
+  type SessionCommunicationMenuAction,
+} from "./session-menu-settings.ts";
 import { createSessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
 
-registerSessionOrganizationEnglish();
 registerSessionPlacementEnglish();
 
 export type SessionMenuData = {
@@ -73,21 +79,6 @@ export type SessionManagementAction =
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
-export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
-  label: "",
-  sessionId: null,
-  pinned: false,
-  unread: false,
-  archived: false,
-  snoozedUntil: null,
-  category: null,
-  icon: null,
-  color: null,
-  categoryClearReturnsToGroups: false,
-};
-
-type SessionMenuActionsHost = HTMLElement & { readonly updateComplete: Promise<boolean> };
-
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
   session: SessionMenuData;
@@ -113,7 +104,34 @@ export type SessionMenuActionsState = {
 export class SessionMenuActions {
   private readonly context = useOptionalApplication();
   private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
-  readonly ownerMenu = createSessionOwnerMenu();
+  private readonly navigation = this.context
+    ? projectOwner(this.context.navigation, (owner) => owner.snapshot)
+    : undefined;
+  private readonly sessions = this.context
+    ? projectOwner(this.context.sessions, (owner) =>
+        owner.canonicalListReady ? personalSessionGroupCandidates(this.context!) : [],
+      )
+    : undefined;
+  private readonly collections = this.context
+    ? createPersonalSessionGroupActions(this.context)
+    : undefined;
+  get personalGroups() {
+    return this.navigation?.read().personalSessionGroups ?? [];
+  }
+  get collectionTarget() {
+    const state = this.readState();
+    const described = this.advanced.row();
+    const row = described
+      ? personalSessionGroupCandidate(described)
+      : this.sessions?.read().find((candidate) => candidate.key === state.session.target?.key);
+    return state.selectionCount === 1 &&
+      !state.session.archived &&
+      state.session.pinnable !== false &&
+      row?.pinnable &&
+      !row.archived
+      ? row
+      : undefined;
+  }
   readonly advanced;
   openCustomSnooze?: () => void;
   customSnoozeKeydown?: (event: KeyboardEvent) => boolean;
@@ -124,10 +142,11 @@ export class SessionMenuActions {
   }
 
   constructor(
-    private readonly host: SessionMenuActionsHost,
+    readonly focusCurrentView: () => void,
     private readonly readState: () => SessionMenuActionsState,
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
+    readonly ownerMenu = createSessionOwnerMenu(),
   ) {
     this.advanced = createSessionMenuSettings({
       context: () => {
@@ -235,6 +254,23 @@ export class SessionMenuActions {
   }
 
   handleSelect(value: string): boolean {
+    if (value.startsWith("personal-collection:")) {
+      const target = this.collectionTarget;
+      if (!this.readState().disabled && target && this.collections) {
+        const id = value.slice("personal-collection:".length);
+        if (id === "new") {
+          void this.collections.edit(
+            undefined,
+            target.key,
+            this.readState().session.target?.agentId,
+          );
+        } else {
+          void this.collections.add(id, target.key, this.readState().session.target?.agentId);
+        }
+        this.onClose();
+      }
+      return true;
+    }
     if (this.advanced.handleSelect(value)) {
       return true;
     }
@@ -293,15 +329,6 @@ export class SessionMenuActions {
       return true;
     }
     return false;
-  }
-
-  focusCurrentView(): void {
-    void this.host.updateComplete.then(() => {
-      const first =
-        this.host.querySelector<HTMLElement>(".session-menu__appearance button:not(:disabled)") ??
-        this.host.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])');
-      first?.focus();
-    });
   }
 
   handleKeydown(event: KeyboardEvent, appearancePicker: { showIconGrid: () => void }): boolean {

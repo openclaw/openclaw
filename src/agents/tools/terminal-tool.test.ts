@@ -107,6 +107,37 @@ describe("terminal tool", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it.each([
+    ["\u001b[32mok\u001b[0m done\u001b[2K", "ok done"],
+    ["\u009b31mred\u009b0m", "red"],
+    ["", ""],
+    ["\r", ""],
+    ["\rhello", "hello"],
+    ["hello\r", "hello"],
+    ["hello\r\r", ""],
+    ["hello\r\r\r", ""],
+    ["hello\rworld\r", "world"],
+    ["10%\r20%\r100%\ndone", "100%\ndone"],
+    ["hello\r\nworld\r\n", "hello\nworld\n"],
+    ["hello\r\r\nworld", "\nworld"],
+    ["a\u0007b\tc", "ab\tc"],
+    [
+      `a\u007f${Array.from({ length: 0x20 }, (_, offset) => String.fromCharCode(0x80 + offset)).join("")}\u00a0b\tc`,
+      "a\u00a0b\tc",
+    ],
+    ["\u001b]0;title\u0007prompt$ ", "prompt$ "],
+    ["\u009d0;title\u009cprompt$ ", "prompt$ "],
+  ])("reads rendered terminal buffer %j as %j", async (raw, expected) => {
+    const { backend, manager, sessionId } = await openAgentTerminal();
+    try {
+      backend.emitData(raw);
+      const result = await makeTool(manager).execute("read", { action: "read", sessionId });
+      expect(result.details).toEqual({ sessionId, text: expected });
+    } finally {
+      manager.closeAgent(agentOwner, sessionId);
+    }
+  });
+
   it("exposes existing-session controls but never shell creation behind the owner-only gate", () => {
     const tool = createTerminalTool();
 
@@ -287,7 +318,7 @@ describe("terminal tool", () => {
         { action: "close", sessionId },
       ]) {
         await expect(tool.execute(params.action, params)).rejects.toThrow(
-          "Terminal session unavailable. Use action=list to find a shared terminal or ask the operator to open one in this chat.",
+          "Terminal session unavailable. Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.",
         );
       }
     }

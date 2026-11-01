@@ -85,21 +85,15 @@ export async function loadOverviewForOperation(
   return await loadSystemAgentOverview();
 }
 
-export async function resolveChannelSetupState(deps: SystemAgentCommandDeps | undefined) {
-  const listPlugins =
-    deps?.listChannelSetupPlugins ??
-    (await import("../channels/plugins/setup-registry.js")).listChannelSetupPlugins;
-  const resolveEntries =
-    deps?.resolveChannelSetupEntries ??
-    (await import("../commands/channel-setup/discovery.js")).resolveChannelSetupEntries;
-  const isConfigured =
-    deps?.isChannelConfigured ??
-    (await import("../config/channel-configured-shared.js")).isStaticallyChannelConfigured;
-  const { shouldShowChannelInSetup } = await import("../commands/channel-setup/discovery.js");
+export async function resolveChannelSetupState() {
+  const { listChannelSetupPlugins } = await import("../channels/plugins/setup-registry.js");
+  const { resolveChannelSetupEntries, shouldShowChannelInSetup } =
+    await import("../commands/channel-setup/discovery.js");
+  const { isStaticallyChannelConfigured } = await import("../config/channel-configured-shared.js");
   const snapshot = await readConfigFileSnapshotLazy();
   const cfg = snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-  const installedPlugins = listPlugins();
-  const resolved = resolveEntries({ cfg, installedPlugins });
+  const installedPlugins = listChannelSetupPlugins();
+  const resolved = resolveChannelSetupEntries({ cfg, installedPlugins });
   return {
     cfg,
     installedPlugins,
@@ -109,7 +103,7 @@ export async function resolveChannelSetupState(deps: SystemAgentCommandDeps | un
       // to chat listings and channel info alike.
       entries: resolved.entries.filter((entry) => shouldShowChannelInSetup(entry.meta)),
     },
-    isConfigured,
+    isConfigured: isStaticallyChannelConfigured,
   };
 }
 
@@ -295,22 +289,15 @@ export async function runConfigSetOperation(params: {
   ctx: PersistentApplyContext;
 }): Promise<{ storeEntry?: string; storeProvider?: string }> {
   const { operation, ctx } = params;
-  const runConfigSet =
-    ctx.deps?.runConfigSet ??
-    (async (setOpts: Parameters<NonNullable<SystemAgentCommandDeps["runConfigSet"]>>[0]) => {
-      const { runConfigSet: importedRunConfigSet } = await import("../cli/config-cli.js");
-      await importedRunConfigSet({
-        ...setOpts,
-        runtime: createNoExitRuntime(ctx.runtime),
-        throwOnError: operation.kind === "config-set-ref" && operation.secret !== undefined,
-      });
-    });
+  const { runConfigSet } = await import("../cli/config-cli.js");
   const beforePersistentApply = ctx.assertPersistentApply
     ? { beforePersistentApply: ctx.assertPersistentApply }
     : {};
   if (operation.kind === "config-set" || operation.secret === undefined) {
     await ctx.commit(() =>
       runConfigSet({
+        runtime: createNoExitRuntime(ctx.runtime),
+        throwOnError: operation.kind === "config-set-ref" && operation.secret !== undefined,
         path: operation.path,
         ...(operation.kind === "config-set"
           ? { value: operation.value, cliOptions: {} }
@@ -360,6 +347,8 @@ export async function runConfigSetOperation(params: {
   );
   try {
     await runConfigSet({
+      runtime: createNoExitRuntime(ctx.runtime),
+      throwOnError: true,
       path: operation.path,
       cliOptions: { refProvider, refSource: "store", refId: storeEntry },
       ...beforePersistentApply,
@@ -402,10 +391,7 @@ export async function runConfigSetOperation(params: {
   return { storeEntry, storeProvider: refProvider };
 }
 
-async function verifyCurrentSetupInference(
-  runtime: RuntimeEnv,
-  deps?: SystemAgentCommandDeps,
-): Promise<{
+async function verifyCurrentSetupInference(runtime: RuntimeEnv): Promise<{
   modelRef: string;
   route: DefaultInferenceRouteProjection;
   latencyMs: number;
@@ -424,10 +410,8 @@ async function verifyCurrentSetupInference(
       "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw, then retry.",
     );
   }
-  const verifyInferenceConfig =
-    deps?.verifyInferenceConfig ??
-    (await import("./setup-inference.js")).verifySetupInferenceConfig;
-  const verification = await verifyInferenceConfig({ config: beforeConfig, runtime });
+  const { verifySetupInferenceConfig } = await import("./setup-inference.js");
+  const verification = await verifySetupInferenceConfig({ config: beforeConfig, runtime });
   if (!verification.ok) {
     throw new Error(
       `OpenClaw setup requires working inference first. The configured route failed a live check: ${verification.error} Run \`openclaw onboard\` on the machine running OpenClaw, then retry.`,
@@ -484,7 +468,7 @@ export async function executeSetup(
     runtime.log(message);
     return { applied: false, message };
   }
-  const verified = await verifyCurrentSetupInference(runtime, opts.deps);
+  const verified = await verifyCurrentSetupInference(runtime);
   if (requestedModel && requestedModel !== verified.modelRef) {
     throw new Error(
       `The verified default model is now ${verified.modelRef}, not ${requestedModel}. Review the current route, or run \`openclaw onboard\` on the machine running OpenClaw, before retrying setup.`,
@@ -496,8 +480,7 @@ export async function executeSetup(
     runtime,
     opts,
     run: async (ctx) => {
-      const applySetup =
-        ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
+      const { applySystemAgentSetup } = await import("./setup-apply.js");
       const surface = ctx.deps?.setupSurface ?? "cli";
       const recovery =
         surface === "cli"
@@ -505,10 +488,8 @@ export async function executeSetup(
           : undefined;
       const workspace =
         recovery?.workspace ?? resolveUserPath(operation.workspace ?? process.cwd());
-      // Cover injected implementations at entry and carry the same synchronous
-      // authority into production setup's workspace and config owners.
       const applied = await ctx.commit(() =>
-        applySetup(
+        applySystemAgentSetup(
           {
             workspace,
             ...(operation.agentName ? { firstAgent: { name: operation.agentName } } : {}),
@@ -570,9 +551,7 @@ export async function executeSetDefaultModel(
         model: operation.model,
         ...(targetAgentId ? { targetAgentId } : {}),
       });
-      const verifyInferenceConfig =
-        ctx.deps?.verifyInferenceConfig ??
-        (await import("./setup-inference.js")).verifySetupInferenceConfig;
+      const { verifySetupInferenceConfig } = await import("./setup-inference.js");
       let persistedModelRef = operation.model;
       let inferenceLatencyMs = 0;
       let persistedBinding: SystemAgentVerifiedInferenceBinding | undefined;
@@ -587,7 +566,7 @@ export async function executeSetDefaultModel(
             const commitRoute = await projectRoute(sourceConfig);
             ctx.assertPersistentApply?.();
             let latestBinding: SystemAgentVerifiedInferenceBinding | undefined;
-            const latestVerification = await verifyInferenceConfig({
+            const latestVerification = await verifySetupInferenceConfig({
               config: sourceConfig,
               runtime: ctx.runtime,
               requireExecutionOwner: true,

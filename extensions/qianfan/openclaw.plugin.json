@@ -6,6 +6,7 @@
   },
   "enabledByDefault": true,
   "providers": ["qianfan"],
+  "contracts": { "embeddingProviders": ["qianfan"] },
   "setup": {
     "providers": [
       {

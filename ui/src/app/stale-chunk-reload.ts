@@ -11,11 +11,14 @@ import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
+const RENDER_RELOAD_STORAGE_KEY = "openclaw.controlUi.renderErrorReloadAttempted";
 // Bounds document probes across rapid re-renders of the same error state.
 const ATTEMPT_COOLDOWN_MS = 5_000;
 // Allow slow links to answer; callers share the in-flight probe.
@@ -29,6 +32,7 @@ const MODULE_IMPORT_ERROR_PATTERN =
 
 type StaleChunkReloadDeps = {
   buildId?: string;
+  reloadOnce?: boolean;
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
   reload?: () => void;
   canReload?: () => boolean;
@@ -60,7 +64,7 @@ export async function retryControlUiImport<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   try {
-    return await load();
+    return await trackForegroundActivity(Promise.resolve(load()));
   } catch (error) {
     if (!isStaleChunkImportError(error)) {
       throw error;
@@ -82,7 +86,7 @@ export async function retryControlUiImport<T>(
     // Chromium can retain the first failed import in its module map. A persistent
     // failure now reaches the route error surface and its guarded reload owner.
     try {
-      return await load();
+      return await trackForegroundActivity(Promise.resolve(load()));
     } catch (retryError) {
       if (isStaleChunkImportError(retryError)) {
         routeImportErrors.add(retryError);
@@ -169,6 +173,15 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   let guardDelayMs = 0;
   try {
     const guard = JSON.parse(storage?.getItem(RELOAD_GUARD_STORAGE_KEY) ?? "null");
+    // Rejected handshakes must settle on visible recovery guidance, not a timer
+    // that keeps replacing an incompatible bundle. Also bound alternating builds.
+    if (
+      deps.reloadOnce &&
+      (guard?.buildId === buildId ||
+        (typeof guard?.at === "number" && Date.now() - guard.at < 60_000))
+    ) {
+      return false;
+    }
     if (guard?.buildId === buildId && typeof guard.at === "number") {
       guardDelayMs = Math.max(0, guard.at + RELOAD_GUARD_WINDOW_MS - Date.now());
     }
@@ -244,6 +257,42 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   return true;
 }
 
+/** Render bugs get one automatic reload per tab, not the stale-asset retry loop. */
+export async function reloadAfterRenderErrorOnce(
+  deps: Omit<StaleChunkReloadDeps, "buildId"> = {},
+): Promise<boolean> {
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
+  if (!storage || deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  // Do not replace a recoverable error with a browser network-error document.
+  if (!(await waitForReachableControlUiDocument({ timeoutMs: 0 }, () => true))) {
+    return false;
+  }
+  if (deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    // Recheck after the shared probe: another failing surface may have claimed it.
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+    // Never clear on mount, Retry, or a timer: a persistent bug must stay stopped.
+    storage.setItem(RENDER_RELOAD_STORAGE_KEY, "1");
+  } catch {
+    return false;
+  }
+  (deps.reload ?? reloadControlUiDocument)();
+  return true;
+}
+
 // A restarting gateway is the common case behind this banner: the stale chunk
 // exists precisely because the gateway was just updated. Give the restart time
 // to finish rather than declining the reload on the first failed probe.
@@ -298,9 +347,9 @@ function waitForRecoverySignal(delayMs: number, signal?: AbortSignal): Promise<v
   return new Promise((resolve) => {
     const finish = () => {
       clearTimeout(timer);
-      window.removeEventListener("online", finish);
-      document.removeEventListener("visibilitychange", onVisibility);
-      signal?.removeEventListener("abort", finish);
+      stopOnline();
+      stopVisibility();
+      stopAbort?.();
       resolve();
     };
     const onVisibility = () => {
@@ -309,9 +358,9 @@ function waitForRecoverySignal(delayMs: number, signal?: AbortSignal): Promise<v
       }
     };
     const timer = setTimeout(finish, delayMs);
-    window.addEventListener("online", finish);
-    document.addEventListener("visibilitychange", onVisibility);
-    signal?.addEventListener("abort", finish, { once: true });
+    const stopOnline = listen(window, "online", finish);
+    const stopVisibility = listen(document, "visibilitychange", onVisibility);
+    const stopAbort = signal && listen(signal, "abort", finish, { once: true });
     if (signal?.aborted) {
       finish();
     }
@@ -387,9 +436,9 @@ export function installStaleChunkReloadListener(): () => void {
     }, 0);
     pending.add(timer);
   };
-  window.addEventListener("vite:preloadError", onPreloadError);
+  const stopPreloadError = listen(window, "vite:preloadError", onPreloadError);
   return () => {
-    window.removeEventListener("vite:preloadError", onPreloadError);
+    stopPreloadError();
     for (const timer of pending) {
       clearTimeout(timer);
     }
@@ -401,14 +450,14 @@ export function installMissingStylesheetRecovery(): () => void {
   let uninstalled = false;
   let banner: HTMLDivElement | null = null;
 
-  const removeListeners = () => {
-    window.removeEventListener("load", checkStylesheet);
-  };
+  let stopLoad: (() => void) | undefined;
 
-  const showBanner = () => {
-    if (uninstalled || banner) {
+  const detectMissingStylesheet = async () => {
+    if (detected || uninstalled) {
       return;
     }
+    detected = true;
+    stopLoad?.();
     banner = document.createElement("div");
     banner.role = "alert";
     // All styles are inline because the entry stylesheet is broken by definition.
@@ -416,21 +465,9 @@ export function installMissingStylesheetRecovery(): () => void {
       "position:fixed;inset:0 0 auto;z-index:2147483647;padding:12px;text-align:center;background:#1f2937;color:#fff;font:14px system-ui";
     const reloadButton = document.createElement("button");
     reloadButton.textContent = t("common.reload");
-    reloadButton.addEventListener(
-      "click",
-      () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }),
-    );
+    listen(reloadButton, "click", () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
     banner.append(t("lazyView.stylesFailed"), " ", reloadButton);
     document.body.append(banner);
-  };
-
-  const detectMissingStylesheet = async () => {
-    if (detected || uninstalled) {
-      return;
-    }
-    detected = true;
-    removeListeners();
-    showBanner();
     await scheduleStaleChunkReload();
   };
 
@@ -439,7 +476,7 @@ export function installMissingStylesheetRecovery(): () => void {
       getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
       "1"
     ) {
-      removeListeners();
+      stopLoad?.();
       return;
     }
     void detectMissingStylesheet();
@@ -450,12 +487,12 @@ export function installMissingStylesheetRecovery(): () => void {
   if (document.readyState === "complete") {
     checkStylesheet();
   } else {
-    window.addEventListener("load", checkStylesheet, { once: true });
+    stopLoad = listen(window, "load", checkStylesheet, { once: true });
   }
 
   return () => {
     uninstalled = true;
-    removeListeners();
+    stopLoad?.();
     banner?.remove();
     banner = null;
   };

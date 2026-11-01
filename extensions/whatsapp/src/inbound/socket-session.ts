@@ -110,6 +110,8 @@ function shouldClearSocketRefAfterSendFailure(error: unknown): boolean {
 export async function createWhatsAppAttachedSocketSession(options: SocketSessionOptions) {
   const { sock } = options;
   const connectedAtMs = Date.now();
+  // Preserve the first-link history floor if sync finishes during attachment.
+  const hasSyncedHistory = sock.authState.creds.accountSyncCounter > 0;
   if (options.socketRef) {
     options.socketRef.current = sock;
   }
@@ -131,7 +133,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       sock,
       sendOperationTimeoutMs,
     ).sendPresenceUpdate(presence);
-    options.logVerbose(`Sent global '${presence}' presence on connect`);
   } catch (error) {
     options.logVerbose(`Failed to send '${presence}' presence on connect: ${String(error)}`);
   }
@@ -242,9 +243,6 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
   const fetchReachoutTimeLock = async (
     currentSock: WASocket,
   ): Promise<ReachoutTimelockState | undefined> => {
-    if (typeof currentSock.fetchAccountReachoutTimelock !== "function") {
-      return undefined;
-    }
     if (!reachoutTimeLockFetch) {
       reachoutTimeLockFetch = currentSock
         .fetchAccountReachoutTimelock()
@@ -427,6 +425,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
 
   return {
     connectedAtMs,
+    hasSyncedHistory,
     self,
     onClose,
     signalClose: (reason?: WebListenerCloseReason) => {

@@ -5,12 +5,13 @@ import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import type { CustodianSetupActions } from "./custodian-actions.ts";
 import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import "../../styles/custodian-setup-card.css";
 
-function SignInWizard(props: { setup: () => CustodianAutoSetup }) {
+function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: CustodianSetupActions }) {
   const state = () => props.setup().wizard.state;
   const step = () => {
     const current = state();
@@ -48,7 +49,7 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup }) {
             <WizardStepControls
               step={current().step}
               value={props.setup().wizardValue}
-              busy={current().busy}
+              busy={props.actions.answering || current().busy}
               externalAuthInput={current().externalAuthInput}
               inputId="custodian-setup-sign-in"
               validationErrorId={
@@ -56,13 +57,14 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup }) {
               }
               sensitiveRevealed={props.setup().wizardSecretVisible}
               onValueChange={(value) => props.setup().setWizardValue(value)}
-              onAnswer={(value) => void props.setup().answerWizard(value)}
+              onAnswer={(value) => props.actions.answer(value)}
               onToggleSensitiveVisibility={() => props.setup().toggleWizardSecretVisibility()}
             />
             <button
               class="btn btn--ghost"
               type="button"
-              onClick={() => void props.setup().cancelWizard()}
+              disabled={props.actions.cancelling}
+              onClick={() => props.actions.cancel()}
             >
               {t("custodian.cancel")}
             </button>
@@ -73,20 +75,23 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup }) {
   );
 }
 
-export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
+export function CustodianSetupCard(props: {
+  store: CustodianSessionStore;
+  actions: CustodianSetupActions;
+}) {
   const context = useApplication();
   const source = createMemo(() => props.store);
   const projection = createMemo(() => projectOwner(source(), (store) => store.autoSetup));
   const setup = () => projection().read();
   const result = () => setup().result;
-  const native = projectSource(context.nativeDeviceSettings, {
-    read: () => nativeSetupCapability(context),
-    subscribe: (settings, notify) => settings?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  }).read;
+  const native = context.nativeDeviceSettings
+    ? projectOwner(context.nativeDeviceSettings, () => nativeSetupCapability(context)).read
+    : () => nativeSetupCapability(context);
   const busy = () => {
     const current = setup();
     return (
+      props.actions.verifying ||
+      props.actions.answering ||
       current.pending ||
       current.wizard.state.phase === "starting" ||
       current.wizard.state.phase === "step"
@@ -105,7 +110,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
   };
   const title = () => {
     const current = setup();
-    if (current.pending) {
+    if (props.actions.verifying || current.pending) {
       return t("custodian.autoSetup.connecting");
     }
     const selected = current.result?.selected;
@@ -137,7 +142,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
               <Icon name="x" />
             </button>
           </div>
-          <Show when={setup().pending}>
+          <Show when={props.actions.verifying || setup().pending}>
             <p class="custodian-setup__progress" role="status">
               <span class="btn__spinner" aria-hidden="true" />
               {t("custodian.autoSetup.verifying")}
@@ -150,7 +155,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
                 class="btn"
                 type="button"
                 disabled={busy()}
-                onClick={() => void setup().signIn()}
+                onClick={() => props.actions.signIn()}
               >
                 {t("custodian.autoSetup.separateLogin")}
               </button>
@@ -159,7 +164,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
           <Show when={!setup().pending && result()?.status === "needs-sign-in"}>
             <p>{t("custodian.autoSetup.signInBody")}</p>
             <Show when={!busy()}>
-              <button class="btn primary" type="button" onClick={() => void setup().signIn()}>
+              <button class="btn primary" type="button" onClick={() => props.actions.signIn()}>
                 {t("custodian.autoSetup.signIn")}
               </button>
             </Show>
@@ -201,7 +206,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
                       type="button"
                       title={candidate.detail}
                       disabled={busy()}
-                      onClick={() => void setup().activate(candidate)}
+                      onClick={() => props.actions.activate(candidate)}
                     >
                       {candidate.label}
                     </button>
@@ -210,7 +215,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
               </div>
             </div>
           </Show>
-          <SignInWizard setup={setup} />
+          <SignInWizard setup={setup} actions={props.actions} />
           <Show when={setup().error}>
             {(error) => (
               <div class="custodian-setup__error" role="alert">
@@ -219,7 +224,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
                   class="btn"
                   type="button"
                   disabled={busy()}
-                  onClick={() => void setup().retry()}
+                  onClick={() => props.actions.retry()}
                 >
                   {t("common.retry")}
                 </button>

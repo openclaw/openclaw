@@ -29,7 +29,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   authorize_actor:
@@ -147,7 +147,7 @@ jobs:
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -266,7 +266,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify protected main-ancestry workflow pin
@@ -383,7 +383,7 @@ jobs:
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -395,7 +395,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Comment PR with inline QA evidence

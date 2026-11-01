@@ -28,6 +28,11 @@ policies leave the continuation under its ordinary restricted policy. Current
 tool restrictions and live revocation checks still apply at execution; the
 handoff does not grant additional tools or infer a sender identity.
 
+Completion turns keep the requester's session tool definitions and catalog.
+The replayed policy gates calls instead: a denied tool reports that it is not
+available during a child-completion turn. If the requester is itself a sub-agent,
+its own inherited restrictions still apply to its listed tools.
+
 An automatic completion turn for a requester on the Claude CLI backend keeps that same
 captured policy. The tools reach the CLI only through OpenClaw's policy-filtered
 MCP surface, so native CLI tools stay disabled for the turn and every inherited
@@ -35,8 +40,7 @@ deny still applies. Other CLI backends, node-hosted Claude CLI sessions, and
 settle batches do not regain requester tools. Message-tool-only replies keep
 their existing source-bound `message` grant. When that restricted surface needs
 its own Claude CLI session, the requester's next resumed turn receives the
-completion prompt and reply as quoted context when its account may replay saved
-history; see [CLI backends](/gateway/cli-backends#sessions).
+completion prompt and reply as bounded quoted context for that same native session; see [CLI backends](/gateway/cli-backends#sessions).
 
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
 `sessions_send`, and the `conversations_*` tools regardless of

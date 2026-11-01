@@ -3,7 +3,9 @@ import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  clientCapabilities?: string[];
   createdVia?: unknown;
+  createdActor?: SessionEntry["createdActor"];
   incognito?: SessionEntry["incognito"];
   modelSelectionLocked?: SessionEntry["modelSelectionLocked"];
   pluginOwnerId?: SessionEntry["pluginOwnerId"];
@@ -16,6 +18,7 @@ export type SessionEntryCurrentFacts = {
   sandbox?: SessionEntry["sandbox"];
   sandboxMode?: SessionEntry["sandboxMode"];
   permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
   sessionRoot?: SessionEntry["sessionRoot"];
   authProfileOverride?: SessionEntry["authProfileOverride"];
   authProfileOverrideSource?: SessionEntry["authProfileOverrideSource"];
@@ -26,8 +29,10 @@ export type SessionEntryCurrentFacts = {
   previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
+  goal?: unknown;
   lifecycleRevision?: unknown;
   lifecycleRunId?: unknown;
+  lastRunId?: unknown;
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;
@@ -39,10 +44,8 @@ export type SessionEntryCurrentFacts = {
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
   delegatedToolPolicy?: unknown;
-  subagentRecovery?: {
-    lastRunId?: unknown;
-    sessionLifecycleRunId?: unknown;
-  };
+  skillLibrarySelections?: unknown;
+  executionPolicy?: unknown;
 };
 
 export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &

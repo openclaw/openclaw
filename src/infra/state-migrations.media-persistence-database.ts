@@ -12,11 +12,13 @@ import {
 import { renewAgentDatabaseMaintenanceAuthorityIfPresent } from "../state/openclaw-agent-db-lease.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { prepareTrajectoryPayload, trajectoryEventJsonSql } from "../trajectory/runtime-payload.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   parseTranscriptEvent,
   transformTranscriptEvent,
@@ -27,26 +29,43 @@ const MEDIA_MIGRATION_BATCH_BYTES = 4 * 1024 * 1024;
 
 type MediaMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_windows" | "trajectory_runtime_events" | "transcript_events"
+  | "session_windows"
+  | "trajectory_runtime_events"
+  | "transcript_events"
+  | "session_transcript_cold_archives"
 >;
 
 function forEachMediaEventBatch(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   table: "trajectory_runtime_events" | "transcript_events";
-  legacyTextStorage?: boolean;
-  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => void;
+  legacyTextStorage: boolean;
+  visit: (rows: Array<{ event_json: string; seq: number; session_id: string }>) => boolean | void;
 }): void {
   const db = getNodeSqliteKysely<MediaMigrationDatabase>(params.database);
-  const eventJson =
-    params.table === "transcript_events" && !params.legacyTextStorage
+  const eventJson = params.legacyTextStorage
+    ? sql.ref<string>(`${params.table}.event_json`) // kysely-allow-raw: private historical TEXT-table union.
+    : params.table === "transcript_events"
       ? transcriptEventJsonSql(params.database)
-      : sql.ref<string>(`${params.table}.event_json`); // kysely-allow-raw: private TEXT-table union.
-  const query = db
+      : trajectoryEventJsonSql(params.database);
+  let query = db
     .selectFrom(params.table)
     .select(["session_id", "seq"])
     .select(eventJson.as("event_json"))
     .orderBy("session_id", "asc")
     .orderBy("seq", "asc");
+  if (params.table === "transcript_events" && !params.legacyTextStorage) {
+    // Archived sessions were absent from this hot-row repair before navigation retention.
+    query = query.where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("session_transcript_cold_archives as cold")
+            .select("cold.session_id")
+            .whereRef("cold.session_id", "=", "transcript_events.session_id"),
+        ),
+      ),
+    );
+  }
   let rows: Array<{ event_json: string; seq: number; session_id: string }> = [];
   let bytes = 0;
   let renewedAt = performance.now();
@@ -59,14 +78,18 @@ function forEachMediaEventBatch(params: {
     }
     const rowBytes = Buffer.byteLength(row.event_json);
     if (rows.length > 0 && bytes + rowBytes > MEDIA_MIGRATION_BATCH_BYTES) {
-      params.visit(rows);
+      if (params.visit(rows) === false) {
+        return;
+      }
       rows = [];
       bytes = 0;
     }
     rows.push(row);
     bytes += rowBytes;
     if (rows.length >= MEDIA_MIGRATION_ROW_BATCH_SIZE || bytes >= MEDIA_MIGRATION_BATCH_BYTES) {
-      params.visit(rows);
+      if (params.visit(rows) === false) {
+        return;
+      }
       rows = [];
       bytes = 0;
     }
@@ -74,6 +97,30 @@ function forEachMediaEventBatch(params: {
   if (rows.length > 0) {
     params.visit(rows);
   }
+}
+
+export function mediaRowsNeedMigration(database: EngineConnection, pathname: string): boolean {
+  for (const table of ["transcript_events", "trajectory_runtime_events"] as const) {
+    let changed = false;
+    forEachMediaEventBatch({
+      database,
+      table,
+      legacyTextStorage: false,
+      visit: (rows) => {
+        changed = rows.some((row) => {
+          const owner = `${pathname}:${row.session_id}:${row.seq}`;
+          return table === "transcript_events"
+            ? transformTranscriptEvent(parseTranscriptEvent(row.event_json, owner)).changed
+            : rewriteTrajectoryEventJson(row.event_json, owner) !== row.event_json;
+        });
+        return !changed;
+      },
+    });
+    if (changed) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function scanTranscriptRows(params: {
@@ -179,6 +226,7 @@ function rewriteTrajectoryEventJson(eventJson: string, owner: string): string {
 export function scanTrajectoryRows(params: {
   database: DatabaseSync;
   pathname: string;
+  legacyTextStorage: boolean;
   beforeRewrite: () => void;
 }): number {
   const { database, pathname } = params;
@@ -187,6 +235,7 @@ export function scanTrajectoryRows(params: {
   forEachMediaEventBatch({
     database,
     table: "trajectory_runtime_events",
+    legacyTextStorage: params.legacyTextStorage,
     visit: (rows) => {
       for (const row of rows) {
         const rewrittenEventJson = rewriteTrajectoryEventJson(
@@ -202,7 +251,11 @@ export function scanTrajectoryRows(params: {
           database,
           db
             .updateTable("trajectory_runtime_events")
-            .set({ event_json: rewrittenEventJson })
+            .set(
+              params.legacyTextStorage
+                ? { event_json: rewrittenEventJson }
+                : prepareTrajectoryPayload(database, rewrittenEventJson),
+            )
             .where("session_id", "=", row.session_id)
             .where("seq", "=", row.seq),
         );

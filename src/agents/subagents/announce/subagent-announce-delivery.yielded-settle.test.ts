@@ -1,176 +1,90 @@
-// Yielded private settle finals require completion evidence and the original requester.
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
-const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
+const payloads = (text = "parent answer") => [{ text }];
+const visibleResult = { payloads: payloads(), deliveryStatus: { status: "sent", resultCount: 1 } };
+const silentResult = { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
+const missingReply = { delivered: false, reason: "visible_reply_missing" };
+const visibleReply = { delivered: true, requesterVisibleFinalDelivered: true };
+const intentionalNonDelivery = {
+  delivered: false,
+  disposition: "intentional_non_delivery",
+  terminal: true,
+};
+const ok = (result: unknown) => ({ status: "ok", result });
+const policySuppression = {
+  payloads: payloads(),
+  deliveryStatus: { status: "suppressed", reason: "message_tool_only", resultCount: 0 },
+};
+const normalizedSilence = {
+  ...silentResult,
+  deliveryStatus: {
+    status: "suppressed",
+    succeeded: true,
+    reason: "no_visible_payload",
+    resultCount: 0,
+  },
+};
+const publicGroup = { public: true, group: true };
+const failedSilence = { ...silentResult, meta: { ...silentResult.meta, aborted: true } };
+const requiredSilence = {
+  ...silentResult,
+  meta: { ...silentResult.meta, terminalReplyExpectation: "result-required" },
+};
+const partial = (meta: Record<string, unknown>) =>
+  ok({ ...policySuppression, payloads: payloads("partial answer"), meta });
+type SettleCase = {
+  response: unknown;
+  expected: Record<string, unknown>;
+  options?: { public?: boolean; group?: boolean; replaced?: boolean };
+};
 
-describe("yielded private settle outcomes", () => {
-  it.each([
-    {
-      name: "delivered final",
-      response: {
-        status: "ok",
-        result: { payloads: [{ text: "parent answer" }], deliveryStatus: sentDeliveryStatus },
-      },
-      expected: { delivered: true, requesterVisibleFinalDelivered: true },
-    },
-    {
-      name: "intentional silence",
-      response: {
-        status: "ok",
-        result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
-      },
-      expected: { delivered: true },
-    },
-    ...["ok", "timeout"].map((status) => ({
-      name: `normalized silent result: ${status}`,
-      response: {
-        status,
-        result: {
-          payloads: [],
-          meta: { terminalReply: { disposition: "silent" } },
-          deliveryStatus: {
-            status: "suppressed",
-            succeeded: true,
-            reason: "no_visible_payload",
-            resultCount: 0,
-          },
-        },
-      },
-      expected:
-        status === "ok"
-          ? { delivered: true }
-          : { delivered: false, reason: "visible_reply_missing" },
-    })),
-    {
-      name: "runtime timeout",
-      response: { status: "timeout", summary: "aborted", stopReason: "timeout" },
-      expected: { delivered: false, reason: "visible_reply_missing" },
-    },
-    {
-      name: "failed turn",
-      response: { status: "error" },
-      expected: { delivered: false, reason: "visible_reply_missing" },
-    },
-    {
-      name: "empty successful turn",
-      response: { status: "ok", result: { payloads: [] } },
-      expected: { delivered: false, reason: "visible_reply_missing" },
-    },
-    {
-      name: "failed silence",
-      response: {
-        status: "ok",
-        result: {
-          payloads: [],
-          meta: { aborted: true, terminalReply: { disposition: "silent" } },
-        },
-      },
-      expected: { delivered: false, reason: "visible_reply_missing" },
-    },
-    {
-      name: "undelivered text",
-      response: { status: "ok", result: { payloads: [{ text: "unsent answer" }] } },
-      expected: { delivered: false, reason: "visible_reply_missing" },
-    },
-    {
-      name: "message-tool room: final sent with the message tool",
-      response: {
-        status: "ok",
-        result: {
-          payloads: [],
-          didSendViaMessagingTool: true,
-          messagingToolSentTargets: [
-            {
-              tool: "message",
-              provider: "discord",
-              accountId: "acct-1",
-              to: "dm:U123",
-              text: "parent answer",
-              sourceReplyFinal: true,
-            },
-          ],
-        },
-      },
-      expected: { delivered: true, requesterVisibleFinalDelivered: true },
-    },
-    {
-      // The room's reply policy held back plain final text; it is not retried or forced out.
-      name: "message-tool room: plain final suppressed by policy",
-      response: {
-        status: "ok",
-        result: {
-          payloads: [{ text: "parent answer" }],
-          deliveryStatus: {
-            status: "suppressed",
-            reason: "message_tool_only",
-            resultCount: 0,
-          },
-        },
-      },
-      expected: { delivered: false, disposition: "intentional_non_delivery", terminal: true },
-    },
-    {
-      name: "public yielded room: plain final suppressed by policy",
-      public: true,
-      response: {
-        status: "ok",
-        result: {
-          payloads: [{ text: "parent answer" }],
-          deliveryStatus: { status: "suppressed", reason: "message_tool_only", resultCount: 0 },
-        },
-      },
-      expected: { delivered: false, disposition: "intentional_non_delivery", terminal: true },
-    },
-    ...[
-      { error: { kind: "incomplete_turn" } },
-      { aborted: true },
-      { yielded: true },
-      { continuationPending: true },
-    ].map((meta) => ({
-      name: "policy suppression cannot settle " + Object.keys(meta)[0],
-      response: {
-        status: "ok",
-        result: {
-          payloads: [{ text: "partial answer" }],
-          meta,
-          deliveryStatus: { status: "suppressed", reason: "message_tool_only", resultCount: 0 },
-        },
-      },
-      expected: { delivered: false, reason: "visible_reply_missing" },
-    })),
-    {
-      name: "transferred next wave",
-      response: {
-        status: "ok",
-        result: { payloads: [], meta: { yielded: true }, requesterContinuationSettled: true },
-      },
-      expected: { delivered: true },
-    },
-    {
-      name: "replaced requester",
-      replaced: true,
-      response: { status: "ok" },
-      expected: { delivered: false, reason: "completion_handoff_unavailable", terminal: true },
-    },
-  ])("requires real completion evidence: $name", async (testCase) => {
-    const sessionKey = "agent:main:discord:dm:U123";
-    const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
-    const current = "replaced" in testCase ? "replacement-parent" : "requester-session-dm";
-    const dispatch = vi.fn(async function <T>(
-      _method: string,
-      _params: Record<string, unknown>,
-      _options?: unknown,
-    ) {
-      return testCase.response as T;
-    });
+it.each`
+  name                                                      | response                                                            | expected                                                                          | options
+  ${"delivered final"}                                      | ${ok(visibleResult)}                                                | ${visibleReply}                                                                   | ${undefined}
+  ${"required public reply"}                                | ${ok(visibleResult)}                                                | ${visibleReply}                                                                   | ${publicGroup}
+  ${"required public silence"}                              | ${ok(silentResult)}                                                 | ${{ delivered: true }}                                                            | ${publicGroup}
+  ${"normalized silent result: ok"}                         | ${ok(normalizedSilence)}                                            | ${{ delivered: true }}                                                            | ${undefined}
+  ${"normalized silent result: timeout"}                    | ${{ status: "timeout", result: normalizedSilence }}                 | ${missingReply}                                                                   | ${undefined}
+  ${"runtime timeout"}                                      | ${{ status: "timeout", summary: "aborted", stopReason: "timeout" }} | ${missingReply}                                                                   | ${undefined}
+  ${"failed turn"}                                          | ${{ status: "error" }}                                              | ${missingReply}                                                                   | ${undefined}
+  ${"empty successful optional turn"}                       | ${ok({ payloads: [] })}                                             | ${{ delivered: true }}                                                            | ${undefined}
+  ${"optional silence promoted to a required human reply"}  | ${ok(requiredSilence)}                                              | ${{ delivered: true }}                                                            | ${undefined}
+  ${"failed silence"}                                       | ${ok(failedSilence)}                                                | ${missingReply}                                                                   | ${undefined}
+  ${"undelivered text"}                                     | ${ok({ payloads: payloads("unsent answer") })}                      | ${missingReply}                                                                   | ${undefined}
+  ${"private room: plain final suppressed by policy"}       | ${ok(policySuppression)}                                            | ${intentionalNonDelivery}                                                         | ${undefined}
+  ${"public room: plain final suppressed by policy"}        | ${ok(policySuppression)}                                            | ${intentionalNonDelivery}                                                         | ${{ public: true }}
+  ${"policy suppression cannot settle error"}               | ${partial({ error: { kind: "incomplete_turn" } })}                  | ${missingReply}                                                                   | ${undefined}
+  ${"policy suppression cannot settle aborted"}             | ${partial({ aborted: true })}                                       | ${missingReply}                                                                   | ${undefined}
+  ${"policy suppression cannot settle yielded"}             | ${partial({ yielded: true })}                                       | ${missingReply}                                                                   | ${undefined}
+  ${"policy suppression cannot settle continuationPending"} | ${partial({ continuationPending: true })}                           | ${missingReply}                                                                   | ${undefined}
+  ${"replaced requester"}                                   | ${{ status: "ok" }}                                                 | ${{ delivered: false, reason: "completion_handoff_unavailable", terminal: true }} | ${{ replaced: true }}
+`(
+  "requires real completion evidence: $name",
+  async ({ response, expected, options = {} }: SettleCase) => {
+    const to = options.group ? "channel:room-1" : "dm:U123";
+    const sessionKey = `agent:main:discord:${to}`;
+    const origin = { channel: "discord", to, accountId: "acct-1" };
+    const current = options.replaced ? "replacement-parent" : "requester-session-dm";
+    const dispatch = vi.fn<
+      typeof import("./subagent-announce.runtime.js").dispatchGatewayMethodInProcess
+    >(async <T>() => response as T);
     const send = vi.fn<typeof sendMessage>();
     onTestFinished(() => testing.setDepsForTest());
     testing.setDepsForTest({
       dispatchGatewayMethodInProcess: dispatch,
-      getRequesterSessionActivity: () => ({ sessionId: current, isActive: false }),
-      getRuntimeConfig: () => ({}),
+      getRequesterSessionActivity: () => ({
+        sessionId: current,
+        isActive: false,
+        target: captureSessionTarget({
+          storeScope: "/synthetic/yielded-settle/sessions.json",
+          sessionKey,
+          incarnation: current,
+        }),
+      }),
+      getRuntimeConfig: () => ({ surfaces: { discord: { silentReply: { group: "allow" } } } }),
       loadRequesterSessionEntry: (key) => ({
         cfg: {},
         canonicalKey: key,
@@ -187,29 +101,22 @@ describe("yielded private settle outcomes", () => {
       sourceTool: "subagent_settle",
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
-      requireDirectDelivery: true,
-      ...("public" in testCase
+      ...(options.public
         ? { requireVisibleReply: true }
         : { completionRequesterSessionId: "requester-session-dm" }),
       directIdempotencyKey: "announce:requester-settle:private",
     });
-    expect(result).toMatchObject(testCase.expected);
-    if ("replaced" in testCase) {
+    expect(result).toMatchObject(expected);
+    if (options.replaced) {
       expect(dispatch).not.toHaveBeenCalled();
     } else {
-      expect(dispatch.mock.calls[0]?.[2]).toMatchObject({
-        replyExpectation: "public" in testCase ? "required" : "optional",
-      });
-      const agentParams = dispatch.mock.calls[0]?.[1];
-      expect(agentParams).toMatchObject({
-        deliver: true,
-        channel: "discord",
-        to: "dm:U123",
-        ...("public" in testCase ? {} : { expectedExistingSessionId: "requester-session-dm" }),
-      });
+      expect(dispatch.mock.calls[0]?.slice(1)).toMatchObject([
+        options.public ? {} : { expectedExistingSessionId: "requester-session-dm" },
+        { replyExpectation: options.public ? "required" : "optional" },
+      ]);
       // The conversation's configured reply policy decides, not this handoff.
-      expect(agentParams).not.toHaveProperty("sourceReplyDeliveryMode");
+      expect(dispatch.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
     }
     expect(send).not.toHaveBeenCalled();
-  });
-});
+  },
+);

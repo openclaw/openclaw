@@ -1,4 +1,3 @@
-// Signal plugin module materializes portable presentations into sendable text.
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   isMessagePresentationInteractiveBlock,

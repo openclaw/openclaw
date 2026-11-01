@@ -45,7 +45,7 @@
   --oc-surface-card: var(--card);
   --oc-surface-card-strong: var(--popover);
   --oc-surface-interactive: var(--bg-elevated);
-  --oc-surface-interactive-hover: var(--bg-hover);
+  --oc-surface-interactive-hover: var(--surface-hover);
   --oc-surface-accent-soft: var(--accent-subtle);
   --oc-surface-secondary-soft: var(--accent-2-subtle);
   --oc-selection-bg: var(--selection-bg);
@@ -311,7 +311,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .oc-input {
-  box-sizing: border-box;
   width: 100%;
   min-height: var(--oc-control-min-height);
   padding: var(--oc-space-2) var(--oc-space-3);
@@ -353,13 +352,12 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .oc-banner {
   display: grid;
-  box-sizing: border-box;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: var(--oc-space-3);
   padding: var(--oc-space-4);
   border: 1px solid var(--oc-border-subtle);
-  border-radius: var(--oc-radius-surface);
+  border-radius: var(--radius-md);
   background: var(--oc-surface-card-strong);
   color: var(--oc-text-secondary);
   font-size: var(--oc-font-size-sm);
@@ -373,7 +371,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 
 .oc-empty {
   display: grid;
-  box-sizing: border-box;
   min-height: 12rem;
   place-items: center;
   padding: var(--oc-space-5);
@@ -405,29 +402,10 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   height: 0.75rem;
   overflow: hidden;
   border-radius: var(--oc-radius-control);
-  background: var(--oc-surface-interactive);
-}
-
-.oc-skeleton-line::after {
-  display: block;
-  width: 45%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, var(--oc-border-subtle), transparent);
-  content: "";
-  animation: oc-skeleton-sweep 1.2s linear infinite;
 }
 
 .oc-skeleton-line-short {
   width: 55%;
-}
-
-@keyframes oc-skeleton-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(225%);
-  }
 }
 
 .oc-status {
@@ -475,10 +453,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 @media (prefers-reduced-motion: reduce) {
   .oc-card-interactive {
     transition: none;
-  }
-
-  .oc-skeleton-line::after {
-    animation: none;
   }
 }
 
@@ -528,7 +502,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--oc-border-subtle) 85%, transparent);
-  border-radius: var(--oc-radius-surface);
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
   background: var(--oc-bg-surface);
   box-shadow: none;
 }
@@ -590,7 +564,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.oc-action,
-.agents-home .btn.agents-home__claw-add.oc-action {
+.agents-home .btn:is(.agents-home__template-add, .agents-home__open).oc-action {
   min-height: 0;
   gap: 6px;
   padding: 8px 14px;
@@ -616,13 +590,14 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.btn--sm.oc-action,
-.agents-home .btn.btn--sm.agents-home__claw-add.oc-action {
+.agents-home .btn.btn--sm:is(.agents-home__template-add, .agents-home__open).oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);
 }
 
 .settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled),
-.agents-home .btn.agents-home__claw-add.oc-action:hover:not(:disabled) {
+.agents-home
+  .btn:is(.agents-home__template-add, .agents-home__open).oc-action:hover:not(:disabled) {
   border-color: var(--oc-border-strong);
   background: var(--oc-surface-interactive-hover);
   color: var(--oc-text-primary);

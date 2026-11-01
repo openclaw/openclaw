@@ -2,7 +2,7 @@
 // Control UI tests cover run lifecycle behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -40,10 +40,13 @@ function makeHost(over: Partial<ReconcileHost> = {}): ReconcileHost {
     sessionKey: "s1",
     chatRunId: null,
     chatStream: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
     sessionsResult: makeSessionsResult([
       { key: "s1", hasActiveRun: true, activeRunIds: ["r1"], status: "running" },
     ]),
-    requestUpdate: () => {},
     ...over,
   };
 }
@@ -64,7 +67,7 @@ function makeLocalTerminalReconcile(
 
 function rowActive(host: ReconcileHost): boolean {
   const row = host.sessionsResult?.sessions.find((r) => r.key === host.sessionKey);
-  return Boolean(row && isSessionRunActive(row));
+  return Boolean(row && isSessionRunStateActive(row));
 }
 
 function completeLocalRun(host: ReconcileHost, publishRunStatus = true) {
@@ -219,7 +222,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     });
 
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(true);
-    expect(isSessionRunActive(host.sessionsResult?.sessions[0] ?? {})).toBe(false);
+    expect(isSessionRunStateActive(host.sessionsResult?.sessions[0] ?? {})).toBe(false);
   });
 
   it("retains the completed run identity while the session row is unavailable", () => {

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { constants, StatementSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { createNativeSessionInitializationOwner } from "../agents/harness/native-session/initialization.js";
@@ -10,6 +10,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -17,26 +18,51 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  observeMainThreadSql,
+  expectNoMainThreadSql as withoutHostSql,
+} from "../test-utils/main-thread-sql-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSessionInitialization } from "./session-initialization.js";
 import { recordSessionStateEventAsync, registerSessionStateWatch } from "./session-state-events.js";
 import {
   captureSessionUpstreamLinkReadSource,
-  prepareSessionUpstreamLink,
-  settleSessionUpstreamLink,
+  prepareSessionUpstreamLink as prepareLink,
+  settleSessionUpstreamLink as settleLink,
 } from "./session-upstream-links-runtime.js";
 import {
-  deleteSessionUpstreamLink,
-  deleteSessionUpstreamLinkAsync,
-  listWatchedSessionUpstreamLinks,
-  upsertSessionUpstreamLink,
-  upsertSessionUpstreamLinkAsync,
-  upsertSessionUpstreamLinkWithCurrentSource,
+  deleteSessionUpstreamLink as deleteLink,
+  deleteSessionUpstreamLinkAsync as deleteAsync,
+  listWatchedSessionUpstreamLinks as listWatched,
+  upsertSessionUpstreamLink as upsert,
+  upsertSessionUpstreamLinkAsync as upsertAsync,
+  upsertSessionUpstreamLinkWithCurrentSource as upsertWithSource,
 } from "./session-upstream-links.js";
-import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
+import {
+  readSessionUpstreamLinkInDatabase as readInDatabase,
+  type SessionUpstreamLinkInput,
+} from "./session-upstream-links.kernel.js";
 
 const tempDirs: string[] = [];
+const key = "agent:main:adopted:source";
+let database: ReturnType<typeof createDatabaseOptions>;
+
+function linkInput(
+  sessionKey = key,
+  overrides: Partial<SessionUpstreamLinkInput> = {},
+): SessionUpstreamLinkInput {
+  return {
+    sessionKey,
+    agentId: "main",
+    catalogId: "codex",
+    hostId: "gateway:local",
+    threadId: "created",
+    upstreamKind: "codex-app-server",
+    upstreamRef: { threadId: "created" },
+    marker: null,
+    ...overrides,
+  };
+}
 
 function createDatabaseOptions() {
   const stateDir = makeTempDir(tempDirs, "openclaw-session-upstream-links-");
@@ -45,25 +71,35 @@ function createDatabaseOptions() {
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
 
-function upsertLink(
-  sessionKey: string,
-  catalogId: string,
-  database: ReturnType<typeof createDatabaseOptions>,
-) {
-  upsertSessionUpstreamLink(
-    {
-      sessionKey,
-      agentId: "main",
+function readLink(sessionKey = key) {
+  return readInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main");
+}
+function watch(targetSessionKey = key, watcherSessionKey = "agent:main:main") {
+  return registerSessionStateWatch({ watcherSessionKey, targetSessionKey }, database);
+}
+
+function upsertLink(sessionKey = key, catalogId = "codex") {
+  upsert(
+    linkInput(sessionKey, {
       catalogId,
-      hostId: "gateway:local",
       threadId: `thread-${sessionKey}`,
       upstreamKind: catalogId === "claude" ? "claude-cli" : "codex-app-server",
       upstreamRef: { source: sessionKey },
       marker: { offset: 1 },
-    },
+    }),
     { ...database, now: 100 },
   );
 }
+const settle = (expected: NonNullable<ReturnType<typeof readLink>>, offset: number) =>
+  settleLink(
+    expected,
+    { kind: "activity", marker: { offset }, now: 200 },
+    { ...database, assertCurrent: () => {} },
+  );
+
+beforeEach(() => {
+  database = createDatabaseOptions();
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -80,15 +116,11 @@ afterAll(() => {
 
 describe("session upstream links", () => {
   it("reuses only the admitted exact link and observes mutation and snapshot boundaries", () => {
-    const options = createDatabaseOptions();
-    const key = "agent:main:adopted:retained";
-    upsertLink(key, "codex", options);
-    const { db: connection, path: databasePath } = openOpenClawStateDatabase(options);
+    upsertLink();
+    const { db: connection, path: databasePath } = openOpenClawStateDatabase(database);
     const db = requireNativeSqliteDatabase(connection);
     const read = (sessionKey = key, agentId = "main") =>
-      runSqliteReadOperationSync(db, () =>
-        readSessionUpstreamLinkInDatabase(db, sessionKey, agentId),
-      );
+      runSqliteReadOperationSync(db, () => readInDatabase(db, sessionKey, agentId));
     const reads = observeSqliteReadSql(StatementSync.prototype);
     const count = () =>
       reads.queries.filter((sql) => /^select .* from "session_upstream_links"/iu.test(sql)).length;
@@ -110,7 +142,7 @@ describe("session upstream links", () => {
       expect(read(absent)).toBeUndefined();
       expect(read(absent)).toBeUndefined();
       expect(count()).toBe(3);
-      upsertLink(absent, "codex", options);
+      upsertLink(absent);
       expect(read(absent)?.sessionKey).toBe(absent);
 
       const update = db.prepare(
@@ -166,84 +198,39 @@ describe("session upstream links", () => {
   });
 
   it("orders asynchronous writes and exact deletion without caller-thread SQL", async () => {
-    const database = createDatabaseOptions();
-    const input = {
-      sessionKey: "agent:main:adopted:async",
-      agentId: "main",
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "async",
-      upstreamKind: "codex-app-server" as const,
-      upstreamRef: { threadId: "async" },
-      marker: null,
-    };
+    const input = linkInput();
     const expected = { ...input, createdAt: 100, updatedAt: 100 };
-    const sql = observeMainThreadSql();
-    try {
-      const first = upsertSessionUpstreamLinkAsync(input, {
+    await withoutHostSql(async () => {
+      const first = upsertAsync(input, {
         ...database,
         now: 100,
         ifAbsent: true,
       });
-      const second = upsertSessionUpstreamLinkAsync(
-        { ...input, threadId: "loser" },
-        { ...database, ifAbsent: true },
-      );
+      const second = upsertAsync({ ...input, threadId: "loser" }, { ...database, ifAbsent: true });
       expect(await Promise.all([first, second])).toEqual([true, false]);
-      const readSource = captureSessionUpstreamLinkReadSource(
-        captureOpenClawStateWorkerContext(database),
-      );
-      expect(await prepareSessionUpstreamLink(readSource, input.sessionKey, input.agentId)).toEqual(
-        expected,
-      );
-      expect(
-        await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId, {
+      const source = captureSessionUpstreamLinkReadSource();
+      const remove = (expectedLink = expected) =>
+        deleteAsync(input.sessionKey, input.agentId, {
           ...database,
-          expected: { ...expected, threadId: "other" },
-        }),
-      ).toBe("changed");
-      expect(
-        await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId, {
-          ...database,
-          expected,
-        }),
-      ).toBe("deleted");
-      expect(
-        await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId, {
-          ...database,
-          expected,
-        }),
-      ).toBe("absent");
-      expect(
-        await prepareSessionUpstreamLink(readSource, input.sessionKey, input.agentId),
-      ).toBeUndefined();
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-    expect(
-      readSessionUpstreamLinkInDatabase(
-        openOpenClawStateDatabase(database).db,
-        input.sessionKey,
-        input.agentId,
-      ),
-    ).toBeUndefined();
+          expected: expectedLink,
+        });
+      expect(await prepareLink(source, input.sessionKey, input.agentId)).toEqual(expected);
+      expect(await remove({ ...expected, threadId: "other" })).toBe("changed");
+      expect(await remove()).toBe("deleted");
+      expect(await remove()).toBe("absent");
+      expect(await prepareLink(source, input.sessionKey, input.agentId)).toBeUndefined();
+    });
+    expect(readLink()).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "initializes and rolls back only its own link without caller-thread SQL (replaced: %s)",
-    async (replaced) => {
-      const database = createDatabaseOptions();
-      const input = {
-        sessionKey: "agent:main:adopted:initialization",
-        agentId: "main",
-        catalogId: "codex",
-        hostId: "gateway:local",
-        threadId: "created",
-        upstreamKind: "codex-app-server" as const,
-        upstreamRef: { threadId: "created" },
-        marker: null,
-      };
+  it.each([
+    ["async", false],
+    ["async", true],
+    ["legacy", false],
+  ] as const)(
+    "%s initializer rolls back only its own link (replaced: %s)",
+    async (mode, replaced) => {
+      const input = linkInput();
       const identity = { sessionId: "created" };
       const bindingStore = {};
       const cleanup = vi.fn(async () => {});
@@ -270,15 +257,34 @@ describe("session upstream links", () => {
           identity,
           prepareCleanup: () => cleanup,
         });
-        await initialization.linkAsync(input);
-        const readSource = captureSessionUpstreamLinkReadSource(
-          captureOpenClawStateWorkerContext(database),
+        using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+        await withPluginRuntimePluginScope(
+          { pluginId: `native-initializer-${mode}-${replaced}` },
+          async () => {
+            if (mode === "legacy") {
+              initialization.link(input);
+            } else {
+              await initialization.linkAsync(input);
+            }
+          },
         );
-        expect(
-          await prepareSessionUpstreamLink(readSource, input.sessionKey, input.agentId),
-        ).toMatchObject(input);
+        const notices = warning.mock.calls.filter(([message]) =>
+          String(message).includes("createNativeSessionInitializationOwner.prepare.link"),
+        );
+        expect(notices).toHaveLength(mode === "legacy" ? 1 : 0);
+        if (mode === "legacy") {
+          expect(notices[0]?.[0]).toContain(
+            "createNativeSessionInitializationOwner.prepare.linkAsync",
+          );
+          expect(notices[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
+          expect(notices[0]?.[0]).toContain("first January 2027 stable release");
+          sql.clear();
+        }
+        const source = captureSessionUpstreamLinkReadSource();
+        const read = () => prepareLink(source, input.sessionKey, input.agentId);
+        expect(await read()).toMatchObject(input);
         if (replaced) {
-          await upsertSessionUpstreamLinkAsync({ ...input, threadId: "replacement" }, database);
+          await upsertAsync({ ...input, threadId: "replacement" }, database);
         }
         await host.rollback(async () => {
           const rollback = owner.getRollback(
@@ -297,18 +303,10 @@ describe("session upstream links", () => {
             await rollback();
           }
         });
-        const current = await prepareSessionUpstreamLink(
-          readSource,
-          input.sessionKey,
-          input.agentId,
+        expect(await read()).toEqual(
+          replaced ? expect.objectContaining({ threadId: "replacement" }) : undefined,
         );
-        if (replaced) {
-          expect(current).toMatchObject({ threadId: "replacement" });
-          expect(cleanup).not.toHaveBeenCalled();
-        } else {
-          expect(current).toBeUndefined();
-          expect(cleanup).toHaveBeenCalledOnce();
-        }
+        expect(cleanup).toHaveBeenCalledTimes(replaced ? 0 : 1);
         sql.expectIdle();
       } finally {
         sql.restore();
@@ -318,94 +316,67 @@ describe("session upstream links", () => {
   );
 
   it("observes source changes and rejects stale initialization", async () => {
-    const database = createDatabaseOptions();
-    const sourceKey = "agent:main:adopted:source";
-    upsertLink(sourceKey, "claude", database);
-    const readSource = captureSessionUpstreamLinkReadSource(
-      captureOpenClawStateWorkerContext(database),
-    );
-    const source = (await prepareSessionUpstreamLink(readSource, sourceKey, "main"))!;
+    upsertLink(key, "claude");
+    const reader = captureSessionUpstreamLinkReadSource();
+    const source = (await prepareLink(reader, key, "main"))!;
     const child = { ...source, sessionKey: "agent:main:adopted:child" };
     const sourceCurrent = {
       context: captureOpenClawStateWorkerContext(database),
       expected: source,
       withCurrent: <T>(run: () => T) => run(),
     };
-    expect(
-      await upsertSessionUpstreamLinkWithCurrentSource(
-        child,
-        { ...database, ifAbsent: true },
-        sourceCurrent,
-      ),
-    ).toBe(true);
+    expect(await upsertWithSource(child, { ...database, ifAbsent: true }, sourceCurrent)).toBe(
+      true,
+    );
     // The retained worker must see a commit from the released synchronous owner.
-    upsertSessionUpstreamLink({ ...source, threadId: "replacement" }, database);
-    const sql = observeMainThreadSql();
-    try {
-      expect(await prepareSessionUpstreamLink(readSource, sourceKey, "main")).toMatchObject({
+    upsert({ ...source, threadId: "replacement" }, database);
+    await withoutHostSql(async () => {
+      expect(await prepareLink(reader, key, "main")).toMatchObject({
         threadId: "replacement",
       });
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
+    });
     await expect(
-      upsertSessionUpstreamLinkWithCurrentSource(
+      upsertWithSource(
         { ...child, sessionKey: "agent:main:adopted:stale" },
         { ...database, ifAbsent: true },
         sourceCurrent,
       ),
     ).rejects.toThrow("source changed");
-    expect(
-      readSessionUpstreamLinkInDatabase(
-        openOpenClawStateDatabase(database).db,
-        "agent:main:adopted:stale",
-        "main",
-      ),
-    ).toBeUndefined();
+    expect(readLink("agent:main:adopted:stale")).toBeUndefined();
   });
   it.each(["watch-then-link", "link-then-watch", "link-then-event"])(
     "skips empty upstream scans until %s creates a watched link",
     async (order) => {
-      const database = createDatabaseOptions();
-      const sessionKey = "agent:main:adopted:idle";
       const watcherSessionKey = "agent:main:subagent:idle-watch";
-      const watch = () =>
-        registerSessionStateWatch({ watcherSessionKey, targetSessionKey: sessionKey }, database);
+      const addWatch = () => watch(key, watcherSessionKey);
       if (order === "watch-then-link") {
-        expect(await watch()).toBe(true);
+        expect(await addWatch()).toBe(true);
       } else {
-        upsertLink(sessionKey, "codex", database);
+        upsertLink();
       }
       const requests = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
       const listRequests = () =>
         requests.mock.calls.filter(([, command]) => command.type === "sessionUpstream.listWatched");
-      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
-      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
+      expect([...(await listWatched(database))]).toEqual([]);
+      expect([...(await listWatched(database))]).toEqual([]);
       expect(listRequests()).toHaveLength(1);
       if (order === "watch-then-link") {
         expect(
-          await upsertSessionUpstreamLinkAsync(
-            {
-              sessionKey,
-              agentId: "main",
-              catalogId: "codex",
-              hostId: "gateway:local",
+          await upsertAsync(
+            linkInput(key, {
               threadId: "idle-thread",
-              upstreamKind: "codex-app-server",
-              upstreamRef: { source: sessionKey },
-              marker: null,
-            },
+              upstreamRef: { source: key },
+            }),
             database,
           ),
         ).toBe(true);
       } else if (order === "link-then-watch") {
-        expect(await watch()).toBe(true);
+        expect(await addWatch()).toBe(true);
       } else {
         expect(
           await recordSessionStateEventAsync(
             {
-              sessionKey,
+              sessionKey: key,
               agentId: "main",
               kind: "human_direct_message",
               actorType: "human",
@@ -417,165 +388,59 @@ describe("session upstream links", () => {
           ),
         ).toBeDefined();
       }
-      expect((await listWatchedSessionUpstreamLinks(database)).get("codex")).toEqual([
-        expect.objectContaining({ sessionKey, agentId: "main" }),
+      expect((await listWatched(database)).get("codex")).toEqual([
+        expect.objectContaining({ sessionKey: key, agentId: "main" }),
       ]);
       expect(listRequests()).toHaveLength(2);
     },
   );
 
-  it("returns each watched link once and skips ambiguous agent ownership without host SQL", async () => {
-    const database = createDatabaseOptions();
-    const watched = "agent:main:adopted:watched";
-    const unwatched = "agent:main:adopted:unwatched";
-    upsertLink(watched, "claude", database);
-    upsertLink(unwatched, "codex", database);
-    expect(
-      await registerSessionStateWatch(
-        { watcherSessionKey: "agent:main:main", targetSessionKey: watched },
-        database,
-      ),
-    ).toBe(true);
-    expect(
-      await registerSessionStateWatch(
-        { watcherSessionKey: "agent:other:main", targetSessionKey: watched },
-        database,
-      ),
-    ).toBe(true);
+  it("keeps watched links distinct and carries scan progress only across same-source refreshes", async () => {
+    upsertLink(key, "claude");
+    upsertLink("agent:main:adopted:unwatched");
+    expect(await watch()).toBe(true);
+    expect(await watch(key, "agent:other:main")).toBe(true);
     const ambiguous = "agent:main:adopted:ambiguous";
-    upsertLink(ambiguous, "claude", database);
+    upsertLink(ambiguous, "claude");
     expect(
-      upsertSessionUpstreamLink(
-        {
-          sessionKey: ambiguous,
+      upsert(
+        linkInput(ambiguous, {
           agentId: "other",
-          catalogId: "codex",
-          hostId: "gateway:local",
           threadId: "ambiguous-thread",
-          upstreamKind: "codex-app-server",
           upstreamRef: null,
-          marker: null,
-        },
+        }),
         database,
       ),
     ).toBe(true);
-    expect(
-      await registerSessionStateWatch(
-        { watcherSessionKey: "agent:main:main", targetSessionKey: ambiguous },
-        database,
-      ),
-    ).toBe(true);
+    expect(await watch(ambiguous)).toBe(true);
 
     await closeOpenClawStateDatabaseAsync();
-    const hostSql = observeMainThreadSql();
-    try {
-      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([
-        [
-          "claude",
-          [
-            expect.objectContaining({
-              sessionKey: watched,
-              marker: { offset: 1 },
-              upstreamRef: { source: watched },
-            }),
-          ],
-        ],
+    await withoutHostSql(async () => {
+      const watched = await listWatched(database);
+      expect(watched.size).toBe(1);
+      expect(watched.get("claude")).toMatchObject([
+        { sessionKey: key, marker: { offset: 1 }, upstreamRef: { source: key } },
       ]);
+    });
 
-      hostSql.expectIdle();
-    } finally {
-      hostSql.restore();
-    }
-
-    const expected = readSessionUpstreamLinkInDatabase(
-      openOpenClawStateDatabase(database).db,
-      watched,
-      "main",
-    );
+    const expected = readLink();
     if (!expected) {
       throw new Error("Expected watched link");
     }
-    const markerSql = observeMainThreadSql();
-    try {
-      const results = await Promise.all([
-        settleSessionUpstreamLink(
-          expected,
-          { kind: "activity", marker: { offset: 9 }, now: 200 },
-          { ...database, assertCurrent: () => {} },
-        ),
-        settleSessionUpstreamLink(
-          expected,
-          { kind: "activity", marker: { offset: 10 }, now: 200 },
-          { ...database, assertCurrent: () => {} },
-        ),
-      ]);
-      expect(results).toEqual([true, false]);
-      markerSql.expectIdle();
-    } finally {
-      markerSql.restore();
-    }
-    expect((await listWatchedSessionUpstreamLinks(database)).get("claude")?.[0]).toEqual(
-      expect.objectContaining({ marker: { offset: 9 }, lastScannedAt: 200, updatedAt: 200 }),
-    );
-
-    deleteSessionUpstreamLink(watched, "main", database);
-    expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
-  });
-
-  it("creates missing state through the worker and keeps discovery failure best-effort", async () => {
-    const database = createDatabaseOptions();
-    const hostSql = observeMainThreadSql();
-    try {
-      expect([...(await listWatchedSessionUpstreamLinks(database))]).toEqual([]);
-      hostSql.expectIdle();
-      expect(
-        existsSync(path.join(database.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite")),
-      ).toBe(true);
-      expect([
-        ...(await listWatchedSessionUpstreamLinks({
-          ...database,
-          path: database.env.OPENCLAW_STATE_DIR,
-        })),
-      ]).toEqual([]);
-      hostSql.expectIdle();
-    } finally {
-      hostSql.restore();
-    }
-  });
-
-  it("preserves the marker on same-source refresh and rebases it on source change", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:refresh";
-    upsertLink(sessionKey, "claude", database);
-    await registerSessionStateWatch(
-      { watcherSessionKey: "agent:main:main", targetSessionKey: sessionKey },
-      database,
-    );
-    const expected = readSessionUpstreamLinkInDatabase(
-      openOpenClawStateDatabase(database).db,
-      sessionKey,
-      "main",
-    );
-    if (!expected) {
-      throw new Error("Expected watched link");
-    }
-    await settleSessionUpstreamLink(
-      expected,
-      { kind: "activity", marker: { offset: 4 }, now: 200 },
-      { ...database, assertCurrent: () => {} },
-    );
-
-    // Same source (thread/host/kind unchanged): scan progress must survive.
-    upsertSessionUpstreamLink({ ...expected, marker: { offset: 99 } }, database);
-    expect((await listWatchedSessionUpstreamLinks(database)).get("claude")?.[0]).toEqual(
-      expect.objectContaining({
-        upstreamRef: { source: sessionKey },
-        marker: { offset: 4 },
-      }),
-    );
-
-    // Source change: the old cursor is meaningless for the new thread; rebase.
-    upsertSessionUpstreamLink(
+    await withoutHostSql(async () => {
+      expect(await Promise.all([settle(expected, 9), settle(expected, 10)])).toEqual([true, false]);
+    });
+    expect((await listWatched(database)).get("claude")?.[0]).toMatchObject({
+      marker: { offset: 9 },
+      lastScannedAt: 200,
+      updatedAt: 200,
+    });
+    upsert({ ...expected, marker: { offset: 99 } }, database);
+    expect((await listWatched(database)).get("claude")?.[0]).toMatchObject({
+      upstreamRef: { source: key },
+      marker: { offset: 9 },
+    });
+    upsert(
       {
         ...expected,
         threadId: "thread-refreshed",
@@ -584,12 +449,33 @@ describe("session upstream links", () => {
       },
       database,
     );
-    expect((await listWatchedSessionUpstreamLinks(database)).get("claude")?.[0]).toEqual(
-      expect.objectContaining({
-        threadId: "thread-refreshed",
-        upstreamRef: { source: "rebased" },
-        marker: { offset: 99 },
-      }),
-    );
+    expect((await listWatched(database)).get("claude")?.[0]).toMatchObject({
+      threadId: "thread-refreshed",
+      upstreamRef: { source: "rebased" },
+      marker: { offset: 99 },
+    });
+
+    deleteLink(key, "main", database);
+    expect([...(await listWatched(database))]).toEqual([]);
+  });
+
+  it("creates missing state through the worker and keeps discovery failure best-effort", async () => {
+    const hostSql = observeMainThreadSql();
+    try {
+      expect([...(await listWatched(database))]).toEqual([]);
+      hostSql.expectIdle();
+      expect(
+        existsSync(path.join(database.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite")),
+      ).toBe(true);
+      expect([
+        ...(await listWatched({
+          ...database,
+          path: database.env.OPENCLAW_STATE_DIR,
+        })),
+      ]).toEqual([]);
+      hostSql.expectIdle();
+    } finally {
+      hostSql.restore();
+    }
   });
 });

@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSharedAuthProfileRows } from "../agents/auth-profiles/sqlite-read.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -34,33 +35,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-describe("machine-state import", () => {
-  it("publishes newly imported paths and keeps the first canonical value", () => {
-    const options = {
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("machine-state-") },
-    };
-    writeConfigMachineState("config.lastTouchedAt", "canonical", options);
-    expect(readConfigMachineState("tts.prefsPath", options)).toBeUndefined();
-
-    expect(
-      importConfigMachineState(
-        [
-          ["tts.prefsPath", "/tmp/first-tts.json"],
-          ["tts.prefsPath", "/tmp/ignored-tts.json"],
-          ["config.lastTouchedAt", "legacy"],
-        ],
-        options,
-      ),
-    ).toEqual({
-      imported: ["tts.prefsPath"],
-      kept: ["tts.prefsPath", "config.lastTouchedAt"],
-    });
-
-    expect(readConfigMachineState("tts.prefsPath", options)).toBe("/tmp/first-tts.json");
-    expect(readConfigMachineState("config.lastTouchedAt", options)).toBe("canonical");
-  });
-});
-
 const authKey = "authProfiles.store";
 const profileId = "fixture:credential";
 const credential = (key: string) => ({ type: "api_key" as const, provider: "fixture", key });
@@ -74,6 +48,7 @@ function credentialFixture() {
       databasePath: database.path,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: `${options.env.OPENCLAW_STATE_DIR}/openclaw.json`,
         role: "gateway",
@@ -95,200 +70,171 @@ function credentialFixture() {
   authority.observe(credential("original"));
   const read = () =>
     readConfigMachineState<ReturnType<typeof store>>(authKey, options)?.profiles[profileId];
-  return { options, database, authority, capture, read };
+  return {
+    options,
+    database,
+    capture,
+    read,
+    readAuthority: authority.readCurrentCredential,
+    write: (value: unknown) => writeConfigMachineState(authKey, value, options),
+    writeAsync: (key: string) => writeConfigMachineStateAsync(authKey, store(key), options),
+    remove: () => deleteConfigMachineState(authKey, options),
+    mutate: {
+      write: () => writeConfigMachineState(authKey, store("updated"), options),
+      update: () => updateConfigMachineState(authKey, () => store("updated"), options),
+      delete: () => expect(deleteConfigMachineState(authKey, options)).toBe(true),
+      "update-delete": () => updateConfigMachineState(authKey, () => undefined, options),
+    },
+    importKeys: (...keys: string[]) =>
+      importConfigMachineState(
+        keys.map((key) => [authKey, store(key)]),
+        options,
+      ),
+  };
 }
 
-describe("generic machine-state credential writes", () => {
-  it.each(["write", "update", "delete", "update-delete"] as const)(
-    "%s denies before commit and publishes the committed credential before release",
-    (operation) => {
-      const current = credentialFixture();
-      const exec = current.database.db.exec.bind(current.database.db);
-      let commits = 0;
-      vi.spyOn(current.database.db, "exec").mockImplementation((sql) => {
-        if (sql === "COMMIT") {
-          commits += 1;
-          expect(() => current.authority.readCurrentCredential()).toThrow(
-            "authority is unavailable",
-          );
-        }
-        return exec(sql);
+function watchCommits(database: ReturnType<typeof openOpenClawStateDatabase>, check: () => void) {
+  const exec = database.db.exec.bind(database.db);
+  vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+    if (sql === "COMMIT") {
+      check();
+    }
+    return exec(sql);
+  });
+}
+
+it.each(["write", "update", "delete", "update-delete"] as const)(
+  "%s denies before commit and publishes the committed credential before release",
+  (operation) => {
+    const { options, database, read, readAuthority, mutate } = credentialFixture();
+    let commits = 0;
+    watchCommits(database, () => {
+      commits += 1;
+      expect(readAuthority).toThrow("authority is unavailable");
+    });
+    const expected = operation.includes("delete") ? undefined : credential("updated");
+    let observed: ReturnType<typeof credential> | undefined;
+    runOpenClawStateWriteTransaction(({ db }) => {
+      mutate[operation]();
+      deferSqlitePostCommitPublication(db, () => {
+        expect(readAuthority()).toEqual(expected);
+        observed = read();
       });
-      const expected = operation.includes("delete") ? undefined : credential("updated");
-      let observed: ReturnType<typeof credential> | undefined;
-      runOpenClawStateWriteTransaction(({ db }) => {
-        if (operation === "write") {
-          writeConfigMachineState(authKey, store("updated"), current.options);
-        } else if (operation === "update") {
-          updateConfigMachineState(authKey, () => store("updated"), current.options);
-        } else if (operation === "delete") {
-          expect(deleteConfigMachineState(authKey, current.options)).toBe(true);
-        } else {
-          updateConfigMachineState(authKey, () => undefined, current.options);
-        }
-        deferSqlitePostCommitPublication(db, () => {
-          expect(current.authority.readCurrentCredential()).toEqual(expected);
-          observed = current.read();
-        });
-      }, current.options);
-      expect(commits).toBe(1);
-      expect(current.authority.readCurrentCredential()).toEqual(expected);
-      expect(observed).toEqual(expected);
-    },
-  );
+    }, options);
+    expect(commits).toBe(1);
+    expect([readAuthority(), observed]).toEqual([expected, expected]);
+  },
+);
 
-  it("imports only the first value and preserves facts when a later import is ignored", () => {
-    const current = credentialFixture();
-    deleteConfigMachineState(authKey, current.options);
-    const exec = current.database.db.exec.bind(current.database.db);
-    vi.spyOn(current.database.db, "exec").mockImplementation((sql) => {
-      if (sql === "COMMIT") {
-        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-      }
-      return exec(sql);
-    });
-    expect(
-      importConfigMachineState(
-        [
-          [authKey, store("imported")],
-          [authKey, store("ignored")],
-        ],
-        current.options,
-      ),
-    ).toEqual({ imported: [authKey], kept: [authKey] });
-    expect(current.authority.readCurrentCredential()).toEqual(credential("imported"));
-    expect(importConfigMachineState([[authKey, store("also-ignored")]], current.options)).toEqual({
-      imported: [],
-      kept: [authKey],
-    });
-    expect(current.authority.readCurrentCredential()).toEqual(current.read());
-    expect(current.read()).toEqual(credential("imported"));
-  });
+it("imports only the first value and preserves facts when a later import is ignored", () => {
+  const { database, read, readAuthority, remove, importKeys } = credentialFixture();
+  remove();
+  watchCommits(database, () => expect(readAuthority).toThrow("authority is unavailable"));
+  expect(importKeys("imported", "ignored")).toEqual({ imported: [authKey], kept: [authKey] });
+  expect(readAuthority()).toEqual(credential("imported"));
+  expect(importKeys("also-ignored")).toEqual({ imported: [], kept: [authKey] });
+  expect([readAuthority(), read()]).toEqual([credential("imported"), credential("imported")]);
+});
 
-  it("publishes the serialized durable value and preserves it against an overtaken cold read", () => {
-    const current = credentialFixture();
-    const cold = current.capture();
-    writeConfigMachineState(
-      authKey,
-      {
-        ...store("unserialized"),
-        toJSON: () => store("serialized"),
-      },
-      current.options,
-    );
-    cold.observe(credential("original"));
-    expect(cold.readCurrentCredential()).toEqual(credential("serialized"));
-    expect(current.authority.readCurrentCredential()).toEqual(current.read());
-  });
+it("publishes the serialized durable value and preserves it against an overtaken cold read", () => {
+  const { capture, read, readAuthority, write } = credentialFixture();
+  const cold = capture();
+  write({ ...store("unserialized"), toJSON: () => store("serialized") });
+  cold.observe(credential("original"));
+  expect(cold.readCurrentCredential()).toEqual(credential("serialized"));
+  expect(readAuthority()).toEqual(read());
+});
 
-  it("keeps the original facts after rollback and unrelated writes leave authority available", () => {
-    const current = credentialFixture();
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        writeConfigMachineState(authKey, store("rolled-back"), current.options);
-        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-        throw new Error("cancel mutation");
-      }, current.options),
-    ).toThrow("cancel mutation");
-    const exec = current.database.db.exec.bind(current.database.db);
-    vi.spyOn(current.database.db, "exec").mockImplementation((sql) => {
-      if (sql === "COMMIT") {
-        expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-      }
-      return exec(sql);
-    });
-    writeConfigMachineState("config.lastTouchedAt", "updated", current.options);
-    expect(current.authority.readCurrentCredential()).toEqual(current.read());
-  });
+it("keeps the original facts after rollback and unrelated writes leave authority available", () => {
+  const { options, database, read, readAuthority } = credentialFixture();
+  expect(() =>
+    runOpenClawStateWriteTransaction(() => {
+      writeConfigMachineState(authKey, store("rolled-back"), options);
+      expect(readAuthority).toThrow("authority is unavailable");
+      throw new Error("cancel mutation");
+    }, options),
+  ).toThrow("cancel mutation");
+  watchCommits(database, () => expect(readAuthority()).toEqual(credential("original")));
+  writeConfigMachineState("config.lastTouchedAt", "updated", options);
+  expect(readAuthority()).toEqual(read());
+});
 
-  it("keeps host authority denied until an async worker's committed facts are installed", async () => {
-    const current = credentialFixture();
-    const events: string[] = [];
-    const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
-      events.push(change.kind);
-      if (change.kind === "settled") {
-        expect(current.authority.readCurrentCredential()).toEqual(credential("worker"));
-      } else {
-        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-      }
-    });
-    try {
-      await writeConfigMachineStateAsync(authKey, store("worker"), current.options);
-    } finally {
-      unsubscribe();
+it("keeps host authority denied until an async worker's committed facts are installed", async () => {
+  const { read, readAuthority, writeAsync } = credentialFixture();
+  const events: string[] = [];
+  const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
+    events.push(change.kind);
+    if (change.kind === "settled") {
+      expect(readAuthority()).toEqual(credential("worker"));
+    } else {
+      expect(readAuthority).toThrow("authority is unavailable");
     }
-    expect(events).toEqual(["pending", "committed", "settled"]);
-    expect(current.authority.readCurrentCredential()).toEqual(current.read());
   });
+  try {
+    await writeAsync("worker");
+  } finally {
+    unsubscribe();
+  }
+  expect(events).toEqual(["pending", "committed", "settled"]);
+  expect(readAuthority()).toEqual(read());
+});
 
-  it("keeps an unknown worker publication denied even after a later successful write", async () => {
-    const current = credentialFixture();
-    const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
-      if (change.kind === "committed") {
-        throw new Error("synthetic fact installation failure");
-      }
-    });
-    try {
-      await writeConfigMachineStateAsync(authKey, store("unknown"), current.options);
-    } finally {
-      unsubscribe();
+it("keeps an unknown worker publication denied even after a later successful write", async () => {
+  const { read, readAuthority, writeAsync } = credentialFixture();
+  const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
+    if (change.kind === "committed") {
+      throw new Error("synthetic fact installation failure");
     }
-    expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-    await writeConfigMachineStateAsync(authKey, store("later"), current.options);
-    expect(current.read()).toEqual(credential("later"));
-    expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
   });
+  try {
+    await writeAsync("unknown");
+  } finally {
+    unsubscribe();
+  }
+  expect(readAuthority).toThrow("authority is unavailable");
+  await writeAsync("later");
+  expect(read()).toEqual(credential("later"));
+  expect(readAuthority).toThrow("authority is unavailable");
 });
 
 it("keeps shared auth discovery warm and observes machine-state worker writes", async () => {
-  const current = credentialFixture();
-  const context = captureOpenClawStateWorkerContext(current.options);
-  const first = await readSharedAuthProfileRows(context);
+  const { options, read, readAuthority, writeAsync, remove, importKeys } = credentialFixture();
+  const context = captureOpenClawStateWorkerContext(options);
+  const rows = () => readSharedAuthProfileRows(context);
+  const first = await rows();
   expect(first.store).toMatchObject({ status: "readable", raw: store("original") });
 
-  await writeConfigMachineStateAsync("fixture.unrelated", 1, current.options);
-  expect(await readSharedAuthProfileRows(context)).toBe(first);
-  expect(current.read()).toEqual(credential("original"));
-  expect(await readSharedAuthProfileRows(context)).toBe(first);
+  await writeConfigMachineStateAsync("fixture.unrelated", 1, options);
+  expect(await rows()).toBe(first);
+  expect(read()).toEqual(credential("original"));
 
-  await writeConfigMachineStateAsync(
-    "authProfiles.state",
-    {
-      order: { fixture: [profileId] },
-    },
-    current.options,
-  );
-  expect((await readSharedAuthProfileRows(context)).state).toEqual({
-    status: "readable",
-    raw: { order: { fixture: [profileId] } },
-  });
+  const state = { order: { fixture: [profileId] } };
+  await writeConfigMachineStateAsync("authProfiles.state", state, options);
+  expect((await rows()).state).toEqual({ status: "readable", raw: state });
 
-  await writeConfigMachineStateAsync(authKey, store("changed"), current.options);
-  const changed = await readSharedAuthProfileRows(context);
+  await writeAsync("changed");
+  const changed = await rows();
   expect(changed.store).toMatchObject({ status: "readable", raw: store("changed") });
-  expect(current.authority.readCurrentCredential()).toEqual(credential("changed"));
+  expect(readAuthority()).toEqual(credential("changed"));
 
   expect(() =>
     runOpenClawStateWriteTransaction(() => {
-      deleteConfigMachineState(authKey, current.options);
+      remove();
       throw new Error("rollback");
-    }, current.options),
+    }, options),
   ).toThrow("rollback");
-  const afterRollback = await readSharedAuthProfileRows(context);
+  const afterRollback = await rows();
   expect(afterRollback).toEqual(changed);
-  expect(await readSharedAuthProfileRows(context)).toBe(afterRollback);
+  expect(await rows()).toBe(afterRollback);
 
-  updateConfigMachineState("authProfiles.state", () => undefined, current.options);
-  deleteConfigMachineState(authKey, current.options);
-  expect(await readSharedAuthProfileRows(context)).toMatchObject({
+  updateConfigMachineState("authProfiles.state", () => undefined, options);
+  remove();
+  expect(await rows()).toMatchObject({
     store: { status: "missing", reason: "row" },
     state: { status: "missing", reason: "row" },
   });
-  expect(current.authority.readCurrentCredential()).toBeUndefined();
+  expect(readAuthority()).toBeUndefined();
 
-  importConfigMachineState([[authKey, store("reconnected")]], current.options);
-  expect((await readSharedAuthProfileRows(context)).store).toMatchObject({
-    status: "readable",
-    raw: store("reconnected"),
-  });
+  importKeys("reconnected");
+  expect((await rows()).store).toMatchObject({ status: "readable", raw: store("reconnected") });
 });

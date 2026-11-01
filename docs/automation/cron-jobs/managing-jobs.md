@@ -22,7 +22,7 @@ Run links from automation messages and notifications open the exact recorded run
       --name "Calendar check" \
       --at "20m" \
       --session main \
-      --system-event "Next heartbeat: check calendar." \
+      --system-event "Check the calendar for upcoming events." \
       --wake now
     ```
   </Tab>
@@ -76,9 +76,13 @@ Run links from automation messages and notifications open the exact recorded run
 
 In the Control UI, an open automation refreshes its next-run time and condition activity when scheduler events arrive. These runtime updates preserve unsaved settings and the saved definition used for conflict detection, including when the selected automation is outside the current list page or filter.
 
+Model choices load when you open an automation's settings or create an automation. You can edit the draft while choices load. Model-catalog errors appear in that editor without interrupting the automation list or run history.
+
 ### Conversational management
 
 An authenticated channel sender explicitly listed in `commands.ownerAllowFrom`, or a Control UI administrator with `operator.admin`, can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
+
+When `tools.gatewayPolicy.automations.scope` is `"caller"`, model turns keep ordinary caller scope even for administrators and configured channel owners. `allowCommandJobs: false` additionally blocks model changes to and runs of command jobs. Direct human administration remains available. See [Gateway tool policy](/gateway/config-tools/tool-policy#automation-scope-and-command-jobs).
 
 Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
 
@@ -98,6 +102,19 @@ attribution stay intact; capless jobs retain their legacy execution policy.
 An explicit permission edit still requires matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
+
+Automations created before owner attribution have no recorded owner. Chat can
+still enable, disable, reschedule or remove them, but only a Gateway owner or an
+operator can change their prompt or tools.
+
+Operator-created automations that name an owner conversation run with operator
+authority. That conversation can list, enable, disable, reschedule, run
+or remove them; other conversations cannot see them. Enabling, disabling and
+schedule or timing changes keep operator authority. Any other change
+from the owner conversation, such as the name, prompt, tools, trigger, delivery,
+failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
+changes need a Gateway owner or an operator, or a new automation. Only a Gateway
+owner or an operator can write its scratch.
 
 ```bash
 # List enabled jobs
@@ -142,11 +159,15 @@ openclaw automations create "0 6 * * *" "Check ops queue" --name "Ops sweep" --s
 openclaw automations edit <jobId> --clear-agent
 ```
 
-Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+Conversation automation views use the conversation's physical key and selected agent. With `session.scope: "global"`, jobs targeting `session:global` or that agent's main-session alias belong to its `global` conversation. An explicitly agent-qualified named target remains separate, and another agent's `global` conversation keeps its own jobs.
+
+Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar. An agent's main session, including `global`, cannot be archived.
+
+Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names the jobs that will pause and offers **Archive anyway** or **Delete anyway**; the warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 
-The agent `automations` tool's `run` action waits in the Gateway instead: it returns the finished run (status, error, delivery status, and summary) when the run ends within the call's `timeoutMs` (default 60 seconds, capped at 10 minutes). A longer run returns its `runId`; read it later with the `runs` action and that `runId`. Main-session jobs, and jobs that run in the calling session, return at once because they start only after the calling turn ends.
+The agent `automations` tool's `run` action waits in the Gateway instead: it returns the finished run (status, error, delivery status, and summary) when the run ends within the call's `timeoutMs` (default 60 seconds, capped at 10 minutes). A longer run returns its `runId`; read it later with the `runs` action and that `runId`. Main-session jobs, and jobs that run in the calling session, return at once because they start only after the calling turn ends. With global session scope, this includes `session:global` and main-session aliases for the calling agent. Quiet jobs targeting another agent's global conversation retain the normal bounded wait.
 
 Run-now delivery measures lateness from when the manual request was accepted. An old pending scheduled slot does not make its fresh output stale; automatic and `--due` runs keep the original scheduled time for that check. A manual run still preserves the job's recurring cadence or future one-shot occurrence.
 
@@ -223,7 +244,28 @@ Automation jobs, run history, and quarantined malformed jobs live in the shared 
 
 Set `cron.skipMissedJobs: true` to skip recurring (`cron` and `every`) slots missed while the Gateway was offline. At startup, those jobs advance to their next future occurrence instead of catching up, avoiding stale reminders and unnecessary model calls at the cost of dropping missed work. The default is `false` (catch up); one-shot (`at`) jobs retain their normal catch-up behavior either way.
 
-Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
+Disable automatic runs: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`. These settings do not prevent manual runs.
+
+Set `cron.defaultTools: ["read"]` to add common prerequisites when the agent's
+automations tool creates or explicitly revises a nonempty `payload.toolsAllow`
+selection. For example, `["execute_code"]` becomes `["execute_code", "read"]`
+before creator-policy checks and approval. The setting accepts any tool names;
+it does not grant unavailable tools or change filesystem, provider, or recurring
+approval enforcement. Unset or `[]` adds nothing.
+
+Use the request-level `toolsAllowMode: "exact"` beside `action` and `job` to opt
+out when the supplied list is an intentional restriction. An explicit
+`payload.toolsAllow: []` always remains tool-less. Omitted or cleared selections
+keep their existing native semantics. The mode is not stored in the job.
+Saved jobs and edits that leave `toolsAllow` alone are unchanged; intentionally
+revise a job's tool selection to adopt new defaults. CLI and direct Gateway
+writes retain their explicit selections. Hosts that construct approval proposals
+use the [shared SDK helper](/plugins/sdk-subpaths) before binding the proposal;
+already approved shapes must be replayed unchanged.
+
+A caller who can define a host-executed automation can make the Gateway start a process with its host privileges. That process can access credentials readable by the Gateway or alter configuration files writable by it. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY` even when local terminals are disabled.
+
+To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST_EXECUTION=1` in its launch environment. The Gateway refuses command and script payloads, condition triggers, `on-exit` schedules, and Gateway-hosted `stream` sources, including persisted and manually requested jobs. Scheduled agent turns and authorized sandbox-backed stream sources remain available. Existing blocked jobs can still be disabled or removed. Gateway configuration cannot change this control; change the launch environment and restart the Gateway to change it. The control does not govern tools used by agent turns or provide filesystem isolation.
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
@@ -235,7 +277,9 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
   <Accordion title="Maintenance">
     `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
-    Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
+    Per-agent run-session retention skips agent databases still undergoing startup preparation while maintaining healthy agents. Completed preparation wakes retention for the newly available database. These sweeps keep the Gateway's maintenance context rather than borrowing the publisher's temporary startup admission. Retention continues even when scheduled execution is disabled.
+
+    The seven-day session registry sweep checks descendants only for expired, unprotected run rows. It retains an exact-run parent while it has a non-archived descendant, including through archived intermediate sessions or in another agent's store. If a non-deleted agent's store is unavailable or held for recovery, the registry sweep defers pruning across healthy stores too and retries every minute: the unavailable store may still contain a live descendant. Once those stores are available and no live descendants remain, the expired parent can be pruned. This preserves the parent communication policy for `sessions_send`; it does not restore parent rows deleted before this fix.
 
     After each registry sweep, the Gateway waits until the next candidate expiry or a committed cron-session or store-topology change. Empty, unchanged registries do not need periodic reads. Protected expired sessions and failed sweeps retry every minute; run-history recovery keeps its existing minute cadence.
 

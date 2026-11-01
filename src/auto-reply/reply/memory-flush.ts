@@ -15,35 +15,17 @@ import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
-function resolveEffectivePromptTokens(
-  basePromptTokens?: number,
-  lastOutputTokens?: number,
-  promptTokenEstimate?: number,
-): number {
-  const base = Math.max(0, basePromptTokens ?? 0);
-  const output = Math.max(0, lastOutputTokens ?? 0);
-  const estimate = Math.max(0, promptTokenEstimate ?? 0);
-  // Flush gating projects the next input context by adding the previous
-  // completion and the current user prompt estimate.
-  return base + output + estimate;
-}
+export { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 
 export function resolveProjectedPromptTokens(
   persistedPromptTokens: number | undefined,
   promptTokenEstimate: number | undefined,
   transcript: TranscriptTokenEstimate | undefined,
 ): number {
-  const project = (promptTokens: number | undefined, outputTokens: number | undefined) =>
-    promptTokens !== undefined
-      ? resolveEffectivePromptTokens(promptTokens, outputTokens, promptTokenEstimate)
-      : 0;
-  return Math.max(
-    project(persistedPromptTokens, transcript?.outputTokens),
-    project(
-      transcript?.promptTokens,
-      transcript?.promptIncludesOutput ? undefined : transcript?.outputTokens,
-    ),
-  );
+  const contextTokens = persistedPromptTokens ?? transcript?.contextTokens;
+  return contextTokens === undefined
+    ? 0
+    : Math.max(0, contextTokens) + Math.max(0, promptTokenEstimate ?? 0);
 }
 
 export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -53,16 +35,6 @@ export function estimatePromptTokensForMemoryFlush(prompt?: string): number | un
   }
   const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
   return Math.ceil(estimateMessagesTokens([message]));
-}
-
-export function resolveCompactionThreshold(params: {
-  contextWindowTokens: number;
-  reserveTokensFloor: number;
-  minimumThresholdTokens?: number;
-}): number {
-  const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
-  return Math.max(0, contextWindow - reserveTokens, Math.floor(params.minimumThresholdTokens ?? 0));
 }
 
 export function resolveResponsesServerCompactionThreshold(params: {

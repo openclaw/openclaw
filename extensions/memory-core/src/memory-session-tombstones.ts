@@ -9,6 +9,7 @@ import {
   tableExists,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "./memory-index-revision.worker.js";
 
 const tombstoneAdmission: SqliteDatabaseAdmissionKey<ReadonlyMap<string, string>> = {
   name: "memory.session-tombstones",
@@ -67,14 +68,13 @@ type MemorySessionTombstoneRow = {
 
 type MemoryOriginDatabase = {
   memory_session_tombstones: MemorySessionTombstoneRow;
-  memory_index_state: { id: number; revision: number };
 };
 // Four bindings per row stay below SQLite's historical 999-variable default.
 const TOMBSTONE_INSERT_BATCH_SIZE = 128;
 
 /** The caller owns schema admission; preserve the supplied connection and write boundary. */
 export function recordMemorySessionTombstonesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     agentId: string;
     sessionIds: readonly string[];
@@ -117,13 +117,7 @@ export function recordMemorySessionTombstonesInDatabase(
     if (recorded > 0) {
       // A shadow index can have no published chunks yet. Its existing revision
       // fence must still reject a rebuild prepared before this deletion.
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("memory_index_state")
-          .set((expression) => ({ revision: expression("revision", "+", 1) }))
-          .where("id", "=", 1),
-      );
+      advanceMemoryIndexRevision(db);
     }
     publishSqliteDatabaseAdmission(db, tombstoneAdmission, sessions);
     return recorded;

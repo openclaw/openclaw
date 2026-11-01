@@ -31,7 +31,7 @@ export function resolveStructuredDraftInitialValue(
     (type === "object" && isRecord(schemaDefault)) ||
     (type === "array" && Array.isArray(schemaDefault))
   ) {
-    initialValue = structuredClone(schemaDefault);
+    initialValue = schemaDefault;
   }
   return isSupportedConfigValueValid(params.schema, initialValue) ? undefined : initialValue;
 }

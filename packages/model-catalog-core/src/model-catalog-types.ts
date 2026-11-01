@@ -14,6 +14,8 @@ import {
 } from "../../llm-core/src/model-data.js";
 import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
 
+export type { DecisionAnswerCapabilities } from "./decision-answer-capabilities.js";
+
 export type {
   ModelInferenceCapabilities,
   ModelDecisionCapabilities,
@@ -85,6 +87,16 @@ export type ModelCatalogCompatConfig = {
   supportedReasoningEfforts?: string[];
   reasoningEffortMap?: Record<string, string>;
   visibleReasoningDetailTypes?: string[];
+  /** Thinking level a new session starts at. Its presence makes the row own the thinking profile. */
+  defaultThinkingLevel?: string;
+  /** Offered thinking levels, in order. Replaces the ladder derived from the map and efforts. */
+  thinkingLevels?: string[];
+  /** Offers the `adaptive` level, which lets the model choose its own effort. */
+  adaptiveThinking?: boolean;
+  /** Thinking stays on even when the row says `reasoning: false` (the route cannot turn it off). */
+  thinkingRequired?: boolean;
+  /** Display labels per level, e.g. `{ low: "on" }` for a binary thinking switch. */
+  thinkingLevelLabels?: Record<string, string>;
 };
 
 /** OpenRouter routing preferences copied into request metadata. */
@@ -113,7 +125,26 @@ export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
 export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
-export type ModelCatalogInput = "text" | "image" | "video" | "document";
+// Lowercase, hyphen-separated token; the Gateway protocol's ModelChoice schema mirrors it.
+const MODEL_FAMILY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const MODEL_FAMILY_MAX_LENGTH = 64;
+
+/**
+ * Canonical model family: the developer lineage a catalog declares for a model, such as
+ * `anthropic`. Callers pass only provider or catalog metadata, never a model id or name.
+ */
+export function normalizeModelFamily(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const family = value.trim().toLowerCase();
+  return family.length <= MODEL_FAMILY_MAX_LENGTH && MODEL_FAMILY_PATTERN.test(family)
+    ? family
+    : undefined;
+}
+
+export const MODEL_CATALOG_INPUTS = ["text", "image", "video", "document"] as const;
+export type ModelCatalogInput = (typeof MODEL_CATALOG_INPUTS)[number];
 export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
 export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
@@ -135,6 +166,13 @@ export function resolveOpenAIThinkingApi(api: unknown): string | undefined {
 }
 
 /** Map keys describe logical choices; provider-native values retain their spelling. */
+/** A row owns its thinking profile when it states a default level or an offered ladder. */
+export function ownsThinkingProfile(
+  compat: { defaultThinkingLevel?: string; thinkingLevels?: readonly string[] } | null | undefined,
+): boolean {
+  return compat?.defaultThinkingLevel !== undefined || (compat?.thinkingLevels?.length ?? 0) > 0;
+}
+
 export function listMappedModelThinkingLevels(model: {
   api?: string | null;
   compat?: unknown;
@@ -162,7 +200,8 @@ export function listMappedModelThinkingLevels(model: {
 }
 
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
-export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
+export const MODEL_CATALOG_STATUSES = ["available", "preview", "deprecated", "disabled"] as const;
+export type ModelCatalogStatus = (typeof MODEL_CATALOG_STATUSES)[number];
 export type ModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -235,6 +274,8 @@ export type ModelCatalogModel = {
   contextTokens?: number;
   /** Total model parameters, including inactive experts. */
   parameterCount?: number;
+  /** Canonical developer lineage of this model; overrides the provider-level family. */
+  family?: string;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
@@ -260,10 +301,20 @@ export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
+  /**
+   * Canonical family of every model in this provider's catalog, for single-developer
+   * catalogs. Rows inherit it like `api`; multi-developer hosts declare it per row.
+   */
+  family?: string;
   /** Provider-recommended primary model id. */
   defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
+  /**
+   * Multi-vendor routers: small model id per vendor, keyed by the vendor prefix of the
+   * primary model id (`<vendor>/<model>`). Used only when the router offers that model.
+   */
+  defaultUtilityModels?: Record<string, string>;
   /**
    * Hosted catalog v2 projection of the curated global list onto this provider's
    * model ids, best first; reserved for picker ordering and not yet used.
@@ -299,6 +350,8 @@ export type ModelCatalog = {
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
   discovery?: Record<string, ModelCatalogDiscovery>;
+  /** Runtime catalogs bound to the configured origin, or the manifest default when absent. */
+  configuredEndpointDiscovery?: string[];
   runtimeAugment?: boolean;
 };
 

@@ -56,3 +56,11 @@ export function matchGitHubItemPath(url: URL): GitHubItemMatch | null {
 export function matchGitHubItemUrl(url: URL): GitHubItemMatch | null {
   return url.href.startsWith("https://github.com/") ? matchGitHubItemPath(url) : null;
 }
+
+/** Commit previews use the same strict repository and HTTPS boundary as items. */
+export function isGitHubCommitUrl(url: URL): boolean {
+  const match = /^\/([^/]+)\/([^/]+)\/commit\/[a-fA-F\d]{7,40}\/?$/u.exec(url.pathname);
+  return Boolean(
+    url.href.startsWith("https://github.com/") && match && decodeRepository(match[1]!, match[2]!),
+  );
+}

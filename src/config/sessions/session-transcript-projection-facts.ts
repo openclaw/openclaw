@@ -17,6 +17,7 @@ export function projectSessionTranscriptFacts(
     ) {
       latestIndexedReset = {
         active_position: row.active_position,
+        event_id: identity.event_id,
         event_type: "reset",
         seq: identity.seq,
       };

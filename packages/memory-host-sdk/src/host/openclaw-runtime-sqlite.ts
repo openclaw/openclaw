@@ -27,8 +27,10 @@ export {
 } from "../../../../src/infra/sqlite-database-admission.js";
 export { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
 export { stageSqliteTransactionState } from "../../../../src/infra/sqlite-post-commit.js";
+export { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
 export {
   sqlPublicationAnchor,
   type PostgresSqlConnection,
+  type EngineConnection,
 } from "../../../../src/infra/sql-connection.js";
 export * from "../../../../src/infra/database-engine/sqlite-search-schema.js";

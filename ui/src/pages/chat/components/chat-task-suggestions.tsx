@@ -1,14 +1,18 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, createUniqueId, For, Show, onSettled } from "solid-js";
 import type {
   ProjectRecord,
   TaskSuggestion,
   TaskSuggestionsAcceptParams,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Menu } from "../../../components/solid/menu.tsx";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
-import { ChatTaskStartMenu } from "./chat-task-start-menu.tsx";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export type TaskSuggestionStartMode = Extract<
   TaskSuggestionsAcceptParams["mode"],
@@ -26,13 +30,17 @@ export type TaskSuggestionAcceptance =
 
 export type ChatTaskSuggestionTrayProps = {
   taskSuggestions?: TaskSuggestion[];
-  taskSuggestionBusyIds?: ReadonlySet<string>;
   taskSuggestionCopiedIds?: ReadonlySet<string>;
   taskSuggestionAcceptance?: (taskId: string) => TaskSuggestionAcceptance | undefined;
   activeTaskSuggestionId?: string;
   taskSuggestionSwapDirection?: "next" | "previous";
   taskSuggestionSwapGeneration?: number;
   onNavigateTaskSuggestion?: (taskId: string, direction: "next" | "previous") => void;
+  onTaskSuggestionNavigationMount?: (
+    taskId: string,
+    direction: "next" | "previous",
+    button: HTMLButtonElement,
+  ) => void;
   onCopyTaskSuggestionPrompt?: (suggestion: TaskSuggestion) => void;
   canAcceptTaskSuggestions?: boolean;
   canDismissTaskSuggestions?: boolean;
@@ -98,10 +106,9 @@ function TaskSuggestionCard(props: {
   active: boolean;
   view: ChatTaskSuggestionTrayProps;
 }) {
-  let path: HTMLElement | undefined;
-  const busy = () => props.view.taskSuggestionBusyIds?.has(props.suggestion.id) ?? false;
   const canAccept = () => props.view.canAcceptTaskSuggestions === true;
   const acceptance = () => props.view.taskSuggestionAcceptance?.(props.suggestion.id);
+  const busy = () => acceptance()?.phase === "starting";
   const failure = () => {
     const value = acceptance();
     return value?.phase === "failed" ? value : undefined;
@@ -117,23 +124,53 @@ function TaskSuggestionCard(props: {
     );
   // Native edits and manual disclosure state survive unrelated owner refreshes.
   const repositoryCwd = createMemo(() => repository()?.cwd ?? "");
-  const instructionsOpen = createMemo(() => Boolean(acceptance()) || busy());
-  createEffect(cwd, () => {
-    const frame = requestAnimationFrame(() => {
-      if (path) {
-        path.toggleAttribute(
-          "data-overflow-right",
-          path.scrollLeft + path.clientWidth < path.scrollWidth - 1,
-        );
-      }
-    });
-    return () => cancelAnimationFrame(frame);
-  });
+  const instructionsOpen = createMemo(() => Boolean(acceptance()));
+  const pathRef = createScrollStateRef(
+    (element, state) => element.toggleAttribute("data-overflow-right", !state.atEnd),
+    { presented: () => props.active, horizontal: true, content: cwd },
+  );
   const accept = (mode: TaskSuggestionStartMode) => {
     if (!busy() && canAccept()) {
       props.view.onAcceptTaskSuggestion?.(props.suggestion, mode, undefined);
     }
   };
+
+  function TaskStartMenu() {
+    const id = createUniqueId();
+    return (
+      <Menu
+        id={`task-start-${id}`}
+        placement="bottom-end"
+        label={t("chat.taskSuggestions.startOptions")}
+        disabled={busy() || !canAccept()}
+        triggerClass="btn task-suggestion__start task-suggestion__start--options"
+        triggerAttributes={{ title: canAccept() ? "" : t("chat.taskSuggestions.adminRequired") }}
+        trigger={<Icon name="chevronDown" />}
+        items={[
+          {
+            id: "local",
+            label: t("chat.taskSuggestions.startSession"),
+            disabled: busy() || !canAccept(),
+          },
+          {
+            id: "worktree",
+            label: t("chat.taskSuggestions.startWorktree"),
+            disabled: busy() || !canAccept(),
+          },
+          {
+            id: "session",
+            label: t("chat.taskSuggestions.startCurrentSession"),
+            disabled: busy() || !canAccept(),
+          },
+        ]}
+        onSelect={(item) => {
+          if (item.id === "local" || item.id === "worktree" || item.id === "session") {
+            accept(item.id);
+          }
+        }}
+      />
+    );
+  }
   return (
     <article
       class="task-suggestion"
@@ -166,24 +203,39 @@ function TaskSuggestionCard(props: {
           </button>
           <Show when={props.count > 1}>
             <For each={["previous", "next"] as const}>
-              {(direction) => (
-                <button
-                  class="task-suggestion__header-action"
-                  type="button"
-                  aria-label={t(
-                    direction === "previous"
-                      ? "chat.taskSuggestions.previous"
-                      : "chat.taskSuggestions.next",
-                  )}
-                  data-task-prev={direction === "previous" ? "" : undefined}
-                  data-task-next={direction === "next" ? "" : undefined}
-                  onClick={() =>
-                    props.view.onNavigateTaskSuggestion?.(props.suggestion.id, direction)
+              {(direction) => {
+                let button: HTMLButtonElement | undefined;
+                onSettled(() => {
+                  if (props.active && button) {
+                    props.view.onTaskSuggestionNavigationMount?.(
+                      props.suggestion.id,
+                      direction,
+                      button,
+                    );
                   }
-                >
-                  <Icon name={direction === "previous" ? "chevronLeft" : "chevronRight"} />
-                </button>
-              )}
+                });
+                return (
+                  <button
+                    ref={(element) => {
+                      button = element;
+                    }}
+                    class="task-suggestion__header-action"
+                    type="button"
+                    aria-label={t(
+                      direction === "previous"
+                        ? "chat.taskSuggestions.previous"
+                        : "chat.taskSuggestions.next",
+                    )}
+                    data-task-prev={direction === "previous" ? "" : undefined}
+                    data-task-next={direction === "next" ? "" : undefined}
+                    onClick={() =>
+                      props.view.onNavigateTaskSuggestion?.(props.suggestion.id, direction)
+                    }
+                  >
+                    <Icon name={direction === "previous" ? "chevronLeft" : "chevronRight"} />
+                  </button>
+                );
+              }}
             </For>
           </Show>
           <Show when={props.view.canDismissTaskSuggestions === true}>
@@ -213,20 +265,7 @@ function TaskSuggestionCard(props: {
             <span class="task-suggestion__hide">{t("chat.taskSuggestions.hideInstructions")}</span>
           </summary>
           <div class="task-suggestion__instruction-body">
-            <code
-              ref={(element) => {
-                path = element;
-              }}
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                element.toggleAttribute(
-                  "data-overflow-right",
-                  element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
-                );
-              }}
-            >
-              {cwd()}
-            </code>
+            <code ref={pathRef}>{cwd()}</code>
             <pre>{sanitizeTaskSuggestionText(props.suggestion.prompt)}</pre>
           </div>
         </details>
@@ -300,7 +339,7 @@ function TaskSuggestionCard(props: {
                 <Icon name="play" />
                 {t(busy() ? "chat.taskSuggestions.starting" : "chat.taskSuggestions.startSession")}
               </button>
-              <ChatTaskStartMenu busy={busy()} canAccept={canAccept()} onSelect={accept} />
+              <TaskStartMenu />
             </>
           }
         >

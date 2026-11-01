@@ -54,7 +54,12 @@ restrictions reuse the same native thread, including after a connection restart.
 Temporary restrictions, such as per-run allowlists, scheduled restrictions, or
 sender-specific restrictions, use an isolated thread where necessary and preserve
 the conversation's existing binding. A temporary first turn does not establish
-a permanent restricted binding.
+a permanent restricted binding. Verified subagent completions carrying inherited
+tool restrictions also use this temporary scope, so the next owner turn can
+resume the original thread with the unseen completion input and answer as quoted
+context. A successful owner turn covers that delta so later turns do not replay it.
+The completion still obeys its inherited restrictions;
+the child's own persistent policy is unchanged.
 
 When a managed restricted thread's creation policy changes, or an older binding
 has no saved policy fingerprint, OpenClaw creates a compatible successor and
@@ -131,10 +136,18 @@ whether any individual file was fully loaded or truncated.
 
 ### Compaction
 
-Do not set `compaction.model` or `compaction.provider` on Codex-backed
-agents. Codex compacts through its native app-server thread state, so
-OpenClaw ignores those local summarizer overrides at runtime, and
-`openclaw doctor --fix` removes them when the agent uses Codex.
+`agents.defaults.compaction.model` selects the model for OpenClaw host summaries,
+including the history summary before seeding a fresh Codex thread. Doctor preserves
+this setting. Native Codex compaction and `/compact` remain owned by Codex and do
+not use this override. A locked model selection also takes precedence over the
+host summary model.
+
+After native compaction, context usage reflects Codex's new history estimate.
+When Codex supplies no estimate, context usage stays unknown until the next
+reported measurement. Compaction does not reset cumulative token usage.
+
+Do not set `compaction.provider` on Codex-backed agents. Doctor removes unsupported
+provider overrides and migrates legacy Lossless configuration as described below.
 
 An authored `models.providers.*.models[].contextTokens` cap is forwarded to
 Codex thread start and resume as `model_context_window`. Codex clamps the value
@@ -170,6 +183,38 @@ for the same model and when no newer unreported turn superseded it. Before an
 observation is available, only an explicit authored cap supplies a budget;
 otherwise the budget remains unknown. Resolved OpenClaw budgets take precedence,
 and learning a native window does not change the thread's bootstrap policy.
+
+For explicitly budgeted context-engine projections, history selected by assembly
+is not silently shortened again to fit a single native user input. It travels as
+quoted-user fragments of at most 8 KiB of UTF-8 text, with images carried
+separately, preserving text, sender labels, and image order. Framing overhead is
+reserved before assembly. The current request remains normal user input,
+separate from quoted history.
+
+OpenClaw seeds selected history once when a native thread starts. Later selections
+that extend the same history append only their new suffix; an unchanged selection
+is not injected again, including after a restart or native thread resume. A
+rewritten selection or changed bootstrap epoch starts a fresh native thread with
+the new selected history instead of reinjecting the full selection into the old
+thread. Codex owns the resulting native history and compaction and may summarize
+it. Use the built-in OpenClaw runtime (`agentRuntime.id: "openclaw"`) when a context
+engine must fully control the model's history and compaction.
+
+Selected saved attachments are restored under the same finite remaining history
+allowance used for assembly. Complete restored text, file wrappers, sender
+labels, separators, and image estimates consume that allowance together. An
+expansion that exceeds it stops before native history or inference is dispatched,
+instead of silently clipping the selected quote. Existing file-extraction limits
+and visible extraction dispositions remain the host media owner's policy.
+
+Ordinary assembly failures retain the existing prompt fallback. Saved attachment
+failures, continuations, and runtime refreshes retain their stricter handling.
+A failed fresh-thread seed is not marked ready. An uncertain append to a reused
+thread releases its OpenClaw binding without deleting the native transcript, so
+a retry starts fresh instead of blindly repeating the append. A crash after an
+append but before its acknowledgment is saved can still require a fresh thread;
+this carrier does not introduce an exactly-once durability guarantee.
+Transport limits still apply and produce an error instead of a partial history.
 
 Fresh Codex threads, including ordinary **Fork conversation** sessions, receive
 recent saved history within a bounded continuity window. Conversation text and

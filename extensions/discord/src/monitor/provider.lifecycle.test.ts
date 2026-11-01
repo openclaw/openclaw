@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { GatewayCloseCodes, type GatewayPlugin } from "../internal/gateway.js";
-import type { waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import {
   DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
   type MutableDiscordGateway,
@@ -20,18 +20,18 @@ type MockGateway = {
   emitter: EventEmitter;
 };
 
-const { stopLogging, unregisterGateway, waitForStop } = vi.hoisted(() => ({
-  stopLogging: vi.fn(),
-  unregisterGateway: vi.fn(),
-  waitForStop: vi.fn((_params: Parameters<typeof waitForDiscordGatewayStop>[0]) =>
-    Promise.resolve(),
-  ),
-}));
-vi.mock("../gateway-logging.js", () => ({ attachDiscordGatewayLogging: () => stopLogging }));
-vi.mock("../monitor.gateway.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../monitor.gateway.js")>()),
-  waitForDiscordGatewayStop: waitForStop,
-}));
+// Suite runs isolate=false: a partial factory here poisons the shared module
+// cache for later files in the worker (#123025), so spread the real module.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    logVerbose: vi.fn(),
+    warn: (message: string) => `warn:${message}`,
+  };
+});
+
+const unregisterGateway = vi.hoisted(() => vi.fn());
 vi.mock("./gateway-registry.js", () => ({ registerGateway: vi.fn(), unregisterGateway }));
 
 describe("runDiscordGatewayLifecycle", () => {
@@ -40,9 +40,8 @@ describe("runDiscordGatewayLifecycle", () => {
     ({ runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js"));
   });
   beforeEach(() => {
-    stopLogging.mockClear();
+    vi.mocked(logVerbose).mockClear();
     unregisterGateway.mockClear();
-    waitForStop.mockClear();
   });
   afterEach(() => vi.useRealTimers());
 
@@ -68,9 +67,17 @@ describe("runDiscordGatewayLifecycle", () => {
     };
     const threadStop = vi.fn();
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const abort = new AbortController();
+    const listening = createDeferred<void>();
+    let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
     const gatewaySupervisor = {
-      attachLifecycle: vi.fn(),
-      detachLifecycle: vi.fn(),
+      attachLifecycle: vi.fn((handler: (event: DiscordGatewayEvent) => void) => {
+        lifecycleHandler = handler;
+        listening.resolve();
+      }),
+      detachLifecycle: vi.fn(() => {
+        lifecycleHandler = undefined;
+      }),
       drainPending: vi.fn((handler: (event: DiscordGatewayEvent) => "continue" | "stop") => {
         const queued = pending.splice(0);
         for (const event of queued) {
@@ -94,20 +101,68 @@ describe("runDiscordGatewayLifecycle", () => {
       threadBindings: { stop: threadStop },
       gatewaySupervisor,
       statusSink,
+      abortSignal: abort.signal,
     };
-    return { params, gateway, emitter, threadStop, runtime, gatewaySupervisor, statusSink };
+    return {
+      params,
+      gateway,
+      emitter,
+      threadStop,
+      runtime,
+      gatewaySupervisor,
+      statusSink,
+      abort,
+      listening: listening.promise,
+      emitGatewayEvent: (event: DiscordGatewayEvent) => lifecycleHandler?.(event),
+    };
   }
 
-  function expectCleanup(h: ReturnType<typeof createHarness>, waits: number, detaches = 1) {
-    expect(waitForStop).toHaveBeenCalledTimes(waits);
+  function expectCleanup(h: ReturnType<typeof createHarness>, attaches: number, detaches = 2) {
+    expect(h.gatewaySupervisor.attachLifecycle).toHaveBeenCalledTimes(attaches);
     expect(unregisterGateway).toHaveBeenCalledWith("default");
-    expect(stopLogging).toHaveBeenCalledOnce();
+    expect(h.emitter.listenerCount("debug")).toBe(0);
+    expect(h.emitter.listenerCount("warning")).toBe(0);
     expect(h.threadStop).toHaveBeenCalledOnce();
     expect(h.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(detaches);
   }
 
+  it.each([
+    ["debug", "Gateway websocket opened", false],
+    ["debug", "Gateway websocket closed: 1001", true],
+    ["debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)", true],
+    ["debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts", true],
+    ["warning", "High latency detected: 1200ms", true],
+  ] as const)("logs %s: %s", async (event, message, promoted) => {
+    const h = createHarness();
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    try {
+      await h.listening;
+      h.emitter.emit(event, message);
+      const verbose = `discord gateway${event === "warning" ? " warning" : ""}: ${message}`;
+      expect(logVerbose).toHaveBeenCalledExactlyOnceWith(verbose);
+      expect(h.runtime.log.mock.calls).toEqual(
+        promoted ? [[event === "warning" ? `warn:${verbose}` : verbose]] : [],
+      );
+    } finally {
+      h.abort.abort();
+      await lifecycle;
+    }
+  });
+
+  it("removes logging listeners on cleanup", async () => {
+    const h = createHarness();
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    await h.listening;
+    h.abort.abort();
+    await lifecycle;
+    vi.mocked(logVerbose).mockClear();
+    h.emitter.emit("debug", "Gateway websocket closed: 1001");
+    h.emitter.emit("warning", "High latency detected: 1200ms");
+    expect(logVerbose).not.toHaveBeenCalled();
+    expect(h.runtime.log).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("joins bindings after voice cleanup fails=%s", async (fails) => {
-    waitForStop.mockRejectedValueOnce(new Error("gateway wait failed"));
     const h = createHarness();
     const autoJoin = vi.fn(async () => undefined);
     const destroy = vi.fn(async () => {
@@ -133,6 +188,8 @@ describe("runDiscordGatewayLifecycle", () => {
       fails ? "voice destroy failed" : "gateway wait failed",
     );
     try {
+      await h.listening;
+      h.emitGatewayEvent(gatewayEvent("fatal", "gateway wait failed"));
       await entered.promise;
       await Promise.resolve();
       expect(settled).toBe(false);
@@ -148,14 +205,8 @@ describe("runDiscordGatewayLifecycle", () => {
 
   it("throttles transport liveness and removes its listener on shutdown", async () => {
     const h = createHarness();
-    const entered = createDeferred<void>();
-    const stopped = createDeferred<void>();
-    waitForStop.mockImplementationOnce(() => {
-      entered.resolve();
-      return stopped.promise;
-    });
     const lifecycle = runDiscordGatewayLifecycle(h.params);
-    await entered.promise;
+    await h.listening;
     expect(h.statusSink).toHaveBeenCalledWith(
       expect.objectContaining({
         connected: true,
@@ -178,7 +229,7 @@ describe("runDiscordGatewayLifecycle", () => {
       { lastTransportActivityAt: 131_000 },
       { lastTransportActivityAt: 200_000 },
     ]);
-    stopped.resolve();
+    h.abort.abort();
     await lifecycle;
     const calls = h.statusSink.mock.calls.length;
     h.emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: Date.now() });
@@ -194,11 +245,11 @@ describe("runDiscordGatewayLifecycle", () => {
     await vi.advanceTimersByTimeAsync(15_250);
     expect(h.gateway.disconnect).toHaveBeenCalledOnce();
     expect(h.gateway.connect).toHaveBeenCalledOnce();
-    expect(waitForStop).not.toHaveBeenCalled();
+    expect(h.gatewaySupervisor.attachLifecycle).not.toHaveBeenCalled();
     abort.abort(new Error("shutdown"));
     await vi.advanceTimersByTimeAsync(0);
     await lifecycle;
-    expectCleanup(h, 1);
+    expectCleanup(h, 0, 2);
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(h.gateway.connect).toHaveBeenCalledOnce();
@@ -212,7 +263,7 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(h.gateway.disconnect).toHaveBeenCalledTimes(2);
     expect(h.gateway.connect).toHaveBeenCalledTimes(2);
     expect(h.gateway.connect).toHaveBeenCalledWith(false);
-    expect(waitForStop).not.toHaveBeenCalled();
+    expect(h.gatewaySupervisor.attachLifecycle).not.toHaveBeenCalled();
     expect(h.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("gateway READY wait timed out after 15000ms"),
     );
@@ -221,6 +272,7 @@ describe("runDiscordGatewayLifecycle", () => {
     );
     h.gateway.isConnected = true;
     await vi.advanceTimersByTimeAsync(2_500);
+    h.abort.abort();
     await lifecycle;
     expect(h.statusSink).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -241,12 +293,15 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(h.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("discord: gateway closed with code 4014"),
     );
-    expectCleanup(h, 0);
+    expectCleanup(h, 0, 1);
   });
 
   it("logs queued non-fatal startup errors and continues", async () => {
     const h = createHarness({ pending: [gatewayEvent("other", "transient startup error")] });
-    await runDiscordGatewayLifecycle(h.params);
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    await h.listening;
+    h.abort.abort();
+    await lifecycle;
     expect(h.runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("discord gateway error: Error: transient startup error"),
     );
@@ -270,15 +325,9 @@ describe("runDiscordGatewayLifecycle", () => {
             ),
           { once: true },
         );
+        queueMicrotask(() => abort.abort(new Error("shutdown")));
       },
     );
-    waitForStop.mockImplementationOnce(async (params) => {
-      const actual =
-        await vi.importActual<typeof import("../monitor.gateway.js")>("../monitor.gateway.js");
-      const waiting = actual.waitForDiscordGatewayStop(params);
-      abort.abort(new Error("shutdown"));
-      return await waiting;
-    });
     await runDiscordGatewayLifecycle(h.params);
     expect(h.gatewaySupervisor.attachLifecycle).toHaveBeenCalledOnce();
     expect(h.runtime.log).toHaveBeenCalledWith(
@@ -309,16 +358,17 @@ describe("runDiscordGatewayLifecycle", () => {
     );
     expect(h.gateway.disconnect).not.toHaveBeenCalled();
     expect(h.gateway.connect).not.toHaveBeenCalled();
-    expectCleanup(h, 0);
+    expectCleanup(h, 0, 1);
   });
 
   it("publishes blocked lifecycle for a fatal authentication close", async () => {
     const h = createHarness();
     const code = GatewayCloseCodes.AuthenticationFailed;
-    waitForStop.mockImplementationOnce(async () => {
-      h.emitter.emit("debug", `Gateway websocket closed: ${code}`);
-    });
-    await runDiscordGatewayLifecycle(h.params);
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    await h.listening;
+    h.emitter.emit("debug", `Gateway websocket closed: ${code}`);
+    h.abort.abort();
+    await lifecycle;
     expect(h.statusSink).toHaveBeenCalledWith(
       expect.objectContaining({
         connected: false,
@@ -330,38 +380,102 @@ describe("runDiscordGatewayLifecycle", () => {
     );
   });
 
+  it("rejects on a live lifecycle stop event and disconnects", async () => {
+    const h = createHarness();
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    const outcome = expect(lifecycle).rejects.toThrow("discord gateway fatal: Error: boom");
+    await h.listening;
+    h.emitGatewayEvent(gatewayEvent("fatal", "boom"));
+    await outcome;
+    expect(h.gateway.disconnect).toHaveBeenCalledOnce();
+    expectCleanup(h, 1);
+  });
+
+  it("force-stops through the runtime readiness deadline and disconnects", async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    const outcome = expect(lifecycle).rejects.toThrow(
+      "discord gateway opened but did not reach READY within 30000ms",
+    );
+    await h.listening;
+    h.gateway.isConnected = false;
+    h.emitter.emit("debug", "Gateway websocket opened");
+    await vi.advanceTimersByTimeAsync(30_000);
+    await outcome;
+    expect(h.gateway.disconnect).toHaveBeenCalledOnce();
+    expectCleanup(h, 1);
+  });
+
+  it("keeps the lifecycle handler active until disconnect returns on abort", async () => {
+    const h = createHarness();
+    h.gateway.disconnect.mockImplementation(() => {
+      h.emitGatewayEvent(gatewayEvent("fatal", "disconnect emitted error"));
+    });
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    await h.listening;
+    h.abort.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
+    expect(h.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("discord gateway fatal: Error: disconnect emitted error"),
+    );
+    expect(h.gateway.disconnect).toHaveBeenCalledOnce();
+    expectCleanup(h, 1);
+  });
+
+  it("keeps the original rejection when disconnect emits another stop event", async () => {
+    const h = createHarness();
+    h.gateway.disconnect.mockImplementation(() => {
+      h.emitGatewayEvent(gatewayEvent("fatal", "second failure"));
+    });
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    const outcome = expect(lifecycle).rejects.toThrow(
+      "discord gateway fatal: Error: first failure",
+    );
+    await h.listening;
+    h.emitGatewayEvent(gatewayEvent("fatal", "first failure"));
+    await outcome;
+    expect(h.runtime.error.mock.calls).toEqual([
+      [expect.stringContaining("discord gateway fatal: Error: first failure")],
+      [expect.stringContaining("discord gateway fatal: Error: second failure")],
+    ]);
+    expect(h.gateway.disconnect).toHaveBeenCalledOnce();
+    expectCleanup(h, 1);
+  });
+
   it("publishes recovery through socket close, scheduled reconnect, and READY", async () => {
     vi.useFakeTimers();
     const h = createHarness();
-    waitForStop.mockImplementationOnce(async () => {
-      h.gateway.isConnected = false;
-      h.emitter.emit("debug", "Gateway websocket closed: 1006");
-      expect(h.statusSink).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          connected: false,
-          lifecycle: "recovering",
-          lastDisconnect: expect.objectContaining({ status: 1006 }),
-        }),
-      );
-      const reconnect = "Gateway reconnect scheduled in 1000ms (zombie, resume=true)";
-      h.emitter.emit("debug", reconnect);
-      expect(h.statusSink).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          connected: false,
-          lifecycle: "recovering",
-          lastError: reconnect,
-        }),
-      );
-      h.emitter.emit("debug", "Gateway websocket opened");
-      expect(h.statusSink).toHaveBeenLastCalledWith(expect.objectContaining({ connected: false }));
-      setTimeout(() => {
-        h.gateway.isConnected = true;
-      }, 1_000);
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(h.statusSink).toHaveBeenLastCalledWith(
-        expect.objectContaining({ connected: true, lifecycle: "ready", lastDisconnect: null }),
-      );
-    });
-    await runDiscordGatewayLifecycle(h.params);
+    const lifecycle = runDiscordGatewayLifecycle(h.params);
+    await h.listening;
+    h.gateway.isConnected = false;
+    h.emitter.emit("debug", "Gateway websocket closed: 1006");
+    expect(h.statusSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        connected: false,
+        lifecycle: "recovering",
+        lastDisconnect: expect.objectContaining({ status: 1006 }),
+      }),
+    );
+    const reconnect = "Gateway reconnect scheduled in 1000ms (zombie, resume=true)";
+    h.emitter.emit("debug", reconnect);
+    expect(h.statusSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: reconnect,
+      }),
+    );
+    h.emitter.emit("debug", "Gateway websocket opened");
+    expect(h.statusSink).toHaveBeenLastCalledWith(expect.objectContaining({ connected: false }));
+    setTimeout(() => {
+      h.gateway.isConnected = true;
+    }, 1_000);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(h.statusSink).toHaveBeenLastCalledWith(
+      expect.objectContaining({ connected: true, lifecycle: "ready", lastDisconnect: null }),
+    );
+    h.abort.abort();
+    await lifecycle;
   });
 });

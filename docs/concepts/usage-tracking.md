@@ -12,6 +12,8 @@ title: "Usage tracking"
 - Human-readable quota-window output is normalized to `X% left`, even when a provider reports consumed quota, remaining quota, or only raw counts. Providers without resettable quota windows show provider summary text instead (for example a balance).
 - Session-level `/status` and the `session_status` tool fall back to the session's transcript log when the live session snapshot is missing token/model data. That fallback fills missing token/cache counters, can recover the active runtime model label, and prefers the larger prompt-oriented total when session metadata is missing or smaller (`totalTokensFresh !== true`, zero, or below the transcript-derived value). Nonzero live values always win over the fallback.
 
+Provider usage is cached for 60 seconds; set `models.usage.cacheTtlMs` to change this (`0` disables reuse).
+
 ## Where it shows up
 
 - `/status` in chats: status card with session tokens and estimated cost (API key models only). Provider usage shows for the **current model provider** when available, as a normalized `X% left` window or provider summary text.
@@ -27,7 +29,9 @@ Since v2026.5.7, `openclaw channels list` no longer prints provider usage; it po
 
 `/usage cost` warns that the **Today** and **Last 30d** totals may be incomplete
 if their aggregate cache is refreshing, partial, or stale, and suggests running
-the command again later. The **Session** total is loaded separately. The CLI
+the command again later. The **Session** total waits up to ten seconds for pending
+refreshes, then shows the last known total marked **stale** while refresh continues.
+Without a cached total, it shows **Session n/a**. The CLI
 `openclaw gateway usage-cost` also reports the recorded cache state before its
 totals.
 
@@ -37,6 +41,11 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+In a selected session's conversation details, search ignores case and matches
+canonically equivalent composed and decomposed Unicode text. Filtering does not
+rewrite the displayed or stored messages.
+
+Detailed report batches share one short wait per agent for pending usage updates.
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date
 range or select a session. Partial totals are not complete billing totals.
@@ -73,19 +82,31 @@ change chart totals. Selecting sessions narrows the charts while retaining the
 comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
-transcript changes. Background refresh waits for 30 seconds without new usage
+transcript changes. A refresh that overlaps agent database creation joins that
+database's preparation before writing its projection. An empty store stays absent
+until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
 or an active agent turn. After five minutes of pending work, it can start in the
-next idle gap without another quiet period. Explicit cost and overview reads
-flush and await pending updates, so a completed turn does not need to wait for
-that timer. This display batching does not delay Goal budgets or provider billing
-limits. A restart or pricing change can require background backfill;
-the page shows partial totals while it advances. Sessions without a cached
+next idle gap without another quiet period. Overview reads return the committed
+aggregates immediately and request background refresh for missing or stale sessions.
+They show partial coverage until that refresh publishes progress; opening the page
+does not wait for large transcripts to be scanned. Explicit session cost reads flush
+pending updates within the same bounded report wait. This display batching does not delay Goal budgets or
+provider billing limits. A restart or pricing change can require background backfill;
+the page shows partial totals while it advances. A pricing change (a new build or
+model catalog update) rescans only sessions with a turn that has no recorded cost;
+sessions whose turns all recorded their cost keep their projection. Sessions without a cached
 projection remain pending without waiting for transcript statistics. Background
 backfill yields between completed transcripts after ten seconds of scanning or
 50 transcripts, whichever comes first. One large transcript or the initial
 inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
-order of floating-point cost additions.
+order of floating-point cost additions. Cached SQLite detail reads use the rollup's
+recorded checkpoint and current transcript mutation facts instead of rescanning
+all transcript rows for their size and event count.
+
+Background refresh budgets use elapsed time, so wall-clock corrections do not
+extend the quiet period or retry delays. Report dates and recorded timestamps
+still follow the wall clock.
 
 ## Usage date ranges
 
@@ -428,7 +449,8 @@ provider-neutral for CLI, app, and Control UI consumers.
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear
   when the credential can access them. Either endpoint can enrich the snapshot
-  independently.
+  independently. Transport failures include their underlying cause in the usage
+  error shown by `openclaw status --usage --json`.
 - **Venice**: API key via env/config/auth store (`VENICE_API_KEY`). Shows USD and
   DIEM balances plus DIEM epoch allocation usage when reported.
 - **Xiaomi MiMo**: two separate usage surfaces. Pay-as-you-go uses an API key

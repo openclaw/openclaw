@@ -210,6 +210,9 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     // candidates, while a newer config epoch stops every remaining build in this publication.
     isBuildCurrent: isPublicationCurrent,
     onBuildStats: options.onBuildStats,
+    selectPluginGeneration: options.preservePluginGenerations
+      ? (owner) => owner.pluginGeneration
+      : undefined,
     pluginMetadataSnapshot: options.pluginMetadataSnapshot,
     registerEntriesAfterBuildStart: true,
     progress,
@@ -264,7 +267,6 @@ async function publishPreparedModelRuntimeCatalogReplacement(
       acquisitionSignal: signal,
       isPublicationCurrent: () => committed || !signal.aborted,
       isOwnerRegistered: (key, owner) => (committed ? host.owners : staged).get(key) === owner,
-      isOwnerPublished: (key, owner) => committed && host.owners.get(key) === owner,
     });
     // Pricing preparation takes no signal; cancellation, shutdown and a stalled read must not
     // leave adoption pending, so it shares the owner build deadline.

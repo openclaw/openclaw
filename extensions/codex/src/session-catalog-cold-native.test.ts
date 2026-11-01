@@ -8,10 +8,8 @@ import {
   createNativeCatalogPerformanceFixture,
   startNativeCatalogPerformanceClient,
 } from "./session-catalog-native-performance.test-support.js";
-import {
-  commandRpcMocks,
-  createCodexSessionCatalogControlFactory,
-} from "./session-catalog.test-helpers.js";
+import { catalogFactory } from "./session-catalog-resident.test-support.js";
+import { commandRpcMocks } from "./session-catalog.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -44,10 +42,8 @@ it("hydrates 490 cold native rollouts and restores them without native reads", a
       env: { OPENCLAW_STATE_DIR: root },
     });
   const createFactory = () =>
-    createCodexSessionCatalogControlFactory({
+    catalogFactory({
       env: fixture.env,
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => undefined,
       openResidentState: openState,
     });
   const factory = createFactory();

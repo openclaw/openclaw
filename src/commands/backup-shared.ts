@@ -1,7 +1,11 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
+import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import {
   createConfigIO,
   resolveConfigPath,
@@ -9,13 +13,19 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeWindowsNamespaceAlias } from "../infra/backup-archive-path-policy.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
 } from "../infra/backup-config-capture.js";
-import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
+import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
+import {
+  getDatabaseEngineInput,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
+import { realpathOrResolve } from "../infra/path-existence.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
   resolveActivatedPluginBackupInventory,
@@ -30,10 +40,10 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
+import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
-import { recordBackupRunOutcomeWithOwner } from "./backup-outcome.js";
 import {
   createBackupResourcePlan,
   type BackupAgentRoot,
@@ -46,6 +56,35 @@ import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
 export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
 
+/** Route only the ledger write; archive creation keeps its existing backup owner. */
+async function recordBackupRunOutcomeWithOwner(
+  params: Omit<Parameters<typeof recordBackupRunOutcome>[0], "env">,
+): Promise<void> {
+  const databasePath = resolveOpenClawStateSqlitePath();
+  if (!existsSync(databasePath)) {
+    return;
+  }
+  const outcome = {
+    ...params,
+    createdAt: params.createdAt ?? Date.now(),
+    pushFailed: params.pushFailed === true ? true : undefined,
+  };
+  await runWithLocalStateOwner({
+    method: "backup.recordOutcome",
+    params: { outcome },
+    target: "backup outcome ledger",
+    recoveryCommand: "openclaw gateway call backup.status",
+    // Config loading must not recreate a database removed while ownership was acquired.
+    assertTargetCurrent: () => {
+      if (!existsSync(databasePath)) {
+        throw new Error("The state database disappeared; the backup outcome was not recorded.");
+      }
+    },
+    runLocal: ({ env, assertCurrent, signal }) =>
+      recordBackupRunOutcome({ ...outcome, env }, { assertCurrent, signal }),
+  });
+}
+
 export async function recordBackupOutcomeBestEffort(
   runtime: RuntimeEnv,
   params: Parameters<typeof recordBackupRunOutcomeWithOwner>[0],
@@ -57,7 +96,7 @@ export async function recordBackupOutcomeBestEffort(
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(
-      `Warning: the ${label} outcome could not be recorded: ${formatErrorMessage(error)}`,
+      terminalText`Warning: the ${label} outcome could not be recorded: ${formatErrorMessage(error)}`,
     );
   }
 }
@@ -71,6 +110,16 @@ export function resolveRequiredBackupPath(
     throw new Error(`Missing required ${label} value.`);
   }
   return resolveUserPath(trimmed);
+}
+
+export function resolveBackupArchivePath(
+  value: string | undefined,
+  label: "--output" | "<archive>" | "--target",
+): string {
+  if (!value?.trim()) {
+    throw new Error(`Missing required ${label} value.`);
+  }
+  return path.resolve(expandHomePrefix(value));
 }
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";
@@ -128,25 +177,6 @@ export function buildBackupArchiveRoot(nowMs = Date.now()): string {
 
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {
   return `${buildBackupArchiveRoot(nowMs)}.tar.gz`;
-}
-
-/** Encode an absolute or relative source path into a traversal-safe archive payload path. */
-function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
-  const normalized = normalizeWindowsNamespaceAlias(sourcePath).replaceAll("\\", "/");
-  const windowsMatch = normalized.match(/^([A-Za-z]):\/(.*)$/);
-  if (windowsMatch) {
-    const drive = windowsMatch[1]?.toUpperCase() ?? "UNKNOWN";
-    const rest = windowsMatch[2] ?? "";
-    return path.posix.join("windows", drive, rest);
-  }
-  if (normalized.startsWith("/")) {
-    return path.posix.join("posix", normalized.slice(1));
-  }
-  return path.posix.join("relative", normalized);
-}
-
-export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
-  return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }
 
 /** Resolve a backup plan from explicit paths, deduplicating assets already covered by parents. */
@@ -216,9 +246,7 @@ async function resolveBackupPlanFromPaths(params: {
   if (onlyConfig) {
     const resolvedConfigPath = path.resolve(configPath);
     const exists = await pathExists(resolvedConfigPath);
-    const sourcePath = exists
-      ? await canonicalizeExistingPath(resolvedConfigPath)
-      : resolvedConfigPath;
+    const sourcePath = exists ? await realpathOrResolve(resolvedConfigPath) : resolvedConfigPath;
     const asset = { kind: "config" as const, sourcePath, displayPath: shortenHomePath(sourcePath) };
     return {
       stateDir,
@@ -273,7 +301,7 @@ async function resolveBackupPlanFromPaths(params: {
       return Object.assign({}, candidate, {
         exists,
         canonicalPath: exists
-          ? await canonicalizeExistingPath(candidate.sourcePath)
+          ? await realpathOrResolve(candidate.sourcePath)
           : path.resolve(candidate.sourcePath),
       });
     }),
@@ -481,14 +509,6 @@ function resolveManagedSkillSymlinkTargetCandidates(params: {
   return [...targets];
 }
 
-async function canonicalizeExistingPath(targetPath: string): Promise<string> {
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
-}
-
 /** Resolve symlinks in the existing prefix while retaining a not-yet-created suffix. */
 export async function canonicalizePathForContainment(targetPath: string): Promise<string> {
   const resolved = path.resolve(targetPath);
@@ -538,7 +558,11 @@ export async function resolveBackupPlanFromDisk(
   } = {},
 ) {
   if (params.onlyConfig) {
-    return await resolveBackupPlanFromState(params);
+    return {
+      ...(await resolveBackupPlanFromState(params)),
+      databaseSelection: undefined,
+      databaseConfig: undefined,
+    };
   }
   assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
   // Admit the engine choice without opening state before its stable discovery snapshot.
@@ -546,8 +570,13 @@ export async function resolveBackupPlanFromDisk(
     observe: false,
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
-  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
-  return await withOpenClawStateDatabaseReadSnapshot(() => resolveBackupPlanFromState(params));
+  const selection = await resolveDatabaseEngineSelection(configSnapshot.config);
+  const plan = await withDatabaseEngineSelection(selection, () =>
+    selection.effectiveEngines.state === "postgres"
+      ? resolveBackupPlanFromState(params)
+      : withOpenClawStateDatabaseReadSnapshot(() => resolveBackupPlanFromState(params)),
+  );
+  return { ...plan, databaseSelection: selection, databaseConfig: configSnapshot.config };
 }
 
 async function resolveBackupPlanFromState(params: {
@@ -573,12 +602,16 @@ async function resolveBackupPlanFromState(params: {
   }
 
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
-  const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
+  const postgresState = getDatabaseEngineInput("state") !== undefined;
+  const configOptions = {
+    observe: false,
+    ...(postgresState ? { pluginValidation: "core-only" as const } : {}),
+  };
+  const configRead = await createConfigIO(configOptions).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
   const discoverySnapshot =
     (await resolveLegacyConfigSnapshotForBackup(configSnapshot)) ?? configSnapshot;
-  const configCapture = await resolveBackupConfigCapture(configRead);
+  const configCapture = await resolveBackupConfigCapture(configRead, configOptions);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(
       `Backup discovery failed at ${shortenHomePath(discoverySnapshot.path)}: ${discoverySnapshot.issues.map((issue) => issue.message).join("; ")}. Agent and plugin ownership could not be resolved. Resolve the reported error and retry backup, or use --only-config to save the config alone.`,
@@ -591,15 +624,23 @@ async function resolveBackupPlanFromState(params: {
     oauthDir,
   }).workspaceDirs;
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
-  const pluginInventory = resolveActivatedPluginBackupInventory({
+  const discoveryInput = {
     config: discoverySnapshot.config,
     env: process.env,
     stateDir,
     workspaceDirs: discoveredWorkspaceDirs,
-  });
-  // Effective agent workspaces can omit their shared base. Exclude it only here
-  // so full backups and destructive cleanup retain their existing selection.
+  };
+  const pluginInventory = postgresState
+    ? (
+        await (
+          await import("../infra/backup-database-discovery.js")
+        ).preparePostgresBackupDiscovery(discoveryInput)
+      ).pluginInventory
+    : resolveActivatedPluginBackupInventory(discoveryInput);
+  // Effective agent workspaces omit managed chat worktrees and can omit their shared base.
+  // Keep these exclusions here so full backups and destructive cleanup retain their selection.
   if (!includeWorkspace && discoverySnapshot.valid) {
+    discoveredWorkspaceDirs.push(...(await readExistingWorktreePaths(process.env)));
     const sharedWorkspaceBase = discoverySnapshot.config.agents?.defaults?.workspace?.trim();
     if (sharedWorkspaceBase) {
       discoveredWorkspaceDirs.push(resolveUserPath(sharedWorkspaceBase));

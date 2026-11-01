@@ -1,14 +1,20 @@
-// Exercise durable auth identity through isolated cron orchestration, stopping at provider I/O.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
-import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
+import { AuthProfileMigrationRequiredError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { removeAuthProfilesAcrossOwnerStores } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
-import { resolveCronAgentLane } from "../agents/lanes.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../agents/cli-backends.test-support.js";
+import { resolveCliExecutionAuthProfileId } from "../agents/cli-execution-auth.js";
+import type { RunEmbeddedAgentInternalParams as AgentRequest } from "../agents/embedded-agent-runner/run/internal-params.js";
+import {
+  isRecordedModelFallbackStop,
+  recordModelFallbackStop,
+} from "../agents/model-fallback-stop.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -21,43 +27,45 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import {
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
 } from "./isolated-agent/job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
-import {
-  isCliProviderMock,
-  loadRunCronIsolatedAgentTurn,
-  makeCronSession,
-  makeCronSessionEntry,
-  mockRunCronFallbackPassthrough,
-  resolveConfiguredModelRefMock,
-  resolveCronAgentLaneMock,
-  resolveCronSessionMock,
-  resolveSessionAuthSelectionMock,
-  runCliAgentMock,
-  runEmbeddedAgentMock,
-  runWithModelFallbackMock,
-} from "./isolated-agent/run.test-harness.js";
+import * as h from "./isolated-agent/run.test-harness.js";
+import { resolveCarriedCronModelSelection } from "./isolated-agent/session-carried-model.js";
+import { normalizeCronRunErrorText } from "./service/execution-errors.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
 import type { CronStoredJob } from "./types.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCronIsolatedAgentTurn = await h.loadRunCronIsolatedAgentTurn();
 const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
+// Install the harness before capture loads the shared scheduled-model selector.
+const { captureCronInferenceBinding } = await import("./inference-binding.runtime.js");
+const { prepareCronRunInference } = await import("./run-inference.js");
+const { captureCronUpdatedInferenceBinding } =
+  await import("../gateway/server-methods/cron-input-validation.js");
 const platformId = "openai:platform";
 const subscriptionId = "openai:subscription";
+const claudeProfile = "anthropic:default";
+const claudeModel = "claude-opus-4-6";
+const claudeRef = `anthropic/${claudeModel}`;
+const capture = (cfg: OpenClawConfig, model?: string, sessionEntry?: SessionEntry) =>
+  captureCronInferenceBinding({ cfg, agentId: "main", model, sessionEntry });
+const cliReply = (model: string) => ({
+  payloads: [{ text: "account reply" }],
+  meta: { agentMeta: { provider: "claude-cli", model } },
+});
 
-function runWithConfig(
-  cfg: OpenClawConfig,
-  job: CronStoredJob = makeIsolatedAgentJobFixture({
+const makeAuthJob = (overrides: Partial<CronStoredJob> = {}): CronStoredJob =>
+  makeIsolatedAgentJobFixture({
     agentId: "main",
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "check status" },
-  }),
-  trigger?: "cron" | "event",
-) {
+    ...overrides,
+  });
+
+function runWithConfig(cfg: OpenClawConfig, job = makeAuthJob(), trigger?: "cron" | "event") {
   return runCronIsolatedAgentTurn(
     makeIsolatedAgentParamsFixture({
       cfg,
@@ -71,64 +79,64 @@ function runWithConfig(
 }
 
 function setupClaudeCliBackend(): void {
+  h.isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        authEpochMode: "profile-only",
-        autoSelectAuthProfile: false,
-      },
-    ],
+    resolveRuntimeCliBackends: () => {
+      const backend = createClaudeCliBackends()[0]!;
+      backend.authEpochMode = "profile-only";
+      backend.autoSelectAuthProfile = false;
+      return [backend];
+    },
     resolvePluginSetupCliBackend: () => undefined,
   });
 }
 
-function oauth(provider = "openai"): AuthProfileCredential {
-  return {
-    type: "oauth",
-    provider,
-    access: "synthetic-subscription-access",
-    refresh: "synthetic-subscription-refresh",
-    expires: Date.now() + 3_600_000,
-    accountId: "synthetic-account",
-  };
-}
+const oauth = (provider = "openai"): AuthProfileCredential => ({
+  type: "oauth",
+  provider,
+  access: "synthetic-subscription-access",
+  refresh: "synthetic-subscription-refresh",
+  expires: Date.now() + 3_600_000,
+  accountId: "synthetic-account",
+});
 
-function apiKey(): AuthProfileCredential {
-  return { type: "api_key", provider: "openai", key: "synthetic-platform-key" };
-}
+const claudeToken = (): AuthProfileCredential => ({
+  type: "token",
+  provider: "anthropic",
+  token: "synthetic-claude-token",
+});
+
+const apiKey = (): AuthProfileCredential => ({
+  type: "api_key",
+  provider: "openai",
+  key: "synthetic-platform-key",
+});
 
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", () => {
   setupRunCronIsolatedAgentTurnSuite();
   let state: OpenClawTestState;
 
   async function saveProfiles(profiles: Record<string, AuthProfileCredential>) {
-    await persistAuthProfileBatch({
-      profiles: Object.entries(profiles).map(([profileId, credential]) => ({
-        profileId,
-        credential,
-      })),
-    });
+    const batch = Object.entries(profiles).map(([profileId, credential]) => ({
+      profileId,
+      credential,
+    }));
+    await persistAuthProfileBatch({ profiles: batch });
   }
 
-  function config(primary = "openai/gpt-4.1"): OpenClawConfig {
-    return {
-      agents: {
-        entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
-        defaults: { model: primary },
+  const config = (primary = "openai/gpt-4.1"): OpenClawConfig => ({
+    agents: {
+      entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+      defaults: { model: primary },
+    },
+    auth: {
+      profiles: {
+        [platformId]: { provider: "openai", mode: "api_key" },
+        [subscriptionId]: { provider: "openai", mode: "oauth" },
       },
-      auth: {
-        profiles: {
-          [platformId]: { provider: "openai", mode: "api_key" },
-          [subscriptionId]: { provider: "openai", mode: "oauth" },
-        },
-        order: { openai: [platformId, subscriptionId] },
-      },
-    };
-  }
+      order: { openai: [platformId, subscriptionId] },
+    },
+  });
 
   beforeEach(async () => {
     state = await createOpenClawTestState({
@@ -137,6 +145,16 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     });
     // The real credential owner resolves the canonical main directory, not a custom test root.
     vi.mocked(resolveAgentDir).mockReturnValue(state.agentDir());
+    h.loadModelCatalogOwnerMock.mockImplementation(async ({ config: cfg, agentId = "main" }) => ({
+      agentId,
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: cfg,
+      modelCatalog: { entries: [], routeVariants: [] },
+    }));
+    h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+    h.resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4.1" } });
+    h.mockRunCronFallbackPassthrough();
   });
 
   afterEach(async () => {
@@ -145,139 +163,53 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     await state.cleanup();
   });
 
-  it.each([
-    { profileId: platformId, mode: "API-key", requirement: "api-key" },
-    { profileId: subscriptionId, mode: "OAuth", requirement: "subscription" },
-  ] as const)(
-    "forwards the creator's durable $mode account on fresh runs despite opposite current auth",
-    async ({ profileId, requirement }) => {
-      await saveProfiles({ [platformId]: apiKey(), [subscriptionId]: oauth() });
-      const cfg = config();
-      const creator: SessionEntry = {
-        sessionId: "creator-session",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-4.1",
-        authProfileOverride: profileId,
-        authProfileOverrideSource: "auto",
-      };
-      const binding = await captureCronInferenceBinding({
-        cfg,
-        agentId: "main",
-        sessionEntry: creator,
+  it("leases the creator's account through settlement and releases it after the turn", async () => {
+    const profileId = platformId;
+    await saveProfiles({ [platformId]: apiKey(), [subscriptionId]: oauth() });
+    const cfg = config();
+    const creator: SessionEntry = {
+      sessionId: "creator-session",
+      updatedAt: 1,
+      modelProvider: "openai",
+      model: "gpt-4.1",
+      authProfileOverride: profileId,
+      authProfileOverrideSource: "auto",
+    };
+    const binding = await capture(cfg, undefined, creator);
+    const other = subscriptionId;
+    let assertLease: (() => void) | undefined;
+    h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
+      expect(request).toMatchObject({
+        authProfileId: profileId,
+        authProfileIdSource: "auto",
+        authProfileBinding: { profileId, authRequirement: "api-key" },
+        allowAuthProfileFallback: false,
+        authProfileFailurePolicy: "local_transient",
       });
-      expect(binding).toMatchObject({
-        version: 1,
-        provider: "openai",
-        profileId,
-        source: "auto",
-        authRequirement: requirement,
-      });
-      expect(creator.authProfileOverrideSource).toBe("auto");
-      const authority = await captureAuthProfileAuthorization({
-        profileId,
-        agentDir: state.agentDir(),
-        cfg,
-        assertCurrent() {},
-      });
-      try {
-        expect(binding?.authorizationId).toBe(authority.authorizationId);
-        authority.assertCurrent();
-      } finally {
-        authority.dispose();
+      const { authProfileBinding, onSuccessfulAuthProfile } = request;
+      if (!authProfileBinding || !onSuccessfulAuthProfile) {
+        throw new Error("Expected live binding and account settlement guard");
       }
-      const job: CronStoredJob = {
-        id: "durable-auth",
-        name: "Durable auth",
-        agentId: "main",
-        enabled: true,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        delivery: { mode: "none" },
-        payload: { kind: "agentTurn", message: "check status" },
-        state: {},
-        inferenceBinding: binding,
-      };
-      const storePath = state.statePath("cron", "jobs.json");
-      await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-      const other = profileId === platformId ? subscriptionId : platformId;
-      await setAuthProfileOrder({
-        agentDir: state.agentDir(),
-        provider: "openai",
-        order: [other, profileId],
-      });
-      await updateAuthProfileStoreWithLock({
-        agentDir: state.agentDir(),
-        updater(store) {
-          store.lastGood = { openai: other };
-          return true;
-        },
-      });
-      resolveCronAgentLaneMock.mockImplementation(resolveCronAgentLane);
-      resolveSessionAuthSelectionMock.mockResolvedValue({
-        profileId: other,
-        source: "auto",
-        routeRequirement: requirement === "api-key" ? "subscription" : "api-key",
-      });
-      mockRunCronFallbackPassthrough();
-      const liveAssertions: Array<() => void> = [];
-      runEmbeddedAgentMock.mockImplementation(async (request: RunEmbeddedAgentInternalParams) => {
-        expect(request).toMatchObject({
-          authProfileId: profileId,
-          authProfileIdSource: "auto",
-          authProfileBinding: { profileId, authRequirement: requirement },
-          allowAuthProfileFallback: false,
-          authProfileFailurePolicy: "local_transient",
-          lane: "cron-nested",
-        });
-        const { authProfileBinding, onSuccessfulAuthProfile } = request;
-        if (!authProfileBinding || !onSuccessfulAuthProfile) {
-          throw new Error("Expected live binding and account settlement guard");
-        }
-        const assertCurrent = () => authProfileBinding.assertCurrent();
-        expect(() => assertCurrent()).not.toThrow();
-        expect(() => onSuccessfulAuthProfile(profileId)).not.toThrow();
-        expect(() => onSuccessfulAuthProfile(other)).toThrow(/inference account changed/i);
-        liveAssertions.push(assertCurrent);
-        request.userTurnTranscriptRecorder?.markBlocked();
-        return { payloads: [{ text: "same authorized account" }], meta: { agentMeta: {} } };
-      });
+      const assertCurrent = () => authProfileBinding.assertCurrent();
+      expect(() => assertCurrent()).not.toThrow();
+      expect(() => onSuccessfulAuthProfile(profileId)).not.toThrow();
+      expect(() => onSuccessfulAuthProfile(other)).toThrow(/inference account changed/i);
+      assertLease = assertCurrent;
+      request.userTurnTranscriptRecorder?.markBlocked();
+      return { payloads: [{ text: "same authorized account" }], meta: { agentMeta: {} } };
+    });
 
-      for (const [index, model] of ["gpt-4.1", "gpt-4o"].entries()) {
-        // Close the real SQLite owners before each load: neither job nor credential comes from a warm handle.
-        clearRuntimeAuthProfileStoreSnapshots();
-        await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-        const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
-        expect(reloaded?.inferenceBinding).toEqual(binding);
-        if (!reloaded) {
-          throw new Error("Expected the persisted automation");
-        }
-        const changed = config(`openai/${model}@${other}`);
-        changed.auth!.order = { openai: [other, profileId] };
-        resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model });
-        resolveCronSessionMock.mockReturnValue(
-          makeCronSession({
-            sessionEntry: makeCronSessionEntry({ sessionId: `fresh-run-${index}` }),
-          }),
-        );
-        const result = await runWithConfig(changed, reloaded);
-        expect(result.status).toBe("ok");
-        expect(result.sessionId).toBe(`fresh-run-${index}`);
-        expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(index + 1);
-        expect(runEmbeddedAgentMock.mock.lastCall?.[0]).toMatchObject({
-          provider: "openai",
-          model,
-        });
-        expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
-        // The assertion is backed by a per-run owner lease, not a permanently valid closure.
-        expect(() => liveAssertions[index]!()).toThrow(/disconnected|replaced/i);
-      }
-      expect(runCliAgentMock).not.toHaveBeenCalled();
-    },
-  );
+    // Persistence and changed defaults are covered through real HTTP in auth-continuity.integration.
+    const result = await runWithConfig(
+      config(`openai/gpt-4.1@${other}`),
+      makeAuthJob({ inferenceBinding: binding }),
+    );
+    expect(result.status, result.error).toBe("ok");
+    expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
+    expect(assertLease).toBeTypeOf("function");
+    expect(() => assertLease!()).toThrow(/disconnected|replaced/i);
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
 
   it("executes a reloaded native-owned job without resolving its irrelevant host profile", async () => {
     const runtimeAuthority = {
@@ -286,15 +218,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       namespace: "synthetic.inference",
       payload: { account: "synthetic-native-account" },
     };
-    const job = makeIsolatedAgentJobFixture({
-      agentId: "main",
+    const job = makeAuthJob({
       runtimeAuthority,
       payload: {
         kind: "agentTurn",
         message: "check status",
         model: "openai/gpt-4.1@openai:missing-native-only",
       },
-      delivery: { mode: "none" },
     });
     const storePath = state.statePath("cron", "jobs.json");
     await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
@@ -302,9 +232,10 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     if (!reloaded) {
       throw new Error("Expected the native-owned persisted job");
     }
-    resolveSessionAuthSelectionMock.mockRejectedValue(new Error("Host auth must not be resolved"));
-    mockRunCronFallbackPassthrough();
-    runEmbeddedAgentMock.mockImplementation(async (request: RunEmbeddedAgentInternalParams) => {
+    h.resolveSessionAuthSelectionMock.mockRejectedValue(
+      new Error("Host auth must not be resolved"),
+    );
+    h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
       expect(request.scheduledRuntimeAuthority).toEqual(runtimeAuthority);
       expect(request.authProfileId).toBeUndefined();
       expect(request.authProfileBinding).toBeUndefined();
@@ -313,104 +244,654 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     });
     const result = await runWithConfig(config(), reloaded);
     expect(result.status, result.error).toBe("ok");
-    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
   });
 
   it("runs a native Claude CLI job without adopting an unrelated host account", async () => {
     await saveProfiles({ [platformId]: apiKey() });
     setupClaudeCliBackend();
-    isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "claude-cli", model: "sonnet" });
-    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
-    mockRunCronFallbackPassthrough();
-    runCliAgentMock.mockResolvedValue({
-      payloads: [{ text: "native account reply" }],
-      meta: { agentMeta: { provider: "claude-cli", model: "sonnet" } },
-    });
+    h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "claude-cli", model: "sonnet" });
+    h.resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
+    h.runCliAgentMock.mockResolvedValue(cliReply("sonnet"));
 
     const result = await runWithConfig(config("claude-cli/sonnet"));
 
     expect(result.status, result.error).toBe("ok");
-    expect(runCliAgentMock).toHaveBeenCalledOnce();
-    expect(runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(h.runCliAgentMock).toHaveBeenCalledOnce();
+    expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it.each(["cron", "event"] as const)(
     "keeps %s CLI fallback on its account boundary (#144047)",
     async (trigger) => {
-      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
       setupClaudeCliBackend();
-      resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
-      resolveSessionAuthSelectionMock.mockResolvedValue({ profileId: platformId, source: "auto" });
-      await saveProfiles({ [platformId]: apiKey(), "claude-cli:personal": oauth("claude-cli") });
-      runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => {
-        await runInitialModelFallbackAttempt(params);
-        return {
-          result: await runFallbackModelAttempt(params, "openai", "gpt-4o", "unknown"),
-          provider: "openai",
-          model: "gpt-4o",
-          attempts: [],
-        };
+      h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+      h.resolveSessionAuthSelectionMock.mockResolvedValue({
+        profileId: platformId,
+        source: "auto",
       });
+      await saveProfiles({ [platformId]: apiKey(), "claude-cli:personal": oauth("claude-cli") });
+      h.runWithModelFallbackMock.mockImplementation(
+        async (params: TestModelFallbackRunnerParams) => {
+          await runInitialModelFallbackAttempt(params);
+          return {
+            result: await runFallbackModelAttempt(params, "openai", "gpt-4o", "unknown"),
+            provider: "openai",
+            model: "gpt-4o",
+            attempts: [],
+          };
+        },
+      );
       const cfg = config();
       cfg.agents!.defaults!.model = { primary: "openai/gpt-4.1", fallbacks: ["openai/gpt-4o"] };
       cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
       cfg.auth!.order = { "claude-cli": ["claude-cli:personal"] };
-      runCliAgentMock.mockResolvedValue({
-        payloads: [{ text: "event account reply" }],
-        meta: { agentMeta: { provider: "claude-cli", model: "gpt-4o" } },
-      });
+      h.runCliAgentMock.mockResolvedValue(cliReply("gpt-4o"));
 
       const result = await runWithConfig(cfg, undefined, trigger);
 
-      expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
       if (trigger === "cron") {
         expect(result.status).toBe("error");
         expect(result.error).toContain("Automation has no recorded inference account");
-        expect(runCliAgentMock).not.toHaveBeenCalled();
+        // The refusal names the runtime and account, and the exact command that records it.
+        expect(result.error).toContain(
+          "Runtime claude-cli would run openai/gpt-4o with stored account claude-cli:personal",
+        );
+        expect(result.error).toContain(
+          "openclaw automations edit <jobId> --model openai/gpt-4o@claude-cli:personal",
+        );
+        expect(h.runCliAgentMock).not.toHaveBeenCalled();
       } else {
         expect(result.status, result.error).toBe("ok");
-        expect(runCliAgentMock).toHaveBeenCalledOnce();
-        expect(runCliAgentMock.mock.lastCall?.[0].trigger).toBe("event");
-        expect(runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
-        expect(runCliAgentMock.mock.lastCall?.[0].authProfileId).toBe("claude-cli:personal");
+        expect(h.runCliAgentMock).toHaveBeenCalledOnce();
+        expect(h.runCliAgentMock.mock.lastCall?.[0].trigger).toBe("event");
+        expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+        expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBe("claude-cli:personal");
       }
     },
   );
 
-  it.each(["cron", "event"] as const)(
-    "fails closed for a bound account on a %s CLI route (#144047)",
-    async (trigger) => {
+  it.each([
+    { trigger: "cron", cli: true },
+    { trigger: "event", cli: true },
+    { trigger: "cron", cli: false },
+  ] as const)(
+    "explains a legacy bound account refusal for $trigger with cli=$cli (#144047)",
+    async ({ trigger, cli }) => {
       await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
       const cfg = config();
-      const binding = await captureCronInferenceBinding({
-        cfg,
-        agentId: "main",
-        model: "openai/gpt-4.1@openai:work",
+      const captured = await capture(cfg, "openai/gpt-4.1@openai:work");
+      expect(captured).toMatchObject({ profileId: "openai:work", source: "user" });
+      // Captured before bindings recorded their runtime, so the run derives one as before.
+      const { runtime: _runtime, ...binding } = captured!;
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, {
+        version: 1,
+        jobs: [makeAuthJob({ inferenceBinding: binding })],
       });
-      expect(binding).toMatchObject({ profileId: "openai:work", source: "user" });
-      isCliProviderMock.mockImplementation((provider: string) => provider === "claude-cli");
-      mockRunCronFallbackPassthrough();
       setupClaudeCliBackend();
-      resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4o" });
-      cfg.agents!.defaults!.model = "openai/gpt-4o";
-      cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+      const provider = cli ? "openai" : "anthropic";
+      const model = cli ? "gpt-4o" : "claude-sonnet-4-5";
+      h.resolveConfiguredModelRefMock.mockReturnValue({ provider, model });
+      cfg.agents!.defaults!.model = `${provider}/${model}`;
+      if (cli) {
+        cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+      }
       cfg.auth!.order = { "claude-cli": ["claude-cli:personal"] };
-
-      const result = await runWithConfig(
-        cfg,
-        makeIsolatedAgentJobFixture({ agentId: "main", inferenceBinding: binding }),
-        trigger,
-      );
+      clearRuntimeAuthProfileStoreSnapshots();
+      await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+      const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
+      if (!reloaded) {
+        throw new Error("Expected the persisted automation");
+      }
+      const result = await runWithConfig(cfg, reloaded, trigger);
 
       expect(result.status).toBe("error");
       expect(result.error).toContain("incompatible with its recorded inference account and route");
-      expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-      expect(runCliAgentMock).not.toHaveBeenCalled();
+      expect(result.error).toContain(cli ? "CLI login" : "different provider");
+      expect(result.error).toContain("account openai:work (no recorded runtime)");
+      expect(result.error).toContain(
+        "openclaw automations edit <jobId> --model <provider/model>@<profileId>",
+      );
+      expect(reloaded.inferenceBinding).toEqual(binding);
+      expect((await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding).toEqual(binding);
+      expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(h.runCliAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a bound job on its recorded runtime when config moves its model to a CLI", async () => {
+    await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
+    const cfg = config();
+    const binding = await capture(cfg, "openai/gpt-4.1@openai:work");
+    expect(binding?.runtime).toBeTruthy();
+    setupClaudeCliBackend();
+    h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4o" });
+    cfg.agents!.defaults!.model = "openai/gpt-4o";
+    cfg.agents!.defaults!.models = { "openai/gpt-4o": { agentRuntime: { id: "claude-cli" } } };
+    h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
+      expect(request.authProfileBinding?.profileId).toBe("openai:work");
+      expect(request.agentHarnessRuntimeOverride).toBe(binding?.runtime);
+      request.userTurnTranscriptRecorder?.markBlocked();
+      return { payloads: [{ text: "recorded runtime" }], meta: { agentMeta: {} } };
+    });
+
+    const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  // Claude CLI forwards a stored Anthropic account the same way interactive chat does.
+  const claudeCliConfig = async (): Promise<OpenClawConfig> => {
+    await saveProfiles({ [claudeProfile]: claudeToken() });
+    setupClaudeCliBackend();
+    const cfg = config(claudeRef);
+    cfg.agents!.defaults!.models = { [claudeRef]: { agentRuntime: { id: "claude-cli" } } };
+    cfg.auth = {
+      profiles: { [claudeProfile]: { provider: "anthropic", mode: "token" } },
+      order: { anthropic: [claudeProfile] },
+    };
+    h.resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "anthropic",
+      model: claudeModel,
+    });
+    h.resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "anthropic", model: claudeModel },
+    });
+    return cfg;
+  };
+
+  it.each([
+    { model: undefined, source: "auto" },
+    { model: `${claudeRef}@${claudeProfile}`, source: "user" },
+  ] as const)(
+    "records and runs the stored account a Claude CLI runtime forwards (model=$model)",
+    async ({ model, source }) => {
+      const cfg = await claudeCliConfig();
+      const binding = await capture(cfg, model);
+      expect(binding).toMatchObject({
+        provider: "anthropic",
+        profileId: claudeProfile,
+        authRequirement: "subscription",
+        source,
+      });
+      let assertCurrent: (() => void) | undefined;
+      h.runCliAgentMock.mockImplementation(async (request) => {
+        assertCurrent = request.assertCurrent;
+        expect(assertCurrent).toBeTypeOf("function");
+        assertCurrent?.();
+        return cliReply(claudeModel);
+      });
+
+      const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+      expect(result.status, result.error).toBe("ok");
+      expect(h.runCliAgentMock).toHaveBeenCalledOnce();
+      expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+        provider: "claude-cli",
+        authProfileId: claudeProfile,
+      });
+      expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(() => assertCurrent?.()).toThrow(/disconnected|replaced|settlement/i);
+    },
+  );
+
+  it.each(["migration", "unreadable", "abort", "terminal"] as const)(
+    "preserves a CLI account %s failure after acquiring scheduled authorization",
+    async (kind) => {
+      const cfg = await claudeCliConfig();
+      const binding = await capture(cfg);
+      const inference = await prepareCronRunInference({ binding, cfg, agentDir: state.agentDir() });
+      if (!inference) {
+        throw new Error("Expected the captured account's run authorization");
+      }
+      const secret = "sk-abcdefghijklmnopqrstuv";
+      const failure =
+        kind === "migration"
+          ? new AuthProfileMigrationRequiredError({ agentDir: state.agentDir(), sources: [] })
+          : kind === "unreadable"
+            ? new AuthProfileStoreUnreadableError(state.statePath("unreadable.sqlite"))
+            : new Error(`Authorization: Bearer ${secret}`);
+      if (kind === "abort") {
+        failure.name = "AbortError";
+      } else if (kind === "terminal") {
+        recordModelFallbackStop(failure);
+      }
+      try {
+        // Fail the resolver's second store read, after the saved account was admitted.
+        // Failing initial authorization would never reach the compatibility wrapper.
+        await expect(
+          inference.resolveCliAuthProfile((selected) =>
+            resolveCliExecutionAuthProfileId({
+              cliExecutionProvider: "claude-cli",
+              authProfileProvider: "anthropic",
+              config: cfg,
+              agentDir: state.agentDir(),
+              selected,
+              loadAuthProfileStoreForRuntimeAsync: async () => {
+                throw failure;
+              },
+            }),
+          ),
+        ).rejects.toBe(failure);
+        const message = normalizeCronRunErrorText(failure);
+        expect(message).not.toContain(secret);
+        expect(message).not.toContain("incompatible with its recorded inference account");
+        if (
+          failure instanceof AuthProfileMigrationRequiredError ||
+          failure instanceof AuthProfileStoreUnreadableError
+        ) {
+          expect(message).toContain(failure.code);
+          expect(message).toContain("openclaw doctor --fix");
+        }
+        expect(isRecordedModelFallbackStop(failure)).toBe(kind === "terminal");
+      } finally {
+        inference.dispose();
+      }
+    },
+  );
+
+  it.each(["missing", "incompatible"] as const)(
+    "keeps account adoption advice for a %s CLI profile",
+    async (kind) => {
+      const cfg = await claudeCliConfig();
+      const binding = await capture(cfg);
+      const inference = await prepareCronRunInference({ binding, cfg, agentDir: state.agentDir() });
+      if (!inference) {
+        throw new Error("Expected the captured account's run authorization");
+      }
+      try {
+        await expect(
+          inference.resolveCliAuthProfile((selected) =>
+            resolveCliExecutionAuthProfileId({
+              cliExecutionProvider: "claude-cli",
+              authProfileProvider: "anthropic",
+              config: cfg,
+              agentDir: state.agentDir(),
+              selected,
+              loadAuthProfileStoreForRuntimeAsync: async (): Promise<AuthProfileStore> => ({
+                version: 1,
+                profiles: kind === "missing" ? {} : { [claudeProfile]: apiKey() },
+              }),
+            }),
+          ),
+        ).rejects.toMatchObject({
+          message: expect.stringContaining("--model <provider/model>@<profileId>"),
+          cause: expect.objectContaining({ name: "CliExecutionAuthProfileError" }),
+        });
+      } finally {
+        inference.dispose();
+      }
+    },
+  );
+
+  it.each(["removed", "reconnected"] as const)(
+    "rejects a %s account during CLI preparation before credential use",
+    async (change) => {
+      const cfg = await claudeCliConfig();
+      const binding = await capture(cfg);
+      const credentialUse = vi.fn();
+      h.runCliAgentMock.mockImplementation(async (request) => {
+        expect(request.assertCurrent).toBeTypeOf("function");
+        request.assertCurrent?.();
+        await removeAuthProfilesAcrossOwnerStores({
+          profileIds: [claudeProfile],
+          agentDir: state.agentDir(),
+        });
+        if (change === "reconnected") {
+          await saveProfiles({ [claudeProfile]: claudeToken() });
+        }
+        request.assertCurrent?.();
+        credentialUse();
+        return { payloads: [{ text: "must not run" }], meta: {} };
+      });
+      const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
+      expect(result.status).toBe("error");
+      expect(result.error).toMatch(/disconnected|replaced/i);
+      expect(credentialUse).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves a native Claude CLI login unbound and rejects a missing explicit account", async () => {
+    const cfg = await claudeCliConfig();
+
+    await expect(capture(cfg, `${claudeRef}@anthropic:claude-cli`)).resolves.toBeUndefined();
+    await expect(capture(cfg, `${claudeRef}@anthropic:missing`)).rejects.toThrow(
+      /No credentials found for profile "anthropic:missing"/,
+    );
+  });
+
+  it("binds an unbound Claude CLI job from an explicit model@profile update", async () => {
+    const cfg = await claudeCliConfig();
+    const update = async (model: string) => {
+      const payload = { kind: "agentTurn" as const, message: "check status", model };
+      return await captureCronUpdatedInferenceBinding(
+        makeAuthJob({ payload }),
+        { payload },
+        cfg,
+        {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
+      );
+    };
+
+    const selected = await update(`${claudeRef}@${claudeProfile}`);
+    try {
+      expect(selected?.inferenceBinding).toMatchObject({
+        provider: "anthropic",
+        profileId: claudeProfile,
+        authRequirement: "subscription",
+        source: "user",
+      });
+    } finally {
+      selected?.disposeInferenceAuthorization?.();
+    }
+    // The native login stays the CLI's own and leaves the job unbound.
+    await expect(update(`${claudeRef}@anthropic:claude-cli`)).resolves.toBeUndefined();
+  });
+
+  it("keeps the recorded runtime when an edit selects a different account", async () => {
+    const cfg = await embeddedAnthropicConfig({
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    });
+    const recorded = await captureFromCreator(cfg, claudeCliCreator());
+    expect(recorded?.runtime).toBe("claude-cli");
+    const payload = {
+      kind: "agentTurn" as const,
+      message: "check status",
+      model: `${claudeRef}@${claudeProfile}`,
+    };
+
+    // Config alone would pick the embedded runtime; the job keeps the one it runs on.
+    const edited = await captureCronUpdatedInferenceBinding(
+      makeAuthJob({ payload, inferenceBinding: recorded }),
+      { payload },
+      cfg,
+      {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
+    );
+    try {
+      expect(edited?.inferenceBinding).toMatchObject({
+        profileId: claudeProfile,
+        source: "user",
+        runtime: "claude-cli",
+      });
+    } finally {
+      edited?.disposeInferenceAuthorization?.();
+    }
+  });
+
+  it("rejects an account edit that would move the job off its unavailable recorded runtime", async () => {
+    const cfg = await embeddedAnthropicConfig({
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    });
+    const recorded = await captureFromCreator(cfg, claudeCliCreator());
+    expect(recorded?.runtime).toBe("claude-cli");
+    // claude-cli stops being a CLI backend for this config after capture.
+    h.isCliProviderMock.mockImplementation(() => false);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+    const payload = {
+      kind: "agentTurn" as const,
+      message: "check status",
+      model: `${claudeRef}@${claudeProfile}`,
+    };
+    const job = makeAuthJob({ payload, inferenceBinding: recorded });
+
+    await expect(
+      captureCronUpdatedInferenceBinding(
+        job,
+        { payload },
+        cfg,
+        {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
+      ),
+    ).rejects.toThrow(/runs on runtime claude-cli, which is unavailable/);
+    expect(job.inferenceBinding).toBe(recorded);
+  });
+  // The Oct 20 shape: a `current` job created from a conversation that runs Claude through
+  // claude-cli, on an Anthropic model the config alone would run embedded, with a stored
+  // Anthropic key. The run copies the conversation's runtime, so capture must resolve it too.
+  const claudeCliCreator = (): SessionEntry => ({
+    sessionId: "creator-session",
+    updatedAt: 1,
+    modelOverride: claudeModel,
+    providerOverride: "anthropic",
+    modelOverrideSource: "user",
+    agentRuntimeOverride: "claude-cli",
+  });
+  const embeddedAnthropicConfig = async (credential: AuthProfileCredential) => {
+    await saveProfiles({ [claudeProfile]: credential });
+    setupClaudeCliBackend();
+    const cfg = config(claudeRef);
+    cfg.auth = {
+      profiles: {
+        [claudeProfile]: {
+          provider: "anthropic",
+          mode: credential.type === "api_key" ? "api_key" : "token",
+        },
+      },
+      order: { anthropic: [claudeProfile] },
+    };
+    h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "anthropic", model: claudeModel });
+    h.resolveAllowedModelRefMock.mockReturnValue({
+      ref: { provider: "anthropic", model: claudeModel },
+    });
+    return cfg;
+  };
+  // Same inputs as cron.add for a `current` job: the creator's auth, its carried runtime.
+  const captureFromCreator = (cfg: OpenClawConfig, creatorEntry: SessionEntry) =>
+    captureCronInferenceBinding({
+      cfg,
+      agentId: "main",
+      sessionEntry: creatorEntry,
+      runtimeSessionEntry: resolveCarriedCronModelSelection(creatorEntry),
+    });
+  const runCopyingCreator = (cfg: OpenClawConfig, job: CronStoredJob) => {
+    // The run's cron session carries the creator's model and runtime, as session.ts copies them.
+    h.resolveCronSessionMock.mockResolvedValue(
+      h.makeCronSession({
+        sessionEntry: h.makeCronSessionEntry(resolveCarriedCronModelSelection(claudeCliCreator())),
+      }),
+    );
+    return runWithConfig(cfg, job);
+  };
+
+  it("binds the account a claude-cli creator's job always paid with and records claude-cli", async () => {
+    const cfg = await embeddedAnthropicConfig({
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    });
+    const binding = await captureFromCreator(cfg, claudeCliCreator());
+    // The account is the one capture bound before runtimes were recorded; only the runtime is new.
+    expect(binding).toMatchObject({
+      provider: "anthropic",
+      profileId: claudeProfile,
+      authRequirement: "api-key",
+      runtime: "claude-cli",
+    });
+    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    // claude-cli runs with the recorded key, as the job did before.
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+      provider: "claude-cli",
+      authProfileId: claudeProfile,
+    });
+    expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a binding recorded without a runtime exactly as before", async () => {
+    const cfg = await embeddedAnthropicConfig({
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    });
+    const { runtime: _runtime, ...legacy } = (await capture(cfg))!;
+    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+
+    // The cron session's copied claude-cli override still selects the runtime.
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: legacy }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+      provider: "claude-cli",
+      authProfileId: claudeProfile,
+    });
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("records the forwarded account with its claude-cli runtime and runs on that runtime", async () => {
+    const cfg = await embeddedAnthropicConfig(claudeToken());
+    const binding = await captureFromCreator(cfg, claudeCliCreator());
+    expect(binding).toMatchObject({
+      provider: "anthropic",
+      profileId: claudeProfile,
+      runtime: "claude-cli",
+    });
+    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+      provider: "claude-cli",
+      authProfileId: claudeProfile,
+    });
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("runs a bound job on its captured runtime, not the runtime its cron session copied", async () => {
+    const cfg = await embeddedAnthropicConfig(claudeToken());
+    const binding = await capture(cfg);
+    expect(binding?.runtime).toBeTruthy();
+    expect(binding?.runtime).not.toBe("claude-cli");
+    h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
+      expect(request.authProfileBinding?.profileId).toBe(claudeProfile);
+      request.userTurnTranscriptRecorder?.markBlocked();
+      return { payloads: [{ text: "captured runtime" }], meta: { agentMeta: {} } };
+    });
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a bound job whose captured runtime the config no longer allows", async () => {
+    const cfg = await embeddedAnthropicConfig(claudeToken());
+    const binding = await captureFromCreator(cfg, claudeCliCreator());
+    expect(binding?.runtime).toBe("claude-cli");
+    // claude-cli stops being a CLI backend for this config after capture.
+    h.isCliProviderMock.mockImplementation(() => false);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain(`account ${claudeProfile} on runtime claude-cli`);
+    expect(result.error).toContain("captured for runtime claude-cli");
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "another model", provider: "anthropic", model: "claude-sonnet-4-6" },
+    { name: "another provider", provider: "openai", model: "gpt-4.1" },
+  ])(
+    "keeps a current job on its captured model and runtime after its conversation switches to $name",
+    async (next) => {
+      const cfg = await embeddedAnthropicConfig(claudeToken());
+      const binding = await captureFromCreator(cfg, claudeCliCreator());
+      expect(binding?.runtime).toBe("claude-cli");
+      // Model refs resolve as written, so a copied conversation model would be selected.
+      h.resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+        const [provider = "", ...model] = raw.split("/");
+        return { ref: { provider, model: model.join("/") } };
+      });
+      const parentKey = "agent:main:dashboard:creator";
+      // After creation, the conversation moves to another model and runtime.
+      const switched: SessionEntry = {
+        sessionId: "creator-session",
+        updatedAt: 1,
+        modelOverride: next.model,
+        providerOverride: next.provider,
+        modelOverrideSource: "user",
+        agentRuntimeOverride: "openclaw",
+      };
+      const { resolveCronSession } = await vi.importActual<
+        typeof import("./isolated-agent/session.js")
+      >("./isolated-agent/session.js");
+      h.resolveCronSessionMock.mockImplementation(
+        async (params: Parameters<typeof resolveCronSession>[0]) =>
+          resolveCronSession({
+            ...params,
+            store: { [parentKey]: switched },
+            lifecycleTimestamps: {},
+          }),
+      );
+      h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+      const job = makeAuthJob({
+        sessionTarget: "current",
+        sessionKey: parentKey,
+        inferenceBinding: binding,
+      });
+
+      const result = await runWithConfig(cfg, job);
+
+      // The run keeps the runtime, provider, model and account the job was created with.
+      expect(result.status, result.error).toBe("ok");
+      expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+        provider: "claude-cli",
+        model: claudeModel,
+        authProfileId: claudeProfile,
+      });
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(job.inferenceBinding).toBe(binding);
+    },
+  );
+
+  it.each(["embedded", "cli"] as const)(
+    "fails a %s job whose stored account was removed with one message naming account and runtime",
+    async (route) => {
+      const cfg =
+        route === "cli" ? await claudeCliConfig() : await embeddedAnthropicConfig(claudeToken());
+      const binding = await capture(cfg);
+      if (!binding?.runtime) {
+        throw new Error("Expected a binding with its captured runtime");
+      }
+      await removeAuthProfilesAcrossOwnerStores({
+        profileIds: [claudeProfile],
+        agentDir: state.agentDir(),
+      });
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
+
+      expect(result.status).toBe("error");
+      expect(result.error).toContain(
+        `Automation inference account ${claudeProfile} on runtime ${binding.runtime} was removed or signed out`,
+      );
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(h.runCliAgentMock).not.toHaveBeenCalled();
     },
   );
 });

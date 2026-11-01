@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../agents/delivery-evidence-values.js";
+import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 
@@ -33,7 +34,7 @@ const assistantTextSignatureCache = new WeakMap<
   { text: unknown; result: AssistantTextSignature }
 >();
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
+export function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
@@ -59,13 +60,12 @@ export function parseAssistantTextSignature(
   } else {
     try {
       const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
+      const phase = normalizeAssistantPhase(parsed.phase);
       result =
         parsed.v === 1
           ? {
               ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-              ...(normalizeAssistantPhase(parsed.phase)
-                ? { phase: normalizeAssistantPhase(parsed.phase) }
-                : {}),
+              ...(phase ? { phase } : {}),
             }
           : null;
     } catch {
@@ -156,11 +156,7 @@ export function readAssistantTextBlocksForPhase(
 /** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
 export function extractAssistantTextForPhase(
   message: unknown,
-  options?: {
-    phase?: AssistantPhase;
-    sanitizeText?: (text: string) => string;
-    joinWith?: string;
-  },
+  options?: { phase?: AssistantPhase },
 ): string | undefined {
   const entry = asOptionalObjectRecord(message);
   if (!entry) {
@@ -168,23 +164,19 @@ export function extractAssistantTextForPhase(
   }
   const messagePhase = normalizeAssistantPhase(entry.phase);
   const phase = options?.phase;
-  const sanitizeText = options?.sanitizeText;
-  const joinWith = options?.joinWith ?? "\n";
-  const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
   const inlineText = typeof entry.text === "string" ? entry.text : entry.content;
   if (typeof inlineText === "string") {
-    const text = messagePhase === phase ? sanitizeBlockText(inlineText) : undefined;
+    const text = messagePhase === phase ? inlineText : undefined;
     return text?.trim() ? text : undefined;
   }
 
   const parts: string[] = [];
   for (const block of readAssistantTextBlocksForPhase(message, phase)) {
-    const sanitized = sanitizeBlockText(block.text);
-    if (sanitized.trim()) {
-      parts.push(sanitized);
+    if (block.text.trim()) {
+      parts.push(block.text);
     }
   }
-  return parts.length ? parts.join(joinWith) : undefined;
+  return parts.length ? parts.join("\n") : undefined;
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
@@ -280,7 +272,7 @@ export function prepareAssistantTranscriptText(
   }
   return record.display !== true &&
     !readTerminalSourceReplyDeliveryMirror(message) &&
-    text?.startsWith("NO_REPLY\n")
-    ? text.slice("NO_REPLY\n".length)
+    text !== undefined
+    ? (stripMixedSilentReplyTokens(text) ?? text)
     : text;
 }

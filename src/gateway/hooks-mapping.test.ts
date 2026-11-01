@@ -1,32 +1,22 @@
-// Hook mapping tests protect webhook path matching, templated agent actions,
-// transform results, skipped mappings, and file-backed mapping config.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import {
-  cleanupTempDirs,
-  makeTempDir,
-  useAutoCleanupTempDirTracker,
-} from "../../test/helpers/temp-dir.js";
-
-const hooksTempDirs: string[] = [];
-const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterAll(() => {
-  cleanupTempDirs(hooksTempDirs);
-});
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   applyHookMappings,
   commitHookTransformMappingReload,
   resolveHookMappings,
 } from "./hooks-mapping.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 // Legacy single-action view: these tests protect non-fanout mappings, which
 // produce at most one action per request. Fan-out coverage asserts the
@@ -40,43 +30,41 @@ async function applySingleHookMapping(...args: Parameters<typeof applyHookMappin
 }
 
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
+type Mapping = NonNullable<
+  NonNullable<Parameters<typeof resolveHookMappings>[0]>["mappings"]
+>[number];
+const agentMapping = (overrides: Partial<Mapping> = {}): Mapping => ({
+  match: { path: "gmail" },
+  action: "agent",
+  messageTemplate: "Subject: {{messages[0].subject}}",
+  ...overrides,
+});
+const mappingContext = (hookPath = "gmail", payload: Record<string, unknown> = {}) => ({
+  path: hookPath,
+  payload,
+  headers: {},
+  url: new URL(hookPath, baseUrl),
+});
+function makeTransforms(prefix = "openclaw-hooks-") {
+  const configDir = tempDirs.make(prefix);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(configDir, "openclaw.json"));
+  const transformsRoot = path.join(configDir, "hooks", "transforms");
+  fs.mkdirSync(transformsRoot, { recursive: true });
+  return { configDir, transformsRoot };
+}
+function resolveTransform(module: string, transformsDir?: string, matchPath = "custom") {
+  return resolveHookMappings({
+    transformsDir,
+    mappings: [agentMapping({ match: { path: matchPath }, transform: { module } })],
+  });
+}
 
 describe("hooks mapping", () => {
   const gmailPayload = { messages: [{ subject: "Hello" }] };
 
-  function expectSkippedTransformResult(
-    result: Awaited<ReturnType<typeof applySingleHookMapping>>,
-  ) {
-    expect(result?.ok).toBe(true);
-    if (result?.ok) {
-      expect(result.action).toBeNull();
-    }
-  }
-
-  function createGmailAgentMapping(params: {
-    id: string;
-    messageTemplate: string;
-    model?: string;
-    agentId?: string;
-  }) {
-    return {
-      id: params.id,
-      match: { path: "gmail" },
-      action: "agent" as const,
-      messageTemplate: params.messageTemplate,
-      ...(params.model ? { model: params.model } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-    };
-  }
-
   async function applyGmailMappings(config: Parameters<typeof resolveHookMappings>[0]) {
     const mappings = resolveHookMappings(config);
-    return applySingleHookMapping(mappings, {
-      payload: gmailPayload,
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
+    return applySingleHookMapping(mappings, mappingContext("gmail", gmailPayload));
   }
 
   function acceptHookMappings(mappings: ReturnType<typeof resolveHookMappings>) {
@@ -84,113 +72,35 @@ describe("hooks mapping", () => {
     return mappings;
   }
 
+  function expectWakeText(
+    result: Awaited<ReturnType<typeof applySingleHookMapping>>,
+    text: string,
+  ) {
+    expect(result).toMatchObject({ ok: true, action: { kind: "wake", text } });
+  }
+
   function expectAgentMessage(
     result: Awaited<ReturnType<typeof applySingleHookMapping>> | undefined,
     expectedMessage: string,
   ) {
-    expect(result?.ok).toBe(true);
-    if (result?.ok && result.action?.kind === "agent") {
-      expect(result.action.kind).toBe("agent");
-      expect(result.action.message).toBe(expectedMessage);
-    }
+    expect(result).toMatchObject({ ok: true, action: { kind: "agent", message: expectedMessage } });
   }
 
-  async function expectBlockedPrototypeTraversal(params: {
-    id: string;
-    messageTemplate: string;
-    payload: Record<string, unknown>;
-    expectedMessage: string;
-  }) {
-    const mappings = resolveHookMappings({
-      mappings: [
-        createGmailAgentMapping({
-          id: params.id,
-          messageTemplate: params.messageTemplate,
-        }),
-      ],
-    });
-    const result = await applySingleHookMapping(mappings, {
-      payload: params.payload,
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
-    expectAgentMessage(result, params.expectedMessage);
-  }
-
-  async function applyGmailTransformSessionKey(params: {
-    tempPrefix: string;
-    transformLines: string[];
-    payload?: Record<string, unknown>;
-    sessionKey?: string;
-  }) {
-    const configDir = makeTempDir(hooksTempDirs, params.tempPrefix);
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
-    fs.writeFileSync(path.join(transformsRoot, "transform.mjs"), params.transformLines.join("\n"));
-
-    const mappings = resolveHookMappings(
-      {
-        mappings: [
-          {
-            match: { path: "gmail" },
-            action: "agent",
-            messageTemplate: "Subject: {{messages[0].subject}}",
-            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-            transform: { module: "transform.mjs" },
-          },
-        ],
-      },
-      { configDir },
-    );
-
-    return applySingleHookMapping(mappings, {
-      payload: params.payload ?? gmailPayload,
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
-  }
-
-  function expectAgentSessionKey(
-    result: Awaited<ReturnType<typeof applySingleHookMapping>>,
-    params: { sessionKey: string; sessionKeySource?: "static" | "templated" },
+  async function applyTransform(
+    source: string,
+    overrides: Partial<Mapping> = {},
+    payload: Record<string, unknown> = gmailPayload,
   ) {
-    expect(result?.ok).toBe(true);
-    if (result?.ok && result.action?.kind === "agent") {
-      expect(result.action.sessionKey).toBe(params.sessionKey);
-      expect(result.action.sessionKeySource).toBe(params.sessionKeySource);
-    }
+    const { transformsRoot } = makeTransforms();
+    fs.writeFileSync(path.join(transformsRoot, "transform.mjs"), source);
+    const mappings = resolveHookMappings({
+      mappings: [agentMapping({ ...overrides, transform: { module: "transform.mjs" } })],
+    });
+    return applySingleHookMapping(mappings, mappingContext("gmail", payload));
   }
 
   it("validates sessionMode returned by hook transforms", async () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-hook-session-mode-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(transformsRoot, "transform.mjs"),
-      'export default () => ({ sessionMode: "shared" });',
-    );
-    const mappings = resolveHookMappings(
-      {
-        mappings: [
-          {
-            match: { path: "gmail" },
-            action: "agent",
-            messageTemplate: "Subject: {{messages[0].subject}}",
-            transform: { module: "transform.mjs" },
-          },
-        ],
-      },
-      { configDir },
-    );
-
-    const result = await applySingleHookMapping(mappings, {
-      payload: gmailPayload,
-      headers: {},
-      url: baseUrl,
-      path: "gmail",
-    });
+    const result = await applyTransform('export default () => ({ sessionMode: "shared" });');
     expect(result).toEqual({
       ok: false,
       error: "hook mapping sessionMode must be isolated or persistent",
@@ -230,26 +140,15 @@ describe("hooks mapping", () => {
   it.each(["wake", "agent"] as const)(
     "rejects %s session key templates that render empty",
     async (action) => {
-      const mappings = resolveHookMappings({
+      const result = await applyGmailMappings({
         mappings: [
-          {
-            id: `empty-${action}-session-key`,
-            match: { path: "gmail" },
+          agentMapping({
             action,
-            ...(action === "wake"
-              ? { textTemplate: "Subject: {{messages[0].subject}}" }
-              : { messageTemplate: "Subject: {{messages[0].subject}}" }),
+            textTemplate: "Subject: {{messages[0].subject}}",
             sessionKey: "{{messages[0].missing}}",
-          },
+          }),
         ],
       });
-      const result = await applySingleHookMapping(mappings, {
-        payload: gmailPayload,
-        headers: {},
-        url: baseUrl,
-        path: "gmail",
-      });
-
       expect(result).toEqual({
         ok: false,
         error: "hook mapping sessionKey template rendered empty",
@@ -260,14 +159,12 @@ describe("hooks mapping", () => {
   it("rejects custom wake sessions that cannot be drained on the next heartbeat", async () => {
     const result = await applyGmailMappings({
       mappings: [
-        {
-          id: "deferred-targeted-wake",
-          match: { path: "gmail" },
+        agentMapping({
           action: "wake",
           textTemplate: "Subject: {{messages[0].subject}}",
           wakeMode: "next-heartbeat",
           sessionKey: "hook:gmail:fixed",
-        },
+        }),
       ],
     });
 
@@ -277,212 +174,91 @@ describe("hooks mapping", () => {
     });
   });
 
-  it("treats transform-provided session keys as templated by default", async () => {
-    const result = await applyGmailTransformSessionKey({
-      tempPrefix: "openclaw-config-sessionkey-xform-",
-      payload: { subject: "external" },
-      sessionKey: "hook:gmail:static",
-      transformLines: [
-        "export default ({ payload }) => ({",
-        '  kind: "agent",',
-        '  message: "Transformed",',
-        "  sessionKey: `hook:gmail:${payload.subject}`,",
-        "});",
-      ],
-    });
+  it.each([
+    ["templated by default", "hook:gmail:static", undefined, "hook:gmail:external", "templated"],
+    [
+      "explicitly static",
+      "hook:gmail:{{messages[0].subject}}",
+      "static",
+      "hook:gmail:fixed",
+      "static",
+    ],
+    ["empty", "hook:gmail:{{messages[0].subject}}", "templated", "", undefined],
+  ] as const)(
+    "tracks %s transform session keys",
+    async (_, sessionKey, source, expected, expectedSource) => {
+      const result = await applyTransform(
+        [
+          source === undefined ? "export default ({ payload }) => ({" : "export default () => ({",
+          '  kind: "agent",',
+          '  message: "Transformed",',
+          source === undefined
+            ? "  sessionKey: `hook:gmail:${payload.subject}`,"
+            : `  sessionKey: ${JSON.stringify(expected)},`,
+          ...(source === undefined ? [] : [`  sessionKeySource: ${JSON.stringify(source)},`]),
+          "});",
+        ].join("\n"),
+        { sessionKey },
+        { subject: "external" },
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        action: { kind: "agent", sessionKey: expected, sessionKeySource: expectedSource },
+      });
+    },
+  );
 
-    expectAgentSessionKey(result, {
-      sessionKey: "hook:gmail:external",
-      sessionKeySource: "templated",
-    });
-  });
-
-  it("uses transform-provided static session key source metadata", async () => {
-    const result = await applyGmailTransformSessionKey({
-      tempPrefix: "openclaw-config-sessionkey-static-",
-      sessionKey: "hook:gmail:{{messages[0].subject}}",
-      transformLines: [
-        "export default () => ({",
-        '  kind: "agent",',
-        '  message: "Transformed",',
-        '  sessionKey: "hook:gmail:fixed",',
-        '  sessionKeySource: "static",',
-        "});",
-      ],
-    });
-
-    expectAgentSessionKey(result, { sessionKey: "hook:gmail:fixed", sessionKeySource: "static" });
-  });
-
-  it("treats empty transform session keys as absent for source tracking", async () => {
-    const result = await applyGmailTransformSessionKey({
-      tempPrefix: "openclaw-config-sessionkey-empty-",
-      sessionKey: "hook:gmail:{{messages[0].subject}}",
-      transformLines: [
-        "export default () => ({",
-        '  kind: "agent",',
-        '  message: "Transformed",',
-        '  sessionKey: "",',
-        '  sessionKeySource: "templated",',
-        "});",
-      ],
-    });
-
-    expectAgentSessionKey(result, { sessionKey: "" });
-  });
-
-  it("rejects transform module traversal outside transformsDir", () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-traversal-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
-    expect(() =>
-      resolveHookMappings(
-        {
-          mappings: [
-            {
-              match: { path: "custom" },
-              action: "agent",
-              transform: { module: "../evil.mjs" },
-            },
-          ],
-        },
-        { configDir },
-      ),
-    ).toThrow(/must be within/);
-  });
-
-  it("rejects absolute transform module path outside transformsDir", () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-abs-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
-    const outside = path.join(os.tmpdir(), "evil.mjs");
-    expect(() =>
-      resolveHookMappings(
-        {
-          mappings: [
-            {
-              match: { path: "custom" },
-              action: "agent",
-              transform: { module: outside },
-            },
-          ],
-        },
-        { configDir },
-      ),
-    ).toThrow(/must be within/);
-  });
-
-  it("rejects transformsDir traversal outside the transforms root", () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-xformdir-trav-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
-    expect(() =>
-      resolveHookMappings(
-        {
-          transformsDir: "..",
-          mappings: [
-            {
-              match: { path: "custom" },
-              action: "agent",
-              transform: { module: "transform.mjs" },
-            },
-          ],
-        },
-        { configDir },
-      ),
-    ).toThrow(/Hook transformsDir/);
+  it.each([
+    ["../evil.mjs", undefined, /must be within/],
+    [path.join(os.tmpdir(), "evil.mjs"), undefined, /must be within/],
+    ["transform.mjs", "..", /Hook transformsDir/],
+  ] as const)("rejects escaping transform path %s (directory: %s)", (module, directory, error) => {
+    makeTransforms();
+    expect(() => resolveTransform(module, directory)).toThrow(error);
   });
 
   it.runIf(process.platform !== "win32")(
     "rejects transform module symlink escape outside transformsDir",
     () => {
-      const configDir = makeTempDir(hooksTempDirs, "openclaw-config-symlink-module-");
-      const transformsRoot = path.join(configDir, "hooks", "transforms");
-      fs.mkdirSync(transformsRoot, { recursive: true });
-      const outsideDir = makeTempDir(hooksTempDirs, "openclaw-outside-module-");
+      const { transformsRoot } = makeTransforms("openclaw-config-symlink-module-");
+      const outsideDir = tempDirs.make("openclaw-outside-module-");
       const outsideModule = path.join(outsideDir, "evil.mjs");
       fs.writeFileSync(outsideModule, 'export default () => ({ kind: "wake", text: "owned" });');
       fs.symlinkSync(outsideModule, path.join(transformsRoot, "linked.mjs"));
-      expect(() =>
-        resolveHookMappings(
-          {
-            mappings: [
-              {
-                match: { path: "custom" },
-                action: "agent",
-                transform: { module: "linked.mjs" },
-              },
-            ],
-          },
-          { configDir },
-        ),
-      ).toThrow(/must be within/);
+      expect(() => resolveTransform("linked.mjs")).toThrow(/must be within/);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rejects transformsDir symlink escape outside transforms root",
     () => {
-      const configDir = makeTempDir(hooksTempDirs, "openclaw-config-symlink-dir-");
-      const transformsRoot = path.join(configDir, "hooks", "transforms");
-      fs.mkdirSync(transformsRoot, { recursive: true });
-      const outsideDir = makeTempDir(hooksTempDirs, "openclaw-outside-dir-");
+      const { transformsRoot } = makeTransforms("openclaw-config-symlink-dir-");
+      const outsideDir = tempDirs.make("openclaw-outside-dir-");
       fs.writeFileSync(path.join(outsideDir, "transform.mjs"), "export default () => null;");
       fs.symlinkSync(outsideDir, path.join(transformsRoot, "escape"), "dir");
-      expect(() =>
-        resolveHookMappings(
-          {
-            transformsDir: "escape",
-            mappings: [
-              {
-                match: { path: "custom" },
-                action: "agent",
-                transform: { module: "transform.mjs" },
-              },
-            ],
-          },
-          { configDir },
-        ),
-      ).toThrow(/Hook transformsDir/);
+      expect(() => resolveTransform("transform.mjs", "escape")).toThrow(/Hook transformsDir/);
     },
   );
 
   it.runIf(process.platform !== "win32")("accepts in-root transform module symlink", async () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-config-symlink-ok-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    const { transformsRoot } = makeTransforms("openclaw-config-symlink-ok-");
     const nestedDir = path.join(transformsRoot, "nested");
     fs.mkdirSync(nestedDir, { recursive: true });
     fs.writeFileSync(path.join(nestedDir, "transform.mjs"), "export default () => null;");
     fs.symlinkSync(path.join(nestedDir, "transform.mjs"), path.join(transformsRoot, "linked.mjs"));
 
-    const mappings = resolveHookMappings(
-      {
-        mappings: [
-          {
-            match: { path: "skip" },
-            action: "agent",
-            transform: { module: "linked.mjs" },
-          },
-        ],
-      },
-      { configDir },
-    );
+    const mappings = resolveTransform("linked.mjs", undefined, "skip");
 
-    const result = await applySingleHookMapping(mappings, {
-      payload: {},
-      headers: {},
-      url: new URL("http://127.0.0.1:18789/hooks/skip"),
-      path: "skip",
-    });
+    const result = await applySingleHookMapping(mappings, mappingContext("skip"));
 
-    expectSkippedTransformResult(result);
+    expect(result).toEqual({ ok: true, action: null });
   });
 
   it("prefers explicit mappings over presets", async () => {
     const result = await applyGmailMappings({
       presets: ["gmail"],
       mappings: [
-        createGmailAgentMapping({
+        agentMapping({
           id: "override",
           messageTemplate: "Override subject: {{messages[0].subject}}",
           model: "openai/gpt-4.1-mini",
@@ -498,9 +274,7 @@ describe("hooks mapping", () => {
   });
 
   it("uses one transform module instance per mapping reload", async () => {
-    const configDir = autoCleanupTempDirs.make("openclaw-hooks-generation-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
+    const { transformsRoot } = makeTransforms("openclaw-hooks-generation-");
     const modPath = path.join(transformsRoot, "same-generation.mjs");
     fs.writeFileSync(
       modPath,
@@ -512,120 +286,63 @@ describe("hooks mapping", () => {
       ].join("\n"),
     );
 
-    const mappings = resolveHookMappings(
-      {
-        mappings: [
-          {
-            match: { path: "testA" },
-            action: "agent",
-            messageTemplate: "unused",
-            transform: { module: "same-generation.mjs", export: "transformA" },
-          },
-          {
-            match: { path: "testB" },
-            action: "agent",
-            messageTemplate: "unused",
-            transform: { module: "same-generation.mjs", export: "transformB" },
-          },
-        ],
-      },
-      { configDir },
-    );
-
-    const resultA = await applySingleHookMapping(mappings, {
-      payload: {},
-      headers: {},
-      url: new URL("http://127.0.0.1:18789/hooks/testA"),
-      path: "testA",
-    });
-    const resultB = await applySingleHookMapping(mappings, {
-      payload: {},
-      headers: {},
-      url: new URL("http://127.0.0.1:18789/hooks/testB"),
-      path: "testB",
+    const mappings = resolveHookMappings({
+      mappings: ["A", "B"].map((suffix) =>
+        agentMapping({
+          match: { path: `test${suffix}` },
+          messageTemplate: "unused",
+          transform: { module: "same-generation.mjs", export: `transform${suffix}` },
+        }),
+      ),
     });
 
-    expect(resultA?.ok).toBe(true);
-    expect(resultB?.ok).toBe(true);
-    let instanceA: string | undefined;
-    let instanceB: string | undefined;
-    if (resultA?.ok && resultA.action?.kind === "wake") {
-      instanceA = resultA.action.text.match(/^A-(.+)$/)?.[1];
-    }
-    if (resultB?.ok && resultB.action?.kind === "wake") {
-      instanceB = resultB.action.text.match(/^B-(.+)$/)?.[1];
-    }
+    const instance = async (suffix: string) => {
+      const result = await applySingleHookMapping(mappings, mappingContext(`test${suffix}`));
+      expect(result?.ok).toBe(true);
+      return result?.ok && result.action?.kind === "wake"
+        ? result.action.text.match(new RegExp(`^${suffix}-(.+)$`))?.[1]
+        : undefined;
+    };
+    const instanceA = await instance("A");
     expect(instanceA).toBeDefined();
-    expect(instanceB).toBe(instanceA);
+    expect(await instance("B")).toBe(instanceA);
   });
 
-  function resolveReloadableMappings(configDir: string) {
-    return resolveHookMappings(
-      {
-        mappings: [
-          {
-            match: { path: "reloadable" },
-            action: "agent",
-            messageTemplate: "unused",
-            transform: { module: "reloadable.mjs" },
-          },
-        ],
-      },
-      { configDir },
-    );
+  function resolveReloadableMappings() {
+    return resolveTransform("reloadable.mjs", undefined, "reloadable");
   }
 
   function applyReloadableMappings(mappings: ReturnType<typeof resolveHookMappings>) {
-    return applySingleHookMapping(mappings, {
-      payload: {},
-      headers: {},
-      url: new URL("http://127.0.0.1:18789/hooks/reloadable"),
-      path: "reloadable",
-    });
+    return applySingleHookMapping(mappings, mappingContext("reloadable"));
   }
 
   it("does not invalidate the active transform cache while resolving a rejected reload", async () => {
-    const configDir = autoCleanupTempDirs.make("openclaw-hooks-rejected-reload-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
+    const { transformsRoot } = makeTransforms("openclaw-hooks-rejected-reload-");
     const modPath = path.join(transformsRoot, "reloadable.mjs");
     fs.writeFileSync(modPath, 'export default () => ({ kind: "wake", text: "accepted" });');
 
-    const acceptedMappings = acceptHookMappings(resolveReloadableMappings(configDir));
-    const accepted = await applyReloadableMappings(acceptedMappings);
-    expect(accepted?.ok).toBe(true);
-    if (accepted?.ok && accepted.action?.kind === "wake") {
-      expect(accepted.action.text).toBe("accepted");
-    }
+    const acceptedMappings = acceptHookMappings(resolveReloadableMappings());
+    expectWakeText(await applyReloadableMappings(acceptedMappings), "accepted");
 
     fs.writeFileSync(modPath, 'export default () => ({ kind: "wake", text: "candidate" });');
     const nextTime = new Date(Date.now() + 5_000);
     fs.utimesSync(modPath, nextTime, nextTime);
 
-    const rejectedCandidateMappings = resolveReloadableMappings(configDir);
+    const rejectedCandidateMappings = resolveReloadableMappings();
     expect(rejectedCandidateMappings).toHaveLength(1);
 
-    const stillAccepted = await applyReloadableMappings(acceptedMappings);
-    expect(stillAccepted?.ok).toBe(true);
-    if (stillAccepted?.ok && stillAccepted.action?.kind === "wake") {
-      expect(stillAccepted.action.text).toBe("accepted");
-    }
+    expectWakeText(await applyReloadableMappings(acceptedMappings), "accepted");
 
-    const newlyAccepted = await applyReloadableMappings(
-      acceptHookMappings(rejectedCandidateMappings),
+    expectWakeText(
+      await applyReloadableMappings(acceptHookMappings(rejectedCandidateMappings)),
+      "candidate",
     );
-    expect(newlyAccepted?.ok).toBe(true);
-    if (newlyAccepted?.ok && newlyAccepted.action?.kind === "wake") {
-      expect(newlyAccepted.action.text).toBe("candidate");
-    }
   });
 
   it("does not let an older in-flight transform import repopulate the reload cache", async ({
     signal,
   }) => {
-    const configDir = autoCleanupTempDirs.make("openclaw-hooks-overlap-");
-    const transformsRoot = path.join(configDir, "hooks", "transforms");
-    fs.mkdirSync(transformsRoot, { recursive: true });
+    const { configDir, transformsRoot } = makeTransforms("openclaw-hooks-overlap-");
     const modPath = path.join(transformsRoot, "reloadable.mjs");
     const oldStartedEvent = path.join(configDir, "old-started");
     const oldStarted = createDeferred();
@@ -643,7 +360,7 @@ describe("hooks mapping", () => {
       ].join("\n"),
     );
 
-    let acceptedMappings = acceptHookMappings(resolveReloadableMappings(configDir));
+    let acceptedMappings = acceptHookMappings(resolveReloadableMappings());
     process.once(oldStartedEvent, onOldStarted);
     const oldImport = applyReloadableMappings(acceptedMappings);
     try {
@@ -660,25 +377,13 @@ describe("hooks mapping", () => {
       const nextTime = new Date(Date.now() + 5_000);
       fs.utimesSync(modPath, nextTime, nextTime);
 
-      acceptedMappings = acceptHookMappings(resolveReloadableMappings(configDir));
-      const afterReload = await withinTest(applyReloadableMappings(acceptedMappings), signal);
-      expect(afterReload?.ok).toBe(true);
-      if (afterReload?.ok && afterReload.action?.kind === "wake") {
-        expect(afterReload.action.text).toBe("new");
-      }
+      acceptedMappings = acceptHookMappings(resolveReloadableMappings());
+      expectWakeText(await withinTest(applyReloadableMappings(acceptedMappings), signal), "new");
 
       releaseOld.resolve();
-      const olderResult = await withinTest(oldImport, signal);
-      expect(olderResult?.ok).toBe(true);
-      if (olderResult?.ok && olderResult.action?.kind === "wake") {
-        expect(olderResult.action.text).toBe("old");
-      }
+      expectWakeText(await withinTest(oldImport, signal), "old");
 
-      const final = await withinTest(applyReloadableMappings(acceptedMappings), signal);
-      expect(final?.ok).toBe(true);
-      if (final?.ok && final.action?.kind === "wake") {
-        expect(final.action.text).toBe("new");
-      }
+      expectWakeText(await withinTest(applyReloadableMappings(acceptedMappings), signal), "new");
     } finally {
       releaseOld.resolve();
       try {
@@ -693,33 +398,28 @@ describe("hooks mapping", () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
     });
-    const result = await applySingleHookMapping(mappings, {
-      payload: {},
-      headers: {},
-      url: new URL("http://127.0.0.1:18789/hooks/noop"),
-      path: "noop",
-    });
+    const result = await applySingleHookMapping(mappings, mappingContext("noop"));
     expect(result?.ok).toBe(false);
   });
 
-  describe("prototype pollution protection", () => {
-    it("blocks constructor traversal in webhook payload", async () => {
-      await expectBlockedPrototypeTraversal({
-        id: "constructor-test",
-        messageTemplate: "type: {{constructor.name}}",
-        payload: { constructor: { name: "INJECTED" } } as Record<string, unknown>,
-        expectedMessage: "type: ",
-      });
+  it("blocks constructor traversal in webhook payload", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [agentMapping({ messageTemplate: "type: {{constructor.name}}" })],
     });
+    expectAgentMessage(
+      await applySingleHookMapping(
+        mappings,
+        mappingContext("gmail", { constructor: { name: "INJECTED" } }),
+      ),
+      "type: ",
+    );
   });
 });
 
 describe("hook mapping fan-out", () => {
-  const fanOutUrl = new URL("http://127.0.0.1:18789/hooks/gmail");
-
   function applyGmailPreset(payload: Record<string, unknown>) {
     const mappings = resolveHookMappings({ presets: ["gmail"] });
-    return applyHookMappings(mappings, { payload, headers: {}, url: fanOutUrl, path: "gmail" });
+    return applyHookMappings(mappings, mappingContext("gmail", payload));
   }
 
   it("renders one action per batched gmail message with per-message session keys", async () => {
@@ -729,23 +429,30 @@ describe("hook mapping fan-out", () => {
         { id: "m2", from: "b@example.com", subject: "Two" },
       ],
     });
-    expect(result?.ok).toBe(true);
-    if (!result?.ok) {
-      return;
+    expect(result).toMatchObject({
+      ok: true,
+      fanout: true,
+      dropped: 0,
+      actions: [
+        {
+          kind: "agent",
+          sessionMode: "isolated",
+          sessionKey: "hook:gmail:m1",
+          message: expect.stringContaining("a@example.com"),
+        },
+        {
+          kind: "agent",
+          sessionMode: "isolated",
+          sessionKey: "hook:gmail:m2",
+          message: expect.stringContaining("b@example.com"),
+        },
+      ],
+    });
+    if (result?.ok) {
+      expect(
+        result.actions.map((action) => (action.kind === "agent" ? action.message : undefined)),
+      ).toEqual([expect.stringContaining("One"), expect.stringContaining("Two")]);
     }
-    expect(result.fanout).toBe(true);
-    expect(result.dropped).toBe(0);
-    expect(result.actions).toHaveLength(2);
-    const agentActions = result.actions.filter((action) => action.kind === "agent");
-    expect(agentActions.map((action) => action.sessionMode)).toEqual(["isolated", "isolated"]);
-    expect(agentActions.map((action) => action.sessionKey)).toEqual([
-      "hook:gmail:m1",
-      "hook:gmail:m2",
-    ]);
-    expect(agentActions[0]?.message).toContain("a@example.com");
-    expect(agentActions[0]?.message).toContain("One");
-    expect(agentActions[1]?.message).toContain("b@example.com");
-    expect(agentActions[1]?.message).toContain("Two");
   });
 
   it("produces no actions for an empty or missing fan-out array", async () => {
@@ -758,15 +465,7 @@ describe("hook mapping fan-out", () => {
   it("rejects nested forEach paths", () => {
     expect(() =>
       resolveHookMappings({
-        mappings: [
-          {
-            id: "nested",
-            match: { path: "gmail" },
-            action: "agent",
-            forEach: "data.messages",
-            messageTemplate: "x",
-          },
-        ],
+        mappings: [agentMapping({ forEach: "data.messages" })],
       }),
     ).toThrow(/forEach must be a top-level payload key/);
   });

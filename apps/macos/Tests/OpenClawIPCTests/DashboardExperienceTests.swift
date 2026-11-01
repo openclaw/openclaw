@@ -198,6 +198,29 @@ struct DashboardExperienceTests {
         #expect(primaryWindow.isVisible && !primaryWindow.isExcludedFromWindowsMenu)
     }
 
+    @Test func `reopening returns to the last focused Dashboard window`() async throws {
+        _ = AppKitTestSupport.application
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url: server.websocketURL(), token: "fixture", password: nil), routeAuthority: nil)
+        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in endpoint })
+        defer { manager.close() }
+        try await manager.show()
+        let main = try #require(manager._testController())
+        await manager.openNewDashboardWindow(for: .primary).value
+        let focused = try #require(manager._testAuxiliaryWindows().first?.controller)
+        #expect(manager.frontmostDashboard()?.controller === focused)
+
+        // Dock reopen and Open Dashboard both enter here; the joined presentation must not raise the main window.
+        manager.presentDashboard()
+        try await manager.show()
+
+        #expect(manager.frontmostDashboard()?.controller === focused)
+        #expect(manager._testController() === main)
+        #expect(manager.openWindowCount(for: .primary) == 2)
+    }
+
     @Test(arguments: ["navigation", "new-window", "focus", "picker"])
     func `hiding windows fences pending opens and target changes`(_ action: String) async throws {
         let server = try await DashboardHTTPFixture.start()

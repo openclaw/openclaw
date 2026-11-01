@@ -1,5 +1,3 @@
-// Public image-generation helpers and types for provider plugins.
-
 export {
   createOpenAiCompatibleImageGenerationProvider,
   type OpenAiCompatibleImageProviderRequestBody,
@@ -17,6 +15,7 @@ export {
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
+  resolveImageSourceUrl,
   sniffImageMimeType,
   toImageDataUrl,
   type ImageMimeTypeDetection,

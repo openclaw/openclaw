@@ -43,8 +43,16 @@ suite.define(() => {
       await editor.fill("A mobile follow-up");
       const send = composer.getByRole("button", { name: "Send message", exact: true });
       await send.waitFor({ state: "visible" });
-      const composerBox = await composer.boundingBox();
-      const sendBox = await send.boundingBox();
+      // A responsive layout can move the whole composer between protocol calls.
+      const [composerBox, sendBox] = await send.evaluate((button) =>
+        [button.closest(".agent-chat__input"), button].map((element) => {
+          if (!element || element.getClientRects().length === 0) {
+            return null;
+          }
+          const { x, y, width, height: boxHeight } = element.getBoundingClientRect();
+          return { x, y, width, height: boxHeight };
+        }),
+      );
       expect(composerBox).not.toBeNull();
       expect(sendBox).not.toBeNull();
       if (!composerBox || !sendBox) {
@@ -52,7 +60,7 @@ suite.define(() => {
       }
       expect(sendBox.x + sendBox.width).toBeLessThanOrEqual(composerBox.x + composerBox.width);
       expect(sendBox.y + sendBox.height).toBeLessThanOrEqual(composerBox.y + composerBox.height);
-      expect(await editor.evaluate((element) => getComputedStyle(element).fontSize)).toBe("16px");
+      expect(await editor.evaluate((element) => getComputedStyle(element).fontSize)).toBe("14px");
     });
   });
 });

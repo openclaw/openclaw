@@ -19,9 +19,10 @@
   --shell-topbar-height: 58px;
   --sidebar-nav-row-height: 40px;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
   grid-template-areas:
     "topbar"
+    "notice"
     "content";
   /* The nav collapses to an overlay drawer here, so it no longer reserves a
      column. Zero the width the docked terminal reads or it would leave a
@@ -39,14 +40,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   .shell--mobile-nav.shell--merged-chat-chrome
   .topbar {
   display: none;
-}
-
-.shell--mobile-nav.shell--connection-status {
-  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
-  grid-template-areas:
-    "topbar"
-    "connection"
-    "content";
 }
 
 .shell--mobile-nav .shell-nav,
@@ -68,8 +61,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(-100%);
   opacity: 0;
   pointer-events: none;
+  /* The drawer slides on the sheet spring; opacity only softens its leading edge. */
   transition:
-    transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform var(--motion-sheet),
     opacity 100ms ease-out;
 }
 
@@ -92,9 +86,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: 0;
   background: rgb(0 0 0 / 44%);
   opacity: 0;
+  /* Hide after the fade without interpolating visibility on every animation frame. */
   transition:
-    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
-    visibility 0s linear 160ms;
+    opacity var(--motion-sheet),
+    visibility 0s linear var(--motion-sheet-duration);
   touch-action: none;
 }
 
@@ -102,9 +97,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   pointer-events: auto;
   visibility: visible;
   opacity: 1;
-  transition:
-    opacity 200ms cubic-bezier(0.32, 0.72, 0, 1),
-    visibility 0s;
+  transition-delay: 0s;
 }
 
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
@@ -112,7 +105,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
-  transition-duration: 200ms, 140ms;
+  transition-duration: var(--motion-sheet-duration), 140ms;
+}
+
+/* Keep selection feedback immediate without scheduling color/background animation frames. */
+.shell--mobile-nav .settings-sidebar__item {
+  transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -122,21 +120,45 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     transition-duration: 0.01ms, 100ms;
   }
 
-  .shell--mobile-nav .shell-nav-backdrop,
-  .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
+  .shell--mobile-nav .shell-nav-backdrop {
     transition-duration: 100ms, 0s;
+    transition-delay: 0s, 100ms;
   }
-}
-
-/* Inside the drawer there is no Escape key to hint at. */
-.shell--mobile-nav .settings-sidebar__esc {
-  display: none;
 }
 
 /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
    the desktop rail toggle makes no sense once the sidebar is a drawer. */
 .shell--mobile-nav .topbar .topbar-nav-toggle {
-  display: inline-flex;
+  display: grid;
+}
+
+/* One drawer button for the topbar, mobile chat and pending-session headers. */
+.mobile-nav-toggle {
+  display: grid;
+  flex: 0 0 40px;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.mobile-nav-toggle:hover {
+  color: var(--text);
+}
+
+.mobile-nav-toggle > svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.mobile-nav-toggle > .gateway-status-dot {
+  inset: 4px 4px auto auto;
 }
 
 .shell--mobile-nav .topbar {
@@ -149,9 +171,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   gap: 10px;
 }
 
-.shell--mobile-nav .topnav-shell__content {
-  display: flex;
-  justify-content: center;
+.mobile-connection-status {
+  min-width: 0;
+  height: 18px;
 }
 
 .shell--mobile-nav .topbar-brand {
@@ -327,6 +349,8 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .chat-thread {
+    --chat-thread-padding-top: 0px;
+
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
        on the scroll container floats macOS overlay scrollbars off the edge. */
@@ -443,10 +467,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 }
 
-/* nth-child is 1-based and includes the checkbox column (col 1). The optional
-   Group column in category mode shifts later indexes; grouping is a desktop
-   workflow, so the hide rules target the default 7-column roster. */
-
 @media (max-width: 900px) {
   .data-table.sessions-table {
     min-width: 640px;
@@ -458,7 +478,7 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 }
 
-/* ≤768px: hide Tokens (col 6); tighten padding; stack pagination */
+/* ≤768px: tighten padding and stack pagination */
 @media (max-width: 768px) {
   .session-menu__panel {
     --menu-item-height: 40px;
@@ -471,11 +491,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
 
   .data-table.sessions-table {
     min-width: 500px;
-  }
-
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6) {
-    display: none;
   }
 
   .data-table th,
@@ -532,35 +547,16 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 }
 
-/* ≤560px: also hide Kind (col 3) and Updated (col 5); keep live status visible */
+/* ≤560px: keep the scoped columns available through horizontal scrolling. */
 @media (max-width: 560px) {
   .data-table.sessions-table {
     min-width: 320px;
-  }
-
-  .sessions-table th:nth-child(3),
-  .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(5),
-  .sessions-table td:nth-child(5) {
-    display: none;
   }
 
   .data-table.sessions-table .data-table-key-col {
     width: 106px;
     min-width: 106px;
     max-width: 106px;
-  }
-
-  /* The 106px key column has no room for the kind avatar; run state stays
-     visible through the status column, which this breakpoint keeps. */
-  .sessions-table .session-avatar {
-    display: none;
-  }
-
-  .sessions-table .session-status-col {
-    width: 76px;
-    min-width: 76px;
-    max-width: 76px;
   }
 
   .data-table th,

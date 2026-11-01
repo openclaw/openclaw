@@ -5,7 +5,8 @@ import type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 
@@ -65,7 +66,7 @@ function connect(
   provider: LinkReaderHovercardProvider,
   request = vi.fn().mockResolvedValue(preview()),
 ) {
-  provider.client = { request } as unknown as GatewayBrowserClient;
+  provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
   return request;
 }
 function card() {
@@ -377,7 +378,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     leave(anchor);
     await vi.advanceTimersByTimeAsync(250);
     expect(card()).toBeNull();
-    Object.assign(provider.client!, { connected: true });
     const signal = new AbortController().signal;
     // Fill the same cache without creating 100 disposable hovercard portals.
     for (let index = 1; index <= 100; index++) {

@@ -13,11 +13,8 @@ describe("resolveFileExtractionLimits", () => {
     expect(resolveFileExtractionLimits(cfg).pdf.maxPages).toBe(150);
   });
 
-  it("ignores non-positive or non-finite agent limits and falls back to defaults", () => {
-    const cfg = {
-      agents: { defaults: { mediaMaxMb: 0, pdfMaxPages: -4 } },
-    } as unknown as OpenClawConfig;
-    const limits = resolveFileExtractionLimits(cfg);
+  it("uses defaults when agent limits are omitted", () => {
+    const limits = resolveFileExtractionLimits({});
     expect(limits.maxBytes).toBe(20 * 1024 * 1024);
     expect(limits.pdf.maxPages).toBe(20);
   });

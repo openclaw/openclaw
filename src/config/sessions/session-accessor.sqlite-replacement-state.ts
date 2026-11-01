@@ -1,11 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
+import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import {
   sessionSharingEntriesEqual,
@@ -21,7 +23,6 @@ import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revi
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
   deleteLegacySessionEntryRows,
-  readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -132,7 +133,7 @@ export function prepareSessionEntryReplacementPublication(
       }),
     );
   }
-  const source = getAdmittedSqliteSchemaFacts(database.db)
+  const source = getAdmittedSqlSchemaFacts(database.db)
     ? captureSessionEntryPublicationSource(database.db, {
         ...readOpenClawAgentDatabaseIdentity(database),
         // Actor receipts carry the complete postimage at the native writer revision.
@@ -143,9 +144,17 @@ export function prepareSessionEntryReplacementPublication(
     : undefined;
   const changedKeys = [
     ...new Set([...result.previous.keys(), ...result.current.keys(), ...archived]),
-  ];
+  ].filter(
+    (key) =>
+      invalidated.has(key) ||
+      options?.postimages?.get(key)?.changed !== false ||
+      // A final no-op must not hide an earlier replacement of the same key.
+      !sqliteSessionEntriesEqual(result.previous.get(key), result.current.get(key)),
+  );
   const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
+    ...(result.patchDiffBaselines ? { patchDiffBaselines: result.patchDiffBaselines } : {}),
+    conversationPublication: readStagedConversationPublications(database),
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
     membershipInvalidatedKeys: result.membershipInvalidatedKeys,
@@ -235,13 +244,28 @@ export function commitSessionEntryReplacementsInDatabase(
   const transactionRows = new Map<string, ResolvedSessionEntryRow>();
   const windows = new Map<string, SessionEntryWindowRow | null>();
   const writtenPostimages: SessionEntryWritePostimages = postimages ?? new Map();
+  let readValidation: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const sessionKey of input.validationKeys) {
-    const transactionRow = readExactSessionEntryRow(database, sessionKey, "full", undefined, true);
+    readValidation ??= prepareExactSessionEntryRowReads(
+      database,
+      input.validationKeys,
+      "full",
+      undefined,
+      { includeWindowFacts: true, includeBoardPresence: true, includeMembership: true },
+    );
+    const transactionRow = readValidation(sessionKey);
     const expectedRow = input.expectedRows.get(sessionKey);
-    if (
-      transactionRow?.row.entry_json !== expectedRow?.row.entry_json ||
-      !sqliteSessionEntriesEqual(transactionRow?.entry, expectedRow?.entry)
-    ) {
+    const unchanged = input.fieldPatch
+      ? transactionRow && expectedRow
+        ? transactionRow.entry.sessionId === expectedRow.entry.sessionId &&
+          transactionRow.entry.lifecycleRevision === expectedRow.entry.lifecycleRevision &&
+          input.fieldPatch.guardFields.every((field) =>
+            isDeepStrictEqual(transactionRow.entry[field], expectedRow.entry[field]),
+          )
+        : transactionRow === expectedRow
+      : transactionRow?.row.entry_json === expectedRow?.row.entry_json &&
+        sqliteSessionEntriesEqual(transactionRow?.entry, expectedRow?.entry);
+    if (!unchanged) {
       throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
     }
     if (transactionRow) {
@@ -281,12 +305,34 @@ export function commitSessionEntryReplacementsInDatabase(
       }
     }
     const canonical = transactionRows.get(replacement.sessionKey);
+    let next = replacement.entry;
+    if (input.fieldPatch) {
+      const expected = input.expectedRows.get(replacement.sessionKey)?.entry;
+      if (!canonical || !expected || replacement.previousSessionKeys?.length) {
+        throw new Error("Field-scoped session patches require an existing canonical entry");
+      }
+      // Merge against the transaction's complete row so concurrent activity and cold
+      // snapshots survive; the existing writer still publishes a complete postimage.
+      next = { ...canonical.entry };
+      for (const field of input.fieldPatch.fields) {
+        const value = replacement.entry[field];
+        if (value === undefined) {
+          delete next[field];
+        } else {
+          Object.assign(next, { [field]: value });
+        }
+      }
+      next.updatedAt =
+        replacement.entry.updatedAt === expected.updatedAt
+          ? canonical.entry.updatedAt
+          : Math.max(canonical.entry.updatedAt, replacement.entry.updatedAt);
+    }
     const canonicalFacts = canonical && captureSessionEntrySnapshot(canonical);
-    const previousWindow = windows.get(replacement.entry.sessionId);
+    const previousWindow = windows.get(next.sessionId);
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
-      structuredClone(replacement.entry),
+      { ...next },
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,
@@ -298,23 +344,28 @@ export function commitSessionEntryReplacementsInDatabase(
             : canonicalFacts?.window,
         canonicalPreviousSideTables: canonicalFacts?.sideTables,
         postimages: writtenPostimages,
+        publishConversationBinding: (replacement.previousSessionKeys?.length ?? 0) > 0,
       },
     );
-    deleteLegacySessionEntryRows(
-      database,
-      [...(replacement.previousSessionKeys ?? [])],
-      replacement.sessionKey,
-      {
-        rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
-        validatedEntries: new Map(
-          [...transactionRows].map(([key, selected]) => [key, selected.entry]),
-        ),
-        postimages: writtenPostimages,
-      },
-    );
+    if (replacement.previousSessionKeys?.length) {
+      deleteLegacySessionEntryRows(
+        database,
+        [...replacement.previousSessionKeys],
+        replacement.sessionKey,
+        {
+          rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId,
+          validatedEntries: new Map(
+            sourceEntries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+          ),
+          postimages: writtenPostimages,
+        },
+      );
+    }
     // Each later replacement starts from the preceding write, including shared physical windows.
     const postimage = writtenPostimages.get(replacement.sessionKey);
     if (postimage) {
+      // Repeated keys are a mutation batch even when the final write returns to its start.
+      postimage.changed ||= current.has(replacement.sessionKey);
       transactionRows.set(replacement.sessionKey, {
         entry: postimage.entry,
         row: {
@@ -372,6 +423,15 @@ export function commitSessionEntryReplacementsInDatabase(
     }
   }
   return {
+    ...(input.fieldPatch
+      ? {
+          patchDiffBaselines: new Map(
+            [...current].flatMap(([key, entry]) =>
+              entry.sessionDiffBaseline ? [[key, entry.sessionDiffBaseline] as const] : [],
+            ),
+          ),
+        }
+      : {}),
     // Fresh creation must not retry another session's failed export.
     pendingArchiveRecovery:
       input.checkPendingArchiveRecovery === true &&

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
@@ -11,7 +10,6 @@ import {
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -19,74 +17,48 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
+import { cacheRunnerConfig, omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
+import { writeTempPlugin } from "./test-helpers/temp-plugin-extension-fixtures.js";
+
+function responseMessage(id: string, text: string) {
+  const content = [{ type: "output_text", text, annotations: [] }];
+  return { type: "message", id, role: "assistant", status: "completed", content };
+}
 
 it("preserves signed empty Responses messages before reasoning across a cold runner reopen", async () => {
   await withOpenClawTestState({ label: "responses-cold-prefix" }, async (state) => {
     const sessionId = "responses-cold-prefix";
     const sessionKey = "agent:main:" + sessionId;
     const model = "gpt-5-cold-prefix-fixture";
-    const instructions = "Stable replay instructions.\n".repeat(32);
-    const pluginDir = state.path("cache-plugin");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "cache-proof",
+    const pluginDir = state.path("plugins", "cache-proof");
+    writeTempPlugin({
+      dir: state.path("plugins"),
+      id: "cache-proof",
+      filename: "index.cjs",
+      manifest: {
         activation: { onStartup: true },
         contracts: { tools: ["cache_probe"] },
-        configSchema: { type: "object", properties: {}, additionalProperties: false },
-      }),
-    );
-    await fs.writeFile(
-      path.join(pluginDir, "index.cjs"),
-      `module.exports = { id: "cache-proof", register(api) {
+      },
+      body: `module.exports = { id: "cache-proof", register(api) {
       api.registerTool({ name: "cache_probe", label: "Cache probe", description: "Return a synthetic record.", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [{ type: "text", text: "synthetic tool result" }] }) });
-      api.on("before_prompt_build", (event) => ({ prependContext: "before " + event.prompt, appendContext: "after " + event.prompt }));
     }};`,
-    );
-    const config: OpenClawConfig = {
-      agents: {
-        entries: { main: { workspace: state.workspaceDir } },
-        defaults: {
-          models: {
-            ["openai/" + model]: { params: { transport: "sse", cacheRetention: "short" } },
-          },
-          bootstrapMaxChars: instructions.length + 4096,
-          bootstrapTotalMaxChars: instructions.length + 8192,
-        },
-      },
-      models: {
-        mode: "replace",
-        providers: {
-          openai: {
-            api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "synthetic-proof",
-            models: [
-              {
-                id: model,
-                name: model,
-                api: "openai-responses",
-                reasoning: true,
-                input: ["text"],
-                contextWindow: 1000000,
-                maxTokens: 1024,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              },
-            ],
-          },
-        },
-      },
-      plugins: {
-        allow: ["openai", "cache-proof"],
-        load: { paths: [pluginDir] },
-        slots: { memory: "none" },
-        entries: { "cache-proof": { enabled: true, hooks: { allowConversationAccess: true } } },
-      },
-      skills: { load: { watch: false } },
-      tools: { allow: ["cache_probe"], toolSearch: false },
-    };
+    });
+    const config = cacheRunnerConfig({
+      api: "openai-responses",
+      provider: "openai",
+      model,
+      workspaceDir: state.workspaceDir,
+      pluginId: "cache-proof",
+      pluginDir,
+      apiKey: "synthetic-proof",
+      input: ["text"],
+      tools: ["cache_probe"],
+      modelSettings: { params: { transport: "sse", cacheRetention: "short" } },
+    });
+    const configuredModel = config.models?.providers?.openai?.models[0];
+    assert(configuredModel);
+    configuredModel.reasoning = true;
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
     await loadAndActivateRootPluginRegistry({
@@ -120,14 +92,10 @@ it("preserves signed empty Responses messages before reasoning across a cold run
         requests.push(payload);
         const comparable = effectiveInput.map((value) => {
           const item = value as Record<string, unknown>;
-          if (
-            item.type !== "function_call" &&
-            !(item.type === "message" && item.role === "assistant")
-          ) {
-            return item;
-          }
-          const { id: _id, status: _status, ...rest } = item;
-          return rest;
+          return item.type === "function_call" ||
+            (item.type === "message" && item.role === "assistant")
+            ? omitWireFields(item, ["id", "status"])
+            : item;
         });
         prefixes.push(
           snapshotProviderPrefix(
@@ -151,23 +119,11 @@ it("preserves signed empty Responses messages before reasoning across a cold run
                 name: "cache_probe",
                 arguments: "{}",
               }
-            : {
-                type: "message",
-                id: "msg_" + id,
-                role: "assistant",
-                status: "completed",
-                content: [{ type: "output_text", text: "synthetic answer", annotations: [] }],
-              },
+            : responseMessage("msg_" + id, "synthetic answer"),
         ];
         // A provider-owned empty message precedes encrypted reasoning in the last warm turn.
-        if (requests.length === 7) {
-          output.unshift({
-            type: "message",
-            id: "msg_empty",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "", annotations: [] }],
-          });
+        if (requests.length === 1) {
+          output.unshift(responseMessage("msg_empty", ""));
         }
         history.set(id, [...effectiveInput, ...output]);
         const events = [
@@ -192,20 +148,10 @@ it("preserves signed empty Responses messages before reasoning across a cold run
       },
     });
     try {
-      for (let turn = 1; turn <= 4; turn++) {
+      // Hook/skill refresh and warm reuse are covered by embedded-agent-runner.prompt-cache.test.ts.
+      for (let turn = 1; turn <= 2; turn++) {
         turnRequests = 0;
-        await fs.writeFile(
-          path.join(state.workspaceDir, "AGENTS.md"),
-          instructions +
-            "\n\n## Skills\nSynthetic skill " +
-            (turn < 3 ? "initial" : "updated") +
-            ".\n## Temporal Context\nSynthetic day " +
-            (turn < 3 ? "initial" : "updated") +
-            ".\n## Runtime\nSynthetic runtime " +
-            (turn < 3 ? "initial" : "updated") +
-            ".\n",
-        );
-        if (turn === 4) {
+        if (turn === 2) {
           clearEmbeddedSessionPromptStates([sessionId]);
           await closeOpenClawAgentDatabasesAsync(state.stateDir);
           cleanupSessionResources(sessionId);
@@ -242,9 +188,6 @@ it("preserves signed empty Responses messages before reasoning across a cold run
             runId,
             timeoutMs: 60000,
             prompt: "visible turn " + turn,
-            skillsSnapshot: { prompt: "skills revision " + (turn < 3 ? 1 : 2), skills: [] },
-            extraSystemPrompt:
-              "Preserve prior instructions and answer only the latest requested marker.",
           });
           expect(result.meta.error).toBeUndefined();
           expect(requests).toHaveLength(turn * 3);
@@ -253,8 +196,7 @@ it("preserves signed empty Responses messages before reasoning across a cold run
         }
       }
       expect(requests[1]?.previous_response_id).toBe("response_1");
-      expect(requests[3]?.previous_response_id).toBe("response_3");
-      expect(requests[9]?.previous_response_id).toBeUndefined();
+      expect(requests[3]?.previous_response_id).toBeUndefined();
       for (let index = 1; index < prefixes.length; index++) {
         assertStableProviderPrefix(prefixes[index - 1]!, prefixes[index]!, {
           label: "request " + (index + 1),

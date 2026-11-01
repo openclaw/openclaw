@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { createAbortError } from "../infra/abort-signal.js";
+import { hasLifecycleErrorCode as hasAgentRunAbortCode } from "../infra/agent-lifecycle-error.js";
 import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
@@ -18,19 +19,16 @@ import {
 } from "./failover/error.js";
 
 /**
- * Shared agent run termination constants.
  *
  * Runtime and stream consumers use these stable literals to recognize user or
  * controller aborts without matching free-form error text.
  */
-/** Error text used for aborted agent runs. */
 export const AGENT_RUN_ABORTED_ERROR = "agent run aborted" as const;
 export {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   AGENT_RUN_SUPERSEDED_STOP_REASON,
   isAbortedAgentStopReason,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/** Error text used for agent runs aborted by a gateway restart. */
 export const AGENT_RUN_RESTART_ABORT_ERROR = "agent run aborted for restart" as const;
 export const AGENT_RUN_SUPERSEDED_ERROR = "agent run superseded by a newer session writer" as const;
 
@@ -47,14 +45,6 @@ export function createAgentRunDirectAbortError(): Error {
   return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
     code: AGENT_RUN_DIRECT_ABORT_ERROR_CODE,
   });
-}
-
-function hasAgentRunAbortCode(value: unknown, code: string): boolean {
-  try {
-    return value instanceof Error && "code" in value && value.code === code;
-  } catch {
-    return false;
-  }
 }
 
 export function isAgentRunDirectAbortReason(value: unknown): boolean {

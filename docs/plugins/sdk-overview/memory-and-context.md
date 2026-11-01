@@ -27,8 +27,10 @@ To participate in durable admitted turns, context engines must declare
 `info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic
 write keyed by `advancementKey` that has no additional effect when repeated. OpenClaw supplies only the inclusive
 accepted turn, from its admitted user entry through its terminal entry; use the
-`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
-rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+`readSessionTranscriptVisibleMessageDelta(...)` cursor API from
+`openclaw/plugin-sdk/context-engine-transcript-runtime` to bootstrap or rebuild
+earlier history (see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor)). Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
 
@@ -75,8 +77,8 @@ resolver. Return `null` to skip the flush for provider-specific reasons.
 
 There are two resolver fields:
 
-- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Its
-  contract is unchanged from earlier releases. Memory Core uses it.
+- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Memory
+  Core uses it.
 - `providerFlushPlanResolver` returns a plan the host completes: a
   `MemoryFlushFilePlanDraft` (a complete `MemoryFlushPlan` is one such draft)
   or a `MemoryFlushToolsPlan`. When a plugin registers both, the host uses
@@ -84,12 +86,10 @@ There are two resolver fields:
 
 Each plan has `prompt`, `systemPrompt`, and one persistence arm. In plans from
 `providerFlushPlanResolver`, the `softThresholdTokens`,
-`forceFlushTranscriptBytes`, `reserveTokensFloor`, and `model` fields are
-deliberate provider overrides. The host fills omitted timing fields from its
-resolved timing, and fills an omitted `model` from `memoryFlush.model` for the
-tools arm only; a file plan without `model` keeps the session's model. A `model` override pins the turn
-to an exact `provider/model` reference, such as `ollama/qwen3:8b`, without
-inheriting the active fallback chain.
+`forceFlushTranscriptBytes`, and `reserveTokensFloor` fields are deliberate
+provider overrides. The host fills omitted timing fields from its resolved
+timing. All flush turns use the active session model and its normal fallback
+chain; resolvers do not select a separate model.
 
 Choose exactly one persistence arm:
 
@@ -209,6 +209,14 @@ Capabilities are enforced before provider code runs:
 | Automatic recall  | `candidates` array containing `"trigger"` and/or `"project"`        | `candidates({ kind })` names an undeclared kind                           |
 | Project filtering | `projectFilter: boolean`                                            | non-empty `activeProjectKeys` is supplied when project filtering is false |
 
+The selected memory slot owner can also join `/learn` by declaring
+`learnToolNames` and `learnGuidanceBuilder`. The host checks the declared tools
+against the turn's tool policy and calls the builder with the allowed subset;
+the builder returns guidance lines appended to the `/learn` prompt, or `[]`
+when those tools cannot persist lessons. The host adds a routing rule when
+Skill Workshop is also available. Unselected sidecars cannot contribute these
+fields.
+
 The selected memory slot owner can also declare `recallToolNames`. These are
 the concrete agent tools Active Memory uses for deep recall. A valid explicit
 Active Memory `toolsAllow` list takes precedence, followed by the selected
@@ -266,8 +274,28 @@ type MemoryAudience =
   `conversation` audience for the durable root session.
 - A spawned child inherits its root audience only after the host validates each
   recorded parent key, session ID, and lifecycle revision.
-- Missing, malformed, cross-agent, cyclic, or stale lineage produces no
-  audience. Unknown or missing durable chat type also produces no audience.
+- A child spawned into another agent receives `owner-private` audience for its
+  own agent only when the spawn that crossed agents was owner-attributed and the
+  root is the owner's direct chat. Conversation audience never crosses agents;
+  that lineage produces no audience.
+- Operator-created root sessions record a `direct` chat type at creation under
+  every `session.dmScope` and `session.scope`, so sessions started later by
+  `sessions_send`, cron, or the `agent` method resolve an audience. Children,
+  forks, plugin-owned sessions, and incognito sessions do not take this stamp.
+  The turn's owner status still selects `owner-private` or `conversation`.
+  `openclaw agent exec` records the same `direct` type on the root session it
+  creates and runs its turn as the owner, because local CLI access is Gateway
+  owner access, so its memory tools receive `owner-private` audience.
+  `openclaw doctor --fix` records the same `direct` type on dashboard chats
+  created before that stamp existed: operator-created rows with a generated
+  `dashboard:` key, grouped under their agent's main session, and with no spawn,
+  fork, plugin owner, incognito boundary, or external delivery route. Group and
+  channel sessions never match. Dashboard roots created without the stamp under
+  another `dmScope` are not grouped under main, so doctor leaves them unchanged;
+  create a new session to give them an audience.
+- Missing, malformed, cyclic, or stale lineage produces no audience. Unknown or
+  missing durable chat type also produces no audience. The Gateway logs every
+  denial as `memory_audience_denied` with the session key and reason.
 
 Audience is separate from sandbox policy. A provider can deny sandboxed callers
 even when they have a valid audience. Operator authority is also separate and
@@ -336,6 +364,14 @@ Dreaming is not a provider runtime capability. Selecting another memory plugin c
 still activate Memory Core as a dreaming sidecar under the existing loader policy.
 Explicitly disabling Memory Core prevents that sidecar. The Dreams UI and file-backed
 maintenance methods do not imply that the selected provider implements dreaming.
+
+## Memory host event diagnostics
+
+`readMemoryHostEventRecords` from `openclaw/plugin-sdk/memory-host-events`
+accepts an optional `type` filter. Storage applies it before `limit`, so a
+diagnostic can request the latest `memory.dream.completed` event with `limit: 1`
+without loading unrelated recall history. Omitting `type` preserves the full
+retained event stream.
 
 ## Bundled Memory Core workers
 
