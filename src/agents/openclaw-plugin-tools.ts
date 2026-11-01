@@ -386,6 +386,7 @@ function* resolveOpenClawPluginToolSteps(
       getRuntimeConfig: resolveCurrentRuntimeConfig,
       cronCreatorToolAllowlist: params.options?.cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef: params.options?.cronCreatorToolAllowlistCaptureRef,
+      cronApprovalSubmissionBroker: params.options?.cronApprovalSubmissionBroker,
       runId: params.options?.runId,
       agentId: pluginToolInputs.context.agentId,
       sessionKey: pluginToolInputs.context.sessionKey,

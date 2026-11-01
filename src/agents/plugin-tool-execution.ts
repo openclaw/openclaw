@@ -3,8 +3,12 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
+import { cloneIsolatedValue } from "../plugins/hook-isolation.js";
 import { createPluginRequesterModels } from "../plugins/requester-models.js";
-import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
+import type {
+  OpenClawPluginToolContext,
+  OpenClawPluginCronApprovalSubmission,
+} from "../plugins/tool-types.js";
 import { runOutsideCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -12,7 +16,11 @@ import {
   bindOperatorModelExecution,
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
-import { bindActiveCronCreatorToolSelection } from "./cron-creator-authority-context.js";
+import type { CronApprovalSubmissionBroker } from "./cron-approval-submission.types.js";
+import {
+  bindActiveCronApprovalSource,
+  bindActiveCronCreatorToolSelection,
+} from "./cron-creator-authority-context.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./sandbox/constants.js";
 import { resolveProtectedSandboxDirectory } from "./sandbox/fs-paths.js";
@@ -34,6 +42,7 @@ export type PluginToolExecutionCapabilities = Pick<
   | "assertCompleteResult"
   | "runtimeContext"
   | "prepareCronToolSelection"
+  | "submitCronApproval"
 >;
 
 /** Capture once at assembly; a retained plugin never resolves a later run's sandbox or identity. */
@@ -47,6 +56,7 @@ export function preparePluginToolExecutionCapabilities(params: {
   getRuntimeConfig?: () => OpenClawConfig | undefined;
   cronCreatorToolAllowlist?: readonly CronCreatorToolAllowlistEntry[];
   cronCreatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
+  cronApprovalSubmissionBroker?: CronApprovalSubmissionBroker;
   runId?: string;
   agentId?: string;
   sessionKey?: string;
@@ -103,8 +113,83 @@ export function preparePluginToolExecutionCapabilities(params: {
     }
   }
   const cronCreatorSource = bindActiveCronCreatorToolSelection(params.runId);
+  const approvalSource = bindActiveCronApprovalSource(params.runId);
+  const approvalBroker = params.cronApprovalSubmissionBroker;
   const resultBudget = resolveToolResultBudget(params.modelContextWindowTokens);
   return (assertInvocationCurrent, pluginSignal) => ({
+    ...(approvalBroker
+      ? {
+          async submitCronApproval(
+            request: Parameters<OpenClawPluginCronApprovalSubmission>[0],
+            options?: Parameters<OpenClawPluginCronApprovalSubmission>[1],
+          ): ReturnType<OpenClawPluginCronApprovalSubmission> {
+            if (!approvalSource) {
+              return { status: "unavailable" as const };
+            }
+            const signal = AbortSignal.any(
+              [params.signal, pluginSignal, options?.signal, approvalSource.signal].filter(
+                (value): value is AbortSignal => Boolean(value),
+              ),
+            );
+            const assertCurrent = () => {
+              signal.throwIfAborted();
+              assertInvocationCurrent();
+              approvalSource.assertCurrent();
+            };
+            assertCurrent();
+            // Snapshot before the first await: the plugin cannot change an in-flight proposal.
+            const input = cloneIsolatedValue(request);
+            return approvalSource.track(async () => {
+              const capture = await approvalSource.capture({ signal, assertCurrent });
+              assertCurrent();
+              const config = params.getRuntimeConfig ? params.getRuntimeConfig() : params.config;
+              const requested = input.toolSelection;
+              let selection;
+              if (requested?.toolsAllow != null) {
+                if (!config || capture.snapshot.provenance.source !== "final-executable-surface") {
+                  return { status: "unavailable" as const };
+                }
+                const prepared = prepareCronToolSelection(
+                  requested,
+                  capture.snapshot.tools,
+                  config.cron?.defaultTools,
+                );
+                if (prepared.status !== "prepared") {
+                  return prepared;
+                }
+                const selectedTools = prepared.toolsAllow ?? [];
+                if (
+                  selectedTools.length &&
+                  capture.snapshot.runtimeAuthority &&
+                  !capture.snapshot.projectRuntimeAuthority
+                ) {
+                  // Core cannot infer which opaque app grants belong to a public tool name.
+                  return { status: "unavailable" as const };
+                }
+                selection = {
+                  toolsAllow: selectedTools,
+                  toolsAllowProvenance: capture.snapshot.provenance,
+                  toolsAllowExecTarget: prepared.toolsAllowExecTarget,
+                  runtimeAuthority:
+                    selectedTools.length && capture.snapshot.runtimeAuthority
+                      ? capture.snapshot.projectRuntimeAuthority?.(selectedTools)
+                      : undefined,
+                };
+              }
+              assertCurrent();
+              const result = await approvalBroker({
+                proposal: input.proposal,
+                selection,
+                signal,
+                assertCurrent,
+                consume: capture.consume,
+              });
+              // A terminal broker result may describe a bind accepted before cancellation.
+              return { status: "submitted" as const, result };
+            });
+          },
+        }
+      : {}),
     async prepareCronToolSelection(selection) {
       const assertCurrent = () => {
         params.signal?.throwIfAborted();

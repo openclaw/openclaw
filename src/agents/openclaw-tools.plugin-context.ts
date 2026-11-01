@@ -20,6 +20,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "assertInputCommitAllowed"
   | "cronCreatorToolAllowlist"
   | "cronCreatorToolAllowlistCaptureRef"
+  | "cronApprovalSubmissionBroker"
   | "agentChannel"
   | "agentAccountId"
   | "agentTo"

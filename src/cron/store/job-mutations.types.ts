@@ -27,6 +27,7 @@ type CronJobMutationOptions = Pick<
   bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
+  approvedToolSelection?: import("../approved-tool-selection.js").CronApprovedToolSelection;
 };
 
 export type CronJobMutation =

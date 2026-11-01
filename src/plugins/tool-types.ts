@@ -66,6 +66,18 @@ export type OpenClawPluginCronToolSelection = (selection: {
   | { status: "denied" }
 >;
 
+/** Host-owned approval submission; the result contains no creator authority. */
+export type OpenClawPluginCronApprovalSubmission = (
+  request: {
+    proposal: Readonly<Record<string, unknown>>;
+    /** Omitted/null toolsAllow leaves selection unprepared; [] is an explicit selection. */
+    toolSelection?: Parameters<OpenClawPluginCronToolSelection>[0];
+  },
+  options?: { signal?: AbortSignal },
+) => Promise<
+  { status: "submitted"; result: unknown } | { status: "unavailable" } | { status: "denied" }
+>;
+
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 type OpenClawPluginToolContextBase = {
   config?: OpenClawConfig;
@@ -155,6 +167,8 @@ type OpenClawPluginToolContextBase = {
   modelExecution?: OpenClawPluginToolModelExecution;
   /** Uses the captured final tool surface; retained copies fail after the owning turn closes. */
   prepareCronToolSelection?: OpenClawPluginCronToolSelection;
+  /** Optional host broker, bound to this original run and plugin instance. */
+  submitCronApproval?: OpenClawPluginCronApprovalSubmission;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned
    * process resources before the command exits.

@@ -122,6 +122,7 @@ it.each([1, 2] as const)(
       },
     );
     const prepare = registration.context.prepareCronToolSelection;
+    expect(registration.context.submitCronApproval).toBeUndefined();
     expect(prepare, "host must supply the preapproval capability").toBeTypeOf("function");
     expect(await prepare!({ toolsAllow: ["execute_code"] })).toEqual({ status: "unavailable" });
     const tool = (name: string) => ({ ...probe(() => {}), name });
@@ -582,3 +583,223 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
     expect(effect).toHaveBeenCalledTimes(mode === "allowed" ? 1 : 0);
   },
 );
+it.each([1, 2] as const)(
+  "submits original approval snapshots through context V%s",
+  async (version) => {
+    const requester = {
+      version: 1 as const,
+      channel: "discord",
+      accountId: "work",
+      senderId: "original-creator",
+    };
+    const capability = createCronCreatorAuthorityCapability(
+      "approval-original",
+      { kind: "external", channel: "discord" },
+      undefined,
+      undefined,
+      requester,
+    )!;
+    const privateAuthority = {
+      version: 1 as const,
+      runtimeId: "fixture",
+      namespace: "fixture.apps",
+      payload: { apps: ["original-calendar"] },
+    };
+    let projectAuthority = true;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const seen: Array<
+      Parameters<
+        import("../agents/cron-approval-submission.types.js").CronApprovalSubmissionBroker
+      >[0]
+    > = [];
+    const broker: import("../agents/cron-approval-submission.types.js").CronApprovalSubmissionBroker =
+      async (submission) => {
+        submission.consume();
+        expect(() => submission.consume()).toThrow("already consumed");
+        seen.push(submission);
+        return { proposalId: "host-receipt" };
+      };
+    await runWithCronCreatorAuthorityCapability(capability, async () => {
+      const factory = () => probe(() => {});
+      const registration = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: capability.runId,
+        resolve: async () => {
+          entered.resolve();
+          await release.promise;
+          return {
+            tools: ["read", "mcp_calendar"],
+            provenance: { version: 1, source: "final-executable-surface" },
+            runtimeAuthority: privateAuthority,
+            ...(projectAuthority
+              ? {
+                  projectRuntimeAuthority: (selected: readonly string[]) =>
+                    selected.includes("mcp_calendar") ? privateAuthority : undefined,
+                }
+              : {}),
+          };
+        },
+        run: () =>
+          register(version === 2 ? { contextVersion: 2, create: factory } : factory, {
+            assertInvocationCurrent: () => {},
+            bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+              runId: capability.runId,
+              config: { cron: { defaultTools: ["read"] } },
+              cronApprovalSubmissionBroker: broker,
+            }),
+          }),
+      });
+      const submit = registration.context.submitCronApproval!;
+      const request = {
+        proposal: { title: "original" },
+        toolSelection: { toolsAllow: ["mcp_calendar"] },
+      };
+      const pending = submit(request);
+      await entered.promise;
+      request.proposal.title = "changed";
+      request.toolSelection.toolsAllow.push("exec");
+      release.resolve();
+      expect(await pending).toEqual({
+        status: "submitted",
+        result: { proposalId: "host-receipt" },
+      });
+      expect(seen[0]?.proposal).toEqual({ title: "original" });
+      expect(seen[0]?.selection).toEqual({
+        toolsAllow: ["read", "mcp_calendar"],
+        toolsAllowProvenance: {
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: { kind: "external", channel: "discord" },
+          channelRequester: requester,
+        },
+        runtimeAuthority: privateAuthority,
+      });
+      for (const toolsAllow of [["read"], [], null, undefined]) {
+        await submit({ proposal: {}, toolSelection: { toolsAllow } });
+        const selection = seen.at(-1)?.selection;
+        if (toolsAllow) {
+          expect(selection?.toolsAllow).toEqual(toolsAllow);
+          expect(selection?.runtimeAuthority).toBeUndefined();
+        } else {
+          expect(selection).toBeUndefined();
+        }
+      }
+      await expect(submit({ proposal: { shared: new SharedArrayBuffer(4) } })).rejects.toThrow(
+        "shared memory",
+      );
+      expect(seen).toHaveLength(5);
+      projectAuthority = false;
+      expect(await submit({ proposal: {}, toolSelection: { toolsAllow: ["read"] } })).toEqual({
+        status: "unavailable",
+      });
+      expect(seen).toHaveLength(5);
+    });
+  },
+);
+
+it.each(["run", "plugin"] as const)(
+  "drains approval broker effects after %s closure and rejects retained sources",
+  async (closure) => {
+    const capability = createCronCreatorAuthorityCapability("approval-drain", { kind: "local" })!;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const finishRun = createDeferred();
+    let submit: NonNullable<OpenClawPluginToolContext["submitCronApproval"]>;
+    let submission: Promise<unknown>;
+    let settled = false;
+    let brokerInput: Parameters<
+      import("../agents/cron-approval-submission.types.js").CronApprovalSubmissionBroker
+    >[0];
+    let retire: () => void;
+    const owner = runWithCronCreatorAuthorityCapability(capability, async () => {
+      const registration = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: capability.runId,
+        resolve: async () => ({
+          tools: ["read"],
+          provenance: { version: 1, source: "final-executable-surface" },
+        }),
+        run: () =>
+          register(
+            { contextVersion: 2, create: () => probe(() => {}) },
+            {
+              assertInvocationCurrent: () => {},
+              bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+                runId: capability.runId,
+                config: {},
+                cronApprovalSubmissionBroker: async (input) => {
+                  brokerInput = input;
+                  entered.resolve();
+                  await release.promise;
+                  expect(() => input.consume()).toThrow();
+                  return { state: "revoked" };
+                },
+              }),
+            },
+          ),
+      });
+      submit = registration.context.submitCronApproval!;
+      retire = () => markPluginRegistryRetired(registration.registry);
+      submission = submit({ proposal: {}, toolSelection: { toolsAllow: ["read"] } });
+      await finishRun.promise;
+    }).then(() => {
+      settled = true;
+    });
+    await entered.promise;
+    if (closure === "plugin") retire!();
+    finishRun.resolve();
+    // The owning source is revoked before the host's pending write has settled.
+    await new Promise<void>((resolve) =>
+      capability.signal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    expect(brokerInput!.signal.aborted).toBe(true);
+    expect(settled).toBe(false);
+    const later = createCronCreatorAuthorityCapability("approval-later", { kind: "local" })!;
+    await runWithCronCreatorAuthorityCapability(later, async () => {
+      await expect(submit!({ proposal: {} })).rejects.toThrow();
+    });
+    release.resolve();
+    expect(await submission!).toEqual({ status: "submitted", result: { state: "revoked" } });
+    await owner;
+    expect(settled).toBe(true);
+  },
+);
+it("refuses approval submission when plugin closes during source materialization", async () => {
+  const capability = createCronCreatorAuthorityCapability("approval-await", { kind: "local" })!;
+  const entered = createDeferred();
+  const release = createDeferred();
+  const broker = vi.fn(async () => ({ state: "bound" }));
+  await runWithCronCreatorAuthorityCapability(capability, async () => {
+    const registration = runWithCronCreatorAuthorityCapabilityResolver({
+      capability,
+      runId: capability.runId,
+      resolve: async () => {
+        entered.resolve();
+        await release.promise;
+        return { tools: ["read"], provenance: { version: 1, source: "final-executable-surface" } };
+      },
+      run: () =>
+        register(
+          { contextVersion: 2, create: () => probe(() => {}) },
+          {
+            assertInvocationCurrent: () => {},
+            bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
+              runId: capability.runId,
+              config: {},
+              cronApprovalSubmissionBroker: broker,
+            }),
+          },
+        ),
+    });
+    const pending = registration.context.submitCronApproval!({
+      proposal: {},
+      toolSelection: { toolsAllow: ["read"] },
+    });
+    await entered.promise;
+    markPluginRegistryRetired(registration.registry);
+    release.resolve();
+    await expect(pending).rejects.toThrow();
+    expect(broker).not.toHaveBeenCalled();
+  });
+});

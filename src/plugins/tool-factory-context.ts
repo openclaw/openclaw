@@ -65,7 +65,10 @@ export function createPluginToolFactoryContext(params: {
     ...context,
     ...(entry.contextVersion === 2
       ? executionCapabilities
-      : { prepareCronToolSelection: executionCapabilities?.prepareCronToolSelection }),
+      : {
+          prepareCronToolSelection: executionCapabilities?.prepareCronToolSelection,
+          submitCronApproval: executionCapabilities?.submitCronApproval,
+        }),
     ...(continuation
       ? {
           requesterSenderId: continuation.senderId,

@@ -5,9 +5,11 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import {
   CRON_MANAGEMENT_METHODS,
   createCronCreatorAuthorityRunScope,
+  consumeCronCreatorAuthorityGrant,
   hasCronChannelRequester,
   isCronModelManagementAllowed,
   mintCronCreatorAuthorityGrant,
+  readCronCreatorAuthorityRunScopeProvenance,
   revokeCronCreatorAuthorityRunScope,
   type CronCreatorAuthorityRunScope,
   type CronManagementEntitlement,
@@ -368,7 +370,17 @@ export function runWithCronCreatorAuthorityCapability<T>(
   run: () => T,
   signal?: AbortSignal,
 ): T {
-  const revoke = () => revokeCronCreatorAuthorityRunScope(scope);
+  const revoke = () => {
+    revokeCronCreatorAuthorityRunScope(scope);
+    scope.approvalSubmissions?.beginClose();
+  };
+  const settle = () => {
+    signal?.removeEventListener("abort", revoke);
+    revoke();
+    return scope.approvalSubmissions?.hasPendingWork
+      ? scope.approvalSubmissions.drain()
+      : undefined;
+  };
   signal?.addEventListener("abort", revoke, { once: true });
   if (signal?.aborted) {
     revoke();
@@ -376,17 +388,17 @@ export function runWithCronCreatorAuthorityCapability<T>(
   try {
     const result = activeCronCreatorAuthority.run(scope, run);
     if (isPromiseLike(result)) {
-      return Promise.resolve(result).finally(() => {
-        signal?.removeEventListener("abort", revoke);
-        revoke();
+      return Promise.resolve(result).finally(settle) as T;
+    }
+    const pending = settle();
+    return pending ? (pending.then(() => result) as T) : result;
+  } catch (error) {
+    const pending = settle();
+    if (pending) {
+      return pending.then(() => {
+        throw error;
       }) as T;
     }
-    signal?.removeEventListener("abort", revoke);
-    revoke();
-    return result;
-  } catch (error) {
-    signal?.removeEventListener("abort", revoke);
-    revoke();
     throw error;
   }
 }
@@ -475,6 +487,58 @@ export function bindActiveCronCreatorToolSelection(runId: string | undefined) {
         },
       }
     : undefined;
+}
+
+/** Retains the original source and all broker effects until its owning run settles. */
+export function bindActiveCronApprovalSource(runId: string | undefined) {
+  const source = bindCronCreatorAuthoritySource(runId);
+  const submissions = source?.authority.approvalSubmissions;
+  if (!source || !submissions) {
+    return undefined;
+  }
+  const creatorProfileId = requesterCreatorProfileId(
+    getGatewayToolCallerIdentity()?.requesterOrigin,
+  );
+  return {
+    signal: source.authority.signal,
+    assertCurrent: source.assertCurrent,
+    track<T>(run: () => Promise<T>): Promise<T> {
+      source.assertCurrent();
+      return submissions.track(run);
+    },
+    async capture(options: { signal: AbortSignal; assertCurrent: () => void }) {
+      const snapshot = await source.materialize(options);
+      options.assertCurrent();
+      let consumed = false;
+      return {
+        snapshot: {
+          ...snapshot,
+          provenance: {
+            ...snapshot.provenance,
+            ...readCronCreatorAuthorityRunScopeProvenance(source.authority),
+          },
+        },
+        consume() {
+          options.assertCurrent();
+          source.assertCurrent(options.signal);
+          if (consumed) {
+            throw new Error("Automation approval source was already consumed.");
+          }
+          consumed = true;
+          const grant = mintCronCreatorAuthorityGrant(
+            source.authority,
+            options.signal,
+            snapshot.runtimeAuthority,
+            undefined,
+            "runtime",
+            undefined,
+            creatorProfileId,
+          );
+          consumeCronCreatorAuthorityGrant(grant).assertCurrent();
+        },
+      };
+    },
+  };
 }
 
 /** Binds the resolver to the exact active run and revokes retained callbacks at settlement. */
