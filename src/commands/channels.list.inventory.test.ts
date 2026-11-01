@@ -34,6 +34,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 vi.mock("../plugins/control-plane-workspace.js", () => ({
   resolvePluginControlPlaneWorkspace: () => ({ workspaceScope: "shared" }),
 }));
+// mock-isolation: No installed channel plugin discovery.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: async () => [],
 }));

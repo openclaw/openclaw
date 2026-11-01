@@ -56,6 +56,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
   getChannelsCommandSecretTargetIds: () => new Set<string>(),
 }));
 
+// mock-isolation: No installed channel plugin discovery.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfigAsync: mocks.listReadOnlyChannelPluginsForConfigAsync,
 }));

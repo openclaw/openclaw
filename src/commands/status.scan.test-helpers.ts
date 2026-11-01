@@ -209,6 +209,7 @@ export async function loadStatusScanModuleForTest(
     mocks.resolveMemorySearchConfig ??
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
+  // mock-isolation: No saved plugin state.
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
     hasConfiguredChannelsForReadOnlyScopeAsync: (params: {
       config: OpenClawConfig;
