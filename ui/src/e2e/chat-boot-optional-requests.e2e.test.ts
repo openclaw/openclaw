@@ -94,6 +94,8 @@ suite.define(() => {
         await page.waitForLoadState("networkidle");
         expect(requested.filter((path) => activityPillsModule.test(path))).toEqual([]);
         expect(requested.filter((path) => subagentActivityModule.test(path))).toEqual([]);
+        // The topbar row, with its artwork, stays above phone width.
+        await page.setViewportSize({ width: 800, height: 900 });
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");

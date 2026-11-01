@@ -1,8 +1,9 @@
-import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
+import { isSettingsNavigationRoute, isSettingsTakeover, titleForRoute } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
+import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -17,7 +18,11 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
+import {
+  isMobileNavLayout,
+  shouldFloatShellHeader,
+  shouldMergeChatChrome,
+} from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import {
@@ -144,6 +149,13 @@ export function readShellView(host: ShellViewHost) {
     routeId: activeRoute,
     onboarding,
   });
+  const floatingHeader =
+    !nativeEmbed &&
+    shouldFloatShellHeader({
+      mobileNavLayout,
+      routeId: activeRoute,
+      onboarding,
+    });
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // Settings needs expanded navigation, so the collapse state pauses there too.
@@ -325,6 +337,10 @@ export function readShellView(host: ShellViewHost) {
     mobileNavLayout,
     nativeWebChrome,
     mergedChatChrome,
+    floatingHeader,
+    get pageTitle() {
+      return activeRoute === "custodian" ? askBrandLabel() : titleForRoute(activeRoute);
+    },
     get navCollapsed() {
       return navCollapsed();
     },

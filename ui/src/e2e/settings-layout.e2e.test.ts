@@ -387,7 +387,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname, routeId: route });
         await expect
           .poll(() => readShellInsets(route), { message: `${route} settings shell alignment` })
-          .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 12 });
+          .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 16 });
       }
 
       for (const route of mobileStandaloneSettingsPageRoutes) {
@@ -467,8 +467,9 @@ suite.define(() => {
             contentLeft: 12,
             contentRightInset: 12,
             headerLeft: 12,
-            headerTop: 70,
-            titleLeft: 12,
+            // Clears the floating header; the title stays for assistive tech only.
+            headerTop: 64,
+            titleLeft: 11,
             workspaceLeft: 12,
             workspaceRightInset: 12,
           });
@@ -507,7 +508,7 @@ suite.define(() => {
         columnLeft: 12,
         columnRightInset: 12,
         contentPaddingInline: 0,
-        topbarPaddingInline: 12,
+        topbarPaddingInline: 16,
       });
 
       await page.setViewportSize({ height: 900, width: 1440 });
