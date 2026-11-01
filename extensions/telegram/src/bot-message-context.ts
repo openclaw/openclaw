@@ -315,6 +315,7 @@ export const buildTelegramMessageContext = async ({
   route = applyTelegramTargetSession({
     cfg,
     route,
+    bindingMode,
     chatId,
     isGroup,
     senderId,

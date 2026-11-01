@@ -169,6 +169,7 @@ async function resolveTelegramCommandAuth(params: {
   const targetSessionKey = resolveTelegramTargetSession({
     cfg,
     route,
+    bindingMode: inspectedRoute.bindingMode,
     chatId,
     isGroup,
     senderId,
