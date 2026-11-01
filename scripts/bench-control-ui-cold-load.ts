@@ -1446,7 +1446,7 @@ try {
     }
   }
   await page.addInitScript((entries) => {
-    if (window !== window.top) return;
+    if (window !== window.top || location.protocol === "about:") return;
     for (const [key, value] of Object.entries(entries)) {
       if (localStorage.getItem(key) === null) localStorage.setItem(key, value);
     }
