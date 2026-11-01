@@ -11,7 +11,7 @@ export const proofRegions = {
 };
 
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = false) {
+export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint = false) {
   if (window !== window.top) {
     return undefined;
   }
@@ -47,6 +47,14 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
       rows: number;
       sections: number;
     }>,
+    textStates: [] as Array<{
+      atMs: number;
+      hash: string;
+      characters: number;
+      truncated: boolean;
+      height: number;
+      width: number;
+    }>,
     animationSamples: [] as ReloadAnimationSample[],
     animationProbeMs: 0,
     animationPolicy:
@@ -67,7 +75,7 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     stopped: false,
   };
   Reflect.set(window, "__warmReloadProof", data);
-  if (traceIndexedDb) {
+  if (transcriptLatePaint) {
     for (const operation of ["get", "getAll", "getAllKeys", "put"] as const) {
       const original = IDBObjectStore.prototype[operation];
       Object.defineProperty(IDBObjectStore.prototype, operation, {
@@ -385,6 +393,31 @@ export function installWarmReloadBrowserProbe(route: string, traceIndexedDb = fa
     }
     Reflect.get(window, "__paneChrome").sample(performance.now());
     sampleAnimations();
+    const answer = transcriptLatePaint
+      ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
+      : undefined;
+    if (answer) {
+      const text = answer.textContent ?? "";
+      const box = answer.getBoundingClientRect();
+      const textHash = hash(text);
+      const previousText = data.textStates.at(-1);
+      if (
+        box.width > 0 &&
+        box.height > 0 &&
+        (previousText?.hash !== textHash ||
+          previousText.height !== box.height ||
+          previousText.width !== box.width)
+      ) {
+        data.textStates.push({
+          atMs: performance.now(),
+          hash: textHash,
+          characters: text.length,
+          truncated: text.includes("...(truncated)..."),
+          height: box.height,
+          width: box.width,
+        });
+      }
+    }
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
     const rows = rowElements.length;
     const sidebarRowElements = [

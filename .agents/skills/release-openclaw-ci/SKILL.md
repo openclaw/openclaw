@@ -801,8 +801,13 @@ error bodies are retried on the next poll, never reported as job results.
 State lives in `$TMPDIR/openclaw-frv/<repo>-<parent>-watch.json` (`--state`
 overrides), so a restart after a harness or Monitor timeout does not re-report.
 `--once` takes one snapshot, `--interval <seconds>` sets polling (default 60),
-and `--json` prints NDJSON. It exits once the parent and every dispatched child
-are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
+and `--json` prints NDJSON. It exits with code 1 on a newly observed current
+parent/artifact-producer blocker or a policy-blocking carried child failure,
+after saving the notification. Resume with the same command and state to keep
+following diagnostics without repeating that blocker. Otherwise, it exits once
+the parent and every dispatched child are terminal; restart it after a later
+rerun. Use `status` for structured blockers and preview recovery with
+`continue --failed --dry-run`. Do not hand-roll bash or `gh`
 watchers.
 
 Watch candidate events derive the frozen SHA and context ref from the sealed

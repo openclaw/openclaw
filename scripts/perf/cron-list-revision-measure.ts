@@ -21,7 +21,6 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { writeSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -31,7 +30,7 @@ import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -157,16 +156,11 @@ listPreparations = 0;
 revisionDigest = createHash("sha256");
 rowDigest = createHash("sha256");
 const profilePath = `${output}.heapprofile`;
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 if (values.mode === "promotion") {
   assert(values["gc-log"] && global.gc, "promotion requires --gc-log and --expose-gc");
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -203,7 +197,7 @@ const outsideLoad = loadavg();
 const cpu = process.cpuUsage();
 const mainCpu = process.threadCpuUsage();
 const latencies: number[] = [];
-marker("heap-start");
+writeGatewayGcTraceMarker("heap-start", profilePath);
 measuredStart = performance.now();
 for (let i = 0; i < operations; i++) {
   const started = performance.now();
@@ -212,7 +206,7 @@ for (let i = 0; i < operations; i++) {
   await nextTurn();
 }
 measuredEnd = performance.now();
-marker("heap-stop");
+writeGatewayGcTraceMarker("heap-stop", profilePath);
 const usedCpu = process.cpuUsage(cpu);
 const usedMainCpu = process.threadCpuUsage(mainCpu);
 loop.disable();

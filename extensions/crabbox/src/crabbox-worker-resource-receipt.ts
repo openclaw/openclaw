@@ -9,11 +9,6 @@ export function readCrabboxResourceReceipt(
   if (value.provider !== "azure-sandbox") {
     return undefined;
   }
-  if (value.retention !== undefined) {
-    throw new Error(
-      "Retained Crabbox allocations require the session-disk lifecycle; adoption refused",
-    );
-  }
   const labels = isRecord(value.labels) ? value.labels : {};
   const fields = {
     provider: value.provider,

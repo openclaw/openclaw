@@ -19,6 +19,7 @@ import {
 import {
   commandResult,
   installGitHubPublicationTestHarness,
+  overrideCommands,
 } from "./github-publication.test-support.js";
 
 describe("existing PR preparation through the registered agent action", () => {
@@ -892,6 +893,24 @@ describe("existing PR preparation through the registered agent action", () => {
     const f = await fixture({ fork: true });
     const before = f.readSession();
     const head = await f.git("rev-parse", "HEAD");
+    let failedRead = false;
+    overrideCommands((argv) => {
+      if (
+        !failedRead &&
+        argv[0] === "gh" &&
+        argv.includes("GET") &&
+        argv.at(-1) ===
+          `repos/${f.pr.head.repo.full_name}/branches/${encodeURIComponent(f.pr.head.ref)}`
+      ) {
+        failedRead = true;
+        return commandResult("", 1);
+      }
+      return undefined;
+    });
+    await expect(f.invoke()).rejects.toThrow(
+      "The original PR's write eligibility could not be verified",
+    );
+    expect(failedRead).toBe(true);
     f.pr.maintainer_can_modify = false;
     await expect(f.invoke()).rejects.toThrow("no observed write permission");
     f.pr.maintainer_can_modify = true;

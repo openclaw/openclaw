@@ -20,6 +20,40 @@ const options = {
 const scopes = ["operator.sessions.read", "operator.sessions.write"];
 
 suite.define(() => {
+  it("keeps operator session-only command menus free of forbidden catalog reads", async () => {
+    await suite.withPage(options, async ({ page }) => {
+      const row = {
+        ...createControlUiSessionRow("agent:main:main", "Scoped workspace", Date.now()),
+        sharingRole: "owner",
+        spawnedCwd: "/workspace/synthetic-project",
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey: row.key,
+        sessions: [row],
+        operatorScopes: scopes,
+        featureMethods: ["chat.metadata", "chat.startup", "chat.send", "commands.list"],
+        methodResponses: {
+          "commands.list": {
+            __mockError: { code: "FORBIDDEN", message: "missing scope: operator.read" },
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, row.key));
+      const composer = page
+        .locator(".agent-chat__composer-combobox textarea")
+        .filter({ visible: true });
+      await composer.fill("/help");
+      await page.locator(".slash-menu[role='listbox']").waitFor();
+      await expect
+        .poll(() => page.locator(".slash-menu-name").allTextContents())
+        .toContain("/help");
+      expect(await gateway.getRequests("commands.list")).toHaveLength(0);
+      expect(await page.getByText("missing scope: operator.read", { exact: false }).count()).toBe(
+        0,
+      );
+    });
+  });
+
   it("loads publication options while the own-PR read is unavailable", async () => {
     await suite.withPage(options, async ({ page }) => {
       const row = createControlUiSessionRow("agent:main:main", "Scoped workspace", Date.now());

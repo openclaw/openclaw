@@ -124,14 +124,15 @@ export function projectChatTranscript(
     replyLocalPerson: localParticipantIdentityKey(props.userId),
     searchOpen: search.open,
     searchQuery: search.query,
-    messageRecovery:
-      searchFiltering && props.loadFullAssistantMessage
-        ? {
-            messages: expandedAssistantMessages,
-            revision: recovery.revision,
-            agentId: props.fullMessageAgentId,
-          }
-        : undefined,
+    messageRecovery: searchFiltering
+      ? {
+          messages: expandedAssistantMessages,
+          revision: recovery.revision,
+          agentId: props.fullMessageAgentId,
+          displayFacts: props.displayFacts,
+          canFetchFullMessage: Boolean(props.loadFullAssistantMessage),
+        }
+      : undefined,
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const { snapshot, live, resolveLiveStream } = createTranscriptStreamSource(
     chatItemsInput,

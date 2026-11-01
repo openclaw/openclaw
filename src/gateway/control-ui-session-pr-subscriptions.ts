@@ -20,8 +20,9 @@ import {
   type WatchedKeyState,
   loadSessionPullRequests,
   pushedSnapshot,
+  removeControlUiSessionPrMembership,
   retainControlUiSessionPrBranchSnapshot,
-  retireControlUiSessionPrState,
+  staleReceiptsOnlyCell,
   UNAVAILABLE_SNAPSHOT,
 } from "./control-ui-session-pr-prepared-read.js";
 import type {
@@ -94,15 +95,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     state: WatchedKeyState | undefined,
     connId: string,
     sessionKey: string,
-  ) => {
-    const keys = state?.sessionKeysByConnId.get(connId);
-    keys?.delete(sessionKey);
-    if (keys?.size === 0) {
-      state?.sessionKeysByConnId.delete(connId);
-      state?.connIds.delete(connId);
-    }
-    retireControlUiSessionPrState(state, keyStates);
-  };
+  ) => removeControlUiSessionPrMembership(state, connId, sessionKey, keyStates);
 
   const removeMemberships = (
     connId: string,
@@ -353,6 +346,10 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
               prepared.publishSnapshot(state, snapshot, assertReadAuthority);
               // Shared equality does not acknowledge recipients that missed publication.
               await push(new Set(state.connIds), state, snapshot, assertSourceCurrent, refresh);
+              const stalePassiveKey = staleReceiptsOnlyCell(keyStates, state, snapshot);
+              if (stalePassiveKey) {
+                void loadSnapshot(stalePassiveKey);
+              }
             }
             return snapshot;
           });

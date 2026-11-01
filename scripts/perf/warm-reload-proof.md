@@ -45,8 +45,9 @@ transcript includes extended nested lists, bold text, code, tables, and links.
 The synthetic operator uses Involving me, category
 grouping, Created sorting, five collapsed categories, always-visible empty groups,
 and no previews; the catalog has 97 groups and 102 section-order entries. This
-mode records read-only IndexedDB request start/completion times and whether an
-exact snapshot read found a record, without recording cache keys or contents.
+mode records complete-message text hashes and heights, plus read-only IndexedDB
+request start/completion times and whether an exact snapshot read found a record,
+without recording cache keys or contents.
 `firstTranscriptDomMs` records visible text on either transcript placement,
 independently of a dashboard occupying the main region. These are DOM and I/O
 milestones; filmstrip inspection still owns paint claims.
@@ -60,6 +61,10 @@ workload, not a cache-readiness condition. Each warm run records the target's
 cache inventory and elapsed visit time before capture. This tests short-visit
 persistence rather than a return visit to an already-persisted transcript. The
 initial cold capture remains separate from these independently reset visits.
+
+For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
+and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
