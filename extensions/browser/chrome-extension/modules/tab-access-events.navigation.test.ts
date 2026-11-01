@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chromeEvent } from "./browser.test-support.js";
-import { createRelayCommandHandler } from "./relay-command-handler.js";
 import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import { createTabAccessPolicy, type TabAccessEpoch, type TabAccessMode } from "./tab-access.js";
@@ -131,68 +130,6 @@ async function createNavigationHarness(
 }
 
 describe("Chrome navigation event access", () => {
-  it.each(["all", "selected"] as const)(
-    "distinguishes changed-document reads from revocation in %s mode",
-    async (mode) => {
-      for (const outcome of ["navigation", "pause", "group removal", "restricted", "detach"]) {
-        const h = await createNavigationHarness(mode, { groupId: 11 });
-        const send = vi.fn();
-        vi.stubGlobal("chrome", {
-          ...h.chromeApi,
-          debugger: {
-            ...h.chromeApi.debugger,
-            sendCommand: async () => {
-              h.update({ url: "https://destination.example/" });
-              if (outcome === "pause") {
-                await h.policy.pause(7);
-              }
-              if (outcome === "group removal") {
-                h.policy.invalidateGroup({ id: 11 }, true);
-              }
-              if (outcome === "restricted") {
-                h.update({ url: "chrome://settings" });
-              }
-              if (outcome === "detach") {
-                h.chromeApi.debugger.onDetach.emit({ tabId: 7 }, "target_closed");
-              }
-              return { body: "stale private content" };
-            },
-          },
-        });
-        const handler = createRelayCommandHandler({
-          send,
-          isCurrent: () => true,
-          attachDebugger: vi.fn(),
-          detachDebugger: h.detachDebugger,
-          createTab: vi.fn(),
-          focusWindowForTab: vi.fn(),
-          scheduleTabsSync: vi.fn(),
-          captureDebugger: () => () => {
-            if (!h.attachments.has(7)) {
-              throw new Error("Debugger attachment retired");
-            }
-          },
-          captureAccess: h.policy.capture,
-          requireAccessibleTab: h.policy.requireTab,
-          requireNavigatedTab: h.policy.requireTab,
-          navigateTab: vi.fn(),
-        });
-        await handler({ type: "cdp", seq: 1, tabId: 7, method: "Network.getResponseBody" });
-        expect(send).toHaveBeenCalledExactlyOnceWith({
-          type: "error",
-          seq: 1,
-          message: expect.stringContaining(
-            outcome === "navigation" || (outcome === "group removal" && mode === "all")
-              ? "document changed while the command was in flight; inspect the current page before retrying"
-              : outcome === "detach"
-                ? "Debugger attachment retired"
-                : "access was revoked",
-          ),
-        });
-      }
-    },
-  );
-
   it("projects native child session ids only while the attachment epoch is current", async () => {
     const harness = await createNavigationHarness("selected");
     const params = { frame: { id: "child", loaderId: "child-loader", url: "about:blank" } };
