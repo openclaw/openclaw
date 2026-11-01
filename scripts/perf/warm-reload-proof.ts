@@ -934,8 +934,14 @@ try {
           });
           await cdp.send("Network.clearBrowserCache");
           await page.evaluate(
-            ({ viewerId, groups, endAnchor, targetKey }) => {
+            ({ viewerId, groups, endAnchor, targetKey, anchorFixture }) => {
               const gatewayUrl = `ws://${location.host}`;
+              if (anchorFixture) {
+                localStorage.setItem(
+                  `openclaw.control.settings.v1:${gatewayUrl}`,
+                  JSON.stringify({ fontChat: "lora" }),
+                );
+              }
               if (endAnchor) {
                 const key = `openclaw.control.settings.v1:${gatewayUrl}`;
                 const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
@@ -981,6 +987,7 @@ try {
             {
               viewerId: fixture.fixtureSummary.viewerId,
               endAnchor: values["dashboard-end-anchor"] && route === "dashboard",
+              anchorFixture: values["dashboard-end-anchor"],
               targetKey: fixture.fixtureSummary.targets[1]!.key,
               groups: Array.from(
                 { length: 97 },
