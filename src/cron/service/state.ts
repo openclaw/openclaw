@@ -641,9 +641,10 @@ export type CronUpdateResult = CronJob;
 export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 export type CronUpdateInput = CronJobPatch;
-/** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
+/** Private caller facts and commit guards for authenticated updates. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
+  | "payloadSourceConversation"
   | "operatorSource"
   | "operatorSourceExecutionRevision"
   | "toolsAllowProvenance"

@@ -180,7 +180,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         : callerScope && { ...callerScope, manageAll: undefined };
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
-    let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+    let sessionCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
     let operatorSourceExecutionRevision: string | undefined;
     let streamExecPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
     let creatorSessionId: string | undefined;
@@ -281,11 +281,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       const runtimeAuthority = capture?.captureRuntimeAuthority();
       capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
       const nextJob = await validateUpdate(currentJob);
-      if (creatorScope) {
-        operatorSourceExecutionRevision = resolveCronOperatorExecutionRevision(nextJob);
-        operatorCapture = await captureCronCreatorSession(
+      if (creatorScope || (patch.payload && callerScope?.sessionKey)) {
+        operatorSourceExecutionRevision = creatorScope
+          ? resolveCronOperatorExecutionRevision(nextJob)
+          : undefined;
+        sessionCapture = await captureCronCreatorSession(
           nextJob,
-          creatorScope,
+          creatorScope ?? callerScope,
           { client, context, signal },
           cfg,
           true,
@@ -314,15 +316,23 @@ export const cronHandlers: GatewayRequestHandlers = {
           targetAccess?.assertCurrent();
           capture?.assertCurrent();
           inference?.assertInferenceSelectionCurrent();
-          operatorCapture?.assertOperatorSourceCurrent?.();
+          if (creatorScope) {
+            sessionCapture?.assertOperatorSourceCurrent?.();
+          }
         },
         hasCurrentClientAuthority,
         modelJobPolicy: { config: cfg, jobId, patch },
       },
     );
     const updateOptions: CronUpdateOptions = {
-      ...(operatorCapture?.operatorSource
-        ? { operatorSource: operatorCapture.operatorSource, operatorSourceExecutionRevision }
+      ...(creatorScope && sessionCapture?.operatorSource
+        ? { operatorSource: sessionCapture.operatorSource, operatorSourceExecutionRevision }
+        : {}),
+      ...(patch.payload && callerScope?.sessionKey
+        ? {
+            payloadSourceConversation:
+              sessionCapture?.payloadSourceConversation ?? sessionCapture?.sourceConversation,
+          }
         : {}),
       ...(touchesToolRuntime || narrowsTrustedJob
         ? {

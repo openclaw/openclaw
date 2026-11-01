@@ -215,6 +215,12 @@ export function planCronJobMutation(
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      if (
+        options.payloadSourceConversation &&
+        !isDeepStrictEqual(previousJob.payload, nextJob.payload)
+      ) {
+        nextJob.payloadSourceConversation = options.payloadSourceConversation;
+      }
       if (options.bindSourceConversation) {
         assertCronBindApplies(previousJob, options.bindSourceConversation);
         nextJob.sourceConversation = { ...options.bindSourceConversation };

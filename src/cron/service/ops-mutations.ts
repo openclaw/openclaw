@@ -283,6 +283,7 @@ async function updateLoadedJob(params: {
     id,
     patch,
     options: {
+      payloadSourceConversation: opts?.payloadSourceConversation,
       streamSandbox: opts?.streamSandbox,
       operatorSource: opts?.operatorSource,
       operatorSourceExecutionRevision: opts?.operatorSourceExecutionRevision,
