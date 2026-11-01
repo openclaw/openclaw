@@ -380,9 +380,10 @@
   /* Menu steps sit on the --radius-* chain so themes keep their corner character;
      near-square themes pin them. Shared knobs keep transient menus from drifting. */
   --radius-menu: calc(var(--radius-md) * 1.6 * var(--openclaw-corner-radius-scale));
-  --radius-menu-item: calc(var(--radius-sm) * 2 * var(--openclaw-corner-radius-scale));
+  --radius-menu-item: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
   --radius-tooltip: calc(var(--radius-sm) * 1.25 * var(--openclaw-corner-radius-scale));
   --menu-radius: var(--radius-menu);
+  --menu-radius-large: 22px;
   --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;
   --menu-padding: 4px;
@@ -548,21 +549,11 @@
     corner-shape: superellipse(1.5);
   }
 
-  /* Menu panels and items take their radius from --menu-radius and
-     --menu-item-radius in their home rules; only the shape is added here. */
+  /* Menu panels take their radius from --menu-radius in their home rules; only
+     the shape is added here. Menu rows get theirs in overlay.css. */
   .slash-menu.slash-menu,
   .chat-reply-context-menu.chat-reply-context-menu,
   .chat-selection-popup.chat-selection-popup {
-    corner-shape: superellipse(1.5);
-  }
-
-  /* Items pick up corner-shape too, not just the scaled radius: corner-shape
-     doesn't inherit, and a bigger round radius sitting inside a squircle
-     panel with no shape of its own reads as an unrelated smaller circle
-     poking out of a superellipse, not a coherent nested row. */
-  .slash-menu-item.slash-menu-item,
-  .chat-reply-context-menu.chat-reply-context-menu button,
-  .chat-selection-popup.chat-selection-popup button {
     corner-shape: superellipse(1.5);
   }
 }

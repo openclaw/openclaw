@@ -697,12 +697,10 @@
 
 @supports (corner-shape: superellipse(1.5)) {
   .chat-pr-menu--drill.oc-menu {
-    border-radius: calc(var(--radius-xl) * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  .chat-pr-menu--drill
-    :is(.oc-menu-item, .chat-ci__automation-option--menu, .chat-ci__job-summary) {
+    border-radius: max(
+      var(--menu-radius),
+      calc(var(--radius-xl) * var(--openclaw-corner-radius-scale))
+    );
     corner-shape: superellipse(1.5);
   }
 }

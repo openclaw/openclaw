@@ -17,7 +17,11 @@ const CORNER_CASES = [
   ),
   ...corners("20px", "25px", ".option-card, .agent-chat__input, .agent-chat__input .slash-menu"),
   // Menu rows share --menu-item-radius at both scales.
-  ...corners("12px", "15px", ".slash-menu-item, .chat-reply-context-menu button"),
+  ...corners(
+    "10px",
+    "12.5px",
+    ".slash-menu-item, .chat-reply-context-menu button, .oc-menu-item, .picker-select__option, .session-menu__item, .chat-controls__inline-select-option",
+  ),
 ];
 
 // Neither siblings nor non-opted descendants may inherit scaled radius tokens.
@@ -38,6 +42,10 @@ const markup = `<main>
   <div class="agent-chat__input"><div class="slash-menu">Menu</div></div>
   <div class="chat-reply-context-menu" role="menu"><button type="button" role="menuitem">Reply</button></div>
   <div class="agent-chat__search-bar"><input type="text" /></div>
+  <button type="button" class="oc-menu-item">Row</button>
+  <div class="picker-select__option" role="option">Row</div>
+  <button type="button" class="session-menu__item">Row</button>
+  <div class="agent-chat__input"><button type="button" class="chat-controls__inline-select-option">Row</button></div>
   <span class="chip">Chip</span><span class="statusDot"></span><div class="run-inspector__panel">Surface</div>
   <div class="settings-group"><div class="settings-segmented">Segmented</div></div>
 </main>`;
@@ -66,6 +74,9 @@ const css = readStyles(
   "styles/chat/composer",
   "styles/settings-controls",
   "styles/settings",
+  "styles/select-picker",
+  "styles/session-menu",
+  "components/solid/overlay",
   "pages/activity/run-inspector",
 );
 
@@ -107,6 +118,17 @@ fixture.describe("Control UI corner curvature", () => {
       );
     },
   );
+
+  it("draws the picker fill with the same corner as its row", async () => {
+    const fill = await fixture.withPage("picker-fill", cornerDocument(true), (page) =>
+      page.evaluate(() => {
+        const option = document.querySelector(".picker-select__option")!;
+        const style = getComputedStyle(option, "::before");
+        return [style.borderTopLeftRadius, style.getPropertyValue("corner-shape")];
+      }),
+    );
+    expect(fill).toEqual(["12.5px", "superellipse(1.5)"]);
+  });
 
   it("keeps the :root radius tokens MCP apps read canonical under the scale", async () => {
     const tokens = await fixture.withPage("root-tokens", cornerDocument(true), (page) =>

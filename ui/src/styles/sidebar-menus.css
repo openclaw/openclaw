@@ -122,7 +122,6 @@
   padding: 4px;
   border-radius: var(--menu-radius);
   background: var(--popover);
-  corner-shape: round;
 }
 
 .chat-header-session-menu--mobile.session-menu .oc-menu .oc-menu {

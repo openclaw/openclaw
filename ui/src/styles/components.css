@@ -1169,6 +1169,7 @@ select.settings-select:not([multiple]) {
         min-height: 32px;
         padding: 6px 8px;
         border-radius: var(--menu-item-radius);
+        corner-shape: superellipse(1.5);
         font-size: calc(13px * var(--control-ui-text-scale));
         line-height: calc(1.25 / 0.875);
       }
