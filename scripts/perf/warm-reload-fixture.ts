@@ -17,6 +17,7 @@ export type WarmReloadFixtureOptions = {
   uiRoot?: string;
   sessions?: number;
   transcriptLatePaint?: boolean;
+  dashboardEndAnchor?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
@@ -29,6 +30,7 @@ function transcript(
   imageBlocks: readonly unknown[],
   agentId: string,
   longMarkdown = false,
+  endAnchor = false,
 ) {
   const events: unknown[] = [];
   let parentId: string | null = null;
@@ -45,7 +47,8 @@ function transcript(
     });
     parentId = id;
   };
-  for (let row = 0; row < 9; row++) {
+  const lastRow = endAnchor ? 32 : 8;
+  for (let row = 0; row <= lastRow; row++) {
     const runId = `warm-proof-run-${session}-${row}`;
     append(
       {
@@ -64,7 +67,7 @@ function transcript(
       },
       `user-${row}`,
     );
-    if (row === 8) {
+    if (row === lastRow) {
       append(
         {
           role: "assistant",
@@ -135,27 +138,35 @@ function transcript(
         content: [
           {
             type: "text",
-            text: [
-              `### Synthetic milestone ${row + 1}`,
-              "This is synthetic reload-proof data. The checks below exercise tall rows, tables, code, and retained layout while live authority reconnects.",
-              table,
-              code,
-              ...(longMarkdown
+            text: endAnchor
+              ? row === lastRow
                 ? Array.from(
-                    { length: 24 },
+                    { length: 18 },
                     (_, index) =>
-                      `- **Verification ${index + 1}** retains the complete synthetic result.\n  - The nested item links to [fixture evidence](https://example.invalid/verification/${index + 1}) and preserves its layout on reload.`,
-                  )
-                : []),
-              `[Related fixture session](/chat/${agentId}/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)`,
-            ].join("\n\n"),
+                      `Synthetic paragraph ${index + 1}. The isolated dashboard retains this complete reply while reconnecting. Each checkpoint records its result in place, preserves the reader's position, and keeps the final paragraph visible from the first cached frame.`,
+                  ).join("\n\n")
+                : `Synthetic checkpoint ${row + 1} is complete.`
+              : [
+                  `### Synthetic milestone ${row + 1}`,
+                  "This is synthetic reload-proof data. The checks below exercise tall rows, tables, code, and retained layout while live authority reconnects.",
+                  table,
+                  code,
+                  ...(longMarkdown
+                    ? Array.from(
+                        { length: 24 },
+                        (_, index) =>
+                          `- **Verification ${index + 1}** retains the complete synthetic result.\n  - The nested item links to [fixture evidence](https://example.invalid/verification/${index + 1}) and preserves its layout on reload.`,
+                      )
+                    : []),
+                  `[Related fixture session](/chat/${agentId}/team-shape-session-2) · [Synthetic pull request](https://github.com/openclaw-fixture/reload-proof/pull/248)`,
+                ].join("\n\n"),
           },
-          ...(row === 8 ? imageBlocks : []),
+          ...(!endAnchor && row === 8 ? imageBlocks : []),
         ],
       },
       `assistant-${row}`,
     );
-    if (row === 7) {
+    if (!endAnchor && row === 7) {
       const id = `warm-proof-${session}-notice`;
       events.push({
         type: "custom_message",
@@ -168,6 +179,19 @@ function transcript(
         display: true,
       });
       parentId = id;
+    }
+  }
+  if (endAnchor) {
+    for (let index = 0; index < 12; index++) {
+      append(
+        {
+          role: "custom",
+          customType: "synthetic-hidden",
+          content: "Synthetic bookkeeping",
+          display: false,
+        },
+        `hidden-${index}`,
+      );
     }
   }
   return events;
@@ -444,7 +468,14 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               sessionKey: target.key,
               sessionId: target.id,
             },
-            transcript(index, now, imageBlocks, agentId, options.transcriptLatePaint),
+            transcript(
+              index,
+              now,
+              imageBlocks,
+              agentId,
+              options.transcriptLatePaint,
+              options.dashboardEndAnchor,
+            ),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
             expectedSessionId: target.id,
@@ -552,16 +583,17 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       assignedToOperator,
       activeAssignedToOperator,
       workspaceGitBranch: "main",
-      assistantRowsPerRoute: 9,
-      largestTableRows: 42,
-      largestCodeLines: 28,
-      managedImagePerRoute: 1,
+      assistantRowsPerRoute: options.dashboardEndAnchor ? 33 : 9,
+      largestTableRows: options.dashboardEndAnchor ? 0 : 42,
+      largestCodeLines: options.dashboardEndAnchor ? 0 : 28,
+      managedImagePerRoute: options.dashboardEndAnchor ? 0 : 1,
       reactionsPerRoute: 1,
-      noticeRowsPerRoute: 1,
+      noticeRowsPerRoute: options.dashboardEndAnchor ? 0 : 1,
       mockProvider: "QA loopback OpenAI Responses",
       admission: options.admission ? "signed-in" : "token",
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
+      dashboardEndAnchor: options.dashboardEndAnchor ?? false,
       viewerId,
       pinKeys,
       sidebarParents,
