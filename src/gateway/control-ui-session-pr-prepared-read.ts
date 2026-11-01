@@ -9,6 +9,7 @@ import type {
 import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import {
   prepareControlUiSessionPrServiceTarget,
+  receiptsOnlyTargetIdentity,
   type ControlUiSessionPrTarget,
   type ControlUiSessionPrReadContext,
 } from "./control-ui-session-pr-read.js";
@@ -88,6 +89,59 @@ export function retireControlUiSessionPrState<
   if (keyStates.get(state.target.identity) === state) {
     keyStates.delete(state.target.identity);
   }
+}
+
+export function removeControlUiSessionPrMembership(
+  state: WatchedKeyState | undefined,
+  connId: string,
+  sessionKey: string,
+  keyStates: Map<string, WatchedKeyState>,
+): void {
+  const keys = state?.sessionKeysByConnId.get(connId);
+  keys?.delete(sessionKey);
+  if (keys?.size === 0) {
+    state?.sessionKeysByConnId.delete(connId);
+    state?.connIds.delete(connId);
+  }
+  retireControlUiSessionPrState(state, keyStates);
+}
+
+// The verified states each passive cell last reloaded for; a cache miss never retries per poll.
+const passiveReloads = new WeakMap<PreparedSessionPrState, string>();
+
+/**
+ * A full read verified task PR states that its watched receipt-only sibling still lacks.
+ * Reloading that sibling reuses the verified metadata cache and never starts a GitHub read.
+ */
+export function staleReceiptsOnlyCell(
+  keyStates: ReadonlyMap<string, PreparedSessionPrState>,
+  state: PreparedSessionPrState,
+  snapshot: ControlUiSessionPullRequestSnapshot,
+): string | undefined {
+  if (state.target.taskReceiptsOnly) {
+    return undefined;
+  }
+  const passiveKey = receiptsOnlyTargetIdentity(state.target.identity);
+  const passive = keyStates.get(passiveKey);
+  const verified = new Map(
+    snapshot.taskPullRequests?.flatMap((task) =>
+      task.pullRequest ? [[task.url, task.pullRequest.state] as const] : [],
+    ),
+  );
+  if (
+    !passive?.connIds.size ||
+    !passive.snapshot?.taskPullRequests?.some(
+      (task) => verified.has(task.url) && task.pullRequest?.state !== verified.get(task.url),
+    )
+  ) {
+    return undefined;
+  }
+  const signature = JSON.stringify([...verified]);
+  if (passiveReloads.get(passive) === signature) {
+    return undefined;
+  }
+  passiveReloads.set(passive, signature);
+  return passiveKey;
 }
 
 /** Retain only branch facts across audience/mode changes on the same physical source. */

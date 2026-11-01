@@ -426,7 +426,7 @@ div.chat-thread:where(.chat-thread--annotations) {
   display: flex;
   flex: 0 0 auto;
   /* Reserve the native menu's hit area before its session descriptor arrives. */
-  min-width: var(--chat-pane-header-icon-size);
+  min-width: calc(var(--chat-pane-header-icon-size) * var(--chat-pane-menu-count, 1));
   min-height: var(--chat-pane-header-icon-size);
   align-items: center;
   gap: 0;
