@@ -29,7 +29,13 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./type
 import * as workspaceFs from "./workspace-fs.js";
 
 const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
-const hoisted = { ...sessionFilesMocks, execOpenPath: vi.fn() };
+const openPathMocks = vi.hoisted(() => ({ execOpenPath: vi.fn() }));
+const hoisted = { ...sessionFilesMocks, ...openPathMocks };
+
+vi.mock("./open-path.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./open-path.js")>()),
+  execOpenPath: openPathMocks.execOpenPath,
+}));
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
@@ -130,6 +136,96 @@ function prepareHostFileRead(
     files: createSessionFilesClient(invoke, () => ({ sessionKey, context, options })),
   };
 }
+
+it("opens the selected original host file without a preview-size limit", async () => {
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const selected = path.join(workspaceRoot, "original report.pdf");
+  fs.writeFileSync(selected, "%PDF-1.4\n");
+  const result = await fixture.files.ok("get", selected);
+  expect(result.canOpenInSystem).toBe(true);
+  fs.truncateSync(selected, 17 * 1024 * 1024);
+  const response = await fixture.files.ok("reveal", {
+    path: selected,
+    expectedRoot: workspaceRoot,
+  });
+  expect(response).toEqual({ ok: true, path: selected });
+  expect(hoisted.execOpenPath).toHaveBeenCalledWith({ command: "xdg-open", args: [selected] });
+});
+
+it("keeps host-path authority synchronous at the opener effect", async () => {
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const selected = outsideFile("original");
+  const authority = vi.fn<NonNullable<GatewayRequestHandlerOptions["withSessionTurnAuthority"]>>(
+    async (_target, consume) => {
+      const result = consume(fixture.entry);
+      expect(result).not.toBeInstanceOf(Promise);
+      return result;
+    },
+  );
+  const result = await fixture.files.ok("reveal", selected, undefined, {
+    withSessionTurnAuthority: authority,
+  });
+  expect(result).toMatchObject({ ok: true, path: selected });
+  expect(authority).toHaveBeenCalled();
+  expect(hoisted.execOpenPath).toHaveBeenCalledWith({ command: "xdg-open", args: [selected] });
+});
+
+it.each(["outside", "directory", "stale-root", "permission-change", "placement-change"])(
+  "never opens a file after %s invalidates the selected target",
+  async (failure) => {
+    const fixture = prepareHostFileRead({ permissionMode: "full" });
+    const selected =
+      failure === "outside" || failure === "permission-change"
+        ? outsideFile("private")
+        : path.join(workspaceRoot, "selected.pdf");
+    fs.writeFileSync(selected, "%PDF-1.4\n");
+    if (failure === "outside") {
+      fixture.entry.permissionMode = "read-only";
+    }
+    if (failure === "directory") {
+      fs.unlinkSync(selected);
+      fs.mkdirSync(selected);
+    }
+    const stat = workspaceFs.statWorkspacePath;
+    if (failure === "permission-change" || failure === "placement-change") {
+      vi.spyOn(workspaceFs, "statWorkspacePath").mockImplementationOnce(async (...args) => {
+        const result = await stat(...args);
+        if (failure === "permission-change") {
+          fixture.entry.permissionMode = "read-only";
+        }
+        return result;
+      });
+    }
+    if (failure === "placement-change") {
+      fixture.context.workerSessionPlacementService.prepareRuntimeRefresh = async () => ({
+        placement: undefined,
+        move: undefined,
+        pendingResult: undefined,
+        assertCurrent: () => {
+          throw new Error("placement changed");
+        },
+        release: () => {},
+      });
+    }
+    const request = fixture.files.request(
+      "reveal",
+      {
+        path: selected,
+        expectedRoot:
+          failure === "outside"
+            ? undefined
+            : failure === "stale-root"
+              ? "/old-workspace"
+              : workspaceRoot,
+      },
+      { ...fixture.context, logGateway: { warn: vi.fn() } },
+    );
+    expect((await request)[0]).toMatchObject({
+      ok: !(failure === "outside" || failure === "directory" || failure === "permission-change"),
+    });
+    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
+  },
+);
 
 it("downloads original binary bytes beyond preview limits with safe HTTP metadata and ranges", async () => {
   using connection = createSessionFileDownloadClient();

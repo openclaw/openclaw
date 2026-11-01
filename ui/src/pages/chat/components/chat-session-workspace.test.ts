@@ -546,6 +546,60 @@ describe("session workspace state", () => {
 });
 
 describe("openSessionWorkspaceFile", () => {
+  it("opens the selected original on its captured Gateway and refuses a reconnect", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createLoadingHost(
+      {
+        getFile: vi.fn().mockResolvedValue(
+          fileResult(
+            workspaceFile("report.pdf", {
+              previewKind: "unsupported",
+              mimeType: "application/pdf",
+              size: 64,
+            }),
+            { root: "/workspace", canOpenInSystem: true },
+          ),
+        ),
+      },
+      { client: { request }, hello: gatewayHelloForMethods([]) },
+    );
+    await openSessionWorkspaceFile(state, { path: "report.pdf" });
+    const content = await loadedSidebarContent(state);
+    expect(content.kind).toBe("attachment");
+    expect(content.openInSystem).toBeTypeOf("function");
+    await content.openInSystem?.();
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.files.reveal", {
+      key: "agent:main:current",
+      agentId: "main",
+      path: "report.pdf",
+      expectedRoot: "/workspace",
+    });
+    state.connectionEpoch += 1;
+    await expect(content.openInSystem?.()).rejects.toThrow("Reconnect and reopen");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each(["remote", "reader"])("hides Gateway system opening for a %s preview", async (reason) => {
+    const state = createLoadingHost(
+      {
+        getFile: vi.fn().mockResolvedValue(
+          fileResult(textFile("notes.txt", "hello"), {
+            root: "/workspace",
+            canOpenInSystem: reason !== "remote",
+          }),
+        ),
+      },
+      {
+        hello: gatewayHelloForMethods(
+          [],
+          reason === "reader" ? ["operator.read"] : ["operator.admin"],
+        ),
+      },
+    );
+    await openSessionWorkspaceFile(state, { path: "notes.txt" });
+    expect((await loadedSidebarContent(state)).openInSystem).toBeUndefined();
+  });
+
   it("admits a preview synchronously but does not start its read after reconnect", async () => {
     const state = createFileHost(textFile("old.md", "old"));
     state.connectionEpoch = 1;
