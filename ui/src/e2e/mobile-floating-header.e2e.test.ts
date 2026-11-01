@@ -40,7 +40,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await page.locator(".topbar-nav-toggle").boundingBox())?.y)
         .toBe(55);
-      await inset.evaluate((style) => style.remove());
+      await inset.evaluate((style) => style.parentNode?.removeChild(style));
 
       await page.locator(".topbar-search").click();
       await page.locator("openclaw-command-palette [role='dialog']").first().waitFor();
@@ -65,7 +65,25 @@ suite.define(() => {
     });
   });
 
-  it("truncates a long title before it reaches the pill", async () => {
+  it("truncates a title with no room left before it reaches the pill", async () => {
+    await suite.withPage({ viewport: { width: 280, height: 700 } }, async ({ page }) => {
+      await installMockGateway(page, { sessionKey });
+      await page.goto(suite.server.baseUrl + "settings/cloud-workers");
+      const title = page.locator(".topbar-page-title");
+      await title.waitFor();
+      const box = (await title.boundingBox())!;
+      const pill = (await page.locator(".topnav-shell__actions").boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(pill.x - 8);
+      expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+        true,
+      );
+      expect(await title.evaluate((element) => getComputedStyle(element).textOverflow)).toBe(
+        "ellipsis",
+      );
+    });
+  });
+
+  it("keeps a long title whole at the narrowest phone", async () => {
     await suite.withPage({ viewport: { width: 320, height: 700 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(suite.server.baseUrl + "settings/cloud-workers");
@@ -75,7 +93,7 @@ suite.define(() => {
       const pill = (await page.locator(".topnav-shell__actions").boundingBox())!;
       expect(box.x + box.width).toBeLessThanOrEqual(pill.x - 8);
       expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
-        true,
+        false,
       );
 
       // The notice fits the same slot, and the long title comes back as it was.

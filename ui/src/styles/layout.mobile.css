@@ -332,6 +332,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     overflow: hidden;
     color: var(--text-strong);
     font: 600 16px / 20px var(--font-body);
+    /* The narrowest phones leave less room than the pill takes: 15px keeps the
+       settings titles whole and closer to center. */
+    font-size: clamp(15px, 4.6vw, 16px);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

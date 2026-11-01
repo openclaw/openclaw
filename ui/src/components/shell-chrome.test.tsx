@@ -155,7 +155,7 @@ describe("Solid shell chrome", () => {
     find(".mobile-header__retry")!.click();
     expect(retry).toHaveBeenCalledOnce();
 
-    view.dispose?.();
+    view.unmount();
   });
 
   it("releases topbar toggle registrations on repeated mount and unmount", async () => {

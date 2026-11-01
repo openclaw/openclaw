@@ -75,6 +75,7 @@ defineSolidBridge<Props>(
                       <MobileHeaderNotice
                         notice={{
                           kind: "gateway",
+                          // SAFETY: floatingNotice filters out connected and empty statuses.
                           status: status().kind as GatewayStatusKind,
                           onRetry: status().onRetry,
                         }}
