@@ -110,6 +110,48 @@ it.each([
   }
 });
 
+it("drops the track and reveals a clipped active tab only at phone width", async () => {
+  const viewport = { width: innerWidth, height: innerHeight };
+  const styles = document.createElement("style");
+  styles.textContent = [baseStyles, hubStyles, tabsStyles].join("\n");
+  document.head.append(styles);
+  const [active, setActive] = createSignal("alpha");
+  const view = mountSolid(() => (
+    <div style="width:160px">
+      <HubTabs
+        {...hubProps("reveal", setActive, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"])}
+        active={active()}
+      />
+    </div>
+  ));
+  flush();
+  const strip = view.getByRole("tablist");
+  const select = async (value: string) => {
+    setActive(value);
+    flush();
+    await Promise.resolve();
+  };
+  try {
+    await page.viewport(390, 844);
+    expect(getComputedStyle(strip).boxShadow).toContain("rgba(0, 0, 0, 0)");
+    await select("echo");
+    const echo = view.getByRole("tab", { name: "Echo" }).getBoundingClientRect();
+    expect(strip.scrollLeft).toBeGreaterThan(0);
+    expect(echo.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right + 1);
+    await select("alpha");
+    expect(strip.scrollLeft).toBe(0);
+
+    await page.viewport(1440, 900);
+    expect(getComputedStyle(strip).boxShadow).not.toContain("rgba(0, 0, 0, 0)");
+    await select("echo");
+    expect(strip.scrollLeft).toBe(0);
+  } finally {
+    await page.viewport(viewport.width, viewport.height);
+    view.unmount();
+    styles.remove();
+  }
+});
+
 const hosts: HTMLElement[] = [];
 
 afterEach(() => {

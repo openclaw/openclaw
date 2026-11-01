@@ -175,6 +175,10 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .hub-tabs {
+    --track-color: transparent;
+  }
+
   .content-header.hub-page-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

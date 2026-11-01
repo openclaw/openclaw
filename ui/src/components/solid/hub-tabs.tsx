@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled } from "solid-js";
+import { createEffect, createMemo, onSettled } from "solid-js";
+import { isPhoneLayout } from "../../app/mobile-nav-layout.ts";
 import { reclaimHubTabFocus, rememberHubTabFocus } from "../hub-tabs-focus.ts";
 import { Tabs } from "./tabs.tsx";
 import "../../styles/hub-tabs.css";
@@ -25,6 +26,20 @@ export type HubTabsProps<T extends string> = {
   onActivate?: (element: HTMLElement) => void;
 };
 
+/** Scrolls only the strip, so selecting a tab never moves the page around it. */
+function revealInStrip(strip: HTMLElement, tab: HTMLElement | undefined) {
+  if (!tab) {
+    return;
+  }
+  const bounds = strip.getBoundingClientRect();
+  const rect = tab.getBoundingClientRect();
+  if (rect.left < bounds.left) {
+    strip.scrollBy({ left: rect.left - bounds.left, behavior: "instant" });
+  } else if (rect.right > bounds.right) {
+    strip.scrollBy({ left: rect.right - bounds.right, behavior: "instant" });
+  }
+}
+
 export function HubTabs<T extends string>(props: HubTabsProps<T>) {
   const items = createMemo(() =>
     props.tabs.map((tab) => ({
@@ -45,15 +60,26 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ),
     })),
   );
+  let strip!: HTMLElement;
   let tabElement!: (value: string) => HTMLElement | undefined;
   onSettled(() => {
     if (props.active !== null) {
       reclaimHubTabFocus(props.id, props.active, tabElement(props.active));
     }
   });
+  // Count badges arrive after mount and can push the active tab back out of view.
+  createEffect(
+    () => ({ active: props.active, counts: props.tabs.map((tab) => tab.count).join() }),
+    ({ active }) => {
+      if (active !== null && isPhoneLayout()) {
+        queueMicrotask(() => revealInStrip(strip, tabElement(active)));
+      }
+    },
+  );
   return (
     <Tabs
-      ref={(_element, findTab) => {
+      ref={(element, findTab) => {
+        strip = element;
         tabElement = findTab;
       }}
       id={`${props.id}-tabs`}

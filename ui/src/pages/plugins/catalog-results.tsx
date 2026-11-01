@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, latest, Loading, onSettled, Repeat, Reveal } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
+import { isPhoneLayout } from "../../app/mobile-nav-layout.ts";
 import {
   CatalogDiscoveryChip,
   CatalogDiscoveryChips,
@@ -542,7 +543,12 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     return null;
   };
   let input!: HTMLInputElement;
+  // Focusing the search on a phone would open the keyboard on arrival.
+  const focusOnArrival = !isPhoneLayout();
   onSettled(() => {
+    if (!focusOnArrival) {
+      return;
+    }
     input.dataset.autofocused = "true";
     input.focus();
     let secondFrame = 0;
@@ -564,7 +570,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
         <input
           type="search"
           class="oc-input"
-          autofocus
+          autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}

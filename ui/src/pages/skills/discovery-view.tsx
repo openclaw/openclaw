@@ -1,6 +1,7 @@
 import { createMemo, Errored, isPending, Loading, onSettled, Show } from "solid-js";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { isPhoneLayout } from "../../app/mobile-nav-layout.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -200,8 +201,10 @@ export function SkillDiscovery(props: SkillsProps) {
           .includes(filter),
     );
   });
+  // Focusing the search on a phone would open the keyboard on arrival.
+  const focusOnArrival = !isPhoneLayout();
   onSettled(() => {
-    if (input?.isConnected) {
+    if (focusOnArrival && input?.isConnected) {
       input.focus({ preventScroll: true });
     }
   });
@@ -219,7 +222,7 @@ export function SkillDiscovery(props: SkillsProps) {
           class="settings-input"
           name="skills-search"
           autocomplete="off"
-          autofocus
+          autofocus={focusOnArrival}
           aria-label={t("skillDiscovery.search")}
           placeholder={t("skillDiscovery.search")}
           value={props.state.clawhubSearchQuery}
