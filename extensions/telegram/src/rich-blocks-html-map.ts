@@ -26,6 +26,14 @@ const BLOCK_ISLAND_TAGS = new Set([
 ]);
 
 const MEDIA_SRC_RE = /^https:\/\//i;
+const HTML_HEADING_SIZES: Partial<Record<string, 1 | 2 | 3 | 4 | 5 | 6>> = {
+  h1: 1,
+  h2: 2,
+  h3: 3,
+  h4: 4,
+  h5: 5,
+  h6: 6,
+};
 type HtmlContentRenderer = (nodes: readonly HtmlNode[]) => InputRichBlock[];
 
 // True when a container holds meaningful content outside its allowed children;
@@ -391,6 +399,11 @@ function elementToBlock(
 ): InputRichBlock | undefined {
   if (!node.closed) {
     return undefined;
+  }
+  const headingSize = HTML_HEADING_SIZES[node.name];
+  if (headingSize) {
+    const text = htmlNodesToRichText(node.children);
+    return text === "" ? undefined : { type: "heading", text, size: headingSize };
   }
   switch (node.name) {
     case "hr":

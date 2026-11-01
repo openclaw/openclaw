@@ -3,6 +3,7 @@ import { assert, describe, expect, it } from "vitest";
 import { measureInputRichBlocks, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
+import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 
 function blocksFor(markdown: string): InputRichBlock[] {
   return markdownToTelegramRichBlocks(markdown).blocks;
@@ -24,6 +25,32 @@ function expectLiteral(markdown: string, ...content: string[]) {
 }
 
 describe("block HTML islands", () => {
+  it.each([1, 2, 3, 4, 5, 6])("converts HTML h%i headings in rich message plans", (size) => {
+    const plan = buildTelegramRichMarkdownPlan(
+      `Before\n<h${size}><b>Update</b> &amp; status</h${size}>\nAfter`,
+    );
+    expect(plan.richMessage.blocks).toEqual([
+      { type: "paragraph", text: "Before" },
+      {
+        type: "heading",
+        size,
+        text: [{ type: "bold", text: "Update" }, " & status"],
+      },
+      { type: "paragraph", text: "After" },
+    ]);
+    expect(plan.plainText).toBe("Before\nUpdate & status\nAfter");
+  });
+
+  it.each([
+    ["`<h3>Example</h3>`", "<h3>Example</h3>"],
+    ["```html\n<h3>Example</h3>\n```", "<h3>Example</h3>"],
+    ["<h3>Unclosed", "<h3>Unclosed"],
+  ])("keeps literal heading markup: %s", (markdown, plainText) => {
+    const plan = buildTelegramRichMarkdownPlan(markdown);
+    expect(plan.richMessage.blocks.some((block) => block.type === "heading")).toBe(false);
+    expect(plan.plainText).toBe(plainText);
+  });
+
   it("keeps Markdown lists inside <details> islands", () => {
     const block = single("<details><summary>List</summary>\n\n- item A\n- item B\n\n</details>");
     assert(block.type === "details");
