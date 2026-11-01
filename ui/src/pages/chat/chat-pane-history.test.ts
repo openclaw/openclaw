@@ -14,7 +14,10 @@ import "./chat-pane.tsx";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import {
+  commitCurrentChatHistorySnapshot,
+  type ChatHistoryResult,
+} from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { message, renderedText } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -31,7 +34,10 @@ import {
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
-import { reduceChatSessionProjection } from "./history-merge.ts";
+import {
+  publishChatSessionProjectionMessages,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   applyChatCacheSnapshot,
@@ -329,6 +335,35 @@ it("publishes older history with its own cursor after a sibling advances", async
     messages: state.chatMessages,
     pagination: state.chatHistoryPagination,
   });
+});
+
+it("prepends an older page without rereading the loaded transcript", async () => {
+  const reads = new Set<object>();
+  const loaded = Array.from(
+    { length: 1_000 },
+    (_, index) =>
+      new Proxy(nativeHistoryMessage(index + 101), {
+        get(target, key) {
+          reads.add(target);
+          return Reflect.get(target, key);
+        },
+      }),
+  );
+  const older = Array.from({ length: 100 }, (_, index) => index + 1);
+  const { pane, state } = historyPane(historyPage(older, { totalMessages: 1_100 }));
+  state.chatMessages = loaded;
+  state.chatHistoryPagination = pagination(1_100, 1_000);
+  publishChatSessionProjectionMessages(state, loaded);
+  commitCurrentChatHistorySnapshot(state);
+  reads.clear();
+
+  await pane.loadOlderMessages(false);
+
+  expect(reads.size).toBe(1);
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([
+    ...older,
+    ...loaded.map(nativeHistorySeq),
+  ]);
 });
 
 it("preserves terminal ownership when custody retires during an older-page load", async () => {

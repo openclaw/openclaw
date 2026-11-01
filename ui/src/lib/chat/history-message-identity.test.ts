@@ -77,8 +77,17 @@ it.each([0, 50])("bounds prepend serialization with %i overlapping rows", (overl
   const text = "Synthetic history content. ".repeat(300);
   const page = (start: number) =>
     Array.from({ length: 1000 }, (_, index) => nativeHistoryMessage(start + index, text));
+  const loadedReads = new Set<object>();
   const older = page(1),
-    current = page(1001 - overlap);
+    current = page(1001 - overlap).map(
+      (message) =>
+        new Proxy(message, {
+          get(target, key) {
+            loadedReads.add(target);
+            return Reflect.get(target, key);
+          },
+        }),
+    );
   const stringify = JSON.stringify;
   let serializedCharacters = 0;
   const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
@@ -92,6 +101,8 @@ it.each([0, 50])("bounds prepend serialization with %i overlapping rows", (overl
   } finally {
     serialization.mockRestore();
   }
+  // Only the shared boundary and the first loaded row after it are read.
+  expect(loadedReads.size).toBe(overlap + 1);
   expect(merged).toEqual([...older.slice(0, older.length - overlap), ...current]);
   // The budget scales with the shared boundary, not the accumulated transcript.
   expect(serializedCharacters).toBeLessThanOrEqual((overlap * 2 + 4) * text.length * 1.1);
