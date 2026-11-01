@@ -1379,6 +1379,7 @@ AFTER_CD
         "clone",
         "-q",
         "--no-local",
+        "--no-checkout",
         "--filter=blob:none",
         "--depth=2",
         origin,
@@ -4448,7 +4449,9 @@ ${buildScript}`,
     const packages = workflow.jobs["macos-swift-packages"];
     expect(native.needs).toEqual(["preflight", "build-artifacts"]);
     expect(packages.needs).toEqual(["preflight"]);
-    expect(packages.strategy.matrix.phase).toEqual(["packages"]);
+    expect(packages.strategy.matrix.phase).toContain(
+      "needs.preflight.outputs.run_mlx_native_proof",
+    );
     expect(packages.steps).toEqual(native.steps);
     expect(packages["timeout-minutes"]).toBe(30);
     for (const result of ["success", "skipped", "failure", "cancelled"] as const) {

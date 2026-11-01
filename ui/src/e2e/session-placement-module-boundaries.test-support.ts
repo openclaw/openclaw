@@ -492,7 +492,10 @@ export function defineSessionPlacementModuleBoundaryTests(
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
       await localSessionRow.waitFor();
-      await sessionRow.locator(".session-row-badge--cloud").waitFor();
+      const managedCloudBadge = sessionRow.locator(".session-row-badge--cloud");
+      await managedCloudBadge.waitFor();
+      expect(await managedCloudBadge.count()).toBe(1);
+      expect(await managedCloudBadge.getAttribute("data-placement-state")).toBe("active");
       expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
       await localSessionRow.click({ button: "right" });
       const sessionMenu = page.getByRole("menu", {

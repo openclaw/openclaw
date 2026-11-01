@@ -177,6 +177,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       selectedTargetFiles.delete(missing);
     }
     writeFixtures(selectedTargetFiles);
+    writeFixture(
+      "scripts/ci-changed-scope.mjs",
+      reexport("hasMlxNativeProofInputs", "scripts/ci-changed-scope.mjs"),
+    );
     if (options.bunTestRuntime) {
       const inspection = options.nativeBunInspection;
       writeScript(

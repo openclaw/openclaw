@@ -362,6 +362,21 @@ const pluginContractShards =
     : [];
 const channelContractShards =
   !runtimePullRequest && runNodeFull && !releaseFastLane ? createChannelContractTestShards() : [];
+// Reuse releaseGate's existing exact-SHA/PR admission; never acquire a backend
+// or download models for ordinary PR, push, schedule, or unrelated dispatches.
+const mlxNativeProofScope =
+  workflowEventName === "workflow_dispatch" && releaseGate && !frozenTarget && !compatibilityTarget
+    ? await importTargetPlan("./scripts/ci-changed-scope.mjs")
+    : null;
+const runMlxNativeProof =
+  workflowEventName === "workflow_dispatch" &&
+  releaseGate &&
+  isCanonicalRepository &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  releaseScope === "full" &&
+  typeof mlxNativeProofScope?.hasMlxNativeProofInputs === "function" &&
+  mlxNativeProofScope.hasMlxNativeProofInputs(changedPaths);
 const runMacos =
   !ordinaryPullRequest &&
   !nativeGeneratedOnly &&
@@ -383,7 +398,7 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
 const runMacosSwift =
-  runMacos &&
+  (runMacos || runMlxNativeProof) &&
   !deferMacosSwift &&
   (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
@@ -1807,6 +1822,7 @@ const manifest = {
       : [],
   ),
   run_macos_swift: runMacosSwift,
+  run_mlx_native_proof: runMlxNativeProof,
   run_openclawkit_tests: runMacos && !deferMacosSwift && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
@@ -1951,7 +1967,9 @@ if (hybridHostedEligible) {
     "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-    "macos-swift": count(manifest.run_macos_swift, 2),
+    // Eligible profiles emit one app test row plus packages and mlx; settings
+    // and release rows require a different dispatch admission.
+    "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
     "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
     "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),

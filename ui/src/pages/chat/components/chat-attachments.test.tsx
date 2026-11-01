@@ -650,6 +650,7 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   h.previewProps.draft = "Current draft";
   h.previewProps.onDraftChange = currentDraftChange;
   await h.done.promise;
+  await waitForSolid(() => expect(container.textContent).toContain("Restored text"));
 
   expect(h.attachments.map(({ fileName }) => fileName)).toEqual([
     "pasted-text-123.txt",

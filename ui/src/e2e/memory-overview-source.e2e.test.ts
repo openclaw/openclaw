@@ -31,8 +31,14 @@ sourceSuite.define(() => {
       const overview = page.locator(".memory-overview");
       await expect(overview.getByRole("heading", { name: "Memory is awake" })).toBeVisible();
       const row = overview.locator(".settings-row", { hasText: "Embeddings" });
+      await expect(row).toBeVisible();
       await expect(row).toHaveCSS("min-height", "48px");
       await expect(row).toHaveCSS("padding", "12px 16px");
+      await expect(overview.locator(".memory-overview__hero")).toHaveCSS("display", "grid");
+      await expect(overview.locator(".memory-overview__lobster")).toHaveCSS(
+        "aspect-ratio",
+        "120 / 105",
+      );
       await expect(page.locator('link[href*="/assets/plugins/memory-core/"]')).toHaveCount(1);
       expect(await gateway.getRequests("doctor.memory.status")).toHaveLength(1);
       expect(await gateway.getRequests("plugins.controlUi.report")).toHaveLength(0);

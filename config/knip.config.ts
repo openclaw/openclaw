@@ -214,6 +214,9 @@ const repositoryScriptEntries = [
   "scripts/build-mac-swift.mts!",
   // CI passes this native test launcher through the Apple command log wrapper.
   "scripts/test-macos-native.mts!",
+  // CI invokes the settings owner and its per-source producer by path.
+  "scripts/test-macos-mlx-settings.mts!",
+  "test/helpers/macos-mlx-settings-producer.ts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-package-dist-imports.mjs!",

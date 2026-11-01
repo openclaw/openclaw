@@ -3,7 +3,7 @@ import { phraseQueryPattern } from "../../../lib/text-match.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 /** CSS name shared by the independent pane owners. */
-export const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
+const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
 
 type BlockText = { text: string; nodes: Text[]; starts: number[] };
 type Viewport = Pick<DOMRect, "top" | "right" | "bottom" | "left">;
@@ -340,7 +340,7 @@ export function registerChatSearchTextBlock(element: HTMLElement): () => void {
 }
 
 /** Tracks only mutations to registered text blocks while this pane is searching. */
-export function syncChatSearchHighlight(root: HTMLElement, query: string): void {
+function syncChatSearchHighlight(root: HTMLElement, query: string): void {
   if (!highlightRegistry()) {
     return;
   }

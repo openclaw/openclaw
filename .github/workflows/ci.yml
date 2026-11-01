@@ -238,6 +238,7 @@ jobs:
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
       macos_node_matrix: ${{ steps.manifest.outputs.macos_node_matrix }}
       run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
+      run_mlx_native_proof: ${{ steps.manifest.outputs.run_mlx_native_proof }}
       run_openclawkit_tests: ${{ steps.manifest.outputs.run_openclawkit_tests }}
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_ios_voice_cleanup_tests: ${{ steps.manifest.outputs.run_ios_voice_cleanup_tests }}
@@ -5082,7 +5083,9 @@ jobs:
         run: |
           python3 -I -S - <<'PYTHON'
           import os
+          import sys
           import time
+          assert sys.version_info >= (3, 10), "Native job clock requires Python 3.10+"
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print(f"started={time.monotonic()}", file=output)
           PYTHON
@@ -5099,7 +5102,7 @@ jobs:
 
       - name: Setup Node environment for Apple assets
         id: macos-node-assets
-        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
+        if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -5108,15 +5111,19 @@ jobs:
           install-deps: "false"
 
       - name: Install native asset dependencies
-        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
+        if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         env:
           CI: "true"
           MACOS_NATIVE_PHASE: ${{ matrix.phase }}
         run: |
           set -euo pipefail
-          native_install_args=(install --frozen-lockfile --prefer-offline --optional --filter '@openclaw/mermaid-renderer...' --filter '@openclaw/gateway-protocol...')
-          if [[ "$MACOS_NATIVE_PHASE" == "tests" && -f apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift ]]; then
-            native_install_args+=(--filter 'openclaw...')
+          native_install_args=(install --frozen-lockfile --prefer-offline --optional)
+          # Real Gateway source imports cross root-manifest edges; settings needs the full workspace.
+          if [[ "$MACOS_NATIVE_PHASE" != "mlx-settings" ]]; then
+            native_install_args+=(--filter '@openclaw/mermaid-renderer...' --filter '@openclaw/gateway-protocol...')
+            if [[ "$MACOS_NATIVE_PHASE" == "tests" && -f apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift ]]; then
+              native_install_args+=(--filter 'openclaw...')
+            fi
           fi
           pnpm "${native_install_args[@]}" \
             --config.ignore-scripts=false \
@@ -5126,14 +5133,14 @@ jobs:
 
       - name: Setup Node.js for native test tooling
         id: macos-node-tooling
-        if: hashFiles('scripts/prepare-apple-mermaid.mjs') == ''
+        if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') == ''
         env:
           REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
         run: *ensure_node_run
 
       - &apple_mermaid_cache_key
         name: Identify Apple Mermaid inputs
-        if: hashFiles('scripts/prepare-apple-mermaid.mjs') != '' && env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true'
+        if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') != '' && env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true'
         id: apple-mermaid-inputs
         run: echo "key=$(node scripts/prepare-apple-mermaid.mjs --cache-key)" >> "$GITHUB_OUTPUT"
 
@@ -5148,6 +5155,7 @@ jobs:
 
       - name: Prepare Apple Mermaid assets
         id: macos-native-assets
+        if: matrix.phase != 'mlx'
         run: |
           set -euo pipefail
           if [[ -f scripts/prepare-apple-mermaid.mjs ]]; then
@@ -5225,7 +5233,7 @@ jobs:
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
-        if: matrix.phase != 'packages'
+        if: contains(fromJSON('["release","tests"]'), matrix.phase)
         run: |
           set -euo pipefail
           xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
@@ -5245,7 +5253,7 @@ jobs:
 
       - name: Restore Swift build directory cache
         id: swift-build-cache
-        if: matrix.phase != 'packages' && needs.preflight.outputs.cache_mode != 'off'
+        if: contains(fromJSON('["release","tests"]'), matrix.phase) && needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
@@ -5256,7 +5264,7 @@ jobs:
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
-        if: matrix.phase != 'packages'
+        if: contains(fromJSON('["release","tests"]'), matrix.phase)
         run: |
           set -euo pipefail
           cache_valid=true
@@ -5371,6 +5379,53 @@ jobs:
           swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
           trap 'rm -rf "$swabble_scratch"' EXIT
           swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --disable-index-store -Xswiftc -gline-tables-only --no-parallel
+
+      - name: MLX TTS helper build and tests
+        id: mlx-helper
+        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'mlx' && env.HISTORICAL_TARGET != 'true' }}
+        env:
+          MLX_NATIVE_PROOF: ${{ needs.preflight.outputs.run_mlx_native_proof }}
+          NATIVE_STARTED: ${{ steps.swift-cache-clock.outputs.started }}
+          CHECKOUT_SHA: *checkout_sha
+        run: |
+          set -euo pipefail
+          mlx_proof="$(mktemp -d "$RUNNER_TEMP/openclaw-mlx-tts-proof.XXXXXX")"
+          echo "proof-path=$mlx_proof" >> "$GITHUB_OUTPUT"
+          mlx_args=(--proof-dir "$mlx_proof" --started "$NATIVE_STARTED")
+          if [[ "$MLX_NATIVE_PROOF" == "true" ]]; then
+            mlx_args+=(--extended)
+          fi
+          python3 -I -S scripts/test-macos-mlx-native.py "${mlx_args[@]}"
+
+      - name: Upload MLX TTS resolution
+        if: ${{ always() && matrix.phase == 'mlx' && steps.mlx-helper.outputs.proof-path != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-mlx-tts-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.mlx-helper.outputs.proof-path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: MLX retained settings upgrade
+        id: mlx-settings
+        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'mlx-settings' && needs.preflight.outputs.run_mlx_native_proof == 'true' }}
+        env:
+          CHECKOUT_SHA: *checkout_sha
+          NATIVE_STARTED: ${{ steps.swift-cache-clock.outputs.started }}
+        run: |
+          set -euo pipefail
+          settings_proof="$(mktemp -d "$RUNNER_TEMP/openclaw-mlx-settings-proof.XXXXXX")"
+          echo "proof-path=$settings_proof" >> "$GITHUB_OUTPUT"
+          node scripts/test-macos-mlx-settings.mts "$settings_proof" "$NATIVE_STARTED" "$CHECKOUT_SHA"
+
+      - name: Upload MLX settings proof
+        if: ${{ always() && matrix.phase == 'mlx-settings' && steps.mlx-settings.outputs.proof-path != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-mlx-settings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.mlx-settings.outputs.proof-path }}
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Build Swift tests
         id: swift-test-build
@@ -5525,7 +5580,7 @@ jobs:
 
       - name: Check Swift cache save budget
         id: swift-cache-budget
-        if: matrix.phase != 'packages' && needs.preflight.outputs.cache_write_allowed == 'true'
+        if: contains(fromJSON('["release","tests"]'), matrix.phase) && needs.preflight.outputs.cache_write_allowed == 'true'
         continue-on-error: true
         timeout-minutes: 1
         env:
@@ -5581,7 +5636,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: [packages]
+        phase: ${{ fromJSON(needs.preflight.outputs.run_mlx_native_proof == 'true' && '["packages","mlx","mlx-settings"]' || '["packages","mlx"]') }}
     runs-on: *hosted_xcode_runner
     timeout-minutes: 30
     env:
