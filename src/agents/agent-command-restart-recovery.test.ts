@@ -3,11 +3,49 @@ import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/r
 import {
   buildCurrentRunRestartRecoveryClaim,
   buildRestartRecoveryTerminalDeliveryEvidence,
+  prepareCommandHarnessCompletionRecovery,
   constrainRestartRecoveryDeliveryPayloads,
 } from "./agent-command-restart-recovery.js";
 import { hasMessagingToolDeliveryToSource } from "./subagents/announce/subagent-announce-completion-delivery.js";
 
 describe("buildCurrentRunRestartRecoveryClaim", () => {
+  it.each([undefined, "automatic", "message_tool_only"] as const)(
+    "retains direct delivery reply mode %s across recovery admission",
+    (sourceReplyDeliveryMode) => {
+      const entry = { sessionId: "session-1", updatedAt: 1 };
+      const deliveryContext = { channel: "discord", to: "channel:123" };
+      const { sourceOptions } = prepareCommandHarnessCompletionRecovery({
+        entry,
+        sessionId: entry.sessionId,
+        sessionKey: "agent:main:main",
+        runId: "direct-run",
+        agentId: "main",
+        opts: { message: "continue my task", deliver: true, sourceReplyDeliveryMode },
+        hasDeliveryContext: true,
+      });
+      const claim = buildCurrentRunRestartRecoveryClaim({
+        entry,
+        deliveryContext,
+        runId: "direct-run",
+        ...sourceOptions,
+      });
+      expect(claim.restartRecoverySourceReplyDeliveryMode).toBe(
+        sourceReplyDeliveryMode ?? "automatic",
+      );
+      expect(claim.restartRecoveryDeliveryContext).toEqual(deliveryContext);
+      // Retaining delivery policy must not manufacture source-message authority.
+      expect(claim.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(claim.restartRecoverySourceIngress).toBeUndefined();
+      expect(
+        buildCurrentRunRestartRecoveryClaim({
+          entry: { ...entry, ...claim, restartRecoveryDeliveryRunId: "recovery-run" },
+          runId: "recovery-run",
+          sourceReplyDeliveryMode: "message_tool_only",
+        }).restartRecoverySourceReplyDeliveryMode,
+      ).toBe(sourceReplyDeliveryMode ?? "automatic");
+    },
+  );
+
   it("persists the complete generated-media policy, including an empty allowlist", () => {
     expect(
       buildCurrentRunRestartRecoveryClaim({
@@ -90,10 +128,12 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
           restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
         },
         runId: "recovery-run",
+        sourceReplyDeliveryMode: "automatic",
       }),
     ).toMatchObject({
       restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
       restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoverySourceReplyDeliveryMode: undefined,
     });
   });
 
