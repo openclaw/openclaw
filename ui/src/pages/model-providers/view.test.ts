@@ -331,7 +331,7 @@ describe("renderModelProviders", () => {
     const help = row.querySelector('button[aria-label="About the decision model"]');
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
-    expect(text(help?.closest("openclaw-tooltip")?.querySelector('[slot="content"]'))).toBe(
+    expect(text(row.querySelector('openclaw-tooltip [slot="content"]'))).toBe(
       "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; chat models are not used as a fallback.",
     );
   });
