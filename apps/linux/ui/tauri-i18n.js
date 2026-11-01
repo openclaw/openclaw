@@ -17,7 +17,6 @@
     typeof catalog?.messages === "object" && catalog.messages !== null;
   const requestedLocale = window["__OPENCLAW_TAURI_LOCALE__"] === "pt-PT" ? "pt-PT" : "en";
   const locale = hasCatalog ? requestedLocale : "en";
-  const languageKey = locale === "pt-PT" ? "ptPT" : "en";
   const format = (template, expectedArgs, args) => {
     const allowed = new Set(Array.isArray(expectedArgs) ? expectedArgs : []);
     const values = args && typeof args === "object" && !Array.isArray(args) ? args : {};
@@ -37,19 +36,23 @@
       return String(values[name]);
     });
   };
+  const argumentNames = (template) => [
+    ...new Set([...template.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu)].map((match) => match[1])),
+  ];
   const fallbackText = (key, args = {}, fallback = key) => {
-    const expectedArgs = [...new Set([...fallback.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu)].map((match) => match[1]))];
-    return format(fallback, expectedArgs, args);
+    return format(fallback, argumentNames(fallback), args);
   };
   const text = hasCatalog
     ? (key, args = {}, fallback = key) => {
         const entry = catalog.messages[key];
-        const candidate = entry?.[languageKey];
+        const currentArgs = argumentNames(fallback);
+        const currentEntry = entry?.en === fallback &&
+          Array.isArray(entry.args) &&
+          entry.args.length === currentArgs.length &&
+          entry.args.every((name, index) => name === currentArgs[index]);
+        const candidate = locale === "pt-PT" && currentEntry ? entry.ptPT : fallback;
         const message = typeof candidate === "string" ? candidate : fallback;
-        const expectedArgs = Array.isArray(entry?.args)
-          ? entry.args
-          : [...new Set([...fallback.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu)].map((match) => match[1]))];
-        return format(message, expectedArgs, args);
+        return format(message, currentArgs, args);
       }
     : fallbackText;
 

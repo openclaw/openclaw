@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
   assignNativeI18nIds,
@@ -11,6 +13,8 @@ import {
   assertTauriPlaceholderParity,
   mergeTauriLocaleTranslations,
   parseTauriEnglishDeclaration,
+  serializeTauriShellCatalogScript,
+  type TauriShellCatalog,
 } from "../../scripts/tauri-app-i18n.ts";
 
 describe("Tauri native i18n inventory", () => {
@@ -117,6 +121,94 @@ describe("Tauri native i18n inventory", () => {
     ).toThrow("placeholders or line breaks differ");
     expect(() => assertTauriPlaceholderParity("Line one\nLine two", "Linha um", "fixture")).toThrow(
       "placeholders or line breaks differ",
+    );
+  });
+
+  it("projects the native catalog only into packaged top-level pages", () => {
+    const catalog: TauriShellCatalog = {
+      version: 1,
+      sourceInventorySha256: "0".repeat(64),
+      messages: {
+        "quickChat.messageAgent": {
+          en: "Message {name}",
+          ptPT: "Mensagem para {name}",
+          args: ["name"],
+        },
+      },
+    };
+    const script = serializeTauriShellCatalogScript(catalog);
+    const load = (href: string, topFrame = true) => {
+      const window: { top?: unknown; __OPENCLAW_TAURI_CATALOG__?: TauriShellCatalog } = {};
+      window.top = topFrame ? window : {};
+      runInNewContext(script, { window, location: { href }, URL });
+      return window;
+    };
+
+    const packaged = load("tauri://localhost/quickchat.html");
+    expect(packaged.__OPENCLAW_TAURI_CATALOG__?.messages["quickChat.messageAgent"]?.ptPT).toBe(
+      "Mensagem para {name}",
+    );
+    expect(
+      Object.getOwnPropertyDescriptor(packaged, "__OPENCLAW_TAURI_CATALOG__")?.configurable,
+    ).toBe(false);
+    for (const [href, topFrame] of [
+      ["tauri://localhost:12345/quickchat.html", true],
+      ["https://tauri.localhost:12345/quickchat.html", true],
+      ["tauri://localhost/quickchat.html", false],
+      ["https://example.com/quickchat.html", true],
+    ] as const) {
+      expect(load(href, topFrame).__OPENCLAW_TAURI_CATALOG__).toBeUndefined();
+    }
+  });
+
+  it("uses current English when a packaged shell translation has stale source or arguments", async () => {
+    const source = readFileSync(
+      new URL("../../apps/linux/ui/tauri-i18n.js", import.meta.url),
+      "utf8",
+    );
+    const document = {
+      documentElement: { lang: "" },
+      querySelectorAll: () => [],
+    };
+    const window: Record<string, unknown> = {
+      __OPENCLAW_TAURI_CATALOG__: {
+        version: 1,
+        sourceInventorySha256: "0".repeat(64),
+        messages: {
+          "quickChat.messageAgent": {
+            en: "Message {name}",
+            ptPT: "Mensagem para {name}",
+            args: ["oldName"],
+          },
+          "setup.connecting": {
+            en: "Connecting to the old service",
+            ptPT: "A ligar ao serviço antigo",
+            args: [],
+          },
+        },
+      },
+      __OPENCLAW_TAURI_LOCALE__: "pt-PT",
+    };
+    window.top = window;
+    runInNewContext(source, {
+      window,
+      document,
+      location: { href: "tauri://localhost/index.html" },
+      URL,
+    });
+
+    const ready = window["__OPENCLAW_TAURI_I18N_READY__"] as Promise<{
+      locale: string;
+      text: (key: string, args: Record<string, string>, fallback: string) => string;
+    }>;
+    expect(typeof ready.then).toBe("function");
+    const api = await ready;
+    expect(api.locale).toBe("pt-PT");
+    expect(api.text("quickChat.messageAgent", { name: "Ada" }, "Message {name}")).toBe(
+      "Message Ada",
+    );
+    expect(api.text("setup.connecting", {}, "Connecting to OpenClaw")).toBe(
+      "Connecting to OpenClaw",
     );
   });
 });

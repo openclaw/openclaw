@@ -1602,9 +1602,6 @@ async function main() {
       await android.checkAndroidAppI18n();
       await apple.checkAppleAppI18n({ reportObsolete });
     }
-    if (parsed.command === "verify") {
-      await writeTauriShellCatalog(false);
-    }
   }
   if (parsed.command === "sync" && parsed.write && !parsed.locale) {
     // The inventory and native/*.json feed the generated Android/Apple app

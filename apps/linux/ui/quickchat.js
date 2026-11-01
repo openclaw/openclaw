@@ -1,7 +1,7 @@
-const shellI18n = await (window["__OPENCLAW_TAURI_I18N_READY__"] ?? Promise.resolve({
+let shellI18n = {
   locale: "en",
   text: (_key, args = {}, fallback = _key) => fallback.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu, (token, name) => Object.hasOwn(args, name) ? String(args[name]) : token),
-}));
+};
 const t = (key, fallback, args = {}) => shellI18n.text(key, args, fallback);
 
 function chatMessageText(message) {
@@ -213,6 +213,7 @@ function resolveInlineWidgetUrl(rawSurfaceUrl, rawTarget) {
 }
 
 const tauri = window["__TAURI__"];
+const nativeI18nReady = window["__OPENCLAW_TAURI_I18N_READY__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
 const rendererSessionId =
@@ -307,9 +308,9 @@ function setError(message = "") {
 }
 
 const GATEWAY_STATUS_MESSAGES = new Map([
-  ["pairing-required", t("quickChat.pairingRequired", "Approve this device in the dashboard (Nodes)")],
-  ["credential-required", t("quickChat.credentialRequired", "Gateway requires a credential — open the dashboard on the gateway host")],
-  ["tls-failure", t("quickChat.tlsFailure", "Gateway TLS trust failed — check the certificate fingerprint")],
+  ["pairing-required", { key: "quickChat.pairingRequired", fallback: "Approve this device in the dashboard (Nodes)" }],
+  ["credential-required", { key: "quickChat.credentialRequired", fallback: "Gateway requires a credential — open the dashboard on the gateway host" }],
+  ["tls-failure", { key: "quickChat.tlsFailure", fallback: "Gateway TLS trust failed — check the certificate fingerprint" }],
 ]);
 
 function renderStatus() {
@@ -317,7 +318,10 @@ function renderStatus() {
     setError(sendError);
     return;
   }
-  const fallback = GATEWAY_STATUS_MESSAGES.get(gatewayState) || t("quickChat.gatewayUnreachable", "Gateway unreachable — retrying");
+  const statusMessage = GATEWAY_STATUS_MESSAGES.get(gatewayState);
+  const fallback = statusMessage
+    ? t(statusMessage.key, statusMessage.fallback)
+    : t("quickChat.gatewayUnreachable", "Gateway unreachable — retrying");
   setError(gatewayState === "tls-failure" ? fallback : gatewayNotice || fallback);
 }
 
@@ -1428,6 +1432,9 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 async function initializeRenderer() {
+  if (nativeI18nReady) {
+    shellI18n = await nativeI18nReady;
+  }
   await listen("quickchat:shown", () => {
     reveal();
   });

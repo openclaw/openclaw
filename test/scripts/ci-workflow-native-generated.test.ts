@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { detectChangedScope, shouldRunNativeI18n } from "../../scripts/ci-changed-scope.mjs";
 import { isNativeGeneratedOnlyChange } from "../../scripts/lib/ci-native-generated-scope.mjs";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
@@ -42,6 +44,31 @@ describe("generated native locale scope", () => {
       }
     },
   );
+
+  it("refreshes and publishes the generated Tauri shell catalog for PT-PT", () => {
+    const workflow = parseYaml(
+      readFileSync(
+        new URL("../../.github/workflows/native-app-locale-refresh.yml", import.meta.url),
+        "utf8",
+      ),
+    ) as {
+      on: { push: { paths: string[] } };
+      jobs: {
+        refresh: { strategy: { matrix: { locale: string[] } } };
+        finalize: { steps: Array<{ uses?: string; with?: Record<string, string> }> };
+      };
+    };
+    const publisher = workflow.jobs.finalize.steps.find(
+      (step) => step.uses === "./.github/actions/publish-generated-pr",
+    );
+    expect(workflow.on.push.paths).toContain("apps/linux/i18n/**");
+    expect(workflow.jobs.refresh.strategy.matrix.locale).toContain("pt-PT");
+    expect(publisher?.with?.["generated-paths"]).toContain("apps/linux/ui/i18n/catalog.json");
+    expect(publisher?.with?.["generated-paths"]).toContain("apps/linux/ui/i18n/catalog.js");
+    expect(publisher?.with?.["invalidation-paths"]).toContain("apps/linux/i18n/en.json");
+    expect(publisher?.with?.["invalidation-paths"]).toContain("scripts/tauri-app-i18n.ts");
+  });
+
   it.each([
     { eventName: "pull_request" as const, author: "Bot", full: false, runBuilds: false },
     { eventName: "pull_request" as const, author: "User", full: false, runBuilds: true },

@@ -346,7 +346,7 @@ class GatewaySwitchFixture(GatewayFixture):
         self.chrome.close_window(settings)
         self.chrome.command("wmctrl", "-ia", main)
         wait("Edit Gateway", "heading")
-        wait("SSH connection failed:", prefix=True)
+        wait("Gateway action failed: SSH connection failed:", prefix=True)
         self.capture("failed-edit-recovery")
         click("Connection type", "combo box")
         self.chrome.command("xdotool", "key", "Home", "Return")

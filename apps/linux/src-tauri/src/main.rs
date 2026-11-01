@@ -3467,6 +3467,7 @@ fn main() {
         );
 
     let builder = builder.setup(move |app| {
+        shell_i18n::initialize_catalog(app.handle())?;
         test_profile::prepare(app.handle())?;
         let namespace = remote_gateway::config_path()?
             .to_string_lossy()

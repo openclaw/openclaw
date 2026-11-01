@@ -131,7 +131,15 @@ function createFakeElement(tagName = "div") {
 }
 
 function createQuickChatHarness(
-  options: { initialize?: boolean; deferRegistration?: boolean; deferReady?: boolean } = {},
+  options: {
+    initialize?: boolean;
+    deferRegistration?: boolean;
+    deferReady?: boolean;
+    i18n?: {
+      locale: string;
+      text: (key: string, args: Record<string, string>, fallback: string) => string;
+    };
+  } = {},
 ): Record<string, any> {
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
@@ -179,6 +187,7 @@ function createQuickChatHarness(
   };
   const Date = { now: () => fakeNow };
   const window = {
+    __OPENCLAW_TAURI_I18N_READY__: options.i18n ? Promise.resolve(options.i18n) : undefined,
     __TAURI__: {
       core: {
         invoke(
@@ -530,9 +539,22 @@ for (const failedStage of ["registration", "admission"] as const) {
   });
 }
 
-test("gateway state updates and clears the Quick Chat user accent", () => {
-  const harness = createQuickChatHarness();
+test("gateway state updates localize status after shell readiness and clear the user accent", async () => {
+  const harness = createQuickChatHarness({
+    initialize: true,
+    i18n: {
+      locale: "pt-PT",
+      text(key, _args, fallback) {
+        return key === "quickChat.pairingRequired"
+          ? "Aprove este dispositivo no painel (Nodes)"
+          : fallback;
+      },
+    },
+  });
+  await harness.initialized();
   harness.setGatewayUp();
+  harness.emitGatewayState({ state: "pairing-required" });
+  assert.equal(harness.error(), "Aprove este dispositivo no painel (Nodes)");
 
   for (const accent of ["#45b6fe", "#52c99a", ""]) {
     harness.emitGatewayState({ state: "up", ...(accent ? { accent } : {}) });

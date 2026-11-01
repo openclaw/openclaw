@@ -238,7 +238,7 @@ export async function buildTauriShellCatalog(): Promise<TauriShellCatalog> {
   };
 }
 
-function serializeTauriShellCatalogScript(catalog: TauriShellCatalog): string {
+export function serializeTauriShellCatalogScript(catalog: TauriShellCatalog): string {
   return `(() => {
   if (window !== window.top) return;
   const pageUrl = new URL(location.href);

@@ -14,7 +14,7 @@ On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alo
 
 The shell selects its language from the operating system at launch. Explicit `pt-PT` and `pt_PT.UTF-8` select Portuguese (Portugal); `pt-BR`, bare `pt`, and unsupported languages fall back to English. Changing the operating-system language takes effect on the next launch. The connected Control UI keeps its own language preference, separate from the shell. New native message IDs use explicit English fallbacks in other locale catalogs until those translations are reviewed.
 
-Ordinary Cargo builds use the checked-in declaration and generated shell catalog. They do not run Node or translation providers.
+Ordinary Cargo builds embed the checked-in English declaration and use the generated shell catalog when it is packaged. If the generated catalog is absent, the shell uses English until the native locale refresh produces it; malformed packaged data fails startup. Cargo does not run Node or translation providers. `native-app-i18n verify` validates source-only locale inputs without requiring generated artifacts, while `native-app-i18n check` requires the complete generated locale set and current Tauri projection.
 
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
 

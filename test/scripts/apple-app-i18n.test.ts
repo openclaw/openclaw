@@ -6,6 +6,7 @@ import { expect, it, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
 import { parseNativeI18nInventory } from "../../scripts/native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
+import { decodeXml } from "../../src/shared/xml.ts";
 
 const readInventory = async () =>
   parseNativeI18nInventory(await readFile("apps/.i18n/native-source.json", "utf8"));
@@ -20,13 +21,31 @@ const site = (kind: string, platform: "ios" | "macos") => ({
 function makeEntry(id: string, source: string, sites: Entry["sites"]): Entry {
   return { id: `native.apple.${id}`, source, surface: "apple", sites };
 }
-function artifact(translations: Record<string, string>) {
-  return { version: 2, locale: "fr", translations };
+function artifact(translations: Record<string, string>, locale = "fr") {
+  return { version: 2, locale, translations };
+}
+function sourceOnlyInfoPlistFixture(source: string) {
+  return [...source.matchAll(/<key>([^<]+)<\/key>\s*<string>([\s\S]*?)<\/string>/gu)]
+    .map((match) => ({
+      key: decodeXml(match[1] ?? ""),
+      source: decodeXml(match[2] ?? ""),
+    }))
+    .flatMap((entry) =>
+      entry.key.endsWith("UsageDescription") || entry.key === "NSScreenCaptureDescription"
+        ? [
+            `/* OpenClaw source: ${JSON.stringify(entry.source)} */`,
+            `${JSON.stringify(entry.key)} = ${JSON.stringify(entry.source)};`,
+          ]
+        : [],
+    )
+    .join("\n")
+    .concat("\n");
 }
 
 const probe = vi.hoisted(() => ({
   source: "",
-  catalogs: new Map<string, string>(),
+  catalogs: new Map<string, string | Error>(),
+  missingNativeLocales: new Set<string>(),
   paths: [
     "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
     "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
@@ -42,12 +61,50 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     // Synthetic calls are opt-in and limited to production-source reads; all other I/O stays real.
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
       const file = typeof args[0] === "string" ? args[0].replaceAll("\\", "/") : "";
-      const source = probe.catalogs.get(path.resolve(file)) ?? (await actual.readFile(...args));
+      const catalog = probe.catalogs.get(path.resolve(file));
+      if (catalog instanceof Error) {
+        throw catalog;
+      }
+      const source = catalog ?? (await actual.readFile(...args));
       return probe.source &&
         typeof source === "string" &&
         probe.paths.some((entry) => file.endsWith("/" + entry))
         ? source + "\n" + probe.source
         : source;
+    },
+    readdir: async (...args: Parameters<typeof actual.readdir>) => {
+      if (typeof args[0] !== "string") {
+        return actual.readdir(...args);
+      }
+      const directoryPath = args[0];
+      const directory = path.resolve(directoryPath);
+      if (directory !== path.resolve("apps/.i18n/native")) {
+        return actual.readdir(...args);
+      }
+      const entries = await actual.readdir(directoryPath, {
+        withFileTypes: true,
+        encoding: "utf8",
+      });
+      const names = new Set(entries.map((entry) => entry.name));
+      const fixtureEntries = [...probe.catalogs.keys()]
+        .filter((file) => path.dirname(file) === directory && file.endsWith(".json"))
+        .map((file) => path.basename(file))
+        .filter((name) => !names.has(name))
+        .map((name) => ({
+          name,
+          parentPath: directoryPath,
+          isFile: () => true,
+          isDirectory: () => false,
+          isBlockDevice: () => false,
+          isCharacterDevice: () => false,
+          isSymbolicLink: () => false,
+          isFIFO: () => false,
+          isSocket: () => false,
+        }));
+      return [...entries, ...fixtureEntries].filter((entry) => {
+        const locale = entry.name.replace(/\.json$/u, "");
+        return !probe.missingNativeLocales.has(locale);
+      });
     },
   };
 });
@@ -89,24 +146,72 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
   }
 });
 
-it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
-  const inventory = await readInventory();
-  const translations = await Promise.all(
-    NATIVE_I18N_LOCALES.map(async (locale) =>
-      JSON.parse(await readFile(`apps/.i18n/native/${locale}.json`, "utf8")),
-    ),
-  );
-  const catalogs = await Promise.all(
-    Object.entries({
-      "apps/ios/Resources/Localizable.xcstrings": apple.buildIosCatalog,
-      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings": apple.buildMacosCatalog,
-    }).map(async ([file, buildCatalog]) => {
-      const filePath = path.resolve(file);
-      const existing = JSON.parse(await readFile(filePath, "utf8"));
-      return { filePath, catalog: buildCatalog(existing, inventory, translations).catalog };
+it("verifies and compiles source when a generated native locale is not yet present", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-apple-source-only-"));
+  const output = path.join(root, "output");
+  const localePath = path.resolve("apps/.i18n/native/pt-PT.json");
+  probe.missingNativeLocales.add("pt-PT");
+  probe.catalogs.set(
+    localePath,
+    Object.assign(new Error("source-only checkout has no PT-PT native artifact"), {
+      code: "ENOENT",
     }),
   );
   try {
+    await expect(apple.verifyAppleAppI18n()).resolves.toBeUndefined();
+    await expect(apple.compileMacosLocalizations(output)).resolves.toBeUndefined();
+    await expect(apple.checkAppleAppI18n()).rejects.toThrow("Apple/native locale parity drift");
+    const english = await readFile(path.join(output, "en.lproj", "Localizable.strings"), "utf8");
+    expect(english).toContain('"About OpenClaw" = "About OpenClaw";');
+  } finally {
+    probe.missingNativeLocales.clear();
+    probe.catalogs.delete(localePath);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
+  const ptPtArtifactPath = path.resolve("apps/.i18n/native/pt-PT.json");
+  try {
+    const inventory = await readInventory();
+    probe.catalogs.set(
+      ptPtArtifactPath,
+      JSON.stringify(
+        artifact(Object.fromEntries(inventory.map((entry) => [entry.id, entry.source])), "pt-PT"),
+      ),
+    );
+    const translations = await Promise.all(
+      NATIVE_I18N_LOCALES.map(async (locale) =>
+        JSON.parse(await readFile(`apps/.i18n/native/${locale}.json`, "utf8")),
+      ),
+    );
+    for (const [sourcePath, outputPath] of [
+      ["apps/ios/Sources/Info.plist", "apps/ios/Sources/pt-PT.lproj/InfoPlist.strings"],
+      ["apps/ios/WatchApp/Info.plist", "apps/ios/WatchApp/pt-PT.lproj/InfoPlist.strings"],
+      [
+        "apps/ios/ShareExtension/Info.plist",
+        "apps/ios/ShareExtension/pt-PT.lproj/InfoPlist.strings",
+      ],
+      [
+        "apps/ios/ActivityWidget/Info.plist",
+        "apps/ios/ActivityWidget/pt-PT.lproj/InfoPlist.strings",
+      ],
+    ] as const) {
+      probe.catalogs.set(
+        path.resolve(outputPath),
+        sourceOnlyInfoPlistFixture(await readFile(sourcePath, "utf8")),
+      );
+    }
+    const catalogs = await Promise.all(
+      Object.entries({
+        "apps/ios/Resources/Localizable.xcstrings": apple.buildIosCatalog,
+        "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings": apple.buildMacosCatalog,
+      }).map(async ([file, buildCatalog]) => {
+        const filePath = path.resolve(file);
+        const existing = JSON.parse(await readFile(filePath, "utf8"));
+        return { filePath, catalog: buildCatalog(existing, inventory, translations).catalog };
+      }),
+    );
     for (const { filePath, catalog } of catalogs) {
       probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
     }

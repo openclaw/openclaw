@@ -1,13 +1,16 @@
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::{Error, ErrorKind};
 use std::sync::OnceLock;
+use tauri::{AppHandle, Runtime};
 
 const SOURCE: &str = include_str!("../../i18n/en.json");
-const CATALOG: &str = include_str!("../../ui/i18n/catalog.json");
 
 static SOURCE_MESSAGES: OnceLock<Option<Value>> = OnceLock::new();
 static CATALOG_MESSAGES: OnceLock<Option<Value>> = OnceLock::new();
 static LOCALE: OnceLock<String> = OnceLock::new();
+const CATALOG_ASSET_PATH: &str = "/i18n/catalog.json";
 
 fn messages(value: &'static str, cell: &'static OnceLock<Option<Value>>) -> Option<&'static Value> {
     cell.get_or_init(|| serde_json::from_str(value).ok())
@@ -18,8 +21,67 @@ fn source_messages() -> Option<&'static Value> {
     messages(SOURCE, &SOURCE_MESSAGES)
 }
 
+fn parse_catalog_asset(bytes: Option<&[u8]>) -> std::io::Result<Option<Value>> {
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let catalog: Value = serde_json::from_slice(bytes)
+        .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
+    let valid_hash = catalog
+        .get("sourceInventorySha256")
+        .and_then(Value::as_str)
+        .is_some_and(|hash| {
+            hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        });
+    let Some(catalog_messages) = catalog.get("messages").and_then(Value::as_object) else {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "Tauri shell catalog has no messages object",
+        ));
+    };
+    if catalog.get("version").and_then(Value::as_u64) != Some(1) || !valid_hash {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "Tauri shell catalog has an unsupported version or inventory digest",
+        ));
+    }
+    for (key, entry) in catalog_messages {
+        let valid_entry = entry.get("en").and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty())
+            && entry.get("ptPT").and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty())
+            && entry
+                .get("args")
+                .and_then(Value::as_array)
+                .is_some_and(|args| args.iter().all(Value::is_string));
+        if !valid_entry {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Tauri shell catalog has an invalid message entry for {key}"),
+            ));
+        }
+    }
+    Ok(Some(catalog))
+}
+
+pub fn initialize_catalog<R: Runtime>(app: &AppHandle<R>) -> std::io::Result<()> {
+    let bytes = catalog_asset_bytes(app.asset_resolver().iter());
+    let catalog = parse_catalog_asset(bytes.as_deref())?;
+    CATALOG_MESSAGES.set(catalog).map_err(|_| {
+        Error::new(
+            ErrorKind::AlreadyExists,
+            "Tauri shell catalog was initialized more than once",
+        )
+    })
+}
+
+fn catalog_asset_bytes<'a>(
+    mut assets: impl Iterator<Item = (Cow<'a, str>, Cow<'a, [u8]>)>,
+) -> Option<Vec<u8>> {
+    assets
+        .find_map(|(path, bytes)| (path.as_ref() == CATALOG_ASSET_PATH).then(|| bytes.into_owned()))
+}
+
 fn catalog_messages() -> Option<&'static Value> {
-    messages(CATALOG, &CATALOG_MESSAGES)
+    CATALOG_MESSAGES.get().and_then(Option::as_ref)
 }
 
 fn normalized_supported_locale(tag: &str) -> Option<&'static str> {
@@ -140,18 +202,33 @@ fn source_text(key: &str) -> Option<&'static str> {
         .as_str()
 }
 
-fn message_for(locale: &str, key: &str) -> Option<&'static str> {
+fn message_for_catalog<'a>(locale: &str, key: &str, catalog: Option<&'a Value>) -> Option<&'a str> {
+    let source = source_text(key)?;
     if locale == "pt-PT" {
-        if let Some(text) = catalog_messages()
+        if let Some(entry) = catalog
             .and_then(|catalog| catalog.get("messages"))
             .and_then(|messages| messages.get(key))
-            .and_then(|entry| entry.get("ptPT"))
-            .and_then(Value::as_str)
         {
-            return Some(text);
+            let entry_args = entry
+                .get("args")
+                .and_then(Value::as_array)
+                .and_then(|args| args.iter().map(Value::as_str).collect::<Option<Vec<_>>>());
+            if let (Some(entry_args), Some(text)) =
+                (entry_args, entry.get("ptPT").and_then(Value::as_str))
+            {
+                if entry.get("en").and_then(Value::as_str) == Some(source)
+                    && entry_args == declared_args(key)
+                {
+                    return Some(text);
+                }
+            }
         }
     }
-    source_text(key)
+    Some(source)
+}
+
+fn message_for(locale: &str, key: &str) -> Option<&'static str> {
+    message_for_catalog(locale, key, catalog_messages())
 }
 
 fn render(key: &str, template: &str, allowed: &[&str], args: &[(&str, &str)]) -> String {
@@ -203,7 +280,16 @@ pub fn format(key: &str, args: &[(&str, &str)]) -> String {
 }
 
 fn format_for(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
-    let Some(template) = message_for(locale, key) else {
+    format_for_catalog(locale, key, args, catalog_messages())
+}
+
+fn format_for_catalog(
+    locale: &str,
+    key: &str,
+    args: &[(&str, &str)],
+    catalog: Option<&Value>,
+) -> String {
+    let Some(template) = message_for_catalog(locale, key, catalog) else {
         assert!(
             args.is_empty(),
             "Tauri formatting arguments require a declared message for {key}"
@@ -212,6 +298,55 @@ fn format_for(locale: &str, key: &str, args: &[(&str, &str)]) -> String {
     };
     let allowed = declared_args(key);
     render(key, template, &allowed, args)
+}
+
+#[cfg(test)]
+fn test_catalog() -> Value {
+    let translations = [
+        ("setup.connecting", "A ligar ao OpenClaw"),
+        ("tray.runtimeNoInstalledService", "Sem serviço do Gateway instalado"),
+        ("nativeMenu.about", "Acerca de"),
+        ("nativeMenu.aboutNamed", "Acerca de {appName}"),
+        ("nativeMenu.closeWindow", "Fechar janela"),
+        ("nativeMenu.copy", "Copiar"),
+        ("nativeMenu.cut", "Cortar"),
+        ("nativeMenu.edit", "Editar"),
+        ("nativeMenu.file", "Ficheiro"),
+        ("nativeMenu.fullscreen", "Alternar ecrã completo"),
+        ("nativeMenu.help", "Ajuda"),
+        ("nativeMenu.hide", "Ocultar"),
+        ("nativeMenu.hideNamed", "Ocultar {appName}"),
+        ("nativeMenu.hideOthers", "Ocultar outras aplicações"),
+        ("nativeMenu.maximize", "Maximizar"),
+        ("nativeMenu.minimize", "Minimizar"),
+        ("nativeMenu.paste", "Colar"),
+        ("nativeMenu.quit", "Sair"),
+        ("nativeMenu.quitNamed", "Sair de {appName}"),
+        ("nativeMenu.redo", "Refazer"),
+        ("nativeMenu.selectAll", "Selecionar tudo"),
+        ("nativeMenu.services", "Serviços"),
+        ("nativeMenu.undo", "Desfazer"),
+        ("nativeMenu.view", "Ver"),
+        ("nativeMenu.window", "Janela"),
+    ];
+    let messages = translations
+        .into_iter()
+        .map(|(key, pt_pt)| {
+            (
+                key.to_owned(),
+                serde_json::json!({
+                    "en": source_text(key).expect("test source declaration"),
+                    "ptPT": pt_pt,
+                    "args": declared_args(key),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    serde_json::json!({
+        "version": 1,
+        "sourceInventorySha256": "0".repeat(64),
+        "messages": messages,
+    })
 }
 
 pub fn chrome_copy() -> Value {
@@ -245,8 +380,8 @@ pub fn chrome_copy() -> Value {
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn menu_text_for(locale: &str, key: &str) -> String {
-    format_for(locale, key, &[])
+fn menu_text_for(locale: &str, key: &str, catalog: Option<&Value>) -> String {
+    format_for_catalog(locale, key, &[], catalog)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -268,25 +403,31 @@ fn default_app_menu_text(
     named_key: &str,
     english_prefix: &str,
     native_text: &str,
+    catalog: Option<&Value>,
 ) -> Option<String> {
     if locale != "pt-PT" {
         return Some(native_text.to_owned());
     }
     match default_app_name(native_text, english_prefix)? {
-        None => Some(menu_text_for(locale, bare_key)),
+        None => Some(menu_text_for(locale, bare_key, catalog)),
         Some(app_name) => {
             let escaped_name = app_name.replace('&', "&&");
-            Some(format_for(
+            Some(format_for_catalog(
                 locale,
                 named_key,
                 &[("appName", escaped_name.as_str())],
+                catalog,
             ))
         }
     }
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn default_submenu_label_for(locale: &str, native_text: &str) -> Option<String> {
+fn default_submenu_label_for(
+    locale: &str,
+    native_text: &str,
+    catalog: Option<&Value>,
+) -> Option<String> {
     let key = match native_text {
         "File" => "nativeMenu.file",
         "Edit" => "nativeMenu.edit",
@@ -295,19 +436,24 @@ fn default_submenu_label_for(locale: &str, native_text: &str) -> Option<String> 
         "Help" => "nativeMenu.help",
         _ => return None,
     };
-    Some(menu_text_for(locale, key))
+    Some(menu_text_for(locale, key, catalog))
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn default_predefined_label_for(locale: &str, native_text: &str) -> Option<String> {
+fn default_predefined_label_for(
+    locale: &str,
+    native_text: &str,
+    catalog: Option<&Value>,
+) -> Option<String> {
     match native_text {
-        "Hide Others" => Some(menu_text_for(locale, "nativeMenu.hideOthers")),
+        "Hide Others" => Some(menu_text_for(locale, "nativeMenu.hideOthers", catalog)),
         _ if native_text == "About" || native_text.starts_with("About ") => default_app_menu_text(
             locale,
             "nativeMenu.about",
             "nativeMenu.aboutNamed",
             "About",
             native_text,
+            catalog,
         ),
         _ if native_text == "Hide" || native_text.starts_with("Hide ") => default_app_menu_text(
             locale,
@@ -315,6 +461,7 @@ fn default_predefined_label_for(locale: &str, native_text: &str) -> Option<Strin
             "nativeMenu.hideNamed",
             "Hide",
             native_text,
+            catalog,
         ),
         _ if native_text == "Quit" || native_text.starts_with("Quit ") => default_app_menu_text(
             locale,
@@ -322,6 +469,7 @@ fn default_predefined_label_for(locale: &str, native_text: &str) -> Option<Strin
             "nativeMenu.quitNamed",
             "Quit",
             native_text,
+            catalog,
         ),
         _ => {
             let key = match native_text {
@@ -338,7 +486,7 @@ fn default_predefined_label_for(locale: &str, native_text: &str) -> Option<Strin
                 "Zoom" => "nativeMenu.maximize",
                 _ => return None,
             };
-            Some(menu_text_for(locale, key))
+            Some(menu_text_for(locale, key, catalog))
         }
     }
 }
@@ -351,13 +499,14 @@ pub fn localize_default_macos_menu<R: tauri::Runtime>(
     if locale != "pt-PT" {
         return Ok(());
     }
+    let catalog = catalog_messages();
 
     for (position, kind) in menu.items()?.iter().enumerate() {
         let Some(submenu) = kind.as_submenu() else {
             continue;
         };
         if position != 0 {
-            if let Some(text) = default_submenu_label_for(locale, &submenu.text()?) {
+            if let Some(text) = default_submenu_label_for(locale, &submenu.text()?, catalog) {
                 submenu.set_text(text)?;
             }
         }
@@ -365,7 +514,7 @@ pub fn localize_default_macos_menu<R: tauri::Runtime>(
             let Some(item) = child.as_predefined_menuitem() else {
                 continue;
             };
-            if let Some(text) = default_predefined_label_for(locale, &item.text()?) {
+            if let Some(text) = default_predefined_label_for(locale, &item.text()?, catalog) {
                 item.set_text(text)?;
             }
         }
@@ -376,9 +525,12 @@ pub fn localize_default_macos_menu<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        chrome_copy, default_app_menu_text, default_predefined_label_for,
-        default_submenu_label_for, format_for, menu_text_for, render, select_locale,
+        catalog_asset_bytes, chrome_copy, default_app_menu_text, default_predefined_label_for,
+        default_submenu_label_for, format_for, format_for_catalog, menu_text_for,
+        parse_catalog_asset, render, select_locale, test_catalog, CATALOG_ASSET_PATH,
     };
+    use std::borrow::Cow;
+    use serde_json::Value;
 
     #[test]
     fn only_explicit_portuguese_portugal_tags_select_portuguese() {
@@ -424,22 +576,93 @@ mod tests {
 
     #[test]
     fn portuguese_catalog_falls_back_to_the_source_catalog_per_key() {
+        let catalog = test_catalog();
         assert_eq!(
-            format_for("pt-PT", "setup.connecting", &[]),
+            format_for_catalog("pt-PT", "setup.connecting", &[], Some(&catalog)),
             "A ligar ao OpenClaw"
         );
         assert_eq!(
-            format_for("fr-FR", "gateway.statusConnected", &[]),
+            format_for_catalog("fr-FR", "gateway.statusConnected", &[], Some(&catalog)),
             "Connected"
         );
         assert_eq!(
-            format_for("en", "tray.runtimeNoInstalledService", &[]),
+            format_for_catalog("en", "tray.runtimeNoInstalledService", &[], Some(&catalog)),
             "No installed Gateway service"
         );
         assert_eq!(
-            format_for("pt-PT", "tray.runtimeNoInstalledService", &[]),
+            format_for_catalog(
+                "pt-PT",
+                "tray.runtimeNoInstalledService",
+                &[],
+                Some(&catalog),
+            ),
             "Sem serviço do Gateway instalado"
         );
+    }
+
+    #[test]
+    fn absent_or_stale_packaged_catalog_uses_current_english_per_key() {
+        assert!(parse_catalog_asset(None).unwrap().is_none());
+        let catalog = test_catalog();
+        assert_eq!(
+            format_for_catalog("pt-PT", "setup.connecting", &[], Some(&catalog)),
+            "A ligar ao OpenClaw"
+        );
+
+        let mut stale_source: Value = catalog.clone();
+        stale_source["messages"]["setup.connecting"]["en"] = Value::String("Old source".into());
+        assert_eq!(
+            format_for_catalog("pt-PT", "setup.connecting", &[], Some(&stale_source)),
+            "Connecting to OpenClaw"
+        );
+
+        let mut stale_args = catalog;
+        stale_args["messages"]["nativeMenu.aboutNamed"]["args"] =
+            serde_json::json!(["oldName"]);
+        assert_eq!(
+            format_for_catalog(
+                "pt-PT",
+                "nativeMenu.aboutNamed",
+                &[("appName", "OpenClaw")],
+                Some(&stale_args),
+            ),
+            "About OpenClaw"
+        );
+    }
+
+    #[test]
+    fn exact_embedded_asset_key_adopts_the_current_portuguese_catalog() {
+        let catalog = test_catalog();
+        let bytes = serde_json::to_vec(&catalog).unwrap();
+        let found = catalog_asset_bytes(
+            [(
+                Cow::Borrowed(CATALOG_ASSET_PATH),
+                Cow::Borrowed(bytes.as_slice()),
+            )]
+            .into_iter(),
+        )
+        .unwrap();
+        let parsed = parse_catalog_asset(Some(&found)).unwrap().unwrap();
+        assert_eq!(
+            format_for_catalog("pt-PT", "setup.connecting", &[], Some(&parsed)),
+            "A ligar ao OpenClaw"
+        );
+        assert!(catalog_asset_bytes(
+            [(Cow::Borrowed("i18n/catalog.json"), Cow::Borrowed(bytes.as_slice()))]
+                .into_iter()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn present_invalid_packaged_catalog_is_rejected() {
+        for raw in [
+            br#"{"version":2,"sourceInventorySha256":"0000000000000000000000000000000000000000000000000000000000000000","messages":{}}"#.as_slice(),
+            br#"{"version":1,"sourceInventorySha256":"bad","messages":{}}"#.as_slice(),
+            br#"{"version":1,"sourceInventorySha256":"0000000000000000000000000000000000000000000000000000000000000000","messages":{"bad":{"en":"Bad","ptPT":"Mau","args":[1]}}}"#.as_slice(),
+        ] {
+            assert!(parse_catalog_asset(Some(raw)).is_err());
+        }
     }
 
     #[test]
@@ -457,6 +680,7 @@ mod tests {
 
     #[test]
     fn default_macos_menu_labels_use_the_native_portuguese_catalog() {
+        let catalog = test_catalog();
         let labels = [
             ("nativeMenu.about", "About", "Acerca de"),
             ("nativeMenu.closeWindow", "Close Window", "Fechar janela"),
@@ -497,23 +721,24 @@ mod tests {
                     | "nativeMenu.window"
             );
             let english_label = if submenu {
-                default_submenu_label_for("en", english)
+                default_submenu_label_for("en", english, Some(&catalog))
             } else {
-                default_predefined_label_for("en", english)
+                default_predefined_label_for("en", english, Some(&catalog))
             };
             let portuguese_label = if submenu {
-                default_submenu_label_for("pt-PT", english)
+                default_submenu_label_for("pt-PT", english, Some(&catalog))
             } else {
-                default_predefined_label_for("pt-PT", english)
+                default_predefined_label_for("pt-PT", english, Some(&catalog))
             };
             assert_eq!(english_label.as_deref(), Some(english));
             assert_eq!(portuguese_label.as_deref(), Some(portuguese));
-            assert_eq!(menu_text_for("pt-PT", key), portuguese);
+            assert_eq!(menu_text_for("pt-PT", key, Some(&catalog)), portuguese);
         }
     }
 
     #[test]
     fn named_macos_menu_labels_preserve_literal_app_names() {
+        let catalog = test_catalog();
         for (bare_key, named_key, prefix, expected_bare, expected_named) in [
             (
                 "nativeMenu.about",
@@ -538,7 +763,14 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                default_app_menu_text("pt-PT", bare_key, named_key, prefix, prefix),
+                default_app_menu_text(
+                    "pt-PT",
+                    bare_key,
+                    named_key,
+                    prefix,
+                    prefix,
+                    Some(&catalog),
+                ),
                 Some(expected_bare.to_owned())
             );
             assert_eq!(
@@ -548,12 +780,20 @@ mod tests {
                     named_key,
                     prefix,
                     &format!("{prefix} File & {{name}}"),
+                    Some(&catalog),
                 ),
                 Some(expected_named.to_owned())
             );
             let english = format!("{prefix} File & {{name}}");
             assert_eq!(
-                default_app_menu_text("en", bare_key, named_key, prefix, &english),
+                default_app_menu_text(
+                    "en",
+                    bare_key,
+                    named_key,
+                    prefix,
+                    &english,
+                    Some(&catalog),
+                ),
                 Some(english)
             );
         }
@@ -564,6 +804,7 @@ mod tests {
                 "nativeMenu.aboutNamed",
                 "About",
                 "Aboutface File",
+                Some(&catalog),
             ),
             None
         );

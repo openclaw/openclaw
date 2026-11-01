@@ -176,6 +176,15 @@ describe("Android app i18n resources", () => {
       generatedOverrides.set(shellPath, shell.replaceAll("R.string.cancel", "R.string.app_name"));
       await expect(verifyAndroidAppI18n()).resolves.toBeUndefined();
       await expect(buildAndroidAppI18nCatalog()).rejects.toThrow(missingArtifact);
+      const sourceOnly = await buildAndroidAppI18nCatalog({ allowMissingLocaleArtifacts: true });
+      expect(
+        sourceOnly.resources.get(
+          path.join(GENERATED_RESOURCE_ROOT, "values-fr", "native_strings.xml"),
+        ),
+      ).toBeDefined();
+      expect(
+        sourceOnly.resources.get(path.join(APP_RESOURCE_ROOT, "values-fr", "assistant.xml")),
+      ).toBeDefined();
       await expect(checkAndroidAppI18n()).rejects.toThrow(missingArtifact);
     } finally {
       generatedOverrides.clear();

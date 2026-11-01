@@ -1026,13 +1026,22 @@ async function readInventory(): Promise<NativeI18nInventoryEntry[]> {
   );
 }
 
-async function readArtifacts(): Promise<Map<string, NativeTranslations>> {
+async function readArtifacts(
+  options: { allowMissingLocales?: boolean } = {},
+): Promise<Map<string, NativeTranslations>> {
   return new Map(
     await Promise.all(
       NATIVE_I18N_LOCALES.map(async (locale) => {
-        const parsed = JSON.parse(
-          await readFile(path.join(ARTIFACT_ROOT, `${locale}.json`), "utf8"),
-        ) as { translations?: NativeTranslations };
+        let raw: string;
+        try {
+          raw = await readFile(path.join(ARTIFACT_ROOT, `${locale}.json`), "utf8");
+        } catch (error) {
+          if (options.allowMissingLocales && isMissingFileError(error)) {
+            return [locale, {}] as const;
+          }
+          throw error;
+        }
+        const parsed = JSON.parse(raw) as { translations?: NativeTranslations };
         return [locale, parsed.translations ?? {}] as const;
       }),
     ),
@@ -1186,8 +1195,13 @@ async function readAndroidSourceFacts(): Promise<AndroidSourceFacts> {
   };
 }
 
-export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
-  const [facts, artifacts] = await Promise.all([readAndroidSourceFacts(), readArtifacts()]);
+export async function buildAndroidAppI18nCatalog(
+  options: { allowMissingLocaleArtifacts?: boolean } = {},
+): Promise<GeneratedCatalog> {
+  const [facts, artifacts] = await Promise.all([
+    readAndroidSourceFacts(),
+    readArtifacts({ allowMissingLocales: options.allowMissingLocaleArtifacts }),
+  ]);
   const { inventory, thirdPartyBaseStrings, wearBaseStrings, sources, sourceToKey } = facts;
   const appMainInventoryBySource = new Map(
     inventory
@@ -1275,7 +1289,8 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     "utf8",
   );
   const assistantItems = parseArrays(assistantSource).get("ask_openclaw_query_patterns") ?? [];
-  for (const [locale, localeTranslations] of artifacts) {
+  for (const locale of NATIVE_I18N_LOCALES) {
+    const localeTranslations = artifacts.get(locale) ?? {};
     const translatedBySource = translationsBySource(inventory, localeTranslations);
     const translatedItems = assistantItems.map(
       (source) => translatedBySource.get(source) || source,
@@ -1301,7 +1316,7 @@ function formatProblems(problems: Array<readonly [string, string[]]>): string {
 }
 
 async function generateAndroidAppI18n() {
-  const catalog = await buildAndroidAppI18nCatalog();
+  const catalog = await buildAndroidAppI18nCatalog({ allowMissingLocaleArtifacts: true });
   await rm(GENERATED_ROOT, { recursive: true, force: true });
   await mkdir(path.dirname(GENERATED_KOTLIN_PATH), { recursive: true });
   await writeFile(GENERATED_KOTLIN_PATH, catalog.kotlin);

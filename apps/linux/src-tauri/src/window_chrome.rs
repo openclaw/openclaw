@@ -182,16 +182,21 @@ mod tests {
     #[test]
     fn local_shell_scripts_accept_only_packaged_top_level_documents() {
         let runner = r#"
+const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const chromeScript = process.argv[1];
-const englishChromeScript = process.argv[2];
-const noticeScript = process.argv[3];
-const catalogScript = process.argv[4];
-const i18nScript = process.argv[5];
-const dashboardChromeScript = process.argv[6];
-const dashboardConfig = JSON.parse(process.argv[7]);
-const localeOnlyScript = process.argv[8];
+const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const chromeScript = fixture.chromeScript;
+const englishChromeScript = fixture.englishChromeScript;
+const noticeScript = fixture.noticeScript;
+const i18nScript = fixture.i18nScript;
+const dashboardChromeScript = fixture.dashboardChromeScript;
+const dashboardConfig = JSON.parse(fixture.dashboardConfig);
+const localeOnlyScript = fixture.localeOnlyScript;
+
+function installConsumerCatalog(window) {
+  Object.defineProperty(window, '__OPENCLAW_TAURI_CATALOG__', {value: fixture.catalog});
+}
 
 async function check(url, topFrame, allowed, noticeAllowed = allowed, expectedLocale = 'pt-PT', localChromeScript = chromeScript, includeCatalog = true) {
   const parsed = new URL(url);
@@ -225,7 +230,7 @@ async function check(url, topFrame, allowed, noticeAllowed = allowed, expectedLo
     },
   };
   vm.runInNewContext(localChromeScript, context);
-  if (includeCatalog) vm.runInNewContext(catalogScript, context);
+  if (allowed && includeCatalog) installConsumerCatalog(window);
   vm.runInNewContext(noticeScript, context);
   vm.runInNewContext(i18nScript, context);
   assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_LOCALE__'), allowed);
@@ -243,9 +248,9 @@ async function check(url, topFrame, allowed, noticeAllowed = allowed, expectedLo
       return;
     }
     assert.equal(api.locale, expectedLocale);
-    assert.equal(api.text('quickChat.messageAgent', {name: '<b>{other}</b>'}), expectedLocale === 'pt-PT' ? 'Mensagem para <b>{other}</b>' : 'Message <b>{other}</b>');
-    assert.throws(() => api.text('quickChat.messageAgent', {}), /exactly match/);
-    assert.throws(() => api.text('quickChat.messageAgent', {name: 'Ada', extra: 'ignored'}), /exactly match/);
+    assert.equal(api.text('quickChat.messageAgent', {name: '<b>{other}</b>'}, 'Message {name}'), expectedLocale === 'pt-PT' ? 'Mensagem para <b>{other}</b>' : 'Message <b>{other}</b>');
+    assert.throws(() => api.text('quickChat.messageAgent', {}, 'Message {name}'), /exactly match/);
+    assert.throws(() => api.text('quickChat.messageAgent', {name: 'Ada', extra: 'ignored'}, 'Message {name}'), /exactly match/);
     assert.equal(fetchCount, 0);
   } else {
     assert.equal(fetchCount, 0);
@@ -284,7 +289,6 @@ async function checkConfiguredDashboard(url, topFrame, allowed) {
     },
   };
   vm.runInNewContext(dashboardChromeScript, context);
-  vm.runInNewContext(catalogScript, context);
   vm.runInNewContext(noticeScript, context);
   vm.runInNewContext(`installGatewayNotice(${JSON.stringify(dashboardConfig)});`, context);
   vm.runInNewContext(i18nScript, context);
@@ -325,7 +329,7 @@ async function checkLocaleOnly(url, topFrame, allowed) {
   };
   vm.runInNewContext(localeOnlyScript, context);
   if (allowed) {
-    vm.runInNewContext(catalogScript, context);
+    installConsumerCatalog(window);
     vm.runInNewContext(i18nScript, context);
   }
   assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_LOCALE__'), allowed);
@@ -336,7 +340,7 @@ async function checkLocaleOnly(url, topFrame, allowed) {
   if (allowed) {
     const api = await window.__OPENCLAW_TAURI_I18N_READY__;
     assert.equal(api.locale, 'pt-PT');
-    assert.equal(api.text('quickChat.messageAgent', {name: 'Ada'}), 'Mensagem para Ada');
+    assert.equal(api.text('quickChat.messageAgent', {name: 'Ada'}, 'Message {name}'), 'Mensagem para Ada');
   }
   assert.equal(fetchCount, 0);
 }
@@ -395,21 +399,45 @@ async function checkLocaleOnly(url, topFrame, allowed) {
         let locale_only_script =
             locale_initialization_script().replace(&locale_field, "\"shellLocale\":\"pt-PT\"");
         assert!(locale_only_script.contains("\"shellLocale\":\"pt-PT\""));
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "openclaw-shell-boundary-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&fixture_dir).unwrap();
+        let runner_path = fixture_dir.join("runner.cjs");
+        let fixture_path = fixture_dir.join("fixture.json");
+        let fixture = serde_json::json!({
+            "chromeScript": portuguese_chrome_script,
+            "englishChromeScript": english_chrome_script,
+            "noticeScript": include_str!("../../ui/gateway-notice.js"),
+            "catalog": {
+                "version": 1,
+                "sourceInventorySha256": "0".repeat(64),
+                "messages": {
+                    "quickChat.messageAgent": {
+                        "en": "Message {name}",
+                        "ptPT": "Mensagem para {name}",
+                        "args": ["name"],
+                    },
+                },
+            },
+            "i18nScript": include_str!("../../ui/tauri-i18n.js"),
+            "dashboardChromeScript": dashboard_chrome,
+            "dashboardConfig": dashboard_config,
+            "localeOnlyScript": locale_only_script,
+        });
+        std::fs::write(&runner_path, runner).unwrap();
+        std::fs::write(&fixture_path, serde_json::to_vec(&fixture).unwrap()).unwrap();
         let output = Command::new("node")
-            .args([
-                "-e",
-                runner,
-                &portuguese_chrome_script,
-                &english_chrome_script,
-                include_str!("../../ui/gateway-notice.js"),
-                include_str!("../../ui/i18n/catalog.js"),
-                include_str!("../../ui/tauri-i18n.js"),
-                &dashboard_chrome,
-                &dashboard_config,
-                &locale_only_script,
-            ])
-            .output()
-            .expect("Node.js is required to exercise packaged shell boundaries");
+            .arg(&runner_path)
+            .arg(&fixture_path)
+            .output();
+        std::fs::remove_dir_all(&fixture_dir).unwrap();
+        let output = output.expect("Node.js is required to exercise packaged shell boundaries");
         assert!(
             output.status.success(),
             "{}",
