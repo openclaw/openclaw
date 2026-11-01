@@ -33,6 +33,7 @@ import type { OpenClawIdPeerActivity } from "./member-activity.js";
 import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
+import { signOutTunnelPeer } from "./remote-signout.js";
 import { setOpenClawIdTunnelPrincipalResolver } from "./tunnel-principal.js";
 import type { TunnelRuntime, TunnelRuntimeSettings } from "./tunnel-runtime.js";
 import type { TunnelSupervisorStatus } from "./tunnel-supervisor.js";
@@ -536,6 +537,8 @@ export function createOpenClawIdService(params: {
         return result;
       },
       seq: async () => (await owner.load())?.authority?.seq ?? 0,
+      signOut: async (key) =>
+        signOutTunnelPeer(key, owner, await getEffects(), params.getStateDir()),
     });
   };
 

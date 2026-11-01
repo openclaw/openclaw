@@ -8,6 +8,7 @@
 //   GET  /_openclaw-id/v1/membership  owner devices: seq, binding, active owner certs, members, invites
 //   POST /_openclaw-id/v1/statements  { statement }            MembershipChange, Revocation, root re-certification
 //   POST /_openclaw-id/v1/invites     { cap, proof_key }       InviteCap plus base64url proof key
+//   POST /_openclaw-id/v1/signout     no body                 end this peer's browser credentials
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { base64urlToBytes } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority.js";
@@ -30,9 +31,11 @@ export type TunnelApiOwner = {
   }) => Promise<AuthorityAccepted | AuthorityRefusal>;
   /** Current membership seq, reported after a write so clients can sign the next change. */
   seq: () => Promise<number>;
+  /** Revokes browser tokens and closes RPC connections for the authenticated peer only. */
+  signOut: (peerKey: string) => Promise<boolean>;
 };
 
-type Route = "membership" | "statements" | "invites";
+type Route = "membership" | "statements" | "invites" | "signout";
 
 // Refusal code -> HTTP status. Clients match `error.code`, never the status or message.
 function refusalStatus(code: string): number {
@@ -99,7 +102,9 @@ function routeOf(url: string | undefined): Route | undefined {
     return undefined;
   }
   const name = pathname.slice(TUNNEL_API_PREFIX.length);
-  return name === "membership" || name === "statements" || name === "invites" ? name : undefined;
+  return name === "membership" || name === "statements" || name === "invites" || name === "signout"
+    ? name
+    : undefined;
 }
 
 // Answers an accepted write, or maps a refusal to its HTTP status.
@@ -148,6 +153,14 @@ export async function handleTunnelApiRequest(
       return;
     }
     sendJson(res, 200, view);
+    return;
+  }
+  if (route === "signout") {
+    if (!(await owner.signOut(peerKey))) {
+      sendError(res, 403, "not_admitted", "this device is not admitted");
+      return;
+    }
+    sendJson(res, 200, { signedOut: true });
     return;
   }
   const body = await readJsonObject(req);
