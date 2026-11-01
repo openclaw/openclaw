@@ -2,7 +2,9 @@ import "./reply-dispatcher.tables.test-support.js";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
+import { resolveCardHeader, resolveCardNote } from "./identity-header.js";
 import { createFeishuReplyDeliveryResult } from "./reply-delivery-result.js";
+import { chunkFeishuCardMarkdown } from "./send.js";
 import type { FeishuStreamingSession } from "./streaming-card.js";
 
 const {
@@ -729,4 +731,52 @@ describe("createFeishuReplyDispatcher table limits and preview budget", () => {
     expect(requireStreamingInstance(1).discard).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { pushes: "its header and note", required: false },
+    { pushes: "its required mentions", required: true },
+  ])(
+    "posts a pipe-less table that a bare card fits but $pushes push past the envelope",
+    async ({ required }) => {
+      const limit = 40_000;
+      await useRealMarkdownChunker(limit);
+      resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off"));
+      const identity = { name: "Roster Review Assistant" };
+      const chrome = {
+        header: resolveCardHeader("agent", identity),
+        note: resolveCardNote("agent", identity, {}),
+      };
+      const mentions = Array.from({ length: 20 }, (_entry, index) => ({
+        openId: `ou_reviewer_${index}`,
+        name: `Reviewer ${index}`,
+        key: `@reviewer${index}`,
+      }));
+      const cards = (text: string, meta: Partial<Parameters<typeof chunkFeishuCardMarkdown>[0]>) =>
+        chunkFeishuCardMarkdown({ text, limit, mode: "line", ...meta }).length;
+      const table = (rows: number) =>
+        [
+          "Name | Role",
+          "--- | ---",
+          ...Array.from({ length: rows }, (_entry, index) => `r${index} | ${"d".repeat(24)}`),
+        ].join("\n");
+      const sent = required ? { ...chrome, chunkMentions: mentions } : chrome;
+      let rows = 800;
+      while (cards(table(rows), sent) === 1) {
+        rows += 1;
+      }
+      const text = table(rows);
+      expect(cards(text, required ? chrome : {})).toBe(1);
+      const { options } = createDispatcherHarness({
+        accountId: "main",
+        cfg: tableCfg("block"),
+        identity,
+        ...(required ? { requiredMentionTargets: mentions } : {}),
+      });
+      await options.deliver({ text }, { kind: "final" });
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      const posts = sendMessageFeishuMock.mock.calls.map(([call]) => String(call.text));
+      expect(posts.length).toBeGreaterThan(0);
+      expect(posts.every((post) => post.startsWith("```"))).toBe(true);
+    },
+  );
 });

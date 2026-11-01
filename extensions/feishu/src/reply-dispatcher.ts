@@ -29,7 +29,6 @@ import type { MentionTarget } from "./mention-target.types.js";
 import {
   consumeFeishuPresentationFallbackMarker,
   renderFeishuReplyPayload,
-  cardCarriesWholeTable,
   shouldUseCard,
   withinCardTableLimit,
 } from "./presentation-card.js";
@@ -45,7 +44,7 @@ import {
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { createFeishuReplySenders } from "./reply-senders.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { chunkFeishuCardMarkdown, sendCardFeishu } from "./send.js";
+import { sendCardFeishu } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
 import { projectFeishuStreamingCardText, queueFeishuStreamingUpdate } from "./streaming-update.js";
 import { createFeishuTableRouting } from "./table-routing.js";
@@ -688,6 +687,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const {
+    cardKeepsWholeTable,
     sendChunkedTextReply,
     sendPostReply,
     sendMediaReplies,
@@ -1093,10 +1093,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         (renderMode === "auto" && shouldUseCard(text, nativeTables));
       // A card carries a table as one component and the card chunker does not repeat the
       // header, so a table needing more than one card takes the post path instead. The
-      // outbound send path asks the same question through the same rule.
-      const cardKeepsTableWhole = cardCarriesWholeTable(text, (candidate) =>
-        chunkFeishuCardMarkdown({ text: candidate, limit: textChunkLimit, mode: chunkMode }),
-      );
+      // sender answers with the cut it will make, chrome and required mentions included,
+      // and the outbound send path asks the same question through the same rule.
+      const cardKeepsTableWhole = cardKeepsWholeTable(text);
       const useStaticCard =
         hasText &&
         cardRenderingRequested &&

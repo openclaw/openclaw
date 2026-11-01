@@ -30,6 +30,7 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
     { mode: "off", blocks: 2, settle: "idle", tail: "Roster complete." },
     { mode: "off", blocks: 2, settle: "final", tail: "Roster complete." },
     { mode: "off", blocks: "2 equal", settle: "final", tail: "Roster complete." },
+    { mode: "off", blocks: 1, settle: "idle", tail: "" },
     { mode: "off", blocks: 2, settle: "idle", tail: "" },
     { mode: "off", blocks: 2, settle: "final", tail: "  \n" },
     { mode: "block", blocks: 2, settle: "final", tail: "Roster complete." },
@@ -82,6 +83,67 @@ describe("createFeishuReplyDispatcher block table receipts", () => {
       if (tail.trim()) {
         expect(sendMessageFeishuMock.mock.calls[accepted.length]?.[0]?.mentions).toEqual(mentions);
       }
+      if (settle === "idle") {
+        expect(sendMessageFeishuMock.mock.calls.at(-1)?.[0]?.mentions).toBeUndefined();
+      }
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { rejected: "whole", resent: true },
+    { rejected: "after its first chunk", resent: false },
+  ])(
+    "leaves a remainder rejected $rejected at idle to the matching final, resent=$resent",
+    async ({ resent }) => {
+      await useRealMarkdownChunker(200);
+      createBlockTableHarness(tableCfg("off"));
+      const mentions = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+      const { result, options } = createDispatcherHarness({
+        accountId: "main",
+        cfg: tableCfg("off"),
+        mentionTargets: mentions,
+      });
+      const tail = resent ? "Roster complete." : "Roster complete. ".repeat(30).trim();
+      sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-block" });
+      if (!resent) {
+        sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-tail-prefix" });
+      }
+      sendMessageFeishuMock
+        .mockRejectedValueOnce(new Error("remainder rejected"))
+        .mockResolvedValue({ messageId: "om-resent" });
+      const answer = `${tableMarkdown}\n\n${tail}`;
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await options.deliver({ text: tableMarkdown }, { kind: "block" });
+      result.replyOptions.onPartialReply?.({ text: answer });
+      const idleError: unknown = await Promise.resolve(options.onIdle?.()).catch(
+        (error: unknown) => error,
+      );
+      expect(idleError).toBeInstanceOf(Error);
+      const final: unknown = await options
+        .deliver({ text: answer }, { kind: "final" })
+        .catch((error: unknown) => error);
+      await Promise.resolve(options.onIdle?.()).catch(() => undefined);
+      const posts = sendMessageFeishuMock.mock.calls.map(([call]) => [call.text, call.mentions]);
+      expect(posts.filter(([text]) => String(text).includes("| Ada | Lead |"))).toHaveLength(1);
+      if (resent) {
+        expect(posts).toEqual([
+          [tableMarkdown, mentions],
+          [tail, mentions],
+          [tail, mentions],
+        ]);
+        expect(final).toMatchObject({
+          messageIds: ["om-block", "om-resent"],
+          visibleReplySent: true,
+        });
+      } else {
+        expect(posts).toHaveLength(3);
+        expect(isChannelPartialDeliveryError(final)).toBe(true);
+        expect(final).toMatchObject({
+          deliveryResult: { messageIds: ["om-block", "om-tail-prefix"] },
+        });
+      }
+      await expect(result.ensureNoVisibleReplyFallback("rejected-remainder")).resolves.toBe(false);
       expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     },
   );

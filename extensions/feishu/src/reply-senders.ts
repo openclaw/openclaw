@@ -107,6 +107,26 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     accountId,
   };
 
+  // One option set for every card cut. The whole-table checks here and in the dispatcher
+  // ask it before promoting text to a card, and the send measures the same chrome and
+  // mentions, so a table that fits a bare card cannot be split once the card is dressed.
+  const cardChunkOptions = (text: string, firstChunkMentions?: MentionTarget[]) => {
+    const chrome = resolveCardChrome();
+    return {
+      text,
+      limit: textChunkLimit,
+      mode: chunkMode,
+      header: chrome.header,
+      note: chrome.note,
+      firstChunkMentions,
+      chunkMentions: requiredMentionTargets,
+    };
+  };
+  const cardKeepsWholeTable = (text: string) =>
+    cardCarriesWholeTable(text, (candidate) =>
+      chunkFeishuCardMarkdown(cardChunkOptions(candidate)),
+    );
+
   const sendChunkedTextReply = async (paramsLocal: {
     text: string;
     /** The text before this branch converted it, for a conversion the cut cannot carry. */
@@ -153,9 +173,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       chunkSource,
       paramsLocal.useCard
         ? chunkFeishuCardMarkdown({
-            ...chunkOptions,
-            header: chrome?.header,
-            note: chrome?.note,
+            ...cardChunkOptions(chunkSource, paramsLocal.firstChunkMentions),
+            initialChunks,
           })
         : chunkFeishuPostMarkdown(chunkOptions),
     );
@@ -249,6 +268,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       return (async () => {
         const accepted: FeishuReplyDeliveryResult[] = [];
         let remaining = blockAnswerText;
+        let answerComplete = false;
         try {
           // Keep identical block occurrences in dispatch order. Only complete acceptance
           // advances the prefix; a partial rejection still owns its chunks.
@@ -280,13 +300,14 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
               }),
             );
           }
+          answerComplete = true;
           const supplementalReasoningText = options?.supplementalReasoningText;
           if (supplementalReasoningText?.trim()) {
+            // The accepted blocks or the remainder already carried the final's mentions.
             accepted.push(
               await sendChunkedTextReply({
                 text: supplementalReasoningText,
                 useCard: false,
-                firstChunkMentions: remaining.trim() ? undefined : firstChunkMentions,
               }),
             );
           }
@@ -294,6 +315,14 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           return mergeFeishuReplyDeliveryResults(accepted);
         } catch (error: unknown) {
           const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+          // A remainder rejected whole leaves every receipt above reusable, so its failure
+          // goes out bare and the close owns nothing: the matching final walks the same
+          // receipts and sends only that remainder. A send that accepted a chunk of its
+          // own would be replayed by that retry, and a failed reasoning supplement cannot
+          // reach the final at all, so those failures own the answer and carry the receipts.
+          if (!partial && !answerComplete) {
+            throw error;
+          }
           throw createFeishuPartialReplyDeliveryError(
             partial && error instanceof Error ? (error.cause ?? error) : error,
             mergeFeishuReplyDeliveryResults([...accepted, ...(partial ? [partial] : [])]),
@@ -421,21 +450,12 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     if (pending) {
       return pending;
     }
-    const { header: cardHeader, note: cardNote } = resolveCardChrome();
     const useRecoveryCard =
       !tableNeedsPostPath(content) &&
       !answerTableNeedsPostPath(content) &&
       withinCardTableLimit(content) &&
       // The recovery card promotes text the same way, so it asks the same question.
-      cardCarriesWholeTable(content, (candidate) =>
-        chunkFeishuCardMarkdown({
-          text: candidate,
-          limit: textChunkLimit,
-          mode: chunkMode,
-          header: cardHeader,
-          note: cardNote,
-        }),
-      );
+      cardKeepsWholeTable(content);
     const recovery = sendChunkedTextReply({
       text: content,
       useCard: useRecoveryCard,
@@ -455,6 +475,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
   };
 
   return {
+    cardKeepsWholeTable,
     sendChunkedTextReply,
     sendPostReply,
     sendMediaReplies,
