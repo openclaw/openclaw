@@ -491,9 +491,31 @@ describe("hooks CLI metadata config keys", () => {
   });
 
   it("rejects a blank parent hook agent before dispatching a subcommand", async () => {
-    await expect(runHooks("--agent", "", "list")).rejects.toThrow("--agent must not be blank");
+    const message = "--agent must not be blank";
+    const execution = runHooks("--agent", "", "list");
+    // The root renderer replaces plain errors with a generic failure line.
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({
+      message,
+      humanOutput: `Error: ${message}`,
+      machineOutput: message,
+    });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects a parent hook agent for unsupported subcommands with the reason", async () => {
+    const message =
+      "openclaw hooks install does not support --agent; the option only selects an owner for read-only hook reports.";
+    const execution = runHooks("--agent", "research", "install", "./hook-pack");
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({
+      message,
+      humanOutput: `Error: ${message}`,
+      machineOutput: message,
+    });
+
+    expect(capture.runtimeLogs).toHaveLength(0);
   });
 
   it("uses the selected local fallback for an older Gateway", async () => {
