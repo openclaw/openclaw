@@ -1406,6 +1406,27 @@ evidence, reports a warning, and does not restart the Gateway or install a packa
 journal, lease database, or recovery evidence. Other pending operations still
 require `openclaw update repair` or the recorded package recovery command. The lease database stays at its existing location.
 
+If a reboot or temporary-directory cleanup removes the lease database before
+publication starts, recovery can retire a `prepared` journal with no publication
+intent or published launchers. It first checks that the live package, launcher
+directory, and every launcher still have their recorded previous identities.
+Update admission, repair, and a separately staged recovery helper share this
+settlement. They warn and rename the journal, control directory, candidate, and
+the operation's remaining npm update stage into retained evidence; they do not
+delete them. Other stages are left with their owners. Changed identities,
+publication intent, or another phase do not qualify for this recovery path.
+Recovery `status` is read-only and can report an unfinished operation even when
+the lease database is missing or replaced.
+
+The managed-update lease store still uses the shared per-user temporary location.
+Moving it to a state directory requires a coordinated migration: older updaters
+continue acquiring leases in the temporary location, and separate profiles can
+update the same installation. Copying the database would create competing lease
+owners; file symlinks and hard links do not satisfy the existing store contract.
+Durable placement remains follow-up work. These recovery changes must be present
+in the updater or separately staged helper that executes them; an older sealed
+helper does not gain the new behavior.
+
 After the transaction verifies its selected installation, cleanup failures are
 warnings. Changed old package trees, old helpers, and unexpected backup contents
 are preserved, not restored or deleted. The updater durably closes their recovery
