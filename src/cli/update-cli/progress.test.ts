@@ -184,6 +184,30 @@ describe("update progress", () => {
     vi.restoreAllMocks();
   });
 
+  it("throttles redirected transfer updates and retires them with the active step", async () => {
+    presentation = await observe(true);
+    presentation.progress.onStepStart?.(step);
+    const transfer = { ...step, message: "Receiving objects: 25% (1/4), 64.00 KiB | 8.00 KiB/s" };
+    presentation.progress.onStepProgress?.(transfer);
+    expect(printed()).toContain(transfer.message);
+    const count = log.mock.calls.length;
+    presentation.progress.onStepProgress?.(transfer);
+    expect(log).toHaveBeenCalledTimes(count);
+    vi.advanceTimersByTime(5_000);
+    presentation.progress.onStepProgress?.(transfer);
+    expect(log).toHaveBeenCalledTimes(count + 1);
+    presentation.suspend();
+    presentation.progress.onStepProgress?.(transfer);
+    presentation.resume();
+    presentation.progress.onStepProgress?.(transfer);
+    expect(log).toHaveBeenCalledTimes(count + 1);
+    presentation.progress.onStepStart?.(step);
+    presentation.stop();
+    log.mockClear();
+    presentation.progress.onStepProgress?.(transfer);
+    expect(log).not.toHaveBeenCalled();
+  });
+
   it("prepares report artifacts before emitting without later history or filesystem work", async () => {
     const json = jsonOutput();
     const emit = await prepareResult(result, { json: true, run: context });
@@ -440,6 +464,7 @@ describe("update progress", () => {
   it("keeps JSON silent until one public result without mutating private history", async () => {
     const writeJson = jsonOutput();
     presentation = await observe(false, context);
+    expect(presentation.progress.onStepProgress).toBeUndefined();
     run.phase = "finished";
     run.status = "succeeded";
     run.origin.updateRecoveryCapture = {

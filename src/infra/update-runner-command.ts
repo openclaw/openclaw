@@ -7,6 +7,7 @@ import {
   UPDATE_GIT_RETRY_DELAYS_MS,
   withGitNetworkRetry,
 } from "./git-network-retry.js";
+import { createGitTransferProgress } from "./git-transfer-progress.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
@@ -97,6 +98,12 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
       cwd,
       timeoutMs,
       env,
+      ...(progress?.onStepProgress
+        ? {
+            onUpdateProgress: (message: string) =>
+              progress.onStepProgress?.({ ...stepInfo, message }),
+          }
+        : {}),
       ...(opts.input !== undefined ? { input: opts.input } : {}),
     });
   } catch (error) {
@@ -207,9 +214,26 @@ export async function buildUpdateCommandRunner(
     defaultCommandEnv,
     runCommand:
       runCommand ??
-      ((argv, options) => {
+      ((argv, { onUpdateProgress, ...options }) => {
         const operation =
           argv[0] === "git" ? retryableGitNetworkOperation(argv.slice(1)) : undefined;
+        let report = onUpdateProgress;
+        const notify = (message: string) => {
+          try {
+            report?.(message);
+          } catch {
+            // A display failure must not become subprocess-observer cancellation.
+            report = undefined;
+            console.warn("[update] Download progress display unavailable; continuing download.");
+          }
+        };
+        const showTransfer = operation === "fetch" && Boolean(report);
+        const separator = argv.indexOf("--");
+        const progressAt = separator === -1 ? argv.length : separator;
+        const command =
+          showTransfer && !argv.includes("--progress")
+            ? [...argv.slice(0, progressAt), "--progress", ...argv.slice(progressAt)]
+            : argv;
         return withGitNetworkRetry(
           operation,
           {
@@ -218,14 +242,32 @@ export async function buildUpdateCommandRunner(
             signal: resolveCommandProcessSignal(options.signal),
             beforeRun: operation ? beforeGitNetworkAttempt : undefined,
           },
-          (timeoutMs) =>
-            runCommandWithTimeout(argv, {
-              ...options,
-              timeoutMs,
-              env: options.env ? { ...defaultCommandEnv, ...options.env } : defaultCommandEnv,
-              // Package-manager trees must not outlive a timed-out updater.
-              killProcessTree: true,
-            }),
+          async (timeoutMs) => {
+            const transfer = showTransfer ? createGitTransferProgress(notify) : undefined;
+            try {
+              return await runCommandWithTimeout(command, {
+                ...options,
+                timeoutMs,
+                env: {
+                  ...defaultCommandEnv,
+                  ...options.env,
+                  ...(showTransfer ? { LC_ALL: "C" } : {}),
+                },
+                ...(transfer
+                  ? {
+                      onOutputChunk: (chunk, stream) => {
+                        transfer.onOutputChunk(chunk, stream);
+                        return options.onOutputChunk?.(chunk, stream);
+                      },
+                    }
+                  : {}),
+                // Package-manager trees must not outlive a timed-out updater.
+                killProcessTree: true,
+              });
+            } finally {
+              transfer?.flush();
+            }
+          },
         );
       }),
   };
