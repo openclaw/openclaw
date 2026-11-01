@@ -76,7 +76,6 @@ export function formatGatewayServiceRepairPreview(params: {
   runtimeIssues: readonly ServiceConfigIssue[];
   definitionDrift: ServiceConfigAudit["definitionDrift"];
   pinnedRuntimePath?: string;
-  plannedNodePath?: string;
 }): { preview: string; unresolvedFindings: HealthFinding[] } {
   const unresolvedFindings: HealthFinding[] = [];
   if (params.missingSystemNode) {
@@ -100,7 +99,7 @@ export function formatGatewayServiceRepairPreview(params: {
       code: nodeVersionChange.code,
       entrypointPath:
         params.plannedLayout?.entrypointReal ?? resolveServiceEntrypoint(params.command),
-      plannedNodePath: params.plannedNodePath ?? params.plan.programArguments[0],
+      plannedNodePath: params.plan.programArguments[0],
       recordedNodePath: params.managedDefinition.programArguments[0],
       pinnedRuntimePath: params.pinnedRuntimePath,
     });
