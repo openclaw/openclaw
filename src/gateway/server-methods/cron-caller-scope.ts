@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveCronJobEffectiveAgentId,
+  resolveCronJobSessionRefAgentId,
   tryResolveCronJobEffectiveAgentId,
 } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
@@ -508,6 +509,21 @@ export function cronCreateMatchesCallerScope(params: {
     return false;
   }
   return cronPatchSessionRefsMatchCaller(params.job, params.callerScope);
+}
+
+/**
+ * Names the agent that will execute a created job. Admission calls this once, before caller scope
+ * matching, creator and inference capture, and declaration matching, so every consumer and the
+ * persisted row agree on one owner. An explicit `agentId` wins; otherwise the job's own session
+ * reference decides, because that is the session the due run opens. Detached targets (`isolated`,
+ * `current`, `main`) name no agent and keep the caller scope or configured default.
+ */
+export function bindCronCreateExecutionAgent(job: CronJobCreate): CronJobCreate {
+  if (job.agentId?.trim()) {
+    return job;
+  }
+  const sessionRefAgentId = resolveCronJobSessionRefAgentId(job);
+  return sessionRefAgentId ? { ...job, agentId: normalizeAgentId(sessionRefAgentId) } : job;
 }
 
 export function applyCronCreateCallerScopeDefault(

@@ -1,10 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { observeCronJobCommits } from "../../../test/helpers/cron/runtime-mutation.js";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { cronTestInput } from "../../cron/service.fixture-builders.test-support.js";
 import { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
+import type { CronJobCreate } from "../../cron/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
@@ -13,9 +15,14 @@ import {
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
 import {
+  applyCronCreateCallerScopeDefault,
+  bindCronCreateExecutionAgent,
+  cronCreateMatchesCallerScope,
   cronJobMatchesCallerScope,
+  cronJobMatchesDeclarationScope,
   readCronCallerScope,
   resolveCronCreatorAuthorityCapture,
+  type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
 
@@ -149,4 +156,75 @@ it("uses a scoped session key before the configured default", () => {
       defaultAgentId: "main",
     });
   expect([matches("main"), matches("ops")]).toEqual([false, true]);
+});
+
+describe("create-time execution agent", () => {
+  const workerSessionJob = (overrides: Partial<Parameters<typeof cronTestInput>[0]> = {}) =>
+    cronTestInput({
+      name: "probe",
+      sessionTarget: "session:agent:worker:dashboard:2b6f1c9a",
+      payload: { kind: "agentTurn", message: "ping" },
+      ...overrides,
+    });
+  const mainCaller: CronCallerScope = {
+    kind: "agentTool",
+    agentId: "main",
+    accountId: "default",
+  };
+
+  it("names the agent that owns the session the due run opens", () => {
+    expect(bindCronCreateExecutionAgent(workerSessionJob()).agentId).toBe("worker");
+    expect(
+      bindCronCreateExecutionAgent(
+        workerSessionJob({ sessionTarget: "isolated", sessionKey: "agent:ops:main" }),
+      ).agentId,
+    ).toBe("ops");
+  });
+
+  it("keeps an explicit agent and names no owner for a detached or malformed target", () => {
+    expect(bindCronCreateExecutionAgent(workerSessionJob({ agentId: "ops" })).agentId).toBe("ops");
+    for (const sessionTarget of ["isolated", "current", "main", "session:", "session:\u0000"]) {
+      expect(bindCronCreateExecutionAgent(workerSessionJob({ sessionTarget })).agentId).toBe(
+        undefined,
+      );
+    }
+  });
+
+  it("matches a repeated declaration only against the bound create input", () => {
+    const stored = createCronJob({
+      id: "stored-probe",
+      agentId: "worker",
+      sessionTarget: "session:agent:worker:dashboard:2b6f1c9a",
+    });
+    const matches = (input: CronJobCreate) =>
+      cronJobMatchesDeclarationScope({
+        job: stored,
+        input,
+        callerScope: undefined,
+        defaultAgentId: "main",
+      });
+    // Admission must hand the declaration matcher the same input it persists. An unresolved
+    // create compares the configured default against the stored owner, so a repeated declaration
+    // would add a second job instead of converging onto the first one's id and history.
+    expect(matches(bindCronCreateExecutionAgent(workerSessionJob()))).toBe(true);
+    expect(matches(workerSessionJob())).toBe(false);
+  });
+
+  it("keeps creation restricted to the caller's own agent", () => {
+    const bound = bindCronCreateExecutionAgent(workerSessionJob());
+    // The creating caller stays the recorded owner; only execution routing follows the session.
+    expect(applyCronCreateCallerScopeDefault(bound, mainCaller)).toMatchObject({
+      agentId: "worker",
+      owner: { agentId: "main", accountId: "default" },
+    });
+    expect(
+      cronCreateMatchesCallerScope({ job: bound, callerScope: mainCaller, defaultAgentId: "main" }),
+    ).toBe(false);
+    const own = bindCronCreateExecutionAgent(
+      workerSessionJob({ sessionTarget: "session:agent:main:dashboard:2b6f1c9a" }),
+    );
+    expect(
+      cronCreateMatchesCallerScope({ job: own, callerScope: mainCaller, defaultAgentId: "main" }),
+    ).toBe(true);
+  });
 });

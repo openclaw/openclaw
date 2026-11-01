@@ -1,4 +1,5 @@
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 import type { CronAgentScope } from "./types-shared.js";
 
 export const CRON_AGENT_SELECTION_REQUIRED_MESSAGE =
@@ -11,6 +12,26 @@ export class CronAgentSelectionRequiredError extends Error {
     super(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
     this.name = "CronAgentSelectionRequiredError";
   }
+}
+
+/**
+ * Names the agent a job's own session reference belongs to: the `session:<key>` target the run
+ * resolves first, then the legacy scoped `sessionKey`. Malformed targets name no owner.
+ */
+export function resolveCronJobSessionRefAgentId(job: {
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): string | undefined {
+  let targetKey: string | undefined;
+  try {
+    targetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  } catch {
+    targetKey = undefined;
+  }
+  return (
+    (targetKey ? parseAgentSessionKey(targetKey)?.agentId : undefined) ??
+    parseAgentSessionKey(job.sessionKey)?.agentId
+  );
 }
 
 /** Resolves cron ownership: explicit non-blank id, scoped session key, then configured default. */
