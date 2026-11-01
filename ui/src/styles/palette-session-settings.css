@@ -57,7 +57,7 @@
   min-height: 38px;
   padding: 6px 10px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: inherit;
   font: inherit;

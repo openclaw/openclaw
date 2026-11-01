@@ -548,13 +548,11 @@
     corner-shape: superellipse(1.5);
   }
 
-  /* Menu panels and items get the same direct-property treatment: item
-     radius is computed inline as panel-minus-padding rather than read from
-     --menu-item-radius, so nothing here is inheritable either. */
+  /* Menu panels and items take their radius from --menu-radius and
+     --menu-item-radius in their home rules; only the shape is added here. */
   .slash-menu.slash-menu,
   .chat-reply-context-menu.chat-reply-context-menu,
   .chat-selection-popup.chat-selection-popup {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
@@ -565,7 +563,6 @@
   .slash-menu-item.slash-menu-item,
   .chat-reply-context-menu.chat-reply-context-menu button,
   .chat-selection-popup.chat-selection-popup button {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale) - 4px);
     corner-shape: superellipse(1.5);
   }
 }

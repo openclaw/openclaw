@@ -290,7 +290,7 @@
 .chat-talk-input-picker__item {
   min-height: var(--chat-composer-menu-row-height);
   padding: var(--chat-composer-menu-row-padding);
-  border-radius: var(--chat-composer-menu-row-radius);
+  border-radius: var(--menu-item-radius);
 }
 
 .agent-chat__attach-menu-option,
@@ -2320,7 +2320,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   grid-column: 1 / -1;
   gap: 8px;
   padding: 9px;
-  border-radius: var(--menu-item-radius);
 }
 
 .chat-controls__permission-option > .oc-menu-item__icon,
@@ -4013,7 +4012,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   min-height: 34px;
   padding: 7px 10px;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   background: transparent;
   color: var(--text);
   font: inherit;

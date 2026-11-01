@@ -334,7 +334,7 @@ openclaw-desktop-panel {
   .desktop-rail__menu--desktop .desktop-toolbar-action {
     min-height: 36px;
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: var(--menu-item-radius);
     font-size: 13px;
     line-height: 18px;
     gap: 10px;
