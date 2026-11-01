@@ -709,4 +709,34 @@ describe("chat session sharing menu", () => {
     expect(error?.getAttribute("role")).toBe("alert");
     expect(root.textContent).toContain("Session access");
   });
+
+  it.each([["münchen".normalize("NFC")], ["münchen".normalize("NFD")]])(
+    "matches NFC and NFD people queries against NFD labels: %s",
+    async (query) => {
+      const nfdLabel = "München Person".normalize("NFD");
+      const root = await mount({
+        session: sharingSession({ visibility: "read-only" }),
+        state: sharingState({
+          identities: [human("muenchen-person", nfdLabel)],
+          permissions: [
+            {
+              identityId: "muenchen-person",
+              level: "read",
+              options: ["read", "send"] as ("read" | "send")[],
+            },
+          ],
+        }),
+      });
+
+      root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
+      flush();
+      const search = root.querySelector<HTMLInputElement>("input[data-search]")!;
+      search.value = query;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+
+      expect(root.querySelectorAll(".chat-pane__sharing-person")).toHaveLength(1);
+      expect(part(root, "sharing-member-label")?.textContent).toContain(nfdLabel);
+    },
+  );
 });

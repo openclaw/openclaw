@@ -62,10 +62,14 @@ export function useChatSessionSharingMenu(
     return "";
   });
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return people().filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id, identity.type].join(" ").toLocaleLowerCase().includes(term),
+        [identity.label, identity.id, identity.type]
+          .join(" ")
+          .toLocaleLowerCase()
+          .normalize("NFC")
+          .includes(term),
       ),
     );
   };
