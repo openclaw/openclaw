@@ -255,6 +255,38 @@ it("preserves a configuration failure instead of blaming model setup", () =>
     ).rejects.toThrow(/newer schema version 999999/u);
   }));
 
+it("keeps the embedded agent timeout bounded when the wall clock jumps forward", () =>
+  withOpenClawTestState({ layout: "home" }, async (state) => {
+    // Simulate an NTP forward correction: Date.now jumps +60s after the
+    // deadline seed, which would collapse a wall-clock-derived remaining
+    // budget toward 1ms (the cross-clock-domain defect).
+    const realDateNow = Date.now.bind(Date);
+    let seedCaptured = false;
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      if (!seedCaptured) {
+        seedCaptured = true;
+        return realDateNow();
+      }
+      return realDateNow() + 60_000;
+    });
+
+    let capturedTimeoutMs: number | undefined;
+    mocks.run.mockImplementation(async (input: RunEmbeddedAgentParams) => {
+      capturedTimeoutMs = input.timeoutMs;
+      return { payloads: [{ text: "Repair completed." }], meta: { durationMs: 1 } };
+    });
+
+    const result = await repairTurn(state, { timeoutMs: 10_000 });
+
+    expect(result).toMatchObject({ status: "completed" });
+    // With performance.now() the remaining budget must stay close to the 10s
+    // budget — NOT collapsed to 1ms by the 60s wall-clock forward jump.
+    expect(capturedTimeoutMs).toBeGreaterThan(5_000);
+    expect(capturedTimeoutMs).toBeLessThanOrEqual(10_000);
+
+    dateSpy.mockRestore();
+  }));
+
 it("keeps disposable selectors but rejects hostile overrides before child execution", () =>
   withOpenClawTestState({ layout: "home" }, async (state) => {
     const before = { ...process.env };

@@ -336,7 +336,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     abort: (reason) => controller.abort(reason),
     isCurrent: params.isCurrent,
   });
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = performance.now() + params.timeoutMs;
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
@@ -428,7 +428,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
                     cleanupBundleMcpOnRunEnd: true,
                     disableTrajectory: true,
                     trigger: "manual",
-                    timeoutMs: Math.max(1, deadline - Date.now()),
+                    timeoutMs: Math.max(1, deadline - performance.now()),
                     abortSignal: signal,
                     lane: sessionKey,
                   });
