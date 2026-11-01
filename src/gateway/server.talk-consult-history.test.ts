@@ -18,10 +18,16 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -37,7 +43,10 @@ import {
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
-import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import {
+  captureSessionControllerSettlement,
+  getCurrentSessionControllerOwner,
+} from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
@@ -49,6 +58,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -64,6 +74,9 @@ import {
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
+import { createIdleRelayProvider, makeRelayTransport } from "./talk/relay/index.test-support.js";
+import { createTalkRealtimeRelaySession } from "./talk/relay/session-create.js";
+import { rememberUnifiedTalkSession } from "./talk/session-registry.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 import {
   createGatewaySuiteHarness,
@@ -737,11 +750,15 @@ it.each(["before-final", "after-final"] as const)(
   },
 );
 
+const mediaOnlyAck = "I've put that in the chat.";
+// Fixture simplification: the fake model returns already-parsed mediaUrls, as the
+// embedded runner does after stripping MEDIA directives from the reply text.
 it.each([
-  ["captioned", "COMIC_189542: Here is the comic."],
-  ["media-only", ""],
-] as const)("delivers %s consult media to Talk chat as an attachment", async (_kind, caption) => {
-  const callId = expectDefined(voiceSessionId, "direct voice session");
+  ["direct", "captioned", "COMIC_189542: Here is the comic."],
+  ["direct", "media-only", ""],
+  ["relay", "captioned", "COMIC_189542: Here is the comic."],
+  ["relay", "media-only", ""],
+] as const)("delivers %s %s consult media to Talk chat", async (route, _kind, caption) => {
   const workspaceDir = resolveAgentWorkspaceDir(getRuntimeConfig(), agentId);
   const imagePath = path.join(workspaceDir, `talk-consult-189542-${randomUUID()}.png`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -749,54 +766,109 @@ it.each([
   const authored = caption ? `${caption}\nMEDIA:${imagePath}` : `MEDIA:${imagePath}`;
   runEmbeddedAgent.mockImplementation(async (params) => {
     await params.userTurnTranscriptRecorder?.persistApproved();
-    transcriptManager(params).appendMessage(assistantMessage(authored));
-    return {
-      // The embedded runner strips MEDIA directives from text and carries them as media.
-      payloads: [{ ...(caption ? { text: caption } : {}), mediaUrls: [imagePath] }],
-      meta: { durationMs: 0 },
-    };
+    // Register the backend as the real runner does, so the relay's completion claim promotes.
+    const handle = createEmbeddedRunHandle({ runId: params.runId });
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        operationalRunInstance: params.preparedRunAdmission?.operationalRunInstance,
+      },
+      () =>
+        registerTestEmbeddedRun(
+          params.sessionId,
+          handle,
+          params.sessionKey,
+          undefined,
+          params.agentId,
+          expectDefined(getCurrentSessionControllerOwner(), "consult controller turn"),
+        ),
+    );
+    try {
+      transcriptManager(params).appendMessage(assistantMessage(authored));
+      return {
+        payloads: [{ ...(caption ? { text: caption } : {}), mediaUrls: [imagePath] }],
+        meta: { durationMs: 0 },
+      };
+    } finally {
+      clearTestEmbeddedRun(params.sessionId, handle, params.sessionKey);
+    }
   });
-  const runner = createTalkClientAgentConsultRunner({
-    config: getRuntimeConfig(),
-    context,
-    sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
-    ownerConnId: connectionId,
-    getVoiceSessionId: () => callId,
-    initialItems: [],
-  });
-
-  const result = await runner.runArgs(args);
+  const target = await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey);
+  let spokenText: string;
+  if (route === "direct") {
+    const callId = expectDefined(voiceSessionId, "direct voice session");
+    const runner = createTalkClientAgentConsultRunner({
+      config: getRuntimeConfig(),
+      context,
+      sessionTarget: target,
+      ownerConnId: connectionId,
+      getVoiceSessionId: () => callId,
+      initialItems: [],
+    });
+    spokenText = (await runner.runArgs(args)).text;
+  } else {
+    // The reported path: a GPT-Live relay adopts completion claims, then claims later.
+    let request: RealtimeVoiceBridgeCreateRequest | undefined;
+    const relay = createTalkRealtimeRelaySession({
+      context,
+      connId: connectionId,
+      provider: createIdleRelayProvider((input) => {
+        request = input;
+        return makeRelayTransport();
+      }),
+      providerConfig: {},
+      controlSource: "delegation",
+      sessionTarget: target,
+      instructions: "Test relay",
+      tools: [],
+    });
+    rememberUnifiedTalkSession(relay.relaySessionId, {
+      kind: "realtime-relay",
+      connId: connectionId,
+      relaySessionId: relay.relaySessionId,
+      sessionTarget: target,
+    });
+    try {
+      // The relay runner carries its claim lifecycle beside the provider-facing callback.
+      const runPrompt = expectDefined(
+        request?.runAgentConsult,
+        "relay consult runner",
+      ) as NonNullable<RealtimeVoiceBridgeCreateRequest["runAgentConsult"]> & {
+        adoptCompletionClaims: () => void;
+        claimAppend: () => boolean;
+      };
+      runPrompt.adoptCompletionClaims();
+      spokenText = (await runPrompt({ prompt: args.question })).text;
+      expect(runPrompt.claimAppend()).toBe(true);
+    } finally {
+      await rpc("talk.session.close", { sessionId: relay.relaySessionId });
+    }
+  }
   await waitForDispatchEnd();
   await drainPublications();
 
-  expect(result.text).not.toContain("MEDIA:");
-  expect(result.text).not.toContain(imagePath);
-  if (caption) {
-    expect(result.text).toBe(caption);
-  } else {
-    expect(result.text).not.toBe("I need a moment to verify that before answering.");
-  }
-  expect(context.logGateway.warn).not.toHaveBeenCalledWith(
-    expect.stringContaining("no speakable text"),
-  );
-  const history = await historyMessages();
-  const finals = history.filter(
-    (message) =>
-      asOptionalRecord(message)?.role === "assistant" &&
-      JSON.stringify(message).includes("/api/chat/media/outgoing/"),
-  );
-  expect(finals).toHaveLength(1);
-  expect(asOptionalRecord(finals[0])?.content).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        type: "image",
-        url: expect.stringContaining("/api/chat/media/outgoing/"),
-      }),
-    ]),
-  );
-  expect(JSON.stringify(history)).not.toContain(imagePath);
-  if (caption) {
-    expect(matchingTexts(history, caption)).toEqual([caption]);
+  expect(spokenText).toBe(caption || mediaOnlyAck);
+  expect(context.logGateway.warn).not.toHaveBeenCalled();
+  const managedImage = expect.objectContaining({
+    type: "image",
+    url: expect.stringContaining("/api/chat/media/outgoing/"),
+  });
+  for (const [view, messages] of [
+    ["chat.history", await historyMessages()],
+    ["live session.message", liveMessages()],
+  ] as const) {
+    const withImage = messages.filter((message) =>
+      JSON.stringify(asOptionalRecord(message)?.content).includes("/api/chat/media/outgoing/"),
+    );
+    expect(withImage, view).toHaveLength(1);
+    expect(asOptionalRecord(withImage.at(-1))?.content, view).toEqual(
+      expect.arrayContaining([managedImage]),
+    );
+    expect(JSON.stringify(messages), view).not.toContain(imagePath);
+    if (caption) {
+      expect(matchingTexts(messages, caption), view).toEqual([caption]);
+    }
   }
 });
 
