@@ -89,6 +89,19 @@ guard reproduced it. An adjacent annotation preserves intentional index/database
 isolation and the obsolete allowance is pruned without a replacement. Guard and
 focused tests pass; fresh review and final-head proof remain pending.
 
+### Next assertion repair
+
+Pinned main `93925d28f0c5`: strengthen the system-agent chat-secret negative assertion
+against the trimmed synthetic key. The existing whitespace-padded check permits
+a response that echoes only the key. Preserve the raw-secret proposal identity,
+approval result, no-execution assertion and every declaration. Selected test,
+actual response builder, raw result helper, redaction registry and history read;
+sources and owning guides unchanged. Native untouched baseline, actual producer
+fault with old-green/new-red controls, byte restoration, complete candidate,
+focused checks, fresh review and published-head proof remain pending.
+Batch [190553](https://github.com/openclaw/openclaw/pull/190553) remains in its
+existing auto-merge route while this independent qualification begins.
+
 ## Completed source review
 
 These are local owner/support/caller/history/static-route closures at source census
