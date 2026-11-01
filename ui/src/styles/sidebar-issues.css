@@ -8,6 +8,9 @@
   --sidebar-issues-row-inset: 10px;
   --sidebar-issues-row-gap: 12px;
   --sidebar-issues-age-on-hover: hidden;
+  --sidebar-issues-text-button: var(--sidebar-issues-text-action);
+  --sidebar-issues-button-inset: 11px;
+  --sidebar-issues-quiet-button-inset: 8px;
 
   position: fixed;
   z-index: 121;
@@ -29,6 +32,19 @@
   background: var(--popover);
   color: var(--text);
   box-shadow: var(--overlay-shadow);
+}
+
+/* Mono themes set wider labels; tighter buttons keep the decision row on one line. */
+:root:is(
+    [data-theme="crt"],
+    [data-theme="crt-light"],
+    [data-theme="phosphor"],
+    [data-theme="phosphor-light"]
+  )
+  .sidebar-issues-panel {
+  --sidebar-issues-text-button: var(--control-ui-text-sm);
+  --sidebar-issues-button-inset: 9px;
+  --sidebar-issues-quiet-button-inset: 6px;
 }
 
 .shell--mobile-nav .sidebar-issues-panel {
@@ -330,11 +346,12 @@ footer.sidebar-issues-panel__mentions-note {
   width: auto;
   min-height: 30px;
   margin: 0;
+  flex: none;
   align-items: center;
-  padding: 0 11px;
+  padding: 0 var(--sidebar-issues-button-inset);
   border-radius: var(--radius-md);
   font: inherit;
-  font-size: var(--sidebar-issues-text-action);
+  font-size: var(--sidebar-issues-text-button);
   font-weight: 500;
   line-height: 1;
   letter-spacing: normal;
@@ -685,7 +702,7 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-issues-panel .sidebar-approval-row .sidebar-approval-row__action--deny {
-  padding-inline: 8px;
+  padding-inline: var(--sidebar-issues-quiet-button-inset);
   color: var(--muted);
 }
 

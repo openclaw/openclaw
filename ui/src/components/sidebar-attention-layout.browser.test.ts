@@ -416,6 +416,49 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(params.onDismiss).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["crt", "phosphor-light"])(
+    "keeps all three decisions on one line in the mono %s theme",
+    (theme) => {
+      const root = document.documentElement;
+      const previous = root.dataset.theme;
+      onTestFinished(() => {
+        if (previous === undefined) {
+          delete root.dataset.theme;
+        } else {
+          root.dataset.theme = previous;
+        }
+      });
+      root.dataset.theme = theme;
+      const entries = buildSidebarInboxEntries({
+        approvals: [
+          {
+            id: "approval-mono",
+            kind: "exec",
+            createdAtMs: 1_000,
+            expiresAtMs: Date.now() + 60_000,
+            request: {
+              command: "pnpm test",
+              allowedDecisions: ["allow-once", "allow-always", "deny"],
+            },
+          } as SidebarInboxApproval,
+        ],
+        attention: [],
+        mentions: [],
+        scopeUpgrade: null,
+        update: null,
+      });
+      const shell = shellFor();
+      shell.style.fontFamily = '"JetBrains Mono", ui-monospace, monospace';
+      mountPanel(panelParams(entries), shell);
+      const buttons = Array.from(shell.querySelectorAll(".sidebar-approval-row__action"));
+      expect(buttons).toHaveLength(3);
+      expect(new Set(buttons.map((button) => bounds(button).top)).size).toBe(1);
+      for (const button of buttons) {
+        expect(style(button).whiteSpace).toBe("nowrap");
+      }
+    },
+  );
+
   it("gives every row the same marker and text column", () => {
     const entries = buildSidebarInboxEntries({
       approvals: [
