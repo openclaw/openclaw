@@ -159,8 +159,6 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       data: options.data,
       isConnected: phase === "connected",
       isAdmin: place?.isAdmin() ?? false,
-      canStartAsDraft: flow?.capabilities.canStartAsDraft(context) ?? false,
-      visibility: flow?.visibility ?? "normal",
       cloudProfileId: place?.cloudProfileId ?? "",
       pendingPlacement: flow?.pendingPlacement ?? {
         sessionKey: "",
@@ -175,7 +173,6 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       changed: vi.fn(options.onChange),
       updateComplete: options.updateComplete ?? (() => Promise.resolve()),
       onInvalidate: vi.fn(),
-      onVisibilityRetired: () => flow?.setVisibility("normal"),
       onCloudProfileCleared: () => place?.clearCloudProfile(),
       onCloudState: (error) => flow?.setError(error),
       onPendingPlacementReset: () => flow?.releasePendingPlacementOwner(),

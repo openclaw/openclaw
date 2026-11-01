@@ -84,4 +84,17 @@ describe("managed service update handoff", () => {
   });
 
   registerManagedLaunchdTeardownTests(runManagedServiceManagerBoundary, itUnix, expect);
+
+  itUnix(
+    "rejects a changed launchd lease generation after inspection without native mutation",
+    async () => {
+      const { commands, parentSignal, state } = await runManagedServiceManagerBoundary("launchd", {
+        replaceLaunchdLeaseAfterInspection: true,
+      });
+
+      expect(commands).toEqual(["print gui/501/ai.openclaw.gateway"]);
+      expect(parentSignal).toBeNull();
+      expect(state).toEqual({});
+    },
+  );
 });

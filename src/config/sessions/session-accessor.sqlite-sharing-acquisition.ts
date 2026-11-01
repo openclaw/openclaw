@@ -64,6 +64,8 @@ export type SessionSharingAcquisition = {
 
 export type PreparedSessionSharingRead = {
   followLifecycle?: boolean;
+  /** Transcript compaction preserves the logical session incarnation. */
+  followTranscript?: boolean;
   predicate?: PreparedSessionEntryPredicate;
   pending: Set<object>;
   facts: CommittedSessionSharingFacts | undefined;
@@ -85,6 +87,8 @@ export type SessionSharingRetentionRequest = {
   sessionKey: string;
   /** Input custody owns same-session rollovers; access facts follow committed postimages. */
   followLifecycle?: boolean;
+  /** Transcript compaction preserves the logical session incarnation. */
+  followTranscript?: boolean;
   predicate?: PreparedSessionEntryPredicate;
 } & (
   | { acquiring: true }

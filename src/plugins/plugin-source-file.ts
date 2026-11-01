@@ -8,18 +8,97 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
   readErrorCauses,
 } from "../infra/errors.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
+import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
+import {
+  acquirePluginSource,
+  clearPluginSourceAcquisitionError,
+  createPluginSourceValidationError,
+  markPluginSourceAcquisitionError,
+} from "./plugin-instance-error.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
 // dependency selection may own them; incidental plugin walks must leave them alone.
 export const isPluginSourceEntry = (name: string): boolean =>
   name !== "node_modules" && name !== ".git" && !isGitRuntimeStagingName(name);
+
+export function readPluginCapturedCode(filename: string, capturedDirectory = false): string {
+  try {
+    return fs.readFileSync(filename, "utf8");
+  } catch (error) {
+    // Only a recorded directory selection is source validation; changed private type loses custody.
+    throw capturedDirectory && hasErrnoCode(error, "EISDIR")
+      ? markPluginSourceAcquisitionError(error)
+      : clearPluginSourceAcquisitionError(error);
+  }
+}
+
+export function realpathPluginSource(source: string, originalSource = true): string {
+  return acquirePluginSource(() => fs.realpathSync(source), originalSource);
+}
+
+export function inspectPluginCaptureSource(
+  source: string,
+  boundary: string,
+  prepared: { path: string; boundary: string } | undefined,
+  isRetainedReference: (source: string, real: string) => boolean,
+  outputRoot: string | undefined,
+) {
+  const real = realpathPluginSource(prepared?.path ?? source, !prepared);
+  if (!isPathInside(prepared?.boundary ?? boundary, real) && !isRetainedReference(source, real)) {
+    throw createPluginSourceValidationError(
+      "Standalone plugin input leaves its source directory",
+      !prepared,
+    );
+  }
+  if (!prepared && outputRoot && isPathInside(outputRoot, real)) {
+    return undefined;
+  }
+  return { real, directory: acquirePluginSource(() => fs.statSync(real), !prepared).isDirectory() };
+}
+
+export function createPluginSourceDirectoryCapture(
+  captureFile: (source: string, ancestors: Set<string>) => void,
+) {
+  const scannedDirectories = new Set<string>();
+  return (
+    source: string,
+    real: string,
+    target: string,
+    directoryAncestors: Set<string> | undefined,
+    originalSource: boolean,
+  ) => {
+    if (directoryAncestors?.has(real)) {
+      throw createPluginSourceValidationError(
+        "Standalone plugin input contains a directory cycle",
+        originalSource,
+      );
+    }
+    if (!scannedDirectories.has(target)) {
+      const ancestors = directoryAncestors ?? new Set<string>();
+      ancestors.add(real);
+      scannedDirectories.add(target);
+      for (const name of acquirePluginSource(
+        () => fs.readdirSync(real),
+        originalSource,
+      ).toSorted()) {
+        if (isPluginSourceEntry(name)) {
+          captureFile(path.join(source, name), ancestors);
+        }
+      }
+      ancestors.delete(real);
+      scannedDirectories.delete(target);
+    }
+  };
+}
 
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
@@ -42,20 +121,26 @@ function withPluginSourceFile<T>(
   boundary: string,
   read: (fd: number) => T,
   openFile = openRootFileSync,
+  originalSource = false,
 ): T {
-  const opened = openFile({
-    absolutePath: source,
-    rootPath: boundary,
-    boundaryLabel: "plugin build source",
-    rejectHardlinks: false,
-  });
+  const opened = acquirePluginSource(
+    () =>
+      openFile({
+        absolutePath: source,
+        rootPath: boundary,
+        boundaryLabel: "plugin build source",
+        rejectHardlinks: false,
+      }),
+    originalSource,
+  );
   if (!opened.ok) {
-    throw new Error(`Cannot capture plugin source ${source}`, { cause: opened.error });
+    const error = new Error(`Cannot capture plugin source ${source}`, { cause: opened.error });
+    throw originalSource ? markPluginSourceAcquisitionError(error) : error;
   }
   try {
-    return read(opened.fd);
+    return acquirePluginSource(() => read(opened.fd), false);
   } finally {
-    fs.closeSync(opened.fd);
+    acquirePluginSource(() => fs.closeSync(opened.fd), false);
   }
 }
 
@@ -118,6 +203,7 @@ export function copyPluginSourceFile(
     (fd) => {
       const admitted = fs.fstatSync(fd, { bigint: true });
       try {
+        const metrics = getPluginGenerationMetrics();
         const mode = options.preserveSourceMode
           ? Number(admitted.mode & 0o777n)
           : 0o600 | Number(admitted.mode & 0o100n);
@@ -139,6 +225,9 @@ export function copyPluginSourceFile(
           });
           if (bytes !== Number(admitted.size)) {
             throw new FsSafeError("path-mismatch", "Plugin source changed while copying");
+          }
+          if (metrics) {
+            metrics.copiedBytes += bytes;
           }
           fs.fchmodSync(copied.fd, mode);
           const named = fs.lstatSync(target, { bigint: true });
@@ -175,6 +264,9 @@ export function copyPluginSourceFile(
           mode,
           sourceHardlinks: "allow",
         });
+        if (metrics) {
+          metrics.copiedBytes += copied.bytes;
+        }
         // The initial hash belongs to the copied descriptor; receipts still recheck its path.
         return options.hashCopiedContent
           ? {
@@ -205,6 +297,8 @@ export function copyPluginSourceFile(
       }
     },
     options.openFile,
+    // Retained copies and receipt reads validate private custody, rather than new source input.
+    options.preserveSourceMode !== true,
   );
 }
 
@@ -258,6 +352,10 @@ function hashPluginSourceDescriptor(
     const chunk = scratch.subarray(0, length);
     content?.update(chunk);
     receipt?.update(chunk);
+  }
+  const metrics = getPluginGenerationMetrics();
+  if (metrics) {
+    metrics.hashReadBytes += position;
   }
   if (position !== sizeBytes) {
     throw new Error(

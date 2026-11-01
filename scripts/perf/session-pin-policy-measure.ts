@@ -6,12 +6,12 @@
  * parented to their agent main. Timing and allocation use separate passes.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -53,9 +53,6 @@ function run(count: number) {
   }
   assert.equal(pinnable, count * 2_000);
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 run(2);
 for (const mode of ["timing", "allocation"] as const) {
   for (let sample = 0; sample < samples; sample++) {
@@ -83,7 +80,7 @@ for (const mode of ["timing", "allocation"] as const) {
         operations,
         hostLoad,
         ...(allocation
-          ? { sampledBytesPerEntry: allocated(allocation.profile.head) / operations }
+          ? { sampledBytesPerEntry: sumSampledHeapBytes(allocation.profile.head) / operations }
           : {
               cpuUsPerEntry: (cpu.user + cpu.system) / operations,
               wallUsPerEntry: (elapsedMs * 1_000) / operations,

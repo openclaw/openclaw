@@ -36,11 +36,7 @@ import {
   reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
-import {
-  cacheChatSessionSnapshot,
-  clearChatMessagesFromCache,
-  readChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 function createSessionObservationRefresh(
   sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
@@ -280,9 +276,6 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       state.sessionKey,
       resolveChatAgentId(state),
     );
-    for (const { key, agentId } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
-    }
     // Live rows retire on disconnect; the session owner retains same-identity
     // presentation (including deferred metadata) until the next canonical list.
     const presentation = this.context.sessions.presentation;
@@ -680,6 +673,15 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       // The owner can publish its first result synchronously before the handle returns.
       this.projectObservedSessionRow();
       const observation = binding.observation;
+      const pendingAbort = state.pendingAbort;
+      if (
+        pendingAbort &&
+        !observation.hasObserved &&
+        uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId)
+      ) {
+        // A parked pane skips resource discovery, but its queued Stop needs current ownership.
+        refreshRunner.refresh();
+      }
       const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
       if (
         previousObservationSessionId &&

@@ -60,10 +60,12 @@ export function createSqliteWorkerLifecycle({
     inputAdmission,
     operations,
     waiters,
+    beforeSharedStateClose,
   }: {
     inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
+    beforeSharedStateClose?: () => Promise<void>;
   }): Promise<void> {
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     for (const waiting of waiters) {
@@ -71,6 +73,13 @@ export function createSqliteWorkerLifecycle({
         resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));
       }
     }
+    for (const client of stores.values()) {
+      // Retained state leases keep their binding until canonical resources finish.
+      if (!beforeSharedStateClose || !client.actor.stateContext) {
+        client.sealed = true;
+      }
+    }
+    await beforeSharedStateClose?.();
     for (const client of stores.values()) {
       client.sealed = true;
     }

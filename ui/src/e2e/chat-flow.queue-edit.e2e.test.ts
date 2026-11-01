@@ -22,7 +22,7 @@ async function offlineQueue() {
   await page.goto(`${suite.server.baseUrl}chat`);
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible", timeout: 15_000 });
-  await page.locator(".agent-chat__welcome").waitFor({ state: "visible" });
+  await page.locator(".agent-chat__empty").waitFor({ state: "visible" });
   await gateway.setOnline(false);
   await gateway.closeLatest();
   await queueMessages(page);

@@ -17,6 +17,7 @@
  */
 import { registerHooks } from "node:module";
 import { isMainThread } from "node:worker_threads";
+import { findBundledModuleRegion } from "../lib/bundled-module-regions.mjs";
 
 if (isMainThread) {
   const key = Symbol.for("openclaw.benchmark.accessAuthorityCensus");
@@ -76,13 +77,12 @@ if (isMainThread) {
       let source =
         typeof result.source === "string" ? result.source : new TextDecoder().decode(result.source);
       for (const { owner, name, declaration } of observers) {
-        const marker = `//#region ${owner}\n`;
-        const start = source.indexOf(marker);
-        if (start < 0) {
+        const bounds = findBundledModuleRegion(source, owner);
+        if (!bounds) {
           continue;
         }
-        const end = source.indexOf("//#endregion", start);
-        if (end < 0) {
+        const { start, end } = bounds;
+        if (bounds.label.startsWith("//#region ") && !source.startsWith("//#endregion", end)) {
           throw new Error(`Authority census owner region is incomplete: ${owner}`);
         }
         const region = source.slice(start, end);

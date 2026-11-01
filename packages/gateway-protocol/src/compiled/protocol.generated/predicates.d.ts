@@ -1464,6 +1464,11 @@ export function isMcpAuthLoginParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").McpAuthLoginParamsSchema
 >;
+export function isMcpAuthLogoutParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").McpAuthLogoutParamsSchema
+>;
 export function isWizardNextParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1973,11 +1978,6 @@ export function isSessionsTitlePrepareParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsTitlePrepareParamsSchema
 >;
-export function isSessionsRecoverParams(
-  value: unknown,
-): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").SessionsRecoverParamsSchema
->;
 export function isSessionsSendParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2178,6 +2178,16 @@ export function isSessionGitHubActionParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionGitHubActionParamsSchema
 >;
+export function isSessionGitHubReadinessParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitHubReadinessParamsSchema
+>;
+export function isSessionGitHubReadinessResult(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitHubReadinessResultSchema
+>;
 export function isSessionGitHubOptionsParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2192,6 +2202,21 @@ export function isSessionGitHubConfirmParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionGitHubConfirmParamsSchema
+>;
+export function isSessionsFilesPreviewParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesPreviewParamsSchema
+>;
+export function isSessionsFilesPreviewReleaseParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsFilesPreviewReleaseParamsSchema
+>;
+export function isUsersChannelIdentityParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/users.js").UsersChannelIdentityParamsSchema
 >;
 export function isConnectParams(
   value: unknown,

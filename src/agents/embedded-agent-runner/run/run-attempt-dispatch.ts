@@ -365,8 +365,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             assertTargetCurrent();
             try {
               assertSource();
-            } catch {
-              throw new Error("Session target preparation outlived its attempt");
+            } catch (cause) {
+              throw new Error(`Session target preparation outlived its attempt: ${String(cause)}`, {
+                cause,
+              });
             }
             // Source callbacks can retire this attempt or replace its selected target.
             assertTargetCurrent();
@@ -619,7 +621,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    skillWorkshopReviewOf: params.skillWorkshopReviewOf,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
@@ -646,8 +647,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
     compactionForbidden: params.disableCompactionRecovery,

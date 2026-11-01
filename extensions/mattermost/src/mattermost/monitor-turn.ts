@@ -2,6 +2,7 @@ import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   isChannelPartialDeliveryError,
   readAgentRunTerminalOutcome,
+  type BuiltChannelInboundEventContext,
   type ChannelBotLoopProtectionFacts,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -13,7 +14,6 @@ import {
   listMessageReceiptPlatformIds,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MattermostPost } from "./client.js";
 import { createMattermostDraftStream } from "./draft-stream.js";
@@ -40,7 +40,7 @@ import { recordMattermostThreadParticipation } from "./thread-participation.js";
 type MattermostInboundTurnParams = {
   post: MattermostPost;
   rawText: string;
-  ctxPayload: ReturnType<typeof finalizeInboundContext>;
+  ctxPayload: BuiltChannelInboundEventContext;
   eventPlan: MattermostEventPlan;
   historyKey: string | null;
   historyLimit: number;

@@ -416,9 +416,7 @@ describe("irc monitor reconnect", () => {
   ])(
     "reports disconnected status and recovers after $failure",
     async ({ loginError, error, silent }, { signal }) => {
-      vi.useFakeTimers({
-        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
-      });
+      vi.useFakeTimers();
       onTestFinished(() => {
         vi.useRealTimers();
       });

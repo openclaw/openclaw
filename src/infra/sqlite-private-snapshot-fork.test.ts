@@ -3,7 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { assert, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureSqlitePrivateSnapshotFamily as captureFamily,
@@ -72,12 +72,12 @@ it.each(["auto", "off"] as const)("forks independent main/WAL bytes (native %s)"
   configureFsSafeNative({ mode });
   const location = await image.fork();
   for (const [index, suffix] of ["", "-wal"].entries()) {
-    expect(fs.readFileSync(location + suffix)).toEqual(before[index]);
+    assert(before[index]?.equals(fs.readFileSync(location + suffix)), suffix || "main");
     expect(fs.statSync(location + suffix).ino).not.toBe(fs.statSync(image.source + suffix).ino);
     fs.writeFileSync(location + suffix, "private write");
   }
   expect(fs.existsSync(`${location}-shm`)).toBe(false);
-  expect(image.bytes()).toEqual(before);
+  image.bytes().forEach((bytes, i) => assert(before[i]?.equals(bytes), `source ${i}`));
 });
 
 it("preserves committed WAL rows in a separately writable image", async () => {
@@ -99,7 +99,7 @@ it("preserves committed WAL rows in a separately writable image", async () => {
     { value: "committed in WAL" },
   ]);
   writable.exec("INSERT INTO entries VALUES('private only'); PRAGMA wal_checkpoint(TRUNCATE)");
-  expect(image.bytes()).toEqual(before);
+  image.bytes().forEach((bytes, i) => assert(before[i]?.equals(bytes), `source ${i}`));
 });
 
 it.each([
@@ -121,7 +121,7 @@ it.each([
     if (frameFree) {
       const location = await image.fork(family);
       expect(fs.existsSync(`${location}-wal`)).toBe(false);
-      expect(fs.readFileSync(location)).toEqual(Buffer.alloc(65573, 19));
+      assert(Buffer.alloc(65573, 19).equals(fs.readFileSync(location)), location);
     } else {
       await expect(image.fork(family)).rejects.toThrow("reason=retained-snapshot-changed");
     }
@@ -143,7 +143,7 @@ it("refuses retained WAL removal during copy without retrying live capture", asy
   });
   await expect(image.fork()).rejects.toThrow();
   expect(changed).toBe(true);
-  expect(fs.readFileSync(image.source)).toEqual(Buffer.alloc(65573, 19));
+  assert(Buffer.alloc(65573, 19).equals(fs.readFileSync(image.source)), image.source);
 });
 
 it.each(["same-size edit", "replacement", "journal"] as const)(
@@ -174,5 +174,5 @@ it("cleans failed destination work and releases source custody", async () => {
     fsync(descriptor);
   });
   await expect(image.fork()).rejects.toBe(failure);
-  expect(fs.readFileSync(image.source)).toEqual(Buffer.alloc(65573, 19));
+  assert(Buffer.alloc(65573, 19).equals(fs.readFileSync(image.source)), image.source);
 });

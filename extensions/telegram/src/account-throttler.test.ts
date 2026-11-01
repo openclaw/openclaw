@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { Api } from "grammy";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
@@ -5,6 +6,7 @@ import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vi
 import {
   getOrCreateAccountThrottler,
   releaseAccountThrottler,
+  runAuthorizedTelegramRequest,
   runReplaceableTelegramRequest,
 } from "./account-throttler.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
@@ -147,6 +149,47 @@ function laneProbe(
 
 beforeEach(() => {
   resetTelegramAccountThrottlersForTest();
+});
+
+it.each([42, -100123])("keeps queued sends in their caller context for chat %s", async (chatId) => {
+  const callers = new AsyncLocalStorage<AbortSignal>();
+  const firstCaller = new AbortController();
+  const nextCaller = new AbortController();
+  const firstEntered = deferred<void>();
+  const firstResponse = deferred<Response>();
+  const token = `caller-context-${chatId}`;
+  const { api, sent } = callers.run(firstCaller.signal, () =>
+    floodApi(token, (_call, count) => {
+      if (count === 1) {
+        firstEntered.resolve();
+        return firstResponse.promise;
+      }
+      return undefined;
+    }),
+  );
+  onTestFinished(async () => {
+    firstResponse.resolve(messageResponse("first"));
+    await releaseAccountThrottler(token);
+  });
+  const first = callers.run(firstCaller.signal, () => api.sendMessage(chatId, "first"));
+  await firstEntered.promise;
+  const assertNextCaller = () => {
+    callers.getStore()?.throwIfAborted();
+    expect(callers.getStore()).toBe(nextCaller.signal);
+  };
+  const sendNext = (text: string) =>
+    callers.run(nextCaller.signal, () =>
+      runAuthorizedTelegramRequest(assertNextCaller, () => api.sendMessage(chatId, text)),
+    );
+  const next = Promise.allSettled([sendNext("second")]);
+  firstResponse.resolve(messageResponse("first"));
+  await first;
+  firstCaller.abort();
+  expect(await next).toEqual([{ status: "fulfilled", value: { text: "second" } }]);
+
+  nextCaller.abort();
+  await expect(sendNext("revoked")).rejects.toMatchObject({ name: "AbortError" });
+  expect(sent.map(({ text }) => text)).toEqual(["first", "second"]);
 });
 
 it("preserves the group message budget while sending topic actions", async () => {

@@ -9,6 +9,7 @@ import {
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
+import type { CliBackendTurnAssessment } from "../../plugins/cli-backend-turn-status.types.js";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionHandle,
@@ -29,6 +30,7 @@ import {
   captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.message-injection.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { getAttachedBackend } from "../../sessions/session-controller.state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
@@ -532,14 +534,17 @@ describe("plugin-owned CLI same-turn input", () => {
       queued.push(text),
     );
 
-    await expect(
-      queue("revoked", undefined, () => {
-        throw new Error("source revoked");
-      }),
-    ).rejects.toThrow("source revoked");
-    await queue("steer");
-    finish.resolve();
-    await run;
+    try {
+      await expect(
+        queue("revoked", undefined, () => {
+          throw new Error("source revoked");
+        }),
+      ).rejects.toThrow("source revoked");
+      await queue("steer");
+    } finally {
+      finish.resolve();
+      await run;
+    }
 
     expect(queued).toEqual(["steer"]);
     expect(injection.isAvailable()).toBe(false);
@@ -576,27 +581,30 @@ describe("plugin-owned CLI same-turn input", () => {
         onQueueSettled: () => order.push(`settled:${label}`),
       }) as unknown as Parameters<typeof queue>[1];
 
-    await queue("steer", optionsFor(accepted, "steer"));
-    await expect(queue("refused", optionsFor(refused, "refused"))).rejects.toThrow(
-      "native refused",
-    );
-    // The input already reached the model: a transcript failure must not become a
-    // replay, but it must not pass for a committed one either.
-    await expect(queue("failing", optionsFor(failing, "failing"))).resolves.toMatchObject({
-      transcriptCommit: "unconfirmed",
-      errorMessage: expect.stringContaining("transcript store unavailable"),
-    });
-    for (const callback of ["onQueueAccepted", "onQueueSettled"] as const) {
-      await expect(
-        queue(callback, {
-          [callback]: () => {
-            throw new Error("observer failed");
-          },
-        }),
-      ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    try {
+      await queue("steer", optionsFor(accepted, "steer"));
+      await expect(queue("refused", optionsFor(refused, "refused"))).rejects.toThrow(
+        "native refused",
+      );
+      // The input already reached the model: a transcript failure must not become a
+      // replay, but it must not pass for a committed one either.
+      await expect(queue("failing", optionsFor(failing, "failing"))).resolves.toMatchObject({
+        transcriptCommit: "unconfirmed",
+        errorMessage: expect.stringContaining("transcript store unavailable"),
+      });
+      for (const callback of ["onQueueAccepted", "onQueueSettled"] as const) {
+        await expect(
+          queue(callback, {
+            [callback]: () => {
+              throw new Error("observer failed");
+            },
+          }),
+        ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+      }
+    } finally {
+      finish.resolve();
+      await run;
     }
-    finish.resolve();
-    await run;
 
     expect(order).toEqual([
       "started:steer",
@@ -624,12 +632,15 @@ describe("plugin-owned CLI same-turn input", () => {
       target: () => undefined,
     });
 
-    await expect(
-      queue("unconfirmed", { userTurnTranscriptRecorder: recorder }),
-    ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
-    expect(signal?.aborted).toBe(false);
-    finish.resolve();
-    await run;
+    try {
+      await expect(
+        queue("unconfirmed", { userTurnTranscriptRecorder: recorder }),
+      ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+      expect(signal?.aborted).toBe(false);
+    } finally {
+      finish.resolve();
+      await run;
+    }
 
     expect(recorder.isBlocked()).toBe(true);
     expect(recorder.hasPersisted()).toBe(false);
@@ -680,6 +691,188 @@ describe("plugin-owned CLI same-turn input", () => {
     }
     expect(captureCurrentReplyMessageInjectionTarget(operation.key)).toBeUndefined();
   });
+});
+
+describe("plugin turn assessments through the operation watchdog", () => {
+  it.each([
+    "obsolete",
+    "becomes obsolete",
+    "currentness throws",
+    "unavailable",
+    "capture throws",
+  ] as const)(
+    "consumes one unavailable assessment for %s without delaying recovery",
+    async (mode) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(0);
+      const { context } = await createExecution({ timeoutMs: 600_000 });
+      const operation = attachReplyOperation(context);
+      operation.setPhase("running");
+      operation.watchdog.attachAttempt({ assertCurrent() {} });
+      context.params.abortSignal = operation.abortSignal;
+      const ready = createDeferred();
+      const finish = createDeferred();
+      const response = createDeferred<CliBackendTurnAssessment>();
+      const turn = {};
+      // Native completion clears currentTurn before host iterator cleanup can finish.
+      const native: { currentTurn?: object } = {
+        currentTurn: mode === "obsolete" ? undefined : turn,
+      };
+      let assessmentSignal: AbortSignal | undefined;
+      const assess = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        assessmentSignal = signal;
+        return response.promise;
+      });
+      const capture = vi.fn(() => {
+        if (mode === "capture throws") {
+          throw new Error("private capture failure");
+        }
+        if (mode === "unavailable") {
+          return undefined;
+        }
+        return {
+          isCurrent() {
+            if (mode === "currentness throws") {
+              throw new Error("private native currentness failure");
+            }
+            return native.currentTurn === turn;
+          },
+          assess,
+        };
+      });
+      const aborts = vi.fn();
+      operation.abortSignal.addEventListener("abort", aborts);
+      const run = runPlugin(
+        context,
+        async function* (execution) {
+          execution.registerTurnStatus?.({ capture });
+          ready.resolve();
+          await finish.promise;
+          yield SUCCESS_RESULT;
+        },
+        { noOutputTimeoutMs: 600_000 },
+      );
+      const outcome = run.catch((error: unknown) => error);
+      try {
+        await awaitGateBeforeSettlement(ready.promise, run, "plugin never became ready");
+        vi.setSystemTime(360_000);
+        await operation.watchdog.tick();
+        if (mode === "becomes obsolete") {
+          expect(assessmentSignal?.aborted).toBe(false);
+          native.currentTurn = undefined;
+        }
+        vi.setSystemTime(370_000);
+        await operation.watchdog.tick();
+        expect(capture).toHaveBeenCalledOnce();
+        expect(assess).toHaveBeenCalledTimes(mode === "becomes obsolete" ? 1 : 0);
+        expect(aborts).toHaveBeenCalledOnce();
+        expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+        expect(operation.abortSignal.reason).toMatchObject({
+          message: "Reply operation stalled",
+          assessment: {
+            state: "unknown",
+            basis: mode === "capture throws" ? "failed" : "status_unsupported",
+          },
+        });
+        if (mode === "becomes obsolete") {
+          expect(assessmentSignal?.aborted).toBe(true);
+        }
+        response.resolve({ state: "closed", basis: "transport_closed" });
+        await operation.watchdog.tick();
+        expect(aborts).toHaveBeenCalledOnce();
+        expect(capture).toHaveBeenCalledOnce();
+        expect(operation.abortSignal.reason.assessment.state).toBe("unknown");
+      } finally {
+        response.resolve({ state: "closed", basis: "transport_closed" });
+        finish.resolve();
+        await outcome;
+        operation.complete();
+        operation.abortSignal.removeEventListener("abort", aborts);
+      }
+    },
+  );
+  it.each([
+    ["absent", "unknown", "status_unsupported"],
+    ["invalid", "unknown", "invalid"],
+    ["throw", "unknown", "failed"],
+    ["closed", "closed", "transport_closed"],
+    ["busy", "unknown", "busy"],
+    ["transient", "unknown", "transient_error"],
+    ["unsupported", "unknown", "status_unsupported"],
+  ] as const)(
+    "preserves bounded recovery and finite metadata for %s",
+    async (mode, state, basis) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(0);
+      const { context } = await createExecution({ timeoutMs: 600_000 });
+      const operation = attachReplyOperation(context);
+      operation.setPhase("running");
+      operation.watchdog.attachAttempt({ assertCurrent() {} });
+      context.params.abortSignal = operation.abortSignal;
+      const ready = createDeferred();
+      const finish = createDeferred();
+      let retained: CliBackendExecuteContext | undefined;
+      const assess = vi.fn(async () => {
+        if (mode === "throw") {
+          throw new Error("private provider detail");
+        }
+        // Deliberately malformed plugin output exercises the real runtime validator.
+        return (mode === "invalid"
+          ? { state: "closed", basis: "invented", raw: "private" }
+          : { state, basis, raw: "private" }) as unknown as CliBackendTurnAssessment;
+      });
+      const run = runPlugin(
+        context,
+        async function* (execution) {
+          retained = execution;
+          if (mode !== "absent") {
+            execution.registerTurnStatus?.({ capture: () => ({ isCurrent: () => true, assess }) });
+          }
+          ready.resolve();
+          await finish.promise;
+          yield SUCCESS_RESULT;
+        },
+        { noOutputTimeoutMs: 600_000 },
+      );
+      const outcome = run.catch((error: unknown) => error);
+      try {
+        await awaitGateBeforeSettlement(ready.promise, run, "plugin never became ready");
+        const backend = getAttachedBackend(operation)!;
+        expect(backend.turnStatus === undefined).toBe(mode === "absent");
+        const aborted = new Promise<void>((resolve) => {
+          operation.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        vi.setSystemTime(360_000);
+        const pending = operation.watchdog.tick();
+        expect(operation.watchdog.snapshot().waits).toHaveLength(mode === "absent" ? 0 : 1);
+        expect(operation.watchdog.snapshot().recovery?.status).toBe(
+          mode === "absent" ? "pending" : undefined,
+        );
+        await pending;
+        await aborted;
+        expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+        expect(assess).toHaveBeenCalledTimes(mode === "absent" ? 0 : 1);
+        const reason: unknown = operation.abortSignal.reason;
+        if (mode === "absent") {
+          expect(reason).not.toHaveProperty("assessment");
+        } else {
+          expect(reason).toHaveProperty("assessment", {
+            state,
+            basis,
+            durationMs: 0,
+          });
+        }
+        finish.resolve();
+        await outcome;
+        expect(backend.turnStatus).toBeUndefined();
+        expect(() => retained!.registerTurnStatus!({ capture: () => undefined })).toThrow();
+      } finally {
+        finish.resolve();
+        await outcome;
+        operation.complete();
+      }
+    },
+  );
 });
 
 it("permits admitted schema discovery with exec denied, without enabling execution tools", async () => {

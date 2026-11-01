@@ -105,6 +105,8 @@ export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecor
   const origin = { ...record.origin };
   delete origin.updateRecoveryCapture;
   delete origin.windowsUserSid;
+  delete origin.managedHandoff;
+  delete origin.packageStage;
   const verification = { ...record.verification };
   if (verification.recovery?.serviceRestartSafe === false) {
     verification.recovery = { ...verification.recovery };
@@ -146,7 +148,9 @@ export function isAbandonedUpdateRun(
 ): boolean {
   return (
     record.status === "failed" &&
-    (record.reason === "abandoned" || record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
+    (record.reason === "abandoned" ||
+      record.reason === "handoff-terminated" ||
+      record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
   );
 }
 

@@ -121,6 +121,37 @@ export type AgentRuntimeAuthPlan = {
   credentialSource?: AgentRuntimeCredentialSource;
 };
 
+export type PreparedAgentRuntimeAuthAttempt =
+  | {
+      kind: "profile";
+      plan: AgentRuntimeAuthPlan;
+      profileId: string;
+      allowAuthProfileFallback?: never;
+      requiresPriorProfileAttempt?: never;
+    }
+  | {
+      kind: "direct";
+      plan: AgentRuntimeAuthPlan;
+      profileId?: never;
+      /** Direct lookup cannot re-enter automatic profile discovery. */
+      allowAuthProfileFallback: false;
+      /** Fail closed when every prepared profile became cooldown-blocked before dispatch. */
+      requiresPriorProfileAttempt: boolean;
+    }
+  | {
+      kind: "implicit";
+      plan: AgentRuntimeAuthPlan;
+      profileId?: never;
+      allowAuthProfileFallback?: never;
+      requiresPriorProfileAttempt?: never;
+    };
+
+export type PreparedAgentRuntimeAuth = {
+  plan: AgentRuntimeAuthPlan;
+  /** Ordered physical attempts; every route/profile tuple was selected by this planner. */
+  attempts: readonly PreparedAgentRuntimeAuthAttempt[];
+};
+
 /** Prepared plugin metadata snapshot kept opaque to runtime-plan consumers. */
 type AgentRuntimePreparedMetadataSnapshot = object;
 

@@ -1,22 +1,16 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo } from "solid-js";
+import { Errored, Loading, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
-import { ConfigNode } from "../../components/config-form.node.tsx";
-import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
-  SettingsPageHeader,
-  SettingsSection,
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
@@ -24,7 +18,6 @@ import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginCapabilitySection,
   renderPluginCompatibilityNotices,
@@ -33,7 +26,6 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
-import { renderPluginStateStatus } from "./plugin-card.tsx";
 import {
   pluginRowKey,
   renderPluginRowMessage,
@@ -50,7 +42,7 @@ import {
 } from "./settings-editor.tsx";
 import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
-import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
+import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
 export type PluginSettingsTab = "installed" | "advanced";
 type SharedProps = Omit<
@@ -75,7 +67,7 @@ type SharedProps = Omit<
   onConfigReload: () => void;
   onRefresh: () => void;
 };
-type InventoryProps = SharedProps & {
+export type InventoryProps = SharedProps & {
   tab: PluginSettingsTab;
   query: string;
   advancedSchema: JsonSchema | null;
@@ -91,7 +83,8 @@ export type DetailProps = SharedProps &
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
-    onEditMcp?: () => void;
+    canMcpLogout?: boolean;
+    onMcpLogout?: (serverName: string) => void;
     installProgress?: PluginInstallProgress;
     onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: JSX.Element;
@@ -110,20 +103,7 @@ export type DetailProps = SharedProps &
     onRetryInspection: () => void;
     onTabChange: (tab: InstalledPluginDetailTab) => void;
   };
-export function PluginRetryError(props: { error: string; onRetry: () => void }): JSX.Element {
-  return (
-    <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
-      <span>{props.error}</span>
-      <button
-        type="button"
-        class="btn btn--sm oc-action oc-action-secondary"
-        onClick={() => props.onRetry()}
-      >
-        {t("pluginsPage.tryAgain")}
-      </button>
-    </div>
-  );
-}
+const CONNECTION_VERBS = { Account: ["connect", "signOut"], Credential: ["configure", "edit"] };
 function PluginConnectionAction(props: {
   kind: "Account" | "Credential";
   ready: boolean;
@@ -131,7 +111,7 @@ function PluginConnectionAction(props: {
   disabled?: boolean;
   onClick: () => void;
 }) {
-  const verb = () => (props.ready ? "edit" : props.kind === "Account" ? "connect" : "configure");
+  const verb = () => CONNECTION_VERBS[props.kind][props.ready ? 1 : 0];
   return (
     <>
       <button
@@ -152,226 +132,6 @@ function PluginConnectionAction(props: {
         </span>
       ) : null}
     </>
-  );
-}
-function InstalledInventory(props: InventoryProps): JSX.Element {
-  const query = createMemo(() => props.query.trim().toLocaleLowerCase());
-  const plugins = createMemo(() =>
-    (props.result?.plugins ?? [])
-      .filter(
-        (plugin) =>
-          plugin.installed &&
-          (!query() ||
-            [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
-              value?.toLocaleLowerCase().includes(query()),
-            )),
-      )
-      .toSorted((left, right) => left.name.localeCompare(right.name)),
-  );
-  return (
-    <>
-      {!props.connected && !props.result ? (
-        <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
-      ) : props.loading && !props.result ? (
-        <SettingsLoadingSkeleton rows={4} carapace />
-      ) : props.error && !props.result ? (
-        <PluginRetryError error={props.error} onRetry={props.onRefresh} />
-      ) : (
-        <>
-          {props.error ? <PluginRetryError error={props.error} onRetry={props.onRefresh} /> : null}
-          {!plugins().length ? (
-            <SettingsEmpty
-              message={
-                props.query ? t("pluginsPage.noSettingsMatches") : t("pluginsPage.noInstalled")
-              }
-              carapace
-            />
-          ) : (
-            <For each={plugins()} keyed={(plugin) => plugin.id}>
-              {(plugin) => (
-                <article
-                  class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
-                  data-plugin-id={plugin().id}
-                  onClick={(event: Event) => {
-                    const target = event.target;
-                    if (!(target instanceof Element) || !target.closest("button, a")) {
-                      props.onOpenPlugin(plugin().id);
-                    }
-                  }}
-                >
-                  <PluginArtTile
-                    registerIcon={props.registerIcon}
-                    slug={plugin().id}
-                    name={plugin().name}
-                    iconUrl={props.iconUrls[plugin().id]}
-                    onIconError={() => props.onIconError(plugin().id)}
-                    loading={props.iconLoading?.(plugin().id)}
-                  />
-                  <div class="settings-row__text oc-settings-row-content">
-                    <a
-                      class="settings-row__text plugins-settings-row__link"
-                      href={props.pluginHref(plugin().id)}
-                      onClick={(event: MouseEvent) =>
-                        handleNavigationClick(event, () => props.onOpenPlugin(plugin().id))
-                      }
-                    >
-                      <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
-                      <span class="settings-row__desc oc-settings-row-description">
-                        {plugin().description || t("pluginsPage.optionalCapability")}
-                      </span>
-                    </a>
-                    {renderPluginCompatibilityNotices(plugin().compatibilityNotices)}
-                  </div>
-                  <div class="settings-row__control oc-settings-row-control">
-                    {(() => {
-                      const state = plugin().state;
-                      return state === "not-installed"
-                        ? null
-                        : renderPluginStateStatus(state, "plugins-settings-row__status");
-                    })()}
-                    <span class="settings-row__chevron" aria-hidden="true">
-                      <Icon name="chevronRight" />
-                    </span>
-                  </div>
-                  {renderPluginRowMessage(props.messages[pluginRowKey(plugin().id)])}
-                </article>
-              )}
-            </For>
-          )}
-        </>
-      )}
-    </>
-  );
-}
-function AdvancedSettings(options: InventoryProps): JSX.Element {
-  const config = createMemo(() => {
-    const schema = options.advancedSchema;
-    const value = options.configValue;
-    return schema && value ? { schema, value } : null;
-  });
-  return (
-    <Show
-      when={options.connected || Boolean(config())}
-      fallback={<SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />}
-    >
-      <Show
-        when={config()}
-        fallback={
-          !options.configError && !options.configSchemaLoading && options.configValue ? (
-            <SettingsEmpty message={t("pluginsPage.schemaUnavailable")} carapace />
-          ) : null
-        }
-      >
-        {(current) => (
-          <>
-            <ConfigNode
-              params={{
-                rawAvailable: false,
-                maskSensitive: true,
-                schema: current().schema,
-                value: current().value.plugins ?? {},
-                path: ["plugins"],
-                hints: options.configHints,
-                unsupported: new Set(options.configUnsupportedPaths),
-                disabled: !options.canEditConfig || options.configBusy,
-                showLabel: false,
-                onPatch: options.onConfigPatch,
-                onRemove: options.onConfigRemove,
-              }}
-            />
-          </>
-        )}
-      </Show>
-      <PluginSettingsReadStatus
-        model={{ ...options, configSchema: options.advancedSchema }}
-        loading={
-          !options.configError && !config() && (options.configSchemaLoading || !options.configValue)
-        }
-        rows={4}
-        renderError={(error, onRetry) => <PluginRetryError error={error} onRetry={onRetry} />}
-      />
-    </Show>
-  );
-}
-export function renderPluginSettingsInventory(props: InventoryProps): JSX.Element {
-  const body = (
-    <>
-      {props.tab === "installed" ? (
-        <>
-          <label class="plugins-settings-search">
-            <span class="settings-control__sr-label">{t("pluginsPage.searchInstalled")}</span>
-            <span aria-hidden="true">
-              <Icon name="search" />
-            </span>
-            <input
-              class="settings-input oc-input"
-              type="search"
-              aria-label={t("pluginsPage.searchInstalled")}
-              placeholder={t("pluginsPage.searchInstalled")}
-              value={props.query}
-              onInput={(event) => props.onQueryChange(event.currentTarget.value)}
-            />
-          </label>
-          <div class="settings-group oc-settings-group">
-            <InstalledInventory {...props} />
-          </div>
-        </>
-      ) : (
-        <div id="plugin-settings-advanced" class="settings-stack">
-          <PluginManager />
-          <SettingsSection
-            title={t("pluginsPage.advanced")}
-            description={t("pluginsPage.advancedDescription")}
-            actions={
-              <button
-                type="button"
-                class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-                aria-label={t("common.reload")}
-                disabled={props.configBusy || props.configSchemaLoading}
-                onClick={() => props.onConfigReload()}
-              >
-                <Icon name="refresh" />
-              </button>
-            }
-            carapace
-          >
-            <AdvancedSettings {...props} />
-          </SettingsSection>
-        </div>
-      )}
-    </>
-  );
-  return (
-    <SettingsPage carapace={true}>
-      <SettingsPageHeader
-        registerHeading={props.registerRemovalHeading}
-        title={t("tabs.plugins")}
-        subtitle={t("pluginsPage.settingsDescription")}
-      />
-      <div class="plugins-settings-content">
-        <HubTabs
-          id="plugin-settings"
-          active={props.tab}
-          tabs={[
-            { value: "installed", label: t("pluginsPage.settingsInstalled") },
-            { value: "advanced", label: t("pluginsPage.advanced") },
-          ]}
-          ariaLabel={t("pluginsPage.settingsTabs")}
-          panelId="plugin-settings-panel"
-          variant="sub"
-          class="plugins-settings-tabs"
-          carapace
-          onSelect={props.onTabChange}
-        />
-        <div
-          id="plugin-settings-panel"
-          role="tabpanel"
-          aria-labelledby={`plugin-settings-tab-${props.tab}`}
-        >
-          {body}
-        </div>
-      </div>
-    </SettingsPage>
   );
 }
 function permissionSettings(options: DetailProps): PluginSettingsEditorProps["permissions"] {
@@ -587,11 +347,6 @@ function PluginOverview(props: DetailProps): JSX.Element {
           />
         }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
-        notice={
-          (props.inspection?.overview?.hasNativeUi ?? plugin().hasNativeUi) ? (
-            <PluginNativeUiDisclosure />
-          ) : undefined
-        }
         titleAction={
           <Show
             when={Boolean(props.installProgress)}
@@ -638,13 +393,14 @@ function PluginOverview(props: DetailProps): JSX.Element {
                     name={server.serverName}
                     ready={server.state === "authorized"}
                     disabled={
-                      server.state === "authorized"
-                        ? !props.onEditMcp
-                        : !props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin
+                      props.mcpLoginBusy ||
+                      (server.state === "authorized"
+                        ? !props.canMcpLogout || !props.onMcpLogout
+                        : !props.canMcpLogin || !props.onMcpLogin)
                     }
                     onClick={() =>
                       server.state === "authorized"
-                        ? props.onEditMcp?.()
+                        ? props.onMcpLogout?.(server.serverName)
                         : props.onMcpLogin?.(server.serverName)
                     }
                   />

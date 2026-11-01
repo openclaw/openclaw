@@ -112,8 +112,11 @@ export function recordMemorySample(
     );
     for (const [requestClass, bytes] of Object.entries(
       message.payloadBytesByRequestClass ?? {
-        [message.kind === "sqlite_request" || message.kind === "sqlite_reply" ? "other" : ""]:
-          message.payloadBytes,
+        [message.kind === "sqlite_request" ||
+        message.kind === "sqlite_reply" ||
+        message.kind === "authority"
+          ? "other"
+          : ""]: message.payloadBytes,
       },
     )) {
       store.counterValue(

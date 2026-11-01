@@ -19,6 +19,7 @@ import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import type {
   DoctorDatabaseEngineInspection,
   DoctorDatabaseEngineInspectionInput,
@@ -195,12 +196,16 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
         );
       }
     };
+    const inspectState = () =>
+      selection?.effectiveEngines.state === "sqlite"
+        ? withOpenClawStateDatabaseReadSnapshot(inspect, { env, lazy: true })
+        : inspect();
     // The caller's inspection context does not cross this worker boundary.
     await withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
       withArtifactPreservingStateReads(
         () =>
           withSqliteReadOnlyWorkerScope(() =>
-            selection ? withDatabaseEngineSelection(selection, inspect) : inspect(),
+            selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
           ),
         { agentDatabases: true },
       ),

@@ -57,7 +57,9 @@ it("defers startup runtime and divergent engine ownership until Doctor migrates 
         plugins: {
           allow: [pluginId],
           load: { paths: [root] },
-          entries: { [pluginId]: { enabled: true, config: { label: "operator label" } } },
+          entries: {
+            [pluginId]: { enabled: true, config: { enabled: false, label: "operator label" } },
+          },
           slots: { contextEngine: engineId },
         },
       };
@@ -79,7 +81,10 @@ it("defers startup runtime and divergent engine ownership until Doctor migrates 
         configSchema: {
           type: "object",
           additionalProperties: false,
-          properties: { label: { type: "string" } },
+          properties: { enabled: { type: "boolean" }, label: { type: "string" } },
+        },
+        configContracts: {
+          compatibilityMigrationPaths: [`plugins.entries.${pluginId}.config`],
         },
         doctorContract: { stateMigrations: [{ id: "retained-records" }] },
       });
@@ -125,6 +130,8 @@ module.exports = { stateMigrations: [{
             reason: "The replacement package still needs its data migration",
             command: "openclaw doctor --fix",
             requiresStateMigration: true as const,
+            configPaths: [["plugins", "entries", pluginId, "config"]],
+            validationExcludedPaths: [["plugins", "entries", pluginId, "config"]],
           },
         ],
       };

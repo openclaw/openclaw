@@ -1,7 +1,10 @@
 import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
+import {
+  movePathWithCopyFallback,
+  type MovePathPublicationReceipt,
+} from "@openclaw/fs-safe/atomic";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,7 +22,7 @@ import { pathEntryExists as packagePathEntryExists } from "./path-existence.js";
 import { retryAsync } from "./retry.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 
-export const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
+const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 const log = createSubsystemLogger("update/package-launchers");
 
 export function assertPackagePathIdentity(
@@ -66,7 +69,12 @@ export async function activateStagedNpmPackageRoot(
   source: string,
   destination: string,
   assertCurrent?: () => void,
-  unjournaled?: { assertCaller?: () => void; warnings: string[]; platform?: NodeJS.Platform },
+  unjournaled?: {
+    assertCaller?: () => void;
+    onPublished?: () => void;
+    warnings: string[];
+    platform?: NodeJS.Platform;
+  },
 ): Promise<void> {
   if (assertCurrent) {
     // A durable descriptor binds the staged inode. A copied replacement would
@@ -76,24 +84,20 @@ export async function activateStagedNpmPackageRoot(
     await fs.rename(source, destination);
     return;
   }
+  const assertCaller = retainMutationAuthority(unjournaled?.assertCaller ?? (() => {}));
+  const onPublished = () => {
+    // Publication is a fact even if the subsequent ownership check refuses cleanup.
+    unjournaled?.onPublished?.();
+    assertCaller();
+  };
   const stat = await fs.lstat(source);
   if (!stat.isSymbolicLink()) {
-    if (unjournaled && (unjournaled.platform ?? process.platform) === "win32") {
-      // The stage is a sibling of the live root, so this rename cannot cross
-      // devices. fs-safe's Windows EPERM copy fallback would instead copy the
-      // tree and then fail deleting the still-held stage after publication.
-      await renamePackageRootWithWindowsRetries(
-        source,
-        destination,
-        retainMutationAuthority(unjournaled.assertCaller ?? (() => {})),
-        { operation: "activation", warn: (message) => unjournaled.warnings.push(message) },
-      );
-      return;
-    }
-    await movePathWithCopyFallback({
-      from: source,
-      sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
-      to: destination,
+    await movePackageRoot(source, destination, {
+      operation: "activation",
+      assertCaller,
+      onPublished,
+      warn: (message) => unjournaled?.warnings.push(message),
+      platform: unjournaled?.platform,
     });
     return;
   }
@@ -101,11 +105,60 @@ export async function activateStagedNpmPackageRoot(
   // npm represents global local-directory installs as relative symlinks. Moving
   // one changes its meaning, so activate the same canonical source explicitly.
   const canonicalSource = await fs.realpath(source);
+  assertCaller();
   await fs.symlink(
     canonicalSource,
     destination,
     process.platform === "win32" ? "junction" : undefined,
   );
+  onPublished();
+}
+
+/**
+ * Moves an unjournaled package root to a sibling path. Windows uses guarded
+ * rename retries instead of fs-safe's EPERM copy fallback, which would publish
+ * a copy and then fail deleting the still-held source after the destination is live.
+ * Rejected source hardlinks always publish fs-safe's fresh copy, so a hardlink
+ * created after any preflight can never become the published tree.
+ */
+export async function movePackageRoot(
+  source: string,
+  destination: string,
+  options: {
+    operation: string;
+    assertCaller: () => void;
+    /** Extra synchronous precondition checked immediately before each rename. */
+    assertBeforeRename?: () => void;
+    onPublished: (receipt: MovePathPublicationReceipt) => void;
+    warn: (message: string) => void;
+    sourceHardlinks?: "allow" | "reject";
+    platform?: NodeJS.Platform;
+  },
+): Promise<void> {
+  const assertCaller = retainMutationAuthority(options.assertCaller);
+  const assertBeforeRename = () => {
+    options.assertBeforeRename?.();
+    assertCaller();
+  };
+  const sourceHardlinks = options.sourceHardlinks ?? PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS;
+  if ((options.platform ?? process.platform) === "win32" && sourceHardlinks === "allow") {
+    const identity = await renamePackageRootWithWindowsRetries(
+      source,
+      destination,
+      assertBeforeRename,
+      { operation: options.operation, warn: options.warn },
+    );
+    options.onPublished({ path: destination, dev: identity.dev, ino: identity.ino });
+    return;
+  }
+  await movePathWithCopyFallback({
+    from: source,
+    sourceHardlinks,
+    to: destination,
+    assertBeforeRename,
+    assertBeforeMutation: assertCaller,
+    onDestinationPublished: options.onPublished,
+  });
 }
 
 export async function backupNpmPackageRoot(
@@ -116,6 +169,7 @@ export async function backupNpmPackageRoot(
   platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
   if (platform !== "win32") {
+    assertCaller?.();
     await fs.rename(source, destination);
     return;
   }
@@ -133,7 +187,7 @@ export async function backupNpmPackageRoot(
 /**
  * Shared bounded Windows retries for guarded package-root renames: transient
  * AV/indexer denials are retried with authority and path-identity checks while
- * permanent failures stay failures. Package backup, unjournaled activation, and
+ * permanent failures stay failures. Package backup, unjournaled root moves, and
  * rollback publication/compensation renames share this one implementation;
  * callers keep their own operation-specific diagnostics through `operation` and `warn`.
  */
@@ -142,7 +196,7 @@ async function renamePackageRootWithWindowsRetries(
   destination: string,
   assertCurrent: () => void,
   options: { operation: string; warn?: (message: string) => void },
-): Promise<void> {
+): Promise<BigIntStats> {
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
   // Activation crosses parents; pin both so a retry cannot follow a swapped junction.
   const parents = [...new Set([path.dirname(source), path.dirname(destination)])].map(
@@ -198,6 +252,7 @@ async function renamePackageRootWithWindowsRetries(
       { code: isErrno(error) ? error.code : undefined },
     );
   }
+  return sourceIdentity;
 }
 
 export function removePackagePath(
@@ -656,6 +711,25 @@ export async function discardPackageUpdateBackup(
       }
       return `preserved ${label} at ${backupPath}; removal failed: ${formatErrorMessageWithCode(error)}; retirement rename failed: ${formatErrorMessageWithCode(retirementError)}; remove it manually after verifying the installation`;
     }
+  }
+}
+
+export async function restorePackageLauncher(
+  shim: PackageLauncherBackup["entries"][number],
+  assertCurrent: () => void,
+  beforePublish?: (staged: string) => void,
+): Promise<void> {
+  try {
+    if (shim.backup) {
+      await copyPackagePathEntry(shim.backup, shim.destination, assertCurrent, beforePublish);
+    } else {
+      await removePackagePath(shim.destination, assertCurrent);
+    }
+  } catch (error) {
+    throw new Error(
+      `launcher ${shim.destination}${shim.backup ? ` from retained backup ${shim.backup}` : ""}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
   }
 }
 

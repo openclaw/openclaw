@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { modelKey, type ModelRef } from "../../agents/model-ref-shared.js";
 import {
   type ModelAliasIndex,
@@ -12,6 +13,7 @@ import {
 import type { PreparedOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
+import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
 export { modelKey };
 export type { ModelAliasIndex };
 
@@ -46,6 +48,8 @@ export function resolveModelDirectiveSelection(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   rawRuntime?: string | undefined;
+  /** Classify prose without manufacturing a model from an unknown bare word. */
+  requireKnownModel?: boolean;
 }): { selection?: ModelDirectiveSelection; error?: string } {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
   const policy =
@@ -253,10 +257,21 @@ export function resolveModelDirectiveSelection(params: {
     }
   }
 
-  const selection =
-    resolveFuzzy({ fragment: rawTrimmed }) ?? (permitted ? explicitSelection : undefined);
+  const selection = resolveFuzzy({ fragment: rawTrimmed });
   if (selection) {
     return { selection };
+  }
+  if (params.requireKnownModel && !isExactSelection) {
+    const rawId = rawTrimmed.toLowerCase();
+    if (
+      !policy.catalog.some((entry) => entry.id.toLowerCase() === rawId) &&
+      !policy.configuredCatalog.some((entry) => entry.id.toLowerCase() === rawId)
+    ) {
+      return {};
+    }
+  }
+  if (permitted) {
+    return { selection: explicitSelection };
   }
   const modelRef = `${resolved.ref.provider}/${resolved.ref.model}`;
   const rawRuntime = params.rawRuntime?.trim();
@@ -272,4 +287,47 @@ export function resolveModelDirectiveSelection(params: {
     lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
   }
   return { error: lines.join("\n") };
+}
+
+/** Read-only matching must finish before a prose mention can affect session selection. */
+export async function prepareInlineModelDirectiveMatcher(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  defaultProvider: string;
+  defaultModel: string;
+  aliasIndex: ModelAliasIndex;
+  preparedModelCatalog?: ModelCatalogSnapshot;
+}) {
+  const { cfg, agentId, defaultProvider, defaultModel, aliasIndex } = params;
+  const preparedModelCatalog =
+    params.preparedModelCatalog ??
+    (await (
+      await import("../../agents/model-catalog.runtime.js")
+    ).loadPreparedModelCatalogSnapshot({ config: cfg, agentId, readOnly: true }));
+  const policy = createModelVisibilityPolicy({
+    cfg,
+    agentId,
+    catalog: preparedModelCatalog.entries,
+    defaultProvider,
+    defaultModel: { provider: defaultProvider, model: defaultModel },
+    ...resolveRuntimeNormalization(cfg),
+  });
+  return {
+    preparedModelCatalog,
+    isKnownInlineModel: (raw: string) => {
+      const resolved = resolveModelDirectiveSelection({
+        raw,
+        cfg,
+        agentId,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        allowedModelKeys: policy.allowedKeys,
+        modelPolicy: policy,
+        requireKnownModel: true,
+      });
+      // A recognized but disallowed model still belongs to command validation.
+      return Boolean(resolved.selection || resolved.error);
+    },
+  };
 }

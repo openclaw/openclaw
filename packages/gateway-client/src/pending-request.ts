@@ -1,12 +1,14 @@
 import type { ErrorShape, ResponseFrame } from "@openclaw/gateway-protocol";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "@openclaw/gateway-protocol/frame-guards";
 import {
   GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
-import { toStringifiedError } from "@openclaw/normalization-core";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import {
+  GatewayPayloadLimitError,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
@@ -54,6 +56,7 @@ type GatewayPendingRequestsOptions = {
 
 /** Owns request deadlines, correlation, settlement, and generation-scoped IDs. */
 export class GatewayPendingRequests {
+  maxPayloadBytes: number | undefined = MAX_PREAUTH_PAYLOAD_BYTES;
   private pending = new Map<string, GatewayPendingRequest>();
   private requestSequence = 0;
   private bootstrapPause:
@@ -169,6 +172,7 @@ export class GatewayPendingRequests {
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let startupRetry: ReturnType<typeof setTimeout> | undefined;
+      let startupRetryDelayMs = 0;
       let requestSent = false;
       let inFlight = false;
       const pending: GatewayPendingRequest = {
@@ -265,6 +269,11 @@ export class GatewayPendingRequests {
             return;
           }
           try {
+            const limit = this.maxPayloadBytes;
+            const bytes = new TextEncoder().encode(frame).byteLength;
+            if (limit !== undefined && bytes > limit) {
+              throw new GatewayPayloadLimitError(bytes, limit);
+            }
             inFlight = true;
             sender.send(frame);
             if (this.pending.get(id) !== pending) {
@@ -284,10 +293,12 @@ export class GatewayPendingRequests {
         pending.retryStartup = (retryAfterMs) => {
           pending.resend = send;
           clearTimeout(startupRetry);
-          startupRetry = setTimeout(
-            send,
+          // Startup can outlast many hints; back off without shortening the server's minimum.
+          startupRetryDelayMs = Math.max(
             resolveFiniteTimeoutDelayMs(retryAfterMs, GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS),
+            Math.min(8_000, startupRetryDelayMs * 2),
           );
+          startupRetry = setTimeout(send, startupRetryDelayMs);
           startupRetry.unref?.();
         };
         if (
@@ -396,6 +407,7 @@ export class GatewayPendingRequests {
   }
 
   flush(error: Error): void {
+    this.maxPayloadBytes = MAX_PREAUTH_PAYLOAD_BYTES;
     clearTimeout(this.bootstrapPause?.timer);
     this.bootstrapPause = undefined;
     const retired = this.pending;
