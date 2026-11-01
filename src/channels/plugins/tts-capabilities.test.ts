@@ -54,4 +54,11 @@ describe("resolveChannelTtsVoiceDelivery", () => {
     });
     expect(resolveChannelTtsVoiceDelivery("slack")).toBeUndefined();
   });
+
+  it("resolves bundled channel voice delivery before the channel registry loads", () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    expect(resolveChannelTtsVoiceDelivery("Telegram")).toMatchObject({
+      synthesisTarget: "voice-note",
+    });
+  });
 });
