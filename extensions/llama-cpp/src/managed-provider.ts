@@ -7,7 +7,8 @@ import type {
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { llamaCppProviderDiscovery } from "../provider-discovery.js";
 import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "./defaults.js";
-import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./external-server/defaults.js";
+import { LLAMA_CPP_SERVER, LLAMA_SERVER_DEFAULT_ORIGIN } from "./external-server/defaults.js";
+import { createLlamaServerAuthMethod } from "./external-server/registration.js";
 
 function wrapLlamaCppStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const providerConfig = ctx.config?.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
@@ -62,32 +63,7 @@ export function registerLlamaCppProvider(
         runNonInteractive: async (ctx) =>
           (await import("./setup.js")).configureLlamaCppNonInteractive(ctx),
       },
-      {
-        id: "existing-server",
-        label: "Existing llama-server",
-        hint: "Connect to an existing local, private, or remote llama.cpp server",
-        kind: "custom",
-        wizard: {
-          choiceId: "llama-cpp-existing-server",
-          choiceLabel: "Existing llama-server",
-          choiceHint: "Connect to a llama.cpp server managed outside OpenClaw",
-          groupId: LLAMA_CPP_PROVIDER_ID,
-          groupLabel: "Local llama.cpp",
-          groupHint: "Managed or external llama.cpp server",
-          methodId: "existing-server",
-        },
-        appGuidedSetup: {
-          detect: async (ctx) =>
-            (await import("./external-server/setup.js")).detectLlamaServerSetup(ctx),
-          prepare: async (ctx) =>
-            (await import("./external-server/setup.js")).prepareLlamaServerSetup(ctx),
-        },
-        run: async (ctx) => (await import("./external-server/setup.js")).runLlamaServerSetup(ctx),
-        validateNonInteractive: async (ctx) =>
-          (await import("./external-server/setup.js")).validateLlamaServerNonInteractive(ctx),
-        runNonInteractive: async (ctx) =>
-          (await import("./external-server/setup.js")).configureLlamaServerNonInteractive(ctx),
-      },
+      createLlamaServerAuthMethod(LLAMA_CPP_SERVER),
       {
         id: "local-media",
         label: "Managed local OCR and vision",

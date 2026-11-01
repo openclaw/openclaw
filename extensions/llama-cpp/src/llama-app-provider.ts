@@ -5,6 +5,7 @@ import type {
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { llamaAppProviderDiscovery } from "../provider-discovery.js";
 import { LLAMA_APP_SERVER } from "./external-server/defaults.js";
+import { createLlamaServerAuthMethod } from "./external-server/registration.js";
 
 export function registerLlamaAppProvider(api: OpenClawPluginApi): void {
   const wrapStream =
@@ -15,6 +16,7 @@ export function registerLlamaAppProvider(api: OpenClawPluginApi): void {
     };
   api.registerProvider({
     ...llamaAppProviderDiscovery,
+    auth: [createLlamaServerAuthMethod(LLAMA_APP_SERVER)],
     prepareDynamicModel: async (ctx) =>
       (await import("./external-server/provider.js")).prepareLlamaServerDynamicModel(
         ctx,
@@ -23,5 +25,12 @@ export function registerLlamaAppProvider(api: OpenClawPluginApi): void {
     wrapSimpleCompletionStreamFn: wrapStream,
     wrapStreamFn: wrapStream,
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
+    wizard: {
+      modelPicker: {
+        label: "Llama",
+        hint: "Connect to Llama (llama.app) at http://127.0.0.1:9931",
+        methodId: "existing-server",
+      },
+    },
   });
 }

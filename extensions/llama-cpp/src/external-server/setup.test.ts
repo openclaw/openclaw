@@ -5,7 +5,9 @@ import type {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, expect, it, vi } from "vitest";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
+import { LLAMA_APP_SERVER } from "./defaults.js";
 import { modelConfig, successfulDiscovery } from "./external-server.test-support.js";
+import { createLlamaServerAuthMethod } from "./registration.js";
 import {
   configureLlamaServerNonInteractive as configure,
   detectLlamaServerSetup as detect,
@@ -349,7 +351,7 @@ it.each([false, true])(
         expect(configured).not.toHaveProperty(field);
       }
       expect(configured?.params).toBeUndefined();
-      expect(configured?.models).toEqual([expect.objectContaining({ id: MODEL_ID })]);
+      expect(configured?.models).toEqual([]);
       expect(result.defaultModel).toBe(MODEL_REF);
       expect(result.configPatch?.auth).toEqual({
         profiles: { "llama-cpp:default": undefined },
@@ -478,4 +480,144 @@ it("rejects a requested model absent from discovery", async () => {
     "llama-server model missing was not found. Available models: qwen/model:Q4_K_M",
   );
   expect(ctx.runtime.exit).not.toHaveBeenCalled();
+});
+
+it.each(["merge", "replace"] as const)(
+  "saves connection only except explicit %s catalog ownership",
+  async (mode) => {
+    const authored = modelConfig({ name: "My model", contextWindow: 16384 });
+    const config = {
+      models: { mode, providers: { "llama-cpp": { baseUrl: LOCAL_BASE_URL, models: [authored] } } },
+    };
+    const extra = modelConfig({ id: "discovered/extra", name: "Live extra" });
+    const discovery = successfulDiscovery();
+    discovery.models.push({ config: extra, status: "loaded", failed: false });
+    discoverMock.mockResolvedValue(discovery);
+    const prepared = await prepare({ config, env: {}, modelRef: MODEL_REF });
+    expect(prepared && configuredProvider(prepared)?.models).toEqual(
+      mode === "replace" ? [authored, extra] : [authored],
+    );
+    expect(config.models.providers["llama-cpp"].models).toEqual([authored]);
+    const fresh = await prepare({ config: {}, env: {}, modelRef: MODEL_REF });
+    expect(fresh && configuredProvider(fresh)?.models).toEqual([]);
+  },
+);
+
+it("detects and rechecks Llama without changing installed llama.cpp or its primary model", async () => {
+  const method = createLlamaServerAuthMethod(LLAMA_APP_SERVER);
+  const guided = method.appGuidedSetup;
+  if (!guided) {
+    throw new Error("Missing guided Llama setup");
+  }
+  discoverMock.mockResolvedValue(successfulDiscovery("http://127.0.0.1:9931"));
+  const config: ProviderAuthContext["config"] = {
+    agents: { defaults: { model: { primary: "llama-cpp/installed" } } },
+    models: {
+      providers: {
+        "llama-cpp": {
+          baseUrl: LOCAL_BASE_URL,
+          models: [],
+          localService: { command: "/managed/llama-server" },
+        },
+      },
+    },
+  };
+  const before = JSON.stringify(config);
+  const detected = await guided.detect({ config, env: {} });
+  expect(detected?.modelRef).toBe("llama-app/" + MODEL_ID);
+  const prepared = await guided.prepare({ config, env: {}, modelRef: "llama-app/" + MODEL_ID });
+  expect(prepared?.configPatch?.models?.providers?.["llama-app"]).toMatchObject({
+    baseUrl: "http://127.0.0.1:9931/v1",
+    models: [],
+  });
+  expect(prepared?.configPatch?.models?.providers?.["llama-cpp"]).toBeUndefined();
+  expect(prepared?.configPatch?.agents).toBeUndefined();
+  expect(JSON.stringify(config)).toBe(before);
+  await expect(
+    guided.prepare({ config, env: {}, modelRef: "llama-app/missing" }),
+  ).resolves.toBeNull();
+  expect(discoverMock).toHaveBeenCalledTimes(3);
+  expectDiscovery({
+    server: LLAMA_APP_SERVER,
+    baseUrl: "http://127.0.0.1:9931",
+    useRuntimeDefaults: false,
+  });
+  expectAuthUnchanged();
+});
+
+it("leaves missing-model setup incomplete, then succeeds after the app owns the download", async () => {
+  const method = createLlamaServerAuthMethod(LLAMA_APP_SERVER);
+  const note = vi.fn();
+  const unexpected = (): never => {
+    throw new Error("Unexpected setup interaction");
+  };
+  const config: ProviderAuthContext["config"] = {};
+  const ctx: ProviderAuthContext = {
+    config,
+    env: {},
+    runtime: runtime(),
+    isRemote: false,
+    prompter: {
+      ...prompterFor(""),
+      note,
+      intro: unexpected,
+      outro: unexpected,
+      select: unexpected,
+      multiselect: unexpected,
+      progress: unexpected,
+    },
+    openUrl: unexpected,
+    oauth: { createVpsAwareHandlers: unexpected },
+  };
+  const empty = successfulDiscovery("http://127.0.0.1:9931");
+  empty.models = [];
+  discoverMock.mockResolvedValue(empty);
+  await expect(method.run(ctx)).rejects.toThrow("Choose and download a model in Llama, then retry");
+  expect(note).toHaveBeenCalledWith(
+    expect.stringContaining("OpenClaw does not install"),
+    "Connect Llama",
+  );
+  expect(config).toEqual({});
+  expectAuthUnchanged();
+  discoverMock.mockResolvedValue(successfulDiscovery("http://127.0.0.1:9931"));
+  ctx.prompter = { ...ctx.prompter, ...prompterFor("") };
+  const result = await method.run(ctx);
+  expect(result.defaultModel).toBe("llama-app/" + MODEL_ID);
+  expect(result.configPatch?.models?.providers?.["llama-app"]?.models).toEqual([]);
+  expect(config).toEqual({});
+});
+
+it("cancels the Llama connection prompt without discovery or credential mutation", async () => {
+  const method = createLlamaServerAuthMethod(LLAMA_APP_SERVER);
+  const abort = new Error("Cancelled");
+  abort.name = "AbortError";
+  const unexpected = (): never => {
+    throw new Error("Unexpected setup interaction");
+  };
+  const config = {};
+  await expect(
+    method.run({
+      config,
+      env: {},
+      runtime: runtime(),
+      isRemote: false,
+      prompter: {
+        ...prompterFor(""),
+        text: vi.fn(async () => {
+          throw abort;
+        }),
+        note: vi.fn(),
+        intro: unexpected,
+        outro: unexpected,
+        select: unexpected,
+        multiselect: unexpected,
+        progress: unexpected,
+      },
+      openUrl: unexpected,
+      oauth: { createVpsAwareHandlers: unexpected },
+    }),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(config).toEqual({});
+  expect(discoverMock).not.toHaveBeenCalled();
+  expectAuthUnchanged();
 });

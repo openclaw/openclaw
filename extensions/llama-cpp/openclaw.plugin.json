@@ -106,6 +106,20 @@
       "cliFlag": "--llama-server-api-key",
       "cliOption": "--llama-server-api-key <key>",
       "cliDescription": "llama-server API key"
+    },
+    {
+      "provider": "llama-app",
+      "method": "existing-server",
+      "choiceId": "llama-app",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect Llama",
+      "website": "https://llama.app/",
+      "appGuidedSecret": true,
+      "choiceLabel": "Llama",
+      "choiceHint": "Connect to Llama (llama.app)",
+      "groupId": "llama-app",
+      "groupLabel": "Llama",
+      "groupHint": "Local models with llama.app"
     }
   ],
   "contracts": {

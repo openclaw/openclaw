@@ -130,7 +130,7 @@ const facts = (contextWindow: number, supportsTools: boolean, contextTokens = co
 });
 const absentFacts = /"(?:contextWindow|contextTokens|supportsTools)"/u;
 
-it("persists verified router facts and refreshes unknown fields without replacing explicit values", async () => {
+it("seeds verified router facts only in explicit replace mode and refreshes without replacing authored values", async () => {
   let loadedModel = "model-a";
   const propsRequests: string[] = [];
   await withDiscovery(
@@ -164,7 +164,7 @@ it("persists verified router facts and refreshes unknown fields without replacin
         models: [],
       };
       const setup = await prepareLlamaServerSetup({
-        config: { models: { providers: { "llama-cpp": configured } } },
+        config: { models: { mode: "replace", providers: { "llama-cpp": configured } } },
         env: {},
         modelRef: "llama-cpp/model-a",
       });
@@ -182,7 +182,7 @@ it("persists verified router facts and refreshes unknown fields without replacin
 
       const refreshModel = async () =>
         (await refresh(saved)).find((model) => model.id === "model-b");
-      expect(await refreshModel()).toMatchObject(facts(128000, false));
+      expect(JSON.stringify(await refreshModel())).not.toMatch(absentFacts);
       loadedModel = "model-b";
       expect(await refreshModel()).toMatchObject(facts(32768, true));
 
