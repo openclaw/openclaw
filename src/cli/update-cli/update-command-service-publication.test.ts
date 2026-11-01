@@ -578,6 +578,32 @@ it.each(["repository", "existing alias parent", "missing alias parent"])(
     }),
 );
 
+it("falls through to lock and port checks when no service manager exists", () =>
+  withRuntimePublicationFixture(async ({ root, service, publish }) => {
+    vi.mocked(service.readCommand).mockRejectedValue(
+      new ServiceInspectionError("service-manager-unavailable"),
+    );
+    const artifact = path.join(root, "dist-runtime", "published.txt");
+    await fs.writeFile(artifact, "original");
+    const effect = vi.fn(async (assertCurrent: () => Promise<void>) => {
+      await assertCurrent();
+      await fs.writeFile(artifact, "candidate");
+      return "published";
+    });
+    await expect(publish(effect)).resolves.toBe("published");
+    expect(await fs.readFile(artifact, "utf8")).toBe("candidate");
+  }));
+
+it("still refuses changed runtime publication when only the user bus is unavailable", () =>
+  withRuntimePublicationFixture(async ({ service, publish }) => {
+    vi.mocked(service.readCommand).mockRejectedValue(
+      new ServiceInspectionError("systemd-user-bus-unavailable"),
+    );
+    const effect = vi.fn(async () => "published");
+    await expect(publish(effect)).rejects.toThrow(/affected Gateway/);
+    expect(effect).not.toHaveBeenCalled();
+  }));
+
 it("permits an absent Gateway's output-root replacement and new alias descendants while retaining parent identity", () =>
   withRuntimePublicationFixture(async ({ root, service, databasePath, publish }) => {
     service.isAbsent = vi.fn(async () => true);
