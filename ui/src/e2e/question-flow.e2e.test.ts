@@ -747,6 +747,48 @@ suite.define(() => {
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
   });
 
+  it("keeps a long /ask document on one scroller with the answer first at phone width", async () => {
+    const page = await newPage({ height: 844, width: 390 }, true);
+    const request = questionRecord("question-long-document", {
+      multiSelect: true,
+      options: Array.from({ length: 8 }, (_value, index) => ({
+        label: `Rollout option ${index + 1}`,
+        description: "Drains the writers, applies the migration and waits for the health check.",
+      })),
+    });
+    await installMockGateway(page, {
+      featureMethods: ["question.get", "question.resolve"],
+      methodResponses: { "question.get": { question: request } },
+    });
+    await page.goto(new URL(`ask/${request.id}`, suite.server.baseUrl).toString());
+    const document = page.locator("openclaw-question-page");
+    const panel = document.locator(".chat-question-panel");
+    await panel.waitFor();
+
+    const layout = await panel.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>(".approval-page")!;
+      const box = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+      return {
+        panelOverflow: element.scrollHeight - element.clientHeight,
+        pageOverflow: scroller.scrollHeight - scroller.clientHeight,
+        documentOverflow: element.ownerDocument.documentElement.scrollWidth - window.innerWidth,
+        advanceLeft: box(".chat-question-panel__advance").left,
+        advanceHeight: box(".chat-question-panel__advance").height,
+        skipLeft: box(".chat-question-panel__skip").left,
+      };
+    });
+    expect(layout.panelOverflow).toBeLessThanOrEqual(0);
+    expect(layout.pageOverflow).toBeGreaterThan(0);
+    expect(layout.documentOverflow).toBeLessThanOrEqual(0);
+    expect(layout.advanceLeft).toBeLessThan(layout.skipLeft);
+    expect(layout.advanceHeight).toBeGreaterThanOrEqual(44);
+
+    await panel.getByRole("checkbox", { name: /Rollout option 1/ }).tap();
+    const submit = button(panel, "Submit");
+    await submit.scrollIntoViewIfNeeded();
+    expect(await submit.isEnabled()).toBe(true);
+  });
+
   it.each([
     ["answered", false],
     ["answered", true],

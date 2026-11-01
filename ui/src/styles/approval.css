@@ -402,7 +402,14 @@
   }
 
   .approval-page__card {
-    border-radius: 3px 14px 14px 3px;
+    border-radius: calc(3px * var(--openclaw-corner-radius-scale))
+      calc(14px * var(--openclaw-corner-radius-scale))
+      calc(14px * var(--openclaw-corner-radius-scale))
+      calc(3px * var(--openclaw-corner-radius-scale));
+  }
+
+  .approval-page__card::after {
+    border-radius: 0 calc(13px * var(--openclaw-corner-radius-scale)) 0 0;
   }
 
   .approval-page__brand {
@@ -418,8 +425,10 @@
     margin-block: 18px 21px;
   }
 
+  /* The whole request is read before deciding; the page is the one scroller. */
   .approval-page__preview {
-    max-height: 34vh;
+    max-height: none;
+    overflow: visible;
     padding: 14px;
   }
 
@@ -448,6 +457,45 @@
   .approval-page__callout .btn {
     min-height: 44px;
     justify-content: center;
+  }
+
+  /* The chat dock caps this panel; on its own document the page is the one scroller. */
+  .question-page .chat-question-panel:not(.chat-question-panel--collapsed) {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .question-page .chat-question-panel__footer {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .question-page .chat-question-panel__footer .btn {
+    min-height: 44px;
+    justify-content: center;
+    padding-inline: 16px;
+    font-size: var(--control-ui-text-sm);
+  }
+
+  /* Answer first and left-aligned; the fixed width holds Skip still while submitting. */
+  .question-page .chat-question-panel__footer .chat-question-panel__advance {
+    order: -1;
+    min-width: 112px;
+  }
+
+  .question-page .chat-question-panel__footer .chat-question-panel__back {
+    order: 1;
+    margin-inline: auto 0;
+  }
+
+  .question-page .chat-question-panel__error {
+    order: -2;
+    flex-basis: 100%;
+    margin-right: 0;
+  }
+
+  .question-page .chat-question-summary {
+    text-align: start;
   }
 }
 
