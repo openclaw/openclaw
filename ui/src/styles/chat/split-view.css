@@ -820,11 +820,6 @@
   color: var(--session-header-control-active-color, var(--text));
 }
 
-.chat-pane__sharing-menu--desktop
-  > .btn.chat-pane__sharing-trigger[aria-expanded="true"]:hover:not(:disabled) {
-  background: var(--session-header-control-active-hover-bg);
-}
-
 .chat-pane__sharing-draft-glyph {
   stroke-dasharray: 3 3;
 }
