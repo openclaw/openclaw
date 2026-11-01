@@ -2272,7 +2272,6 @@
 ["src/auto-reply/reply/commands-info.test.ts","./commands-export-trajectory.js","5fc0a56ca548b9b5f8acca2fe1d4189a3aaae3b7735d3383031eec622fb8f703",1]
 ["src/auto-reply/reply/commands-info.test.ts","./commands-status.js","f1db05f3c6ff3678bd62e99d5d4e01c91455576d232ab24b0bb777330a51947e",1]
 ["src/auto-reply/reply/commands-info.test.ts","./reply-threading.js","225c806d2dc16c18b8cc9b332165d93bf2969a54f87dbfd0f4843df514dd7beb",1]
-["src/auto-reply/reply/commands-login.consent.test.ts","../../gateway/model-auth-refresh.js","b4d4a11ca426323d10c36f9a0bd396502174e0a5b0e9a23b542ef76b0c764b8e",1]
 ["src/auto-reply/reply/commands-login.harness-test-support.ts","../../commands/models/auth.js","047e32380eb0b7a22197203c5663816530e17ccb5b7b4d4c4ebd0d12c2781639",1]
 ["src/auto-reply/reply/commands-login.test.ts","../../gateway/model-auth-refresh.js","b4d4a11ca426323d10c36f9a0bd396502174e0a5b0e9a23b542ef76b0c764b8e",1]
 ["src/auto-reply/reply/commands-mcp.test.ts","../../infra/outbound/deliver-runtime.js","3158af68afa2a0541e5130654e5a8362540a073d4b8db45ce391a6aeaa9857ad",1]

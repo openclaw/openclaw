@@ -12,6 +12,7 @@ import {
 } from "./commands-login.harness-test-support.js";
 
 const refreshAuthRuntime = vi.hoisted(() => vi.fn<() => Promise<void>>());
+// mock-isolation: /login refresh must not publish auth state to a running Gateway.
 vi.mock("../../gateway/model-auth-refresh.js", () => ({
   refreshModelAuthStateAfterMutation: refreshAuthRuntime,
 }));

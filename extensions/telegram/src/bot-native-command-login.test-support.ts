@@ -13,8 +13,6 @@ import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
-  createPrivateCommandContext,
-  deliverReplies,
   nativeCommandMocks,
 } from "./bot-native-commands.menu-test-support.js";
 

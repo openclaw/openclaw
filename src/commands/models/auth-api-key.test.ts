@@ -62,6 +62,7 @@ const save = (
     provider: "sample",
     apiKey,
     profileId,
+    agentId: "writer",
     agentDir: agentDir("writer"),
     ...options,
   });
