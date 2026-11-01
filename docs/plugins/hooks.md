@@ -141,7 +141,8 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
 
 Incognito sessions do not dispatch `llm_input` or `llm_output` observations.
 Their `agent_end` hooks still receive run identity, success, and duration for
-cleanup and settlement, but receive empty `messages` and no `error` text.
+cleanup and settlement, but receive empty `messages`, no `error` text and no
+`skillsUsed` or `modelIterations`.
 Policy, provider, approval, and explicitly invoked tool hooks remain active.
 This boundary does not sandbox plugins or disable native harness telemetry.
 

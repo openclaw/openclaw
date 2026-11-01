@@ -90,13 +90,17 @@ it("preloads CSS-gated route entries without promoting optional chunks", async (
     throw new Error("Expected the Control UI preload metadata owner");
   }
   const styledEntry = path.join(repoRoot, "ui/src/pages/config/config-page.tsx");
+  const sessionsEntry = path.join(repoRoot, "ui/src/pages/sessions/sessions-page.tsx");
+  const cronEntry = path.join(repoRoot, "ui/src/pages/cron/cron-page.tsx");
   const plainEntry = path.join(repoRoot, "ui/src/pages/usage/usage-page.tsx");
   const sources = new Map([
     [
       "/preload-entry.js",
-      `globalThis.loadStyled = () => import(${JSON.stringify(styledEntry)}); globalThis.loadPlain = () => import(${JSON.stringify(plainEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
+      `globalThis.loadStyled = () => import(${JSON.stringify(styledEntry)}); globalThis.loadSessions = () => import(${JSON.stringify(sessionsEntry)}); globalThis.loadCron = () => import(${JSON.stringify(cronEntry)}); globalThis.loadPlain = () => import(${JSON.stringify(plainEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
     ],
     [styledEntry, 'import "/nested.js"; export const ready = true;'],
+    [sessionsEntry, 'import "/nested.js"; export const sessionsReady = true;'],
+    [cronEntry, 'import "/nested.js"; export const cronReady = true;'],
     ["/nested.js", 'import "/style.css"; globalThis.styled = true;'],
     [plainEntry, "export const ready = true;"],
     ["/optional.js", 'import "/style.css"; export const ready = true;'],
@@ -135,9 +139,13 @@ it("preloads CSS-gated route entries without promoting optional chunks", async (
   }
   const chunks = result.output.filter((asset) => asset.type === "chunk");
   const styled = chunks.find((chunk) => chunk.facadeModuleId === styledEntry)!;
+  const sessions = chunks.find((chunk) => chunk.facadeModuleId === sessionsEntry)!;
+  const cron = chunks.find((chunk) => chunk.facadeModuleId === cronEntry)!;
   const plain = chunks.find((chunk) => chunk.facadeModuleId === plainEntry)!;
   const optional = chunks.find((chunk) => chunk.facadeModuleId === "/optional.js")!;
   expect(requests.get(styled.fileName)).toContain(styled.fileName);
+  expect(requests.get(sessions.fileName)).toContain(sessions.fileName);
+  expect(requests.get(cron.fileName)).toContain(cron.fileName);
   expect(requests.get(plain.fileName)).not.toContain(plain.fileName);
   expect(requests.get(optional.fileName)).not.toContain(optional.fileName);
   expect(
@@ -359,6 +367,67 @@ it("keeps small CSS and measured startup assets compressed, excluding deferred r
   await expectEncodings("assets/chat.js", source, [], startupAssets);
   await expectEncodings("assets/tiny.css", "x", [], startupAssets);
   await expectEncodings("assets/entry.js", "x", [], startupAssets);
+});
+
+it("precompresses small chat boot chunks without adding sidecars for optional chunks", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "control-ui-boot-compression-"));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const outDir = path.join(root, "dist");
+  const chatEntry = path.join(repoRoot, "ui/src/pages/chat/route-entry.ts");
+  const sources = new Map([
+    [
+      "/entry.js",
+      `globalThis.loadChat = () => import(${JSON.stringify(chatEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
+    ],
+    [chatEntry, `export const label = ${JSON.stringify("chat ".repeat(100))};`],
+    ["/optional.js", `export const label = ${JSON.stringify("optional ".repeat(100))};`],
+  ]);
+  await writeFile(path.join(root, "index.html"), '<script type="module" src="/entry.js"></script>');
+  const owner = controlUiViteConfig({ buildInfo }).plugins?.find(
+    (plugin) =>
+      plugin &&
+      typeof plugin === "object" &&
+      "name" in plugin &&
+      plugin.name === "control-ui-precompressed-assets",
+  );
+  if (!owner) {
+    throw new Error("Expected the Control UI precompression owner");
+  }
+  const result = await build({
+    configFile: false,
+    root,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "boot-compression-fixture",
+        enforce: "pre",
+        resolveId: (id) => (sources.has(id) ? id : null),
+        load: (id) => sources.get(id),
+      },
+      owner,
+    ],
+    build: { outDir, minify: false },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one fixture build");
+  }
+  const files = readdirSync(path.join(outDir, "assets"));
+  for (const [moduleId, compressed] of [
+    [chatEntry, true],
+    ["/optional.js", false],
+  ] as const) {
+    const chunk = result.output.find(
+      (output) => output.type === "chunk" && output.facadeModuleId === moduleId,
+    );
+    if (!chunk || chunk.type !== "chunk") {
+      throw new Error(`Expected fixture chunk for ${moduleId}`);
+    }
+    expect(Buffer.byteLength(chunk.code)).toBeLessThan(4096);
+    for (const suffix of ["br", "gz"]) {
+      expect(files.includes(`${path.basename(chunk.fileName)}.${suffix}`)).toBe(compressed);
+    }
+  }
 });
 
 it("uses the supplied artifact identity without reading Git metadata", () => {

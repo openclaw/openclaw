@@ -176,7 +176,14 @@ export function createWorkerEnvironmentStoreKernel(
         throw new Error("Worker environment owner epoch changed");
       }
       const retention = current.retention;
-      if (!retention || !current.leaseId || current.resourceReceipt?.leaseId !== current.leaseId) {
+      // Initial provisioning can record exact resource custody before enrollment returns a lease.
+      if (
+        !retention ||
+        !current.resourceReceipt ||
+        (current.leaseId === null
+          ? current.state !== "provisioning"
+          : current.resourceReceipt.leaseId !== current.leaseId)
+      ) {
         throw new Error("Worker retention requires a policy and exact resource receipt lease");
       }
       if (

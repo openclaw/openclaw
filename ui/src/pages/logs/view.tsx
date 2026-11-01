@@ -83,7 +83,9 @@ export function LogsView(props: LogsProps) {
     // eslint-disable-next-line solid/no-react-specific-props -- The shared status API calls this prop className.
     <PanelRefreshStatus status={props.status} className="logs-refresh-status" />
   );
-  const needle = createMemo(() => normalizeLowercaseStringOrEmpty(props.filterText));
+  const needle = createMemo(() =>
+    normalizeLowercaseStringOrEmpty(props.filterText).normalize("NFC"),
+  );
   const filtered = createMemo(() => {
     const query = needle();
     const matches =
@@ -94,7 +96,9 @@ export function LogsView(props: LogsProps) {
             (!query ||
               normalizeLowercaseStringOrEmpty(
                 [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-              ).includes(query));
+              )
+                .normalize("NFC")
+                .includes(query));
     const rows: LogRow[] = [];
     const byKey = new Map<VirtualItem["key"], number>();
     for (const entry of props.entries) {
@@ -155,8 +159,13 @@ export function LogsView(props: LogsProps) {
     autoFollow = props.autoFollow,
   ) => {
     // Measurement writes interrupt WebKit's wheel travel. Keep idle reader anchoring.
-    instance.shouldAdjustScrollPositionOnItemSizeChange =
-      scrolling && !autoFollow ? skipSizeAdjustment : undefined;
+    const reading = scrolling && !autoFollow;
+    instance.shouldAdjustScrollPositionOnItemSizeChange = reading ? skipSizeAdjustment : undefined;
+    // The end anchor bypasses the size predicate; a negative distance disarms it during travel.
+    const scrollEndThreshold = autoFollow ? 120 : reading ? -1 : 0;
+    if (instance.options.scrollEndThreshold !== scrollEndThreshold) {
+      instance.setOptions({ ...instance.options, scrollEndThreshold });
+    }
   };
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLDivElement>({
     count: 0,
@@ -188,6 +197,7 @@ export function LogsView(props: LogsProps) {
     cancelLayout(scrollRequest);
     readerScrollPending = true;
     virtualizer.cancelScroll();
+    updateSizeAdjustment(virtualizer, true);
   };
   onSettled(() => {
     const { _didMount: mountVirtualizer } = virtualizer;
@@ -225,8 +235,6 @@ export function LogsView(props: LogsProps) {
         count: next.rows.length,
         getItemKey: next.getItemKey,
         followOnAppend: next.autoFollow,
-        // Follow-off readers pin measurements only once they reach the end.
-        scrollEndThreshold: next.autoFollow ? 120 : 0,
       });
       publish();
     },
@@ -263,7 +271,7 @@ export function LogsView(props: LogsProps) {
     return (
       <div
         ref={(node) => (element = node)}
-        class={["log-row", { "log-row--last": rowProps.item.index === rows().length - 1 }]}
+        class="log-row"
         role="listitem"
         aria-posinset={rowProps.item.index + 1}
         aria-setsize={rows().length}

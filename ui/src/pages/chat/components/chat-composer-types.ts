@@ -150,8 +150,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   readingHistory?: boolean;
   onProgressManipulate?: () => void;
   runId?: string | null;
-  /** The pane scopes Gateway questions to this conversation's agent and session. */
+  /** The pane scopes Gateway questions to this conversation and its direct child sessions. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
+  /** Asking child session display names, keyed by question id. */
+  gatewayQuestionSources?: ReadonlyMap<string, string>;
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;

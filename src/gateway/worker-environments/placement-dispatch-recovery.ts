@@ -290,6 +290,25 @@ export function createPlacementRecoveryActions(
           await failure.retryFailedTeardown(placement);
         } else if (placement.state === "active") {
           await reconcileActivePlacement(placement, "runtime", diskAuthority);
+        } else if (
+          placement.state === "draining" &&
+          !placement.turnClaim &&
+          !facts.moves.has(sessionId)
+        ) {
+          const environment = environments.get(placement.environmentId);
+          const loss = workerDisappearanceError(environment);
+          if (loss) {
+            await failure.failDraining(
+              placement,
+              new Error(
+                `Worker lost; recovery required. Unresolved workspace changes remain unverified. ${loss.message}`,
+              ),
+            );
+          } else if (isExactAttachedEnvironment(environment, placement)) {
+            // Stop can commit draining before its final-save claim. Enroll the existing
+            // file-recovery owner; later sweeps settle it without replaying input.
+            await retainDrainingWorkspace(placement);
+          }
         }
         continue;
       }
@@ -478,8 +497,8 @@ export function createPlacementRecoveryActions(
     }
   };
 
-  // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
-  // durable active ownership and retry teardown already fenced by a previous failure.
+  // Runtime sweeps leave live dispatch preparation alone. Session admission excludes live
+  // lifecycle work while interrupted drains rejoin the existing final-save owner.
   const reconcileActive = async (
     environmentId?: string,
     admit: WorkerPlacementRecoveryAdmission = admitRecovery,

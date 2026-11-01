@@ -41,6 +41,7 @@ type WorkerProviderIntentOptions = Pick<
     retainProviderSettlement?: (settled: Promise<void>) => void,
     beforeProvision?: () => void,
     repositorySource?: WorkerProviderRepositorySource,
+    wakeRetained?: () => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -439,8 +440,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       signal,
     };
     signal?.throwIfAborted();
-    const config = options.getConfig();
-    const configured = config.cloudWorkers?.profiles?.[record.profileId];
+    const configured = options.getConfig().cloudWorkers?.profiles?.[record.profileId];
     if (
       !configured ||
       normalizeCapabilityProviderId(configured.provider) !== record.providerId ||
@@ -681,6 +681,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             undefined,
             beforeProvision(requested),
             requested ? preparedIntents.get(requested)?.repository : undefined,
+            existing.retention ? beforeProvision(requested) : undefined,
           );
         }
         return existing;

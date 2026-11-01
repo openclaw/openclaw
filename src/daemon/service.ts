@@ -35,6 +35,7 @@ import {
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
 } from "./schtasks-runtime.js";
+import { recoverForegroundGatewayForService } from "./service-foreground-recovery.js";
 import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
@@ -457,7 +458,14 @@ function withGatewayServiceMutationGuards(
       kind,
       `restart the ${kind} service`,
       true,
-      service.restart,
+      async (args) => {
+        if (kind === "gateway" && args.preserveDefinition) {
+          await recoverForegroundGatewayForService(service, args);
+        }
+        await args.prepareRestart?.();
+        args.assertCurrent?.();
+        return await service.restart(args);
+      },
     ),
   };
 }

@@ -121,6 +121,8 @@ describe("runEmbeddedAttempt tool boundaries", () => {
             : { ids: ["child"] },
       };
       await runAttempt({
+        // Match the fixture model's window for its full runtime/native tool prompt.
+        contextTokenBudget: 8_192,
         toolExecutionAllow: ["read"],
         sessionManager,
         config: { tools: { codeMode: Boolean(code), toolSearch: false } },

@@ -10,6 +10,7 @@ import {
   testing as cliBackendsTesting,
 } from "./cli-backends.test-support.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -356,6 +357,43 @@ it.each(["configured", "literal"] as const)(
     for (const validate of checks) {
       expect(validate()).toContain("not available");
     }
+  },
+);
+
+it.each([true, false])(
+  "selects an opt-in harness only when supported with a host default (%s)",
+  async (supported) => {
+    const cfg: OpenClawConfig = {
+      ...custom,
+      plugins: { entries: { copilot: { enabled: true } } },
+      agents: {
+        defaults: { models: { "fixture/model": { agentRuntime: { id: "openclaw" } } } },
+      },
+    };
+    const registry = harnessRegistry("copilot", {
+      supports: ({ requestedRuntime }) => ({
+        supported: supported && requestedRuntime === "copilot",
+      }),
+    });
+    published.owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      pluginRegistry: registry,
+    });
+    const result = await prepareModelSelectionRuntime({
+      ...request,
+      cfg,
+      catalog: published.owner.modelCatalog.entries,
+      rawRuntime: "copilot",
+      hydrateThinkingCatalog: false,
+    });
+    if (!supported) {
+      expect(result).toMatchObject({ status: "rejected", reason: "invalid-runtime" });
+      return;
+    }
+    expect(result).toMatchObject({
+      status: "ready",
+      runtime: { kind: "set", runtime: "copilot" },
+      harness: { id: "copilot" },
+    });
   },
 );
 

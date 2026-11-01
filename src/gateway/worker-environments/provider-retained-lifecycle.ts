@@ -34,22 +34,24 @@ export function createWorkerRetainedLifecycle(
     signal.throwIfAborted();
     assertCurrent();
     const live = options.requireCurrentOwner(record);
+    const provisioning = live.state === "provisioning" && live.leaseId === null;
     if (
       options.isStopping() ||
       live.destroyRequestedAtMs !== null ||
-      !["ready", "idle", "attached"].includes(live.state) ||
       !live.retention ||
       !live.resourceReceipt ||
-      !live.leaseId ||
-      !live.nodeDeviceId ||
-      live.sharedHost !== false
+      (!provisioning &&
+        (!["ready", "idle", "attached"].includes(live.state) ||
+          !live.leaseId ||
+          !live.nodeDeviceId ||
+          live.sharedHost !== false))
     ) {
       throw new Error("Retained lifecycle lost its dedicated node environment owner");
     }
     return live;
   };
   const leaseFor = (record: WorkerEnvironmentRecord) => ({
-    leaseId: record.leaseId!,
+    leaseId: record.leaseId ?? record.resourceReceipt!.leaseId,
     profile: requireWorkerProfile(record.profileSnapshot.settings),
     resourceReceipt: record.resourceReceipt!,
     retention: record.retention!.policy,
@@ -164,8 +166,9 @@ export function createWorkerRetainedLifecycle(
   };
   const reconcile = async (record: WorkerEnvironmentRecord, signal: AbortSignal) => {
     let live = await observe(record, () => {}, signal);
-    if (live.retention!.operation) {
-      live = await mutate(live, live.retention!.operation!.action, () => {}, signal);
+    // Persisted resume intent retains custody, not caller authority to start compute.
+    if (live.retention!.operation?.action === "pause") {
+      live = await mutate(live, "pause", () => {}, signal);
     }
     const observation = live.retention!.observation;
     // Maintenance may close an expired work window, never authorize another one.
@@ -178,6 +181,39 @@ export function createWorkerRetainedLifecycle(
       live = await mutate(live, "pause", () => {}, signal);
     }
     return live;
+  };
+  const requireRunning = (
+    record: WorkerEnvironmentRecord,
+    assertCurrent: () => void,
+    signal: AbortSignal,
+  ) => {
+    const owner = current(record, assertCurrent, signal);
+    const retained = owner.retention!;
+    if (
+      retained.operation ||
+      retained.observation?.state !== "running" ||
+      retained.observation.computeExpiresAtMs <= now()
+    ) {
+      throw new Error("Retained work window is not active; explicit wake required");
+    }
+    return owner;
+  };
+  const resumeCompute = async (
+    record: WorkerEnvironmentRecord,
+    assertCurrent: () => void,
+    signal: AbortSignal,
+  ) => {
+    let live = record;
+    if (live.retention!.operation) {
+      live = await mutate(live, live.retention!.operation.action, assertCurrent, signal);
+    }
+    const observed = live.retention!.observation!;
+    if (observed.state !== "running" || observed.computeExpiresAtMs <= now()) {
+      // Provider idle suspension closes compute only after an explicit observed pause.
+      live = await mutate(live, "pause", assertCurrent, signal);
+      live = await mutate(live, "resume", assertCurrent, signal);
+    }
+    return requireRunning(live, assertCurrent, signal);
   };
   const setRuntimeAdmission = (
     record: WorkerEnvironmentRecord,
@@ -218,17 +254,15 @@ export function createWorkerRetainedLifecycle(
         }
         return;
       }
+      if (record.state === "provisioning") {
+        throw new Error("Retry the original creation request to recover retained provisioning");
+      }
       try {
         let live = await observe(record, request.assertCurrent, signal);
-        if (live.retention!.operation) {
-          live = await mutate(
-            live,
-            live.retention!.operation!.action,
-            request.assertCurrent,
-            signal,
-          );
-        }
         if (action === "pause") {
+          if (live.retention!.operation) {
+            live = await mutate(live, "pause", request.assertCurrent, signal);
+          }
           if (
             !live.retention!.operation &&
             live.retention!.observation?.state === "suspended" &&
@@ -243,31 +277,18 @@ export function createWorkerRetainedLifecycle(
           }
           return;
         }
-        const observed = live.retention!.observation!;
-        if (observed.state !== "running" || observed.computeExpiresAtMs <= now()) {
-          // Provider idle suspension closes compute only after an explicit observed pause.
-          live = await mutate(live, "pause", request.assertCurrent, signal);
-          live = await mutate(live, "resume", request.assertCurrent, signal);
-        }
+        const resumed = await resumeCompute(live, request.assertCurrent, signal);
         const assertRunning = () => {
-          const owner = current(live, request.assertCurrent, signal);
-          const retained = owner.retention!;
-          if (
-            retained.operation ||
-            retained.observation?.state !== "running" ||
-            retained.observation.computeExpiresAtMs <= now()
-          ) {
-            throw new Error("Retained work window is not active; explicit wake required");
-          }
+          requireRunning(resumed, request.assertCurrent, signal);
         };
         assertRunning();
         if (!options.waitForRetainedNode || !options.ensureNodeWorkerBundle) {
           throw new Error("Retained node reconnect admission is unavailable");
         }
         // Restart must not mistake a partial runtime refresh for usable readiness.
-        await setRuntimeAdmission(live, request.assertCurrent, signal, false);
+        await setRuntimeAdmission(resumed, request.assertCurrent, signal, false);
         const reconnectSignal = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
-        await options.waitForRetainedNode(live.nodeDeviceId!, {
+        await options.waitForRetainedNode(resumed.nodeDeviceId!, {
           signal: reconnectSignal,
           assertCurrent: assertRunning,
         });
@@ -278,18 +299,18 @@ export function createWorkerRetainedLifecycle(
           throw new Error("Retained worker bundle is unavailable");
         }
         await options.refreshRuntime(
-          live,
-          options.providerFor(live.providerId),
+          resumed,
+          options.providerFor(resumed.providerId),
           artifact,
           signal,
           assertRunning,
         );
         assertRunning();
         const installed = await options.ensureNodeWorkerBundle({
-          deviceId: live.nodeDeviceId!,
+          deviceId: resumed.nodeDeviceId!,
           artifact,
           reason: "refresh",
-          environmentId: live.environmentId,
+          environmentId: resumed.environmentId,
           prewarm: true,
           signal,
           assertCurrent: assertRunning,
@@ -298,7 +319,7 @@ export function createWorkerRetainedLifecycle(
         if (!sameWorkerBuild(installed, artifact)) {
           throw new Error("Retained worker runtime admission did not match the current build");
         }
-        await setRuntimeAdmission(live, request.assertCurrent, signal, true);
+        await setRuntimeAdmission(resumed, request.assertCurrent, signal, true);
       } catch (error) {
         await options.saveError(record, error);
         throw error;
@@ -306,6 +327,12 @@ export function createWorkerRetainedLifecycle(
     });
   return {
     reconcile,
+    // Only a fresh creation retry supplies this authority; maintenance never calls it.
+    resumeProvision: async (
+      record: WorkerEnvironmentRecord,
+      assertCurrent: () => void,
+      signal: AbortSignal,
+    ) => resumeCompute(await observe(record, assertCurrent, signal), assertCurrent, signal),
     admitProvision: async (record: WorkerEnvironmentRecord, signal: AbortSignal) =>
       setRuntimeAdmission(await reconcile(record, signal), () => {}, signal, true),
     ensureRetainedRunning: (request: WorkerRetainedRequest) => run(request, "resume"),

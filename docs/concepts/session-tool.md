@@ -104,6 +104,18 @@ to start work is not a suggestion request.
 
 `sessions_list` is a metadata inventory, not a transcript search. Rows include session key and ID, agent, kind, channel, title/label, sidebar group, current owner and original creator, stored project/workspace associations, visible parent/child links, archive/pin state, state version, model/token counts, and run status. Unknown associations remain absent; a stored worktree association does not prove that its checkout still exists.
 
+Check the row's `status` before replacing or steering existing work. `queued`
+and `running` indicate current work; `done` (success), `failed` (error),
+`timeout` (time limit), and `killed` (cancellation) describe the last run's
+outcome. A run outcome does not establish that the overall task is complete
+or that the session is unusable.
+
+For unfinished work, read `sessions_history` and consider continuing the existing
+session with `sessions_send` before spawning a replacement. Use `mode: "followup"`
+for a separate turn or `mode: "steer"` to guide active work. Current access and
+[messaging admission rules](/concepts/session-tool#sending-cross-session-messages)
+still apply; a listed session or its last-run status does not guarantee acceptance.
+
 Use the filters together to narrow the inventory before paging:
 
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.

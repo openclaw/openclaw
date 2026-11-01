@@ -142,6 +142,7 @@ export function environmentForTunnel(
     ensureRetainedRunning: vi.fn(async () => {
       throw new Error("unexpected retained wake");
     }),
+    inspectTurnLease: vi.fn(async () => {}),
     acquireTurnCredential: vi.fn(async () => credential()),
     acknowledgeCredentialDelivery: vi.fn(async () => true),
     stopTunnel: vi.fn(async () => {}),

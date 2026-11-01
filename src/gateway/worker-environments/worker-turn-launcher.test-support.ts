@@ -540,6 +540,8 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   return {
     get: vi.fn(() => undefined),
     ensureRetainedRunning: vi.fn(unexpectedAsync),
+    // Launcher-only fixtures assume a recognized lease; the service suite owns provider outcomes.
+    inspectTurnLease: vi.fn(async () => {}),
     createGatewayTools: prepareGatewayTools,
     resolveSshIdentity: vi.fn(unexpectedAsync),
     acquireTurnCredential: vi.fn(unexpectedAsync),

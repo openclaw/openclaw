@@ -3,7 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
@@ -365,7 +364,7 @@ export function createAgentsPageState(
       void refreshAgents("ensure");
       return;
     }
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     loadActivePanelData();
   }
 
@@ -386,10 +385,8 @@ export function createAgentsPageState(
     );
   }
 
-  function ensureAgentIdentities() {
-    void context.agentIdentity.ensure(
-      listSelectableAgents(state.agentsList?.agents ?? []).map((entry) => entry.id),
-    );
+  function ensureSelectedIdentity() {
+    void context.agentIdentity.ensure([state.agentsSelectedId]);
   }
 
   function loadActivePanelData() {
@@ -506,7 +503,7 @@ export function createAgentsPageState(
     }
     syncAgentState(agents);
     if (mode !== "refresh") {
-      ensureAgentIdentities();
+      ensureSelectedIdentity();
     }
     loadActivePanelData();
   }
@@ -638,7 +635,7 @@ export function createAgentsPageState(
   onSettled(() => {
     gateway.connect();
     syncAgentState();
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
@@ -662,6 +659,7 @@ export function createAgentsPageState(
         intentRevision = selection.intentRevision;
         const previousId = state.agentsSelectedId;
         syncSettingsSelection();
+        ensureSelectedIdentity();
         const agentId = state.agentsSelectedId;
         const route = context.router.getState();
         if (
@@ -681,7 +679,7 @@ export function createAgentsPageState(
       // Roster and file publications adopt metadata before dependent file reads can settle.
       context.agents.subscribe(() => {
         syncAgentState();
-        ensureAgentIdentities();
+        ensureSelectedIdentity();
         loadActivePanelData();
         publish();
       }),

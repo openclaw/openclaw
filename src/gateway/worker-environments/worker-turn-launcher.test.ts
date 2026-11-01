@@ -624,7 +624,12 @@ describe("worker turn launcher local placement", () => {
       `Cloud worker turns require the OpenClaw runtime, not ${runtimeId}`,
     );
 
-    expectUncalled(runLocal, environments.ensureRetainedRunning, environments.startTunnel);
+    expectUncalled(
+      runLocal,
+      environments.ensureRetainedRunning,
+      environments.acquireTurnCredential,
+      environments.startTunnel,
+    );
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     expect(release).toHaveBeenCalledOnce();
   });

@@ -454,6 +454,8 @@ describe("Models page catalog publication", () => {
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
       const utility = modelPicker(page, "utility");
+      utility.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+      await utility.updateComplete;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();
       search!.value = "Discovered";
@@ -486,7 +488,11 @@ describe("Models page catalog publication", () => {
       pendingProviders: ["openai"],
     });
 
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true },
+    });
     await waitForSolid(() =>
       expect(
         page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,

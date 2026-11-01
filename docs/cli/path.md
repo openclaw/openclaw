@@ -186,9 +186,13 @@ Reserved characters (`?`, `&`, `%`) outside quoted, predicate, or union
 segments are rejected. Control characters (U+0000-U+001F, U+007F) are
 rejected anywhere, including the `session` query value.
 
-`formatOcPath(parseOcPath(path)) === path` is guaranteed for normalized paths.
+`formatOcPath(parseOcPath(path)) === path` is guaranteed for canonical paths.
 Other query parameters are ignored except for the first non-empty
 `session=` value.
+
+File names, literal keys, and session values preserve their Unicode code points;
+canonically equivalent spellings remain distinct. Markdown section and item
+addresses still use their existing slug rules.
 
 Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
 field), at most 64 dotted sub-segments per slot, and at most 256 nested
@@ -209,6 +213,8 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
+For JSONL, `**` can span both the physical line and nested value keys:
+`oc://session.jsonl/**/event` finds nested `event` values inside each line.
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as
@@ -248,6 +254,10 @@ depending on the per-kind AST shape.
   `parse-error`.
   Leaf replacement through object-valued mapping keys, such as YAML 1.1
   timestamp keys, is refused with `unresolved` and leaves the file unchanged.
+
+`--value-json` is refused for Markdown and YAML without changing the file.
+Pass a plain `<value>` without that flag to use their existing string/scalar
+write behavior.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`
@@ -317,6 +327,9 @@ openclaw path set 'oc://workflow.yaml/steps/$last/id' 'classify-renamed' --dry-r
 
 # Address markdown frontmatter
 openclaw path resolve 'oc://AGENTS.md/[frontmatter]/name'
+
+# Find several markdown frontmatter keys
+openclaw path find 'oc://AGENTS.md/[frontmatter]/{name,description}'
 
 # Insert markdown frontmatter
 openclaw path set 'oc://AGENTS.md/[frontmatter]/+description' 'Agent instructions' --dry-run
@@ -396,6 +409,12 @@ JSONC edits go through `jsonc-parser`, so comments and whitespace survive a
 `set`. Run with `--dry-run` first to inspect the bytes before committing.
 `.json` files use the same adapter and edit path as `.jsonc`.
 
+For named object keys, JSON, JSONC, and JSONL reads, searches, and replacements
+use the last duplicate occurrence, matching runtime parsing. Replacements preserve
+earlier shadowed copies. Insertion beneath a duplicated parent is refused:
+consolidate the duplicate parents into one, retaining the last effective value,
+then retry.
+
 ### JSONL
 
 ```text
@@ -447,6 +466,12 @@ YAML uses the `yaml` package's `Document` API rather than a hand-rolled
 parser, so ordinary parse/emit round-trips preserve comments and authoring
 shape while resolved paths use the same map-key / sequence-index model as
 JSONC. The same adapter handles `.yaml`, `.yml`, and `.lobster` files.
+
+`resolve` and `find` follow aliases to their anchored values, including
+predicate fields. Reported lines refer to the anchor. `set` can replace an alias
+slot without changing its anchor, but writes through an alias remain refused.
+Recursive searches stop at cyclic alias edges while retaining distinct logical
+paths. YAML merge keys (`<<`) are not expanded.
 
 ## Subcommand reference
 

@@ -12,7 +12,11 @@ import { openDiskCleanupTransport } from "./placement-disk-cleanup.test-support.
 import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
 import { captureRepositoryDiskCheckpoint } from "./repository-workspace-snapshot.js";
 import { openRepositoryCaptureTransport } from "./repository-workspace-snapshot.test-support.js";
-import { withSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
+import {
+  forkSessionRepositoryWorkspace,
+  readSessionRepositoryArtifacts,
+  withSessionRepositoryCheckpoint,
+} from "./session-repository-checkpoints.js";
 import { database, placements, sessionTarget } from "./worker-turn-launcher.test-support.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
@@ -134,6 +138,156 @@ describe("new capture through native private transport", () => {
   });
   afterAll(async () => {
     await wire.close();
+  });
+
+  it("shares a retained capture with requests queued after receipt binding fails", async () => {
+    const f = await openRepositoryCaptureTransport(wire);
+    const checkpointRef = workerWorkspaceResultRef("retained-request");
+    const alias = workerWorkspaceResultRef("queued-after-capture");
+    let current = true;
+    const params = {
+      identity: sessionTarget,
+      repository: f.repository,
+      checkpointRef,
+      purpose: "publication" as const,
+      placements,
+      environments: f.environments,
+      assertCurrent() {
+        if (!current) {
+          throw new Error("retained requester revoked");
+        }
+      },
+    };
+    try {
+      await fs.writeFile(path.join(f.remote, "captured.txt"), "original captured bytes\n");
+      await expect(
+        captureRepositoryDiskCheckpoint(params, async () => {
+          throw new Error("receipt binding lost");
+        }),
+      ).rejects.toThrow("receipt binding lost");
+      const events = [...f.events];
+      await fs.writeFile(path.join(f.remote, "captured.txt"), "later disk bytes\n");
+      const run = processExec.runCommandWithTimeout;
+      const runner = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockImplementation((argv, options) => {
+          if (
+            argv.includes("update-ref") &&
+            typeof options !== "number" &&
+            options.input?.toString().includes("create " + alias + "\0")
+          ) {
+            const beforeInput = options.beforeInput;
+            assert(beforeInput);
+            return run(argv, {
+              ...options,
+              beforeInput: (...args) => {
+                current = false;
+                beforeInput(...args);
+              },
+            });
+          }
+          return run(argv, options);
+        });
+      try {
+        await expect(
+          captureRepositoryDiskCheckpoint({ ...params, additionalRefs: [alias] }, async () => {}),
+        ).rejects.toThrow("retained requester revoked");
+      } finally {
+        runner.mockRestore();
+        current = true;
+      }
+      expect(
+        await hasWorkerWorkspaceResultRef({
+          root: f.store.artifactPath(f.repository.workspaceId),
+          stagedResultRef: alias,
+        }),
+      ).toBe(false);
+      await captureRepositoryDiskCheckpoint({ ...params, additionalRefs: [alias] }, async () => {});
+      expect(
+        await hasWorkerWorkspaceResultRef({
+          root: f.store.artifactPath(f.repository.workspaceId),
+          stagedResultRef: alias,
+        }),
+      ).toBe(true);
+      await captureRepositoryDiskCheckpoint(
+        { ...params, checkpointRef: alias, additionalRefs: [checkpointRef] },
+        async (snapshot) => {
+          await withSessionRepositoryCheckpoint(
+            { workspaceId: f.repository.workspaceId, checkpointRef: snapshot.checkpointRef },
+            async (payload) => {
+              expect(payload.publicationDigest).toMatch(/^sha256:/);
+              expect(payload.publicationStagingRoot).toBeDefined();
+              expect(
+                await fs.readFile(path.join(payload.stagingRoot, "captured.txt"), "utf8"),
+              ).toBe("original captured bytes\n");
+            },
+          );
+        },
+      );
+      expect(f.events).toEqual(events);
+      expect(f.workspace.quiescence.hasActiveWork()).toBe(false);
+      expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("captures unchanged initialization files on the authoritative disk without reopening implicit reads", async () => {
+    const f = await openRepositoryCaptureTransport(wire);
+    const checkpointRef = workerWorkspaceResultRef("unchanged-disk-capture");
+    const aliasRef = workerWorkspaceResultRef("unchanged-disk-alias");
+    const source = { workspaceId: f.repository.workspaceId };
+    try {
+      const captured = await captureRepositoryDiskCheckpoint(
+        {
+          identity: sessionTarget,
+          repository: f.repository,
+          checkpointRef,
+          additionalRefs: [aliasRef],
+          purpose: "publication",
+          placements,
+          environments: f.environments,
+          assertCurrent() {},
+        },
+        async (snapshot, verifyCurrent) => {
+          await verifyCurrent();
+          for (const ref of [checkpointRef, aliasRef]) {
+            await withSessionRepositoryCheckpoint(
+              { ...source, checkpointRef: ref },
+              async (payload) => {
+                expect(payload.current.entries).toEqual([]);
+                expect(payload.publicationDigest).toMatch(/^sha256:/);
+                expect(payload.publicationStagingRoot).toBeDefined();
+              },
+            );
+          }
+          return snapshot;
+        },
+      );
+      expect(captured).toEqual({ checkpointRef, manifestHash: f.repository.manifestHash });
+      expect(await requireWorkspaceResultGit(f.remote, ["rev-parse", "HEAD"])).toBe(
+        f.repository.baseCommit,
+      );
+      await expect(withSessionRepositoryCheckpoint(source, async () => {})).rejects.toThrow(
+        "fresh disk export",
+      );
+      await expect(
+        readSessionRepositoryArtifacts({ ...source, assertCurrent() {} }),
+      ).rejects.toThrow("fresh disk export");
+      await expect(
+        forkSessionRepositoryWorkspace({
+          sourceWorkspaceId: f.repository.workspaceId,
+          agentId: sessionTarget.agentId,
+          sessionKey: "agent:main:unchanged-disk-fork",
+          assertCurrent() {},
+        }),
+      ).rejects.toThrow("Fork requires a fresh disk export");
+      expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+      expect(wire.errors).toEqual([]);
+      expect(f.workspace.quiescence.hasActiveWork()).toBe(false);
+    } finally {
+      await f.close();
+    }
   });
 
   it.for([

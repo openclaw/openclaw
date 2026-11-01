@@ -78,6 +78,10 @@ export function createModelPickerWindow(
   const items = createProjection<Record<string, VirtualItem | undefined>>(() =>
     Object.fromEntries(window().items.map((item) => [item.key, item])),
   );
+  const keys = createMemo(() => window().items.map((item) => String(item.key)), {
+    equals: (before, after) =>
+      before.length === after.length && before.every((key, index) => key === after[index]),
+  });
   function Row(props: { rowKey: string; render: () => JSX.Element }) {
     let element: HTMLDivElement;
     onSettled(() => {
@@ -103,6 +107,7 @@ export function createModelPickerWindow(
   return {
     bind: (element: HTMLDivElement) => (viewport = element),
     height: () => window().height,
+    keys,
     has: (key: string) => Boolean(items[key]),
     renderRow,
     reveal(key: string) {

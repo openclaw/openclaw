@@ -50,6 +50,10 @@
       "label": "Enable Bridge Mode",
       "help": "Read public memory artifacts and events from the active memory plugin in bridge mode."
     },
+    "bridge.ownership": {
+      "label": "Bridge Ownership",
+      "help": "Use sandboxed-only (default) for shared bridge reads, or owner to scope every caller's bridge reads to its agent. Native wiki pages stay shared. This filters wiki tool results, not filesystem access."
+    },
     "bridge.readMemoryArtifacts": {
       "label": "Read Memory Artifacts",
       "help": "Enable bridge reads from the active memory plugin's public artifact export."
@@ -191,6 +195,10 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "ownership": {
+            "type": "string",
+            "enum": ["sandboxed-only", "owner"]
+          },
           "enabled": {
             "type": "boolean"
           },

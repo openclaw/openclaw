@@ -43,6 +43,7 @@ export function DetailView(
       <SettingsPage wide>
         <div class="cron-back-row">
           <button
+            ref={props.focus?.ref("back")}
             type="button"
             class="cron-back"
             data-test-id="cron-back"

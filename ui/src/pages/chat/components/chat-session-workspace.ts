@@ -36,7 +36,7 @@ import type {
   FileReaderView,
   SessionWorkspaceFilter,
   SessionWorkspaceMobileNavigation,
-  SidebarContent,
+  SidebarSelection,
   TranscriptAttachments,
   WorkspaceFileLinkTarget,
 } from "./chat-sidebar-content-types.ts";
@@ -598,7 +598,7 @@ export function createSessionWorkspaceProps(
 
 export function resolveSessionDiffSidebarContent(
   state: SessionWorkspaceHost,
-): SidebarContent | null {
+): SidebarSelection | null {
   const workspace = getSessionWorkspace(state);
   return resolveSessionWorkspaceDiff(
     state,

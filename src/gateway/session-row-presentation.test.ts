@@ -145,6 +145,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
           expect(summaryEligibility).not.toHaveBeenCalled();
           expect(row.activitySummary).toBeUndefined();
           expect(row.sendDisabledReason).toBeUndefined();
+          expect(row.workspaceReadDisabledReason).toBeUndefined();
         } else {
           expect(diagnostics).toHaveBeenCalled();
           expect(summaryEligibility).toHaveBeenCalled();
@@ -284,13 +285,14 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const clients = profiles.map((profile) => profileClient(profile.id));
     const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
-    const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
+    const keys = ["host", "sandbox", "remote", "entry-blocked", "policy-blocked"];
     for (const key of keys) {
       seedRow(`agent:main:${key}`, {
         sessionId: key,
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: creatorId },
-        ...(key === "host" ? {} : { sandbox: "required" as const }),
+        ...(key === "host" || key === "remote" ? {} : { sandbox: "required" as const }),
+        ...(key === "remote" ? { execNode: "synthetic-node" } : {}),
         ...(key === "entry-blocked" ? { sendPolicy: "deny" as const } : {}),
       });
     }
@@ -319,9 +321,21 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     ] as const) {
       expect(reasonFor(index, key)).toBe(reason);
     }
+    const workspaceReasonFor = (key: string) =>
+      prepareProjectedSessionPresentation(projection, clients[0]!).snapshot({
+        agentId: "main",
+        key: `agent:main:${key}`,
+      }).row?.workspaceReadDisabledReason;
+    expect(workspaceReasonFor("host")).toBe(
+      "Your operator role requires a sandboxed session. You cannot read this session's host workspace files. Ask the owner to download and share the file, then attach it to your own session.",
+    );
+    for (const key of ["sandbox", "remote", "entry-blocked", "policy-blocked"]) {
+      expect(workspaceReasonFor(key)).toBeNull();
+    }
     setUserProfileRole(creatorId, "view");
     prepareGatewayRecipientProfile(clients[0]!);
     expect(reasonFor(0, "host")).toBeNull();
+    expect(workspaceReasonFor("host")).toBeNull();
   });
 });
 

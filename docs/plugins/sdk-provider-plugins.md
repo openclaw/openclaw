@@ -66,7 +66,28 @@ Do not write a separate permission store or infer consent from successful login.
 - **Docs.** Add `docs/providers/<id>.md` and list the provider in alphabetical
   order on the provider index.
 - **Proof.** Run a real agent turn on an isolated Gateway with a real key before
-  the PR opens. API calls and mocked transports do not replace it.
+  the PR opens. API calls and mocked transports do not replace it. Make that
+  Gateway look like a real install:
+  - Enable the bundled plugins users run alongside yours, with credentials,
+    not only your provider. Other plugins' hooks only show up when they are
+    configured.
+  - Save the key the way users do (the Control UI provider dialog, or
+    `openclaw models auth paste-api-key`), not only through an environment
+    variable.
+  - Set `OPENCLAW_DEBUG_MODEL_TRANSPORT=1` and check that the
+    `[model-fetch] start provider=<id> … url=` line names your vendor's
+    endpoint.
+- **Stay inside your provider.** Core also runs some hooks for providers you do
+  not own:
+  - `normalizeTransport` receives other providers' transports. Return nothing
+    unless the context names your provider or already targets your endpoint.
+    Core ignores another plugin's change that moves a provider to a different
+    origin, and
+    `src/plugins/contracts/provider-transport-scope.contract.test.ts` fails any
+    bundled hook that rewrites a foreign transport.
+  - `augmentModelCatalog` and `resolveExternalAuthProfiles` run as global
+    discovery. Return only catalog rows and auth profiles for providers your
+    plugin owns.
 - **New model for an existing provider.** Add catalog data, not code. Search
   every provider for the predecessor model ID before adding an exact-ID rule.
 
@@ -164,51 +185,21 @@ plugin auth also exclude agent-credential fallback for plugin-scoped providers.
 
 ## Handle model access after sign-in
 
-Existing consumers of `runModelsAuthLoginFlow` from
-`openclaw/plugin-sdk/provider-auth-login-flow-runtime` must handle a selection
-after credentials are saved. When effective restrictions can hide the provider's
-models, the existing `prompter.select` receives these options:
+Consumers of `runModelsAuthLoginFlow` from
+`openclaw/plugin-sdk/provider-auth-login-flow-runtime` get no model-access
+prompt. When restrictions hide every model of the provider, the flow adds
+`<provider>/*` to the restriction that governs the agent after credentials are
+saved, and returns `modelAccess: { message, applied }`. Show `message` with the
+completion text. `applied: false` means the policy was saved but the running
+Gateway has not confirmed it. Restrictions that already name some of the
+provider's models, and configurations without restrictions, stay unchanged.
 
-| Value  | Label                        | Effect                                                      |
-| ------ | ---------------------------- | ----------------------------------------------------------- |
-| `all`  | `Show all <Provider> models` | Adds that provider's wildcard to the existing policy owner. |
-| `keep` | `Keep current restrictions`  | Leaves restrictions unchanged.                              |
-
-Render the supplied message and options, and return the selected option's value.
-Do not assume that every `select` call chooses a provider or auth method. Neither
-choice activates a new default model. No choice is requested when restrictions
-are absent or already allow the whole provider.
-
-Canceling or rejecting this post-save selection does not undo saved credentials.
-The flow throws `ProviderAuthConfigApplyError`, which extends
-`ProviderCredentialsSavedError`; report that credentials were saved instead of
-treating it as a failed credential exchange. Cancellation at the selection leaves
-restrictions unchanged. A later application failure can leave the policy saved
-but not active in the running Gateway. Keep credential persistence and model
-visibility outcomes distinct.
-
-### Defer the choice to a later reply
-
-For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
-receives a `PreparedProviderModelAccess` request and replaces the post-save
-`select` call; it does not apply the choice. Retain the prepared request until
-login finishes. Use `createProviderLoginFlowRegistry` and
-`reserveProviderLoginFlow` to reserve only the credential exchange.
-
-After login finishes, call `offerProviderLoginModelAccess` with `flows`, `flowKey`,
-`prepared`, and `terminalMessage`. Deliver its structured reply. Always release
-the login in `finally` with `releaseProviderLoginFlow({ flows, flowKey, record })`.
-The pending model-access question has its own lifetime and remains answerable
-after that release; it does not block another login.
-
-Pass the later command to `answerProviderLoginModelAccess` with `flows`, `flowKey`,
-`agentId`, `command`, `runtime`, `readConfig`, and `assertCurrent`; `signal` is
-optional. `readConfig` must return the host's current config. The owner validates
-the answer, applies the choice, and consumes that question. Expired or conflicting
-choices receive a fresh question based on current restrictions.
-Use `cancelProviderLoginFlow({ flows, flowKey })` to cancel either pending phase.
-Do not reconstruct a wildcard write from button text or reuse a prepared request
-for a new login.
+A failed policy write does not undo saved credentials. The flow throws
+`ProviderAuthConfigApplyError`, which extends `ProviderCredentialsSavedError`;
+report that credentials were saved instead of treating it as a failed credential
+exchange. Use `createProviderLoginFlowRegistry` and `reserveProviderLoginFlow` to
+reserve the credential exchange, and release it in `finally` with
+`releaseProviderLoginFlow({ flows, flowKey, record })`.
 
 ### Keep hosted writes authorized
 
@@ -216,15 +207,8 @@ Hosted callers supply `signal` and `assertCurrent` to check the current login,
 sender authority, and selected provider/method before effects and after awaited
 work. An abort signal or matching login identifier alone is not current
 authorization. `beforePersistentEffect` remains the credential-persistence
-preparation callback. Browser authorization ends after the credential phase;
-the later model choice uses the current conversation or wizard authority.
-
-For a deferred choice, pass the answering command's current authority check as
-`answerProviderLoginModelAccess.assertCurrent`. Use its config argument when
-supplied: it is the policy writer's current config. Otherwise read the host's
-current config. The original login callback does not authorize a later command.
-Let the shared owner report the visibility outcome:
-a saved policy is not proof that the running Gateway applied it.
+preparation callback. The model-access write after sign-in uses the same
+`assertCurrent` check.
 
 ## Submit JSON requests
 

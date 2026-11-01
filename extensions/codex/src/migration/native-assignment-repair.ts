@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
@@ -26,7 +27,11 @@ type BindingRow = ReturnType<
   NonNullable<PluginDoctorStateMigrationContext["readPluginStateEntriesInKeyRange"]>
 >[number];
 
-async function normalizeRow(entry: BindingRow, params: Params, warnings: string[]) {
+type IdentityEvidence = Awaited<
+  ReturnType<NonNullable<PluginDoctorStateMigrationContext["readSessionIdentityEvidenceBatch"]>>
+>[number];
+
+function prepareRow(entry: BindingRow, warnings: string[]) {
   const raw = asOptionalRecord(entry.value);
   if (raw?.nativeSubagentAssignments === undefined) {
     return undefined;
@@ -50,12 +55,11 @@ async function normalizeRow(entry: BindingRow, params: Params, warnings: string[
     );
     return undefined;
   }
-  let assignments = inventory?.assignments ?? [];
-  const originalAssignments = assignments;
+  const assignments = inventory?.assignments ?? [];
   const identity = /^(session-key|session):([a-z0-9][a-z0-9_-]{0,63}):(.+)$/u.exec(entry.key);
   const binding = asOptionalRecord(raw.binding);
   const fingerprint = codexNativeSubagentHistoryConnectionFingerprint(stored.binding);
-  if (
+  const requester =
     assignments.length > 0 &&
     identity &&
     stored.sessionId &&
@@ -68,30 +72,42 @@ async function normalizeRow(entry: BindingRow, params: Params, warnings: string[
     binding.supervisionSourceThreadId === undefined &&
     binding.pendingSupervisionBranch === undefined &&
     (binding.authProfileId === undefined || typeof binding.authProfileId === "string") &&
-    fingerprint &&
-    params.context.readSessionIdentityEvidenceBatch
-  ) {
+    fingerprint
+      ? { agentId: identity[2]!, sessionId: stored.sessionId, kind: identity[1], fingerprint }
+      : undefined;
+  return { entry, raw, assignments, requester };
+}
+
+async function normalizeRow(
+  row: NonNullable<ReturnType<typeof prepareRow>>,
+  params: Params,
+  warnings: string[],
+  evidence?: IdentityEvidence,
+) {
+  const { entry, raw, requester } = row;
+  let assignments = row.assignments;
+  const originalAssignments = assignments;
+  if (requester && params.context.readSessionIdentityEvidenceBatch) {
     try {
-      const agentId = identity[2]!;
-      // Doctor distinguishes absent sessions from missing stores and deferred legacy imports.
-      const [evidence] = await params.context.readSessionIdentityEvidenceBatch([
-        { agentId, sessionId: stored.sessionId },
-      ]);
-      if (evidence?.state === "absent") {
+      const { agentId, sessionId, fingerprint } = requester;
+      if (!evidence) {
+        throw new Error("Requester ownership is unresolved");
+      }
+      if (evidence.state === "absent") {
         assignments = [];
-      } else if (evidence?.state === "current") {
+      } else if (evidence.state === "current") {
         const { getSessionEntryByIdAsync, resolveStorePath } = await loadSessionStoreRuntime();
         const { bindingStoreKey } = await loadSessionBindingRecord();
         const current = await getSessionEntryByIdAsync({
           agentId,
-          sessionId: stored.sessionId,
+          sessionId,
           env: params.env,
           storePath: resolveStorePath(params.config.session?.store, { agentId, env: params.env }),
           readConsistency: "latest",
         });
         if (
           !current ||
-          current.entry.sessionId !== stored.sessionId ||
+          current.entry.sessionId !== sessionId ||
           current.sessionKey !== evidence.sessionKey
         ) {
           throw new Error("Requester ownership is unresolved");
@@ -100,7 +116,7 @@ async function normalizeRow(entry: BindingRow, params: Params, warnings: string[
           kind: "session",
           agentId,
           sessionId: current.entry.sessionId,
-          ...(identity[1] === "session-key" ? { sessionKey: current.sessionKey } : {}),
+          ...(requester.kind === "session-key" ? { sessionKey: current.sessionKey } : {}),
         });
         let unknownLifecycle = false;
         assignments = assignments.filter((assignment) => {
@@ -186,8 +202,26 @@ async function* inspect(params: Params) {
     const rows = read(CODEX_APP_SERVER_BINDING_NAMESPACE, { prefix: "", after, limit: 512 });
     const replacements = [];
     const warnings: string[] = [];
-    for (const entry of rows) {
-      const replacement = await normalizeRow(entry, params, warnings);
+    const prepared = rows.flatMap((entry) => {
+      const row = prepareRow(entry, warnings);
+      return row ? [row] : [];
+    });
+    const requested = prepared.flatMap(({ requester }) =>
+      requester ? [{ agentId: requester.agentId, sessionId: requester.sessionId }] : [],
+    );
+    let evidence: IdentityEvidence[] = [];
+    if (requested.length && params.context.readSessionIdentityEvidenceBatch) {
+      try {
+        // The host verifies each legacy source once within this bounded page.
+        evidence = await params.context.readSessionIdentityEvidenceBatch(requested);
+      } catch {
+        // Missing evidence preserves every affected row with its existing warning.
+      }
+    }
+    let evidenceIndex = 0;
+    for (const row of prepared) {
+      const observed = row.requester ? evidence[evidenceIndex++] : undefined;
+      const replacement = await normalizeRow(row, params, warnings, observed);
       if (replacement) {
         replacements.push(replacement);
       }
@@ -199,6 +233,8 @@ async function* inspect(params: Params) {
       return;
     }
     after = rows.at(-1)?.key;
+    // Synchronous evidence reads and settled promises must still admit timers and owner messages.
+    await nextTurn();
   }
 }
 

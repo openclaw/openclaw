@@ -742,7 +742,7 @@ describe("runtime postbuild static assets", () => {
       for (const chunk of release.chunks) {
         const loaded = await load(rootDir, `dist/${chunk.path}`);
         for (const { exported, origin } of chunk.exports) {
-          expect(loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
+          expect(await loaded[exported](), `${release.version}: ${chunk.path}:${exported}`).toBe(
             origin.symbol,
           );
         }
@@ -1325,7 +1325,10 @@ describe("previous release update compatibility", () => {
     return output;
   }
 
-  function serveTarball(archive: string): { child: childProcess.ChildProcess; url: string } {
+  function serveTarball(
+    archive: string,
+    failFirstRequests = 0,
+  ): { child: childProcess.ChildProcess; url: string } {
     const root = createTempDir("update-compat-registry-");
     const portFile = path.join(root, "port");
     const server = path.join(root, "server.cjs");
@@ -1334,8 +1337,15 @@ describe("previous release update compatibility", () => {
       [
         'const fs = require("node:fs");',
         'const http = require("node:http");',
-        "const [archive, portFile] = process.argv.slice(2);",
+        "const [archive, portFile, failFirst] = process.argv.slice(2);",
+        "let requests = 0;",
         "const instance = http.createServer((_request, response) => {",
+        "  requests += 1;",
+        "  if (requests <= Number(failFirst)) {",
+        '    response.writeHead(503, { "content-type": "text/plain" });',
+        '    response.end("temporary registry failure");',
+        "    return;",
+        "  }",
         '  response.writeHead(200, { "content-type": "application/octet-stream" });',
         "  fs.createReadStream(archive).pipe(response);",
         "});",
@@ -1344,9 +1354,13 @@ describe("previous release update compatibility", () => {
         "});",
       ].join("\n"),
     );
-    const child = childProcess.spawn(testNodeExecPath, [server, archive, portFile], {
-      stdio: "ignore",
-    });
+    const child = childProcess.spawn(
+      testNodeExecPath,
+      [server, archive, portFile, String(failFirstRequests)],
+      {
+        stdio: "ignore",
+      },
+    );
     const deadline = Date.now() + 5_000;
     while (!fsSync.existsSync(portFile) && Date.now() < deadline) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
@@ -1462,7 +1476,7 @@ describe("previous release update compatibility", () => {
     const archive = path.join(root, "openclaw.tgz");
     await createTar({ cwd: root, file: archive, gzip: true }, ["package"]);
     const registryIntegrity = `sha512-${createHash("sha512").update(fsSync.readFileSync(archive)).digest("base64")}`;
-    const fixture = serveTarball(archive);
+    const fixture = serveTarball(archive, 1);
     try {
       const output = path.join(root, "inventory.json");
       const integrityArgs = ["view", `openclaw@${version}`, "dist.integrity", "--json"];
@@ -1475,6 +1489,7 @@ describe("previous release update compatibility", () => {
         ],
       );
       expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain("Retrying openclaw@2026.9.4 registry tarball download");
       expect(calls).toEqual([integrityArgs, tarballArgs]);
       expect(readUpdateCompatibilityInventory(output).releases).toMatchObject([
         { version, integrity: registryIntegrity, chunks: [] },

@@ -565,6 +565,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     readRuntimeRefresh: providerLifecycle.readRuntimeRefresh,
     ensureRetainedRunning: providerLifecycle.ensureRetainedRunning,
     suspendRetained: providerLifecycle.suspendRetained,
+    inspectTurnLease: (params: Parameters<typeof providerLifecycle.inspectTurnLease>[0]) => {
+      const signal = params.signal ? AbortSignal.any([scope.signal, params.signal]) : scope.signal;
+      const operation = trackOperation(
+        withLock(params.environmentId, async () => {
+          signal.throwIfAborted();
+          await store.ready();
+          await providerLifecycle.inspectTurnLease({ ...params, signal });
+        }),
+      );
+      // A cancelled waiter cannot detach accepted cleanup from the service lifetime.
+      return racePromiseWithAbortSignal(operation, signal);
+    },
     supportsProviderExecutionMode: providerSupportsExecutionMode,
     supportsExecutionMode: (profileId: string, mode: WorkerExecutionMode) => {
       const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];

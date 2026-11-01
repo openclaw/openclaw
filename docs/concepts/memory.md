@@ -309,7 +309,10 @@ other flush plans are not resolved for sessions that cannot write it. It exposes
 tools, subject to normal tool policies. Those tools receive the source turn's
 memory audience and sandbox state. Missing lookup tools produce a warning but do
 not block a flush that can still persist. The flush is skipped if no valid
-audience or permitted persistence tool is available. It succeeds when a
+audience or permitted persistence tool is available. Source-session and sandbox
+policy denials skip provider flush preparation before a maintenance turn is
+dispatched. These skips are debug diagnostics, not failed lane tasks. Model-specific
+policy and dynamic tool availability are checked by the selected attempt. It succeeds when a
 persistence tool completes without error or the agent returns `NO_REPLY`; lookup
 success alone does not complete the flush. Skipping or failing this optional step
 does not prevent compaction. Plugin authors can find the contract and retry

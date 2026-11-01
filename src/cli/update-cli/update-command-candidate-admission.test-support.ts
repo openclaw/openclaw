@@ -58,9 +58,13 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     freshRestartCalls,
     lastWriteJsonCall,
     getErrorOutput,
-    getTriageFailures,
+    runUpdateFailureTriage,
     expectNoSideEffects,
   } = f;
+
+  // Failure assertions must not render the triage target's inherited environment.
+  const getTriageFailures = () =>
+    vi.mocked(runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);
 
   const { prepareCandidateAdmissionFixture, candidateAdmissionVerdict } =
     createCandidateAdmissionFixtures(f);

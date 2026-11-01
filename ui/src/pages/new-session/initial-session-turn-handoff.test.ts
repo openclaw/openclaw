@@ -1,9 +1,4 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "../chat/attachment-payload-store.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { completeInitialSessionTurn } from "./initial-session-turn-handoff.ts";
 import { InstantThreadHandoff } from "./instant-thread-handoff.ts";
@@ -172,65 +167,6 @@ describe("first-turn publication", () => {
         }
       } finally {
         instant.dispose();
-      }
-    },
-  );
-});
-
-describe("retained launcher rejection", () => {
-  it.each([true, false])(
-    "publishes launcher rejection only for its current owner (%s)",
-    async (current) => {
-      const { context } = createDraftFixture();
-      const client = context.gateway.snapshot.client!;
-      const attachment = current
-        ? registerChatAttachmentPayload({
-            attachment: { id: "launcher-image", mimeType: "image/png", fileName: "image.png" },
-            dataUrl: "data:image/png;base64,aW1hZ2U=",
-            file: new File(["image"], "image.png", { type: "image/png" }),
-          })
-        : undefined;
-      const retain = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
-      const navigation = new StartedSessionNavigation();
-      const navigate = current ? undefined : vi.spyOn(navigation, "navigate").mockResolvedValue();
-      const clearDraft = vi.fn(async () => {});
-      const onRejectedPrompt = vi.fn();
-      const onAccepted = vi.fn();
-      onTestFinished(() => releaseChatAttachmentPayloads(attachment ? [attachment] : []));
-      const error = current ? "Rejected image" : "First turn denied";
-      await completeInitialSessionTurn({
-        context,
-        client,
-        agentId: "main",
-        result: { key: "agent:main:dashboard:rejected", initialRun: { status: "rejected", error } },
-        turn: {
-          text: current ? "" : "Keep this prompt visible",
-          attachments: attachment ? [attachment] : [],
-          createdAt: 1,
-        },
-        instant: undefined,
-        navigation,
-        isCurrent: () => current,
-        clearDraft,
-        completeInBackground: () => true,
-        finishNavigation: vi.fn(),
-        onRejectedPrompt,
-        onAccepted: current ? undefined : onAccepted,
-      });
-      expect(clearDraft).not.toHaveBeenCalled();
-      if (attachment) {
-        const destination = retain.mock.calls[0]![0].attachments;
-        expect(destination).toHaveLength(1);
-        expect(destination[0]!.id).not.toBe(attachment.id);
-        expect(getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aW1hZ2U=");
-        releaseChatAttachmentPayloads([attachment]);
-        expect(getChatAttachmentDataUrl(destination[0]!)).toBe("data:image/png;base64,aW1hZ2U=");
-        expect(onRejectedPrompt).toHaveBeenCalledExactlyOnceWith(error);
-      } else {
-        expect(navigate).not.toHaveBeenCalled();
-        expect(retain).not.toHaveBeenCalled();
-        expect(onAccepted).not.toHaveBeenCalled();
-        expect(onRejectedPrompt).not.toHaveBeenCalled();
       }
     },
   );

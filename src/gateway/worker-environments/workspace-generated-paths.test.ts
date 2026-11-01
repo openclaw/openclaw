@@ -42,9 +42,8 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
-  ".openclaw/tmp",
   ".local/share/pnpm/store",
-  ".openclaw/.pnpm-store",
+  ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".cache/bun-transpiler",

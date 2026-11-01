@@ -396,7 +396,8 @@ export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContr
         id: "gemini-3.1-pro-preview",
         provider: providerId,
         reasoning: true,
-        ...(providerId === "google" ? { api, baseUrl } : {}),
+        // AI Studio Gemini text models default to Interactions regardless of the template.
+        ...(providerId === "google" ? { api: "google-interactions", baseUrl } : {}),
       });
     });
   });

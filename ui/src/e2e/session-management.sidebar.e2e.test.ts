@@ -995,7 +995,11 @@ suite.define(() => {
         page.locator('.sidebar-recent-session[data-session-key="agent:main:chat-29"]'),
       );
       await viewport.evaluate((element) => element.scrollTo(0, 0));
-      await page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]').waitFor();
+      // Coding follows the chat list, so reveal its row through the real viewport.
+      await revealSidebarTarget(
+        viewport,
+        page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]'),
+      );
       await captureUiProof(suite, page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.
