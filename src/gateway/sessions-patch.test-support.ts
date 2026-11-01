@@ -91,3 +91,32 @@ export function mainStoreEntry(overrides: Partial<SessionEntry>): Record<string,
     } as SessionEntry,
   };
 }
+
+export type PatchFixture = Omit<Parameters<typeof runPatch>[0], "patch"> &
+  Omit<ApplySessionsPatchArgs["patch"], "key"> & {
+    key?: string;
+    mainEntry?: Partial<SessionEntry>;
+  };
+export function runPatchFields({
+  cfg,
+  store,
+  storeKey = MAIN_SESSION_KEY,
+  agentId,
+  loadGatewayModelCatalog,
+  archivedBy,
+  mainEntry,
+  ...patch
+}: PatchFixture) {
+  return runPatch({
+    cfg,
+    store: mainEntry === undefined ? store : mainStoreEntry(mainEntry),
+    storeKey,
+    agentId,
+    loadGatewayModelCatalog,
+    archivedBy,
+    patch: { key: storeKey, ...patch },
+  });
+}
+export async function patchFieldsOk(options: PatchFixture) {
+  return expectPatchOk(await runPatchFields(options));
+}

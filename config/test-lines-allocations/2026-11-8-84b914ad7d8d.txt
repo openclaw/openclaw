@@ -1,0 +1,5 @@
+42
+# LOCAL 2026.11.8 row 150; source 84b914ad7d8dee8a7b052c518db0cc90ac8f959e.
+# Preserves explicit true in sparse tool overrides while retaining false/unset and unrelated override semantics. Scope limits: Server-only; Swift composer companion omitted, no macOS/visual proof.
+# Keeps all assertions via metadata/policy sibling extraction; 42 net test LF versus integration HEAD.
+# Scalar baseline unchanged; focused private proof retained.
