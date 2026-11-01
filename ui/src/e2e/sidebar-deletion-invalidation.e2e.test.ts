@@ -160,7 +160,11 @@ suite.define(() => {
           gateways.push(gateway);
           await target.goto(controlUiSessionUrl(suite.server.baseUrl, retained.key));
           await gateway.waitForRequest("connect");
-          await gateway.resolveDeferred("connect");
+        }
+        // Start both tabs before either can publish a boot snapshot. A cached
+        // handoff is separate work from the deletion measured below.
+        await Promise.all(gateways.map((gateway) => gateway.resolveDeferred("connect")));
+        for (const target of pages) {
           await row(target, retained.key).first().waitFor();
           const deletedRow = row(target, deleted.key);
           if (subagent) {
@@ -169,7 +173,9 @@ suite.define(() => {
           } else {
             await deletedRow.first().waitFor();
           }
-          await target.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+          await target
+            .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+            .waitFor();
         }
         for (const target of pages) {
           await target.evaluate(() => {
