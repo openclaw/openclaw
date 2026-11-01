@@ -45,6 +45,12 @@ backup.
 
 ## Update implementation contract
 
+Pre-update config copies publish through a temporary file and same-directory
+rename. An interrupted write preserves the previous `.pre-update` copy, and a
+later snapshot attempt can retry. Post-update recovery refuses malformed copies
+and leaves the current config intact. This repair must be present in the updater
+taking the snapshot; it does not establish power-loss durability.
+
 Git-source and immutable updates probe support before passing `--no-lazy-fetch`.
 Older Git runs the same inspection commands without that option; partial clones
 may fetch promised objects. This fix must be present in the installed updater;
