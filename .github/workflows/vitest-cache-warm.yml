@@ -235,6 +235,16 @@ jobs:
           OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1"
         run: node --import tsx scripts/ci-warm-vitest-caches.mts
 
+      # The Node collection already prepares and joins a full generation after
+      # the build. Preserve the earlier source-only archive for ordinary shards.
+      - name: Save built-source compiled Vitest workers
+        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.warm-caches.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/vitest-worker-cache/run-cache-0
+          key: ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.setup-node-env.outputs.node-toolchain-cache-key }}-${{ github.run_id }}-${{ github.run_attempt }}
+
       - name: Save Vitest transform cache
         if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-cache-key != '' }}
         continue-on-error: true

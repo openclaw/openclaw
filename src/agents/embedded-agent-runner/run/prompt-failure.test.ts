@@ -12,6 +12,7 @@ import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import { recordModelFallbackStop } from "../../model-fallback-stop.js";
+import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -136,6 +137,9 @@ describe("handleEmbeddedPromptFailure", () => {
       provider: "openai",
       modelId: "fixture",
       cyberAccessProgram: "daybreak_blue" as const,
+      admittedRunContext: {
+        operationalRunInstance: createOperationalRunInstanceRef("prompt-failure-test"),
+      },
       authProfileStore: { version: 1 as const, profiles: {} },
       preparedModelRuntime: runtime,
       runtimePlan: buildAgentRuntimePlan({

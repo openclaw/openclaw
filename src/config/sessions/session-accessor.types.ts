@@ -770,7 +770,7 @@ export type SessionBranchListResult =
 export type SessionBranchListParams = Pick<
   SessionMessageCutMutationParams,
   "agentId" | "env" | "sessionKey" | "sessionStoreKey" | "storePath"
->;
+> & { signal?: AbortSignal };
 
 export type SessionBranchSwitchMutationResult =
   | {

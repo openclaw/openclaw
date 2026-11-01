@@ -11,7 +11,7 @@ import { isGatewayClientProfilePending } from "./server-methods/gateway-client-i
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { isGatewayAdmin, prepareProjectedSessionSharing } from "./session-sharing.js";
+import { prepareProjectedSessionSharing, isGatewayAdmin } from "./session-sharing.js";
 
 /** Roster objects are immutable for one publication; authority is checked for every recipient. */
 export function createPresenceRecipientProjection(params: {
@@ -19,7 +19,7 @@ export function createPresenceRecipientProjection(params: {
   presence: SystemPresence[];
   projection?: Pick<
     SessionRowProjection,
-    "getPolicyConfig" | "sharingRevision" | "sharingTargetState"
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState" | "hasMembership"
   >;
 }): (client: GatewayClient | null) => SystemPresence[] {
   const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
@@ -98,11 +98,11 @@ export function createPresenceRecipientProjection(params: {
     const sharing = prepareProjectedSessionSharing({
       cfg,
       client,
-      isMember: () => false,
+      isMember: (target, identityId) =>
+        params.projection?.hasMembership(target.storePath, target.storeKey, identityId) ?? false,
     });
     // Memory actors have independent lifetimes; their watches must stay live.
-    const audience =
-      currentRevision && !hasMemoryWatches ? sharing.getCacheKey(currentRevision) : undefined;
+    const audience = currentRevision && !hasMemoryWatches ? sharing.getCacheKey() : undefined;
     const cached = audience === undefined ? undefined : audiences.get(audience);
     if (cached) {
       return cached;
@@ -115,7 +115,12 @@ export function createPresenceRecipientProjection(params: {
           continue;
         }
         const target = resolveTarget(sessionKey, key, agentId);
-        if (target && (sharing.entryFilter?.(target.canonicalKey, target.entry) ?? true)) {
+        const canRead =
+          target &&
+          ("storePath" in target
+            ? sharing.canReadTarget(target)
+            : (sharing.entryFilter?.(target.canonicalKey, target.entry) ?? true));
+        if (canRead) {
           visible.add(sessionKey);
           indexes.push(index);
         }

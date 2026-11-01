@@ -16,7 +16,6 @@ input.settings-input,
 select.settings-select:not([multiple]) {
   height: var(--settings-control-height);
   padding-block: 0;
-  box-sizing: border-box;
 }
 
 .settings-row__control .btn--icon,
@@ -44,7 +43,6 @@ select.settings-select:not([multiple]) {
 /* The neutral track keeps its 2px inset; many-option enums may wrap. */
 .settings-segmented {
   min-height: var(--settings-control-height);
-  box-sizing: border-box;
   align-items: stretch;
   display: inline-flex;
   flex-wrap: wrap;

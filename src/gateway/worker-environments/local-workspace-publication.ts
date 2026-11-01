@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import type {
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
@@ -42,7 +43,20 @@ export function readLocalWorkspaceCommit(
           Object.entries(mutation.patch).filter(([, entry]) => entry !== undefined),
         ),
         ...(mutation.manifest
-          ? { baseline_ref: mutation.manifest.resultingRoot, baseline_json: null }
+          ? {
+              baseline_ref: mutation.manifest.resultingRoot,
+              baseline_json: null,
+              ...(mutation.manifest.treeRoot
+                ? { tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot) }
+                : {}),
+              ...(mutation.manifest.fingerprints
+                ? {
+                    [`${mutation.manifest.fingerprints.target}_fingerprints`]: Uint8Array.from(
+                      Buffer.from(mutation.manifest.fingerprints.blob, "base64"),
+                    ),
+                  }
+                : {}),
+            }
           : {}),
         worktree_id: id,
         revision: mutation.revision + 1,

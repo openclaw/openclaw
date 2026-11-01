@@ -9,6 +9,7 @@ import {
   coalesceAgentRunFrames,
 } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -195,7 +196,7 @@ export function projectTranscriptChain(
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
-    if (item.kind === "notice" && item.handoffBoundary) {
+    if (isHandoffBoundaryItem(item)) {
       return false;
     }
     const previous = collapsedItems[index - 1];
@@ -412,7 +413,14 @@ export function projectTranscriptRows(
     const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
-      const previews = workPreviews.get(row.key);
+      // Work outside a run frame can anchor its previews to an answer inside
+      // one; that answer renders as part of the frame row.
+      const anchors =
+        row.kind === "item" && row.item.kind === "agent-run-frame"
+          ? [row.key, ...row.item.parts.map((part) => part.key)]
+          : [row.key];
+      const anchored = anchors.flatMap((anchor) => workPreviews.get(anchor) ?? []);
+      const previews = anchored.length > 0 ? anchored : undefined;
       if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
         const content: NativeTranscriptView = { kind: "work-previews", previews };
         result.push({

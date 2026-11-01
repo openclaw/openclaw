@@ -813,6 +813,62 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(h.runCliAgentMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "another model", provider: "anthropic", model: "claude-sonnet-4-6" },
+    { name: "another provider", provider: "openai", model: "gpt-4.1" },
+  ])(
+    "keeps a current job on its captured model and runtime after its conversation switches to $name",
+    async (next) => {
+      const cfg = await embeddedAnthropicConfig(claudeToken());
+      const binding = await captureFromCreator(cfg, claudeCliCreator());
+      expect(binding?.runtime).toBe("claude-cli");
+      // Model refs resolve as written, so a copied conversation model would be selected.
+      h.resolveAllowedModelRefMock.mockImplementation(({ raw }: { raw: string }) => {
+        const [provider = "", ...model] = raw.split("/");
+        return { ref: { provider, model: model.join("/") } };
+      });
+      const parentKey = "agent:main:dashboard:creator";
+      // After creation, the conversation moves to another model and runtime.
+      const switched: SessionEntry = {
+        sessionId: "creator-session",
+        updatedAt: 1,
+        modelOverride: next.model,
+        providerOverride: next.provider,
+        modelOverrideSource: "user",
+        agentRuntimeOverride: "openclaw",
+      };
+      const { resolveCronSession } = await vi.importActual<
+        typeof import("./isolated-agent/session.js")
+      >("./isolated-agent/session.js");
+      h.resolveCronSessionMock.mockImplementation(
+        async (params: Parameters<typeof resolveCronSession>[0]) =>
+          resolveCronSession({
+            ...params,
+            store: { [parentKey]: switched },
+            lifecycleTimestamps: {},
+          }),
+      );
+      h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+      const job = makeAuthJob({
+        sessionTarget: "current",
+        sessionKey: parentKey,
+        inferenceBinding: binding,
+      });
+
+      const result = await runWithConfig(cfg, job);
+
+      // The run keeps the runtime, provider, model and account the job was created with.
+      expect(result.status, result.error).toBe("ok");
+      expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+        provider: "claude-cli",
+        model: claudeModel,
+        authProfileId: claudeProfile,
+      });
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(job.inferenceBinding).toBe(binding);
+    },
+  );
+
   it.each(["embedded", "cli"] as const)(
     "fails a %s job whose stored account was removed with one message naming account and runtime",
     async (route) => {

@@ -294,6 +294,9 @@ export async function handleChatHistoryRequest({
       ? {
           ...historyPage.encodedResponse,
           messages: new SerializedJsonArray(historyPage.encodedResponse.messages),
+          activity: historyPage.encodedResponse.activity
+            ? new SerializedJsonArray(historyPage.encodedResponse.activity)
+            : undefined,
         }
       : prepareChatHistoryResponsePage(historyPage, {
           entry: historyEntry,

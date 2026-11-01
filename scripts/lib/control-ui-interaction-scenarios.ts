@@ -63,6 +63,7 @@ const progressClockSessions = Array.from(
 const progressClocks =
   'openclaw-session-progress-widget [data-progress-card-placement="board"] time';
 const initialProgressClocks = new WeakMap<Page, { count: number; labels: string[] }>();
+const graphStreamingRuns = new WeakMap<Page, string>();
 
 const nativeBoardSessions = Array.from(
   { length: 6 },
@@ -124,7 +125,10 @@ export type InteractionScenario = {
   explicitOnly?: boolean;
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
-  fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
+  fixtureOverrides?: (
+    sandbox: InteractionSandbox | undefined,
+    base: ReturnType<typeof createInteractionFixture>,
+  ) => InteractionFixtureOverrides;
   createRequestHandlers?: (
     defaults: Readonly<Record<string, (params: unknown) => unknown>>,
   ) => Record<string, (params: unknown) => unknown>;
@@ -150,7 +154,7 @@ export function createScenarioFixture(
   sandbox?: InteractionSandbox,
 ): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
-  const overrides = scenario.fixtureOverrides?.(sandbox);
+  const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
     ...base,
     ...overrides,
@@ -1370,6 +1374,8 @@ export function installInteractionNavigationPreloadObserver() {
 export async function settleInteractionNavigationPreloads(
   page: Page,
 ): Promise<InteractionNavigationPreloads> {
+  // Headless Chromium can strand the shell's idle callback until another frame runs.
+  await frames(page);
   const expected = await page.evaluate(async () => {
     const descriptor = document
       .getElementById("openclaw-navigation-preloads")
@@ -1498,7 +1504,11 @@ async function inventoryReady(
       .getByText("Interaction 0000", { exact: true })
       .waitFor();
     await page.waitForFunction(
-      () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 25,
+      () =>
+        Number(
+          document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+            document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+        ) === 26,
     );
   } else {
     await gateway.waitForRequest("cron.list", { match: { offset: 0 } });
@@ -1506,11 +1516,14 @@ async function inventoryReady(
       .locator(".cron-table__row")
       .getByText("Warm automation 0000", { exact: true })
       .waitFor();
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(".cron-table__row").length === 50 &&
-        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true",
-    );
+    await page.waitForFunction(() => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === 50 &&
+        document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true"
+      );
+    });
   }
 }
 
@@ -1541,10 +1554,14 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
   await page.locator(".data-table-pagination__info").getByText(/1000/).waitFor();
   await toggle.click();
   await filters.waitFor({ state: "hidden" });
-  // The owner sorts 1,000 rows, while the product deliberately renders at most 100 per page.
+  // The owner sorts 1,000 rows; the logical page has 100 even when its DOM is windowed.
   await page.locator(".data-table-pagination__size").selectOption("100");
   await page.waitForFunction(
-    () => document.querySelectorAll(".sessions-table tbody .session-data-row").length === 100,
+    () =>
+      Number(
+        document.querySelector(".sessions-table")?.getAttribute("aria-rowcount") ??
+          document.querySelectorAll(".sessions-table tbody .session-data-row").length + 1,
+      ) === 101,
   );
   await frames(page);
 }
@@ -1559,15 +1576,28 @@ async function refreshSessions(page: Page, gateway: MockGatewayControls) {
   await frames(page);
 }
 
+// Inventory cardinality is independent of the number of materialized rows.
+// The fallback lets the same harness compare production bundles before windowing.
+export async function cronLoadedJobCount(page: Page) {
+  return page.evaluate(() => {
+    const size = document.querySelector(".cron-table__row")?.getAttribute("aria-setsize");
+    return size ? Number(size) : document.querySelectorAll(".cron-table__row").length;
+  });
+}
+
 async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
   for (let count = 100; count <= 500; count += 50) {
-    await more.click();
-    await page.waitForFunction(
-      (expected) => document.querySelectorAll(".cron-table__row").length === expected,
-      count,
-    );
+    // Measured rows can move the footer between pointer down and pointer up.
+    await more.press("Enter");
+    await page.waitForFunction((expected) => {
+      const row = document.querySelector(".cron-table__row");
+      const size = row?.getAttribute("aria-setsize");
+      return (
+        (size ? Number(size) : document.querySelectorAll(".cron-table__row").length) === expected
+      );
+    }, count);
   }
 }
 
@@ -1932,7 +1962,10 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 actual native Workboard cards preserve cancelled/coalesced popover transitions, pending hover cancellation, placement and independent resource retirement. Requires --resource-counts; diagnostic waits are not CPU timing.",
     rowSelector: ".workboard-card",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
-    run: (page, gateway) => exerciseWorkboardResourceFixture(page, gateway, frames),
+    run: (page, gateway) =>
+      exerciseWorkboardResourceFixture(page, gateway, async (target) => {
+        await frames(target);
+      }),
   },
   {
     id: "workboard-events-cpu",
@@ -1944,7 +1977,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "1,000 closed cards receive eight actual viewport changes and eight native column scrolls with no diagnostic listeners; measure CPU without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page) => {
-      const evidence = await runWorkboardEventsCpu(page, frames);
+      const evidence = await runWorkboardEventsCpu(page, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -1959,7 +1994,9 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       "Retire 1,000 actual cards, then mount 1,000 through real paginated responses inside the warm CPU interval; measure without --resource-counts.",
     prepare: (page) => prepareWorkboardResourceFixture(page, settleSidebarBackgroundWork),
     run: async (page, gateway) => {
-      const evidence = await runWorkboardRemountCpu(page, gateway, frames);
+      const evidence = await runWorkboardRemountCpu(page, gateway, async (target) => {
+        await frames(target);
+      });
       await settleSidebarCapture(page);
       return evidence;
     },
@@ -2519,6 +2556,117 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: refreshSessions,
   },
   {
+    id: "graph-stream-100-deltas",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "One hundred separately flushed chat deltas render the complete reply, which remains visible after finalization.",
+    prepare: async (page, gateway) => {
+      await prepareChat(page);
+      const after = (await gateway.getRequests("chat.send")).length;
+      await page
+        .locator(`${activePane} .agent-chat__composer-combobox textarea`)
+        .fill("Produce the synthetic graph measurement reply.");
+      await page.locator(`${activePane} .chat-send-btn--send`).click();
+      const request = await gateway.waitForRequest("chat.send", { after });
+      if (!isRecord(request.params) || typeof request.params.idempotencyKey !== "string") {
+        throw new Error("Graph streaming fixture did not start a chat run");
+      }
+      graphStreamingRuns.set(page, request.params.idempotencyKey);
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor();
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const runId = graphStreamingRuns.get(page);
+      if (!runId) {
+        throw new Error("Graph streaming fixture has no prepared run");
+      }
+      const text = await page.evaluate(
+        async ({ sessionKey, runId: targetRunId }) => {
+          const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          let reply = "";
+          for (let index = 1; index <= 100; index++) {
+            reply += `Graph streaming checkpoint ${index}.\n\n`;
+            mock.emit("chat", {
+              sessionKey,
+              runId: targetRunId,
+              seq: index,
+              state: "delta",
+              message: { role: "assistant", content: [{ type: "text", text: reply }] },
+            });
+            // Give every event its own reactive flush and native presentation turn.
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            });
+          }
+          return reply;
+        },
+        { sessionKey: sessionKeys[0], runId },
+      );
+      const liveReply = page.locator(`${activePane} .chat-bubble.streaming`);
+      await liveReply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await liveReply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      await gateway.emitChatFinal({ sessionKey: sessionKeys[0], runId, text });
+      const reply = page.locator(`${activePane} .chat-bubble:not(.streaming)`);
+      await reply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await reply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      const rendered =
+        (await reply.filter({ hasText: "Graph streaming checkpoint 100." }).textContent()) ?? "";
+      if (
+        text
+          .trim()
+          .split("\n\n")
+          .some((checkpoint) => !rendered.includes(checkpoint))
+      ) {
+        throw new Error("Graph streaming lost content during finalization");
+      }
+      // Empty mobile composers show voice input instead of the disabled Send button.
+      await page.locator(`${activePane} .chat-send-btn--send`).waitFor({ state: "attached" });
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor({ state: "detached" });
+      return { deltas: 100, finalized: true };
+    },
+  },
+  {
+    id: "graph-sidebar-live-update",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "An existing sidebar session adopts its live title while the selected transcript stays visible.",
+    prepare: async (page) => {
+      await prepareChat(page);
+      await navigation(page, "sessions");
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText("Interaction 0001", { exact: true })
+        .waitFor();
+      await settleSidebarBackgroundWork(page);
+    },
+    run: async (page, gateway) => {
+      const row = await gateway.getSessionRow(sessionKeys[1]);
+      const updatedAt = Math.max(Date.now(), (row.updatedAt ?? 0) + 1);
+      const label = "Graph sidebar live update witness";
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: row.key,
+        sessionId: row.sessionId,
+        agentId: "main",
+        reason: "patch",
+        ts: updatedAt,
+        session: { ...row, label, displayName: label, updatedAt, snapshotAt: updatedAt },
+        ancestorSessions: [],
+      });
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText(label, { exact: true })
+        .waitFor();
+      await page
+        .locator(activePane)
+        .getByText("Transcript 0 message 399.", { exact: false })
+        .waitFor();
+      await frames(page);
+      return { updatedRows: 1 };
+    },
+  },
+  {
     id: "chat-typing",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "Typing preserves the composer draft without sending a chat request.",
@@ -2807,7 +2955,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await frames(page);
       if (
         (await search.inputValue()) !== cronQuery ||
-        (await page.locator(".cron-table__row").count()) !== 500 ||
+        (await cronLoadedJobCount(page)) !== 500 ||
         (await page.locator(".cron-table").getAttribute("aria-busy")) !== "true" ||
         (await gateway.getRequests("cron.list")).length - before !== 1
       ) {

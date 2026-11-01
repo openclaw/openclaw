@@ -62,7 +62,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     state.client = createGatewayBrowserClientFixture({ request });
     state.connected = true;
     state.chatMessages = Array.from({ length: 12 }, (_, index) => nativeHistoryMessage(index + 3));
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+    state.chatHistoryPagination = { hasMore: true, olderCursor: "older-2", totalMessages: 4 };
     state.chatLoading = false;
     state.chatHasAutoScrolled = true;
     pane.render();
@@ -142,6 +142,10 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
       for (const observer of resizeObservers) {
         observer.emitTarget(earlier, 800, 80);
       }
+      // Native observer receipts commit compensation on the next frame.
+      expect(container.scrollTop).toBe(800);
+      vi.advanceTimersToNextFrame();
+      flush();
     }
     expect(container.scrollTop).toBe(760);
     container.dispatchEvent(new Event("scroll"));
@@ -155,13 +159,17 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     container.scrollTop = 720;
     container.dispatchEvent(new Event("scroll"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", {
-      sessionKey: state.sessionKey,
-      limit: 1000,
-      maxBytes: 3 * 1024 * 1024,
-      toolResultMaxChars: 2_000,
-      offset: 2,
-    });
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "chat.history",
+      {
+        sessionKey: state.sessionKey,
+        limit: 1000,
+        maxBytes: 3 * 1024 * 1024,
+        toolResultMaxChars: 2_000,
+        cursor: "older-2",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(state.chatFollowLocked).toBe(true);
     expect(state.chatReadingHistory).toBe(true);
   },

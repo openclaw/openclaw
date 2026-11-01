@@ -1,8 +1,17 @@
+type TranscriptWitness = { messageId: string; rowKey: string; text: string };
+export type TranscriptWitnesses = { saved: TranscriptWitness; live: TranscriptWitness };
+
 /** Browser-only diagnostic, serialized after the mock socket and wire-delay probe. */
 export function warmReloadProbe(
-  input: { rowFacts?: boolean; avatars?: boolean } = {},
+  input: {
+    rowFacts?: boolean;
+    avatars?: boolean;
+    lateRowFacts?: boolean;
+    witnesses?: TranscriptWitnesses;
+  } = {},
   samplePaneChrome?: (at: number) => void,
 ) {
+  const witnesses = input.witnesses;
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
@@ -46,6 +55,61 @@ export function warmReloadProbe(
   };
   const transcriptPaints: Array<{ renderTime: number; element: string; rowKey: string | null }> =
     [];
+  type WitnessSource = "saved" | "live";
+  const witnessElements = new WeakMap<Element, { source: WitnessSource; rowKey: string }>();
+  const witnessPaints: Array<{
+    source: WitnessSource;
+    identifier: string;
+    rowKey: string;
+    renderTime: number;
+  }> = [];
+  const witnessHistory: Array<{
+    atMs: number;
+    source: string;
+    messageCount: number | null;
+    saved: number;
+    live: number;
+  }> = [];
+  const recordWitnessHistory = (source: string, messages: unknown) => {
+    if (!witnesses) {
+      return;
+    }
+    const matches = { saved: 0, live: 0 };
+    for (const message of Array.isArray(messages) ? messages : []) {
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      const metadata = Reflect.get(message, "__openclaw");
+      const id = metadata && typeof metadata === "object" ? Reflect.get(metadata, "id") : null;
+      for (const witnessSource of ["saved", "live"] as const) {
+        if (id !== witnesses[witnessSource].messageId) {
+          continue;
+        }
+        const content = Reflect.get(message, "content");
+        const text =
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content
+                  .flatMap((block) =>
+                    block && typeof block === "object" && Reflect.get(block, "type") === "text"
+                      ? [Reflect.get(block, "text")]
+                      : [],
+                  )
+                  .join("\n")
+              : "";
+        if (text.includes(witnesses[witnessSource].text)) {
+          matches[witnessSource]++;
+        }
+      }
+    }
+    witnessHistory.push({
+      atMs: performance.now(),
+      source,
+      messageCount: Array.isArray(messages) ? messages.length : null,
+      ...matches,
+    });
+  };
   const largestPaints: Array<{
     renderTime: number;
     loadTime: number;
@@ -56,12 +120,37 @@ export function warmReloadProbe(
   let removedRows = 0;
   let stopped = false;
   let cachedRows: Element[] = [];
-  const factSelectors = {
+  const factSelectors: Record<string, string> = {
     reactions: ".chat-message-reactions",
     notices: ".chat-run-failure",
     activity: ".chat-activity-group",
     meta: ".msg-meta",
+    ...(input.lateRowFacts
+      ? {
+          links: ".markdown-session-link, .markdown-github-item",
+          images: ".chat-image-frame",
+          canonicalNotices: ".chat-notice",
+          avatars: ".chat-avatar-slot, .chat-avatar, .chat-author-avatar",
+        }
+      : {}),
   };
+  const lateFrames: Array<{
+    at: number;
+    cached: boolean;
+    height: number | undefined;
+    links: string[];
+    images: string[];
+    notices: string[];
+    avatars: string[];
+  }> = [];
+  const imageFact = (image: HTMLImageElement) => [
+    image.getAttribute("src")?.startsWith("blob:")
+      ? image.getAttribute("src")
+      : image.getAttribute("src")?.split("?", 1)[0],
+    image.complete && image.naturalWidth > 0,
+    image.naturalWidth,
+    image.naturalHeight,
+  ];
   const factFrames: Array<{
     at: number;
     changes: Array<{ rowKey: string | null; parts: string[]; heightDelta: number }>;
@@ -84,10 +173,15 @@ export function warmReloadProbe(
       cached: boolean;
     }
   >();
+  let observedThread: Element | undefined;
   const resize = input.rowFacts
     ? new ResizeObserver((entries) => {
         for (const entry of entries) {
-          sizes.set(entry.target, entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+          const height = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height;
+          sizes.set(entry.target, height);
+          if (entry.target === observedThread && lateFrames.length) {
+            lateFrames.at(-1)!.height = height;
+          }
         }
       })
     : undefined;
@@ -133,8 +227,10 @@ export function warmReloadProbe(
       // Element Timing is implemented by Chromium but absent from lib.dom.
       const paint = entry as ElementPaint;
       const row = paint.element?.closest(".chat-virtual-row");
+      const witness = paint.element ? witnessElements.get(paint.element) : undefined;
       if (
-        paint.identifier !== "openclaw-transcript" ||
+        (paint.identifier !== "openclaw-transcript" &&
+          (!witness || paint.identifier !== `openclaw-transcript-${witness.source}`)) ||
         !row ||
         !paint.element ||
         paint.renderTime <= 0 ||
@@ -149,6 +245,16 @@ export function warmReloadProbe(
         element: elementLabel(paint.element),
         rowKey: row.getAttribute("data-virtual-row-key"),
       });
+      if (witness && paint.identifier === `openclaw-transcript-${witness.source}`) {
+        milestones[
+          witness.source === "saved" ? "firstSavedWitnessPaint" : "firstLiveWitnessPaint"
+        ] ??= paint.renderTime;
+        witnessPaints.push({
+          ...witness,
+          identifier: paint.identifier,
+          renderTime: paint.renderTime,
+        });
+      }
     }
   });
   observe("largest-contentful-paint", (entries) => {
@@ -215,6 +321,7 @@ export function warmReloadProbe(
       });
       if (store === "snapshots" && request.result !== undefined) {
         mark("cacheRead");
+        recordWitnessHistory("snapshot-read", request.result?.snapshot?.messages);
       }
     });
     return request;
@@ -286,6 +393,19 @@ export function warmReloadProbe(
           ) {
             mark("catchupResponse");
           }
+          if (frame.ok === true) {
+            if (method === "chat.startup" || method === "chat.history") {
+              recordWitnessHistory(method, frame.payload?.messages);
+            } else if (
+              method === "sessions.messages.subscribe" &&
+              frame.payload?.initialHistory?.ok === true
+            ) {
+              recordWitnessHistory(
+                "subscription-initial-history",
+                frame.payload.initialHistory.payload?.messages,
+              );
+            }
+          }
         }
       });
       return socket;
@@ -294,6 +414,8 @@ export function warmReloadProbe(
   const observer = new MutationObserver((records) => {
     const regions = new Map<string, number>();
     const textRoots = new Set<Element>();
+    const addedRoots = new Set<Element>();
+    const textSelector = input.lateRowFacts ? ".chat-text, .chat-notice" : ".chat-text";
     for (const record of records) {
       const element =
         record.target instanceof Element ? record.target : record.target.parentElement;
@@ -314,7 +436,7 @@ export function warmReloadProbe(
       ) {
         avatarTransitions.push({ at: performance.now(), region, attribute: record.attributeName });
       }
-      const textRoot = element?.closest(".chat-text");
+      const textRoot = element?.closest(textSelector);
       if (textRoot) {
         textRoots.add(textRoot);
       }
@@ -322,10 +444,13 @@ export function warmReloadProbe(
         if (!(node instanceof Element)) {
           continue;
         }
-        if (node.matches(".chat-text")) {
+        if (witnesses) {
+          addedRoots.add(node);
+        }
+        if (node.matches(textSelector)) {
           textRoots.add(node);
         }
-        for (const root of node.querySelectorAll(".chat-text")) {
+        for (const root of node.querySelectorAll(textSelector)) {
           textRoots.add(root);
         }
       }
@@ -346,15 +471,34 @@ export function warmReloadProbe(
     // Tag direct text owners before paint. A row/container attribute does not
     // cover descendant block text, and a DOM/rAF timestamp is not presentation.
     for (const root of textRoots) {
-      if (!root.closest(".chat-virtual-row")) {
+      const row = root.closest(".chat-virtual-row");
+      if (!row) {
         continue;
       }
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       let text: Node | null;
       while ((text = walker.nextNode())) {
         const parent = text.parentElement;
-        if (text.textContent?.trim() && parent && !parent.hasAttribute("elementtiming")) {
-          parent.setAttribute("elementtiming", "openclaw-transcript");
+        const textContent = text.textContent;
+        if (textContent?.trim() && parent && !parent.hasAttribute("elementtiming")) {
+          const rowKey = row.getAttribute("data-virtual-row-key");
+          const source = witnesses
+            ? (["saved", "live"] as const).find(
+                (kind) =>
+                  witnesses[kind].rowKey === rowKey &&
+                  textContent.includes(witnesses[kind].text) &&
+                  [...addedRoots].some((added) => added === parent || added.contains(parent)),
+              )
+            : undefined;
+          // Only a fresh text owner may become a witness. Never relabel an already-painted node.
+          if (source && rowKey) {
+            witnessElements.set(parent, { source, rowKey });
+            mark(source === "saved" ? "firstSavedWitnessDom" : "firstLiveWitnessDom");
+          }
+          parent.setAttribute(
+            "elementtiming",
+            source ? `openclaw-transcript-${source}` : "openclaw-transcript",
+          );
         }
       }
     }
@@ -429,6 +573,48 @@ export function warmReloadProbe(
     );
     if (visible) {
       mark("firstTranscript");
+      if (input.lateRowFacts && thread && inner) {
+        observedThread = inner;
+        observeSize(inner);
+        lateFrames.push({
+          at: performance.now(),
+          cached: Boolean(milestones.cacheRead && !milestones.catchupResponse),
+          height: sizes.get(inner),
+          links: [...thread.querySelectorAll<HTMLElement>(factSelectors.links!)].map((link) =>
+            JSON.stringify([
+              link.textContent,
+              link.className,
+              link.dataset.linkReaderTone,
+              link.getAttribute("aria-description"),
+            ]),
+          ),
+          images: [...thread.querySelectorAll<HTMLElement>(factSelectors.images!)].map((frame) =>
+            JSON.stringify([
+              frame.className,
+              frame.getAttribute("style"),
+              [...frame.querySelectorAll("img")].map(imageFact),
+            ]),
+          ),
+          notices: [...thread.querySelectorAll<HTMLElement>(factSelectors.canonicalNotices!)].map(
+            (notice) =>
+              JSON.stringify([
+                notice.getAttribute("data-chat-row-key"),
+                notice.className,
+                notice.textContent,
+              ]),
+          ),
+          avatars: [...thread.querySelectorAll<HTMLElement>(factSelectors.avatars!)].map((avatar) =>
+            JSON.stringify([
+              avatar.className,
+              (avatar instanceof HTMLImageElement
+                ? [avatar]
+                : [...avatar.querySelectorAll("img")]
+              ).map(imageFact),
+              avatar.textContent,
+            ]),
+          ),
+        });
+      }
       if (resize && inner) {
         const at = performance.now();
         const rowKeys = currentRows.map((row) => row.getAttribute("data-virtual-row-key"));
@@ -453,6 +639,14 @@ export function warmReloadProbe(
               elements.map((element) => [
                 element.textContent,
                 element.querySelectorAll("*").length,
+                ...(input.lateRowFacts
+                  ? [
+                      element.className,
+                      element.getAttribute("style"),
+                      element.getAttribute("aria-description"),
+                      [...element.querySelectorAll("img")].map(imageFact),
+                    ]
+                  : []),
               ]),
             );
             heights[part] = elements.map((element) => sizes.get(element));
@@ -538,6 +732,9 @@ export function warmReloadProbe(
         };
       }
     }
+    if (visible && caughtUp) {
+      mark("firstLiveTranscript");
+    }
     const composer = pane?.querySelector<HTMLTextAreaElement>("textarea");
     if (composer && !composer.disabled && !composer.readOnly) {
       mark("inputReady");
@@ -560,7 +757,35 @@ export function warmReloadProbe(
     requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
+  const readWitnesses = () =>
+    witnesses
+      ? {
+          history: [...witnessHistory],
+          paints: [...witnessPaints],
+          saved: {
+            domMs: milestones.firstSavedWitnessDom ?? null,
+            paintMs: milestones.firstSavedWitnessPaint ?? null,
+          },
+          live: {
+            domMs: milestones.firstLiveWitnessDom ?? null,
+            paintMs: milestones.firstLiveWitnessPaint ?? null,
+          },
+          attached: Object.fromEntries(
+            (["saved", "live"] as const).map((source) => [
+              source,
+              [
+                ...document.querySelectorAll(".chat-pane-cache__pane--active .chat-virtual-row"),
+              ].some(
+                (row) =>
+                  row.getAttribute("data-virtual-row-key") === witnesses[source].rowKey &&
+                  row.querySelector(".chat-text")?.textContent?.includes(witnesses[source].text),
+              ),
+            ]),
+          ),
+        }
+      : undefined;
   Reflect.set(window, "__warmReload", {
+    witnesses: readWitnesses,
     read() {
       stopped = true;
       observer.disconnect();
@@ -602,6 +827,36 @@ export function warmReloadProbe(
           Math.min(rect.bottom, bounds.bottom, innerHeight) > Math.max(rect.top, bounds.top, 0)
         );
       });
+      const firstPaint = milestones.firstTranscriptPaint ?? milestones.firstTranscript;
+      // The rAF sample immediately before presentation owns that painted frame.
+      const firstPaintedFrame =
+        firstPaint === undefined ? -1 : lateFrames.findLastIndex((frame) => frame.at <= firstPaint);
+      const paintedLateFrames =
+        firstPaint === undefined ? [] : lateFrames.slice(Math.max(0, firstPaintedFrame));
+      const firstLateFrame = paintedLateFrames[0];
+      const lateChanges = paintedLateFrames.slice(1).flatMap((frame, index) => {
+        const previous = paintedLateFrames[index]!;
+        const parts = (["links", "images", "notices", "avatars"] as const).filter(
+          (part) => JSON.stringify(frame[part]) !== JSON.stringify(previous[part]),
+        );
+        const heightDelta =
+          frame.height !== undefined && previous.height !== undefined
+            ? frame.height - previous.height
+            : 0;
+        return parts.length || Math.abs(heightDelta) > 0.5
+          ? [{ at: frame.at, parts, heightDelta }]
+          : [];
+      });
+      if (
+        input.lateRowFacts &&
+        (firstPaintedFrame < 0 ||
+          !firstLateFrame?.cached ||
+          milestones.firstTranscriptPaint === undefined)
+      ) {
+        throw new Error(
+          "Unqualified late-row-facts sample: no measured cached first transcript paint",
+        );
+      }
       return {
         milestones,
         transcriptPresentation: {
@@ -623,6 +878,7 @@ export function warmReloadProbe(
         },
         measures: performance.getEntriesByType("measure").map((entry) => entry.toJSON()),
         transcriptPaints,
+        transcriptWitnesses: readWitnesses(),
         largestPaints,
         reads,
         historyRequests,
@@ -639,6 +895,30 @@ export function warmReloadProbe(
               threadFrames,
               rowWindows,
               coverage,
+            }
+          : undefined,
+        lateRowFacts: input.lateRowFacts
+          ? {
+              boundary: firstPaint,
+              measuredPaint: milestones.firstTranscriptPaint !== undefined,
+              firstFrame: firstLateFrame,
+              frames: paintedLateFrames,
+              changes: lateChanges,
+              visualChanges: lateChanges.filter((change) => change.parts.length).length,
+              heightDelta:
+                firstLateFrame?.height !== undefined &&
+                paintedLateFrames.at(-1)?.height !== undefined
+                  ? paintedLateFrames.at(-1)!.height! - firstLateFrame.height
+                  : null,
+              maximumHeightChange:
+                firstLateFrame?.height === undefined
+                  ? null
+                  : Math.max(
+                      0,
+                      ...paintedLateFrames.map((frame) =>
+                        Math.abs((frame.height ?? firstLateFrame.height!) - firstLateFrame.height!),
+                      ),
+                    ),
             }
           : undefined,
         states,

@@ -1,9 +1,10 @@
 .chat-mobile-host {
   --mobile-list-surface: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
-  --mobile-list-separator: var(--border-strong);
-  --mobile-list-radius: 14px;
-  --mobile-list-icon: 18px;
-  --mobile-list-gap: 12px;
+  --mobile-list-radius: var(--radius-lg);
+  --mobile-list-lead: 18px;
+  --mobile-list-icon: 15px;
+  --mobile-list-gap: 10px;
+  --mobile-list-inset: 12px;
 }
 
 /* The mobile host owns the scroll container, its conditional fades and the surrounding dock. */
@@ -33,7 +34,7 @@
 
 .chat-details-mobile-root__group {
   min-width: 0;
-  border-radius: 14px;
+  border-radius: var(--mobile-list-radius);
   background: var(--mobile-list-surface);
 }
 
@@ -42,33 +43,23 @@
 }
 
 .chat-details-mobile-root__group > :first-child {
-  border-start-start-radius: 14px;
-  border-start-end-radius: 14px;
+  border-start-start-radius: var(--mobile-list-radius);
+  border-start-end-radius: var(--mobile-list-radius);
 }
 
 .chat-details-mobile-root__group > :last-child {
-  border-end-start-radius: 14px;
-  border-end-end-radius: 14px;
-}
-
-.chat-details-mobile-root__group > * + *::before {
-  position: absolute;
-  inset: 0 12px auto 42px;
-  height: 1px;
-  background: var(--mobile-list-separator);
-  content: "";
-  pointer-events: none;
+  border-end-start-radius: var(--mobile-list-radius);
+  border-end-end-radius: var(--mobile-list-radius);
 }
 
 .chat-details-mobile-root__entry {
   display: flex;
   align-items: center;
-  gap: 12px;
-  box-sizing: border-box;
+  gap: var(--mobile-list-gap);
   width: 100%;
   min-width: 44px;
   min-height: 44px;
-  padding: 8px 12px;
+  padding: 8px var(--mobile-list-inset);
   border: 0;
   background: transparent;
   color: inherit;
@@ -104,13 +95,13 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
+  width: var(--mobile-list-lead);
   color: var(--muted);
 }
 
 .chat-details-mobile-root__leading > svg {
-  width: 18px;
-  height: 18px;
+  width: var(--mobile-list-icon);
+  height: var(--mobile-list-icon);
 }
 
 .chat-details-mobile-root__copy {
@@ -125,7 +116,6 @@
 
 .chat-details-mobile-root__description {
   display: block;
-  margin-top: 2px;
   color: var(--muted);
   font-size: 12px;
   line-height: 18px;
@@ -164,14 +154,15 @@
 }
 
 .chat-details-mobile-processes .chat-details__process {
-  width: 100%;
-  margin-inline: 0;
-  grid-template-columns: var(--mobile-list-icon) minmax(0, 1fr) auto;
+  grid-template-columns: var(--mobile-list-lead) minmax(0, 1fr) auto;
   column-gap: var(--mobile-list-gap);
-  font: 400 14px/20px var(--font-body);
+  row-gap: 0;
+  width: 100%;
   min-height: 44px;
-  padding: 8px 12px;
+  margin-inline: 0;
+  padding: 8px var(--mobile-list-inset);
   border-radius: 0;
+  font: 400 14px/20px var(--font-body);
 }
 
 .chat-details-mobile-processes > [role="list"]:first-child > :first-child,
@@ -180,24 +171,11 @@
   border-start-end-radius: inherit;
 }
 
-.chat-details-mobile-processes [role="listitem"] + [role="listitem"] {
-  position: relative;
+.chat-details-mobile-processes .chat-details__process-name {
+  font: 400 12px/20px var(--mono);
 }
 
-.chat-details-mobile-processes [role="listitem"] + [role="listitem"]::before {
-  position: absolute;
-  inset: 0 12px auto 42px;
-  height: 1px;
-  background: var(--mobile-list-separator);
-  content: "";
-}
-
-.chat-details-mobile-processes .chat-details-mobile-root__leading {
-  width: 18px;
-  height: 18px;
-}
-
-/* The root group owns its inset divider; the collection page keeps its own divider. */
+/* Root rows have no inner divider; the collection page keeps its own divider. */
 .chat-details-mobile-root__group > .chat-pr-mobile__row + .chat-pr-mobile__row {
   border-top: 0;
 }
@@ -214,17 +192,16 @@
   height: 22px;
   margin-inline-start: -4px;
   border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--popover);
+  box-shadow: 0 0 0 2px var(--mobile-list-surface);
 }
 
 .chat-details-mobile-root__people-overflow {
   display: inline-grid;
   place-items: center;
-  box-sizing: border-box;
   width: auto;
   min-width: 22px;
   padding-inline: 3px;
-  background: var(--popover);
+  background: var(--mobile-list-surface);
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
@@ -256,13 +233,13 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: var(--mobile-list-lead);
+  height: var(--mobile-list-lead);
 }
 
 .chat-details-mobile-root__step-marker > :is(svg, .session-run-spinner) {
-  width: 14px;
-  height: 14px;
+  width: var(--mobile-list-icon);
+  height: var(--mobile-list-icon);
 }
 
 .chat-details-mobile-root__step-marker[data-status="in_progress"] {
@@ -322,9 +299,8 @@
     .chat-details-subagents__row,
     .chat-environment-mobile__row
   ) {
-  box-sizing: border-box;
   min-height: 44px;
-  padding: 8px 12px;
+  padding: 8px var(--mobile-list-inset);
   gap: var(--mobile-list-gap);
   color: var(--text);
   font: 400 14px/20px var(--font-body);
@@ -364,10 +340,16 @@
     .chat-environment-mobile__row > svg,
     .chat-environment__action > svg:first-child
   ) {
-  flex: 0 0 var(--mobile-list-icon);
-  width: var(--mobile-list-icon);
+  flex: 0 0 var(--mobile-list-lead);
+  width: var(--mobile-list-lead);
   height: var(--mobile-list-icon);
   color: var(--muted);
+}
+
+.chat-details-mobile-root .chat-pr-mobile__state-icon {
+  flex: 0 0 var(--mobile-list-lead);
+  width: var(--mobile-list-lead);
+  height: var(--mobile-list-icon);
 }
 
 .chat-details-mobile-root .chat-sharing-options {
@@ -391,14 +373,6 @@
   border: 0;
 }
 
-.chat-details-mobile-root .chat-environment-mobile__row + .chat-environment-mobile__row::before {
-  position: absolute;
-  inset: 0 12px auto 42px;
-  height: 1px;
-  background: var(--mobile-list-separator);
-  content: "";
-}
-
 .chat-details-mobile-root .chat-environment__action {
   gap: var(--mobile-list-gap);
   padding: 0;
@@ -406,6 +380,24 @@
 }
 
 .chat-details-mobile-root .chat-details-subagents__avatar {
+  flex: 0 0 var(--mobile-list-lead);
+  width: var(--mobile-list-lead);
+  height: var(--mobile-list-lead);
+  background: transparent;
+  color: var(--muted);
+}
+
+/* The count already says how many; one glyph keeps the label on the shared axis. */
+.chat-details-mobile-root .chat-details-subagents__stack {
+  flex: 0 0 var(--mobile-list-lead);
+  width: var(--mobile-list-lead);
+}
+
+.chat-details-mobile-root .chat-details-subagents__stack > :not(:first-child) {
+  display: none;
+}
+
+.chat-details-mobile-root .chat-details-subagents__avatar > svg {
   width: var(--mobile-list-icon);
   height: var(--mobile-list-icon);
 }
@@ -414,15 +406,27 @@
   .chat-details-subagents__list
   > [role="listitem"]
   + [role="listitem"]::before {
-  inset-inline: 42px 12px;
-  background: var(--mobile-list-separator);
+  content: none;
 }
 
 .chat-details-mobile-processes .chat-details-mobile-processes__show-all {
-  min-height: 36px;
+  min-height: 44px;
+  padding-inline-start: calc(
+    var(--mobile-list-inset) + var(--mobile-list-lead) + var(--mobile-list-gap)
+  );
   color: var(--muted);
-  font: 400 12px/18px var(--font-body);
+  font: 400 13px/20px var(--font-body);
   font-variant-numeric: tabular-nums;
+}
+
+.chat-details-mobile-processes .chat-details-processes__icon {
+  width: var(--mobile-list-lead);
+  height: var(--mobile-list-lead);
+}
+
+.chat-details-mobile-processes .chat-details-processes__icon > svg {
+  width: var(--mobile-list-icon);
+  height: var(--mobile-list-icon);
 }
 
 .chat-details-mobile-processes .chat-details__process-elapsed {

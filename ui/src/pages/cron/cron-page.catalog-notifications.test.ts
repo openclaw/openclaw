@@ -9,7 +9,7 @@ import {
   createPage,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
-import { cronRpc } from "./cron-rpc.test-support.ts";
+import { cronRpc, emitEvent } from "./cron-rpc.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -33,9 +33,9 @@ it("clears a failed catalog refresh during retry without holding the task draft"
   );
   const page = createPage(createContext(createGateway(client, true)), { render: true });
   try {
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["initial-model"]));
     click(page, '[data-test-id="cron-new-task"]');
     await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["initial-model"]));
     const name = fillInput(page, "#cron-name", "Retained task draft");
     invalidateChatMetadataStore(client);
     await waitForCronPage(() => expect(reads).toBe(2));
@@ -76,6 +76,7 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
     return () => listeners.delete(listener);
   });
   const page = createPage(createContext(gateway), { render: true });
+  click(page, '[data-test-id="cron-new-task"]');
   await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fixture/current"]));
 
   refreshFailed = true;
@@ -88,4 +89,32 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
       "Some models could not be refreshed. Open Models to try again.",
     ),
   );
+});
+
+it("loads the catalogue only for an open editor and retires closed-editor invalidations", async () => {
+  const request = cronRpc({ "models.list": () => ({ models: [{ id: "editor-model" }] }) });
+  const client = createTestGatewayClient(request);
+  const gateway = createGateway(client, true);
+  const page = createPage(createContext(gateway), { render: true });
+  const modelCalls = () => request.mock.calls.filter(([method]) => method === "models.list");
+  try {
+    await page.settle();
+    expect(modelCalls()).toHaveLength(0);
+    emitEvent(gateway, "chat.metadata.changed");
+    await page.settle();
+    expect(modelCalls()).toHaveLength(0);
+    click(page, '[data-test-id="cron-new-task"]');
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["editor-model"]));
+    expect(modelCalls()).toHaveLength(1);
+    page.closePanel();
+    await page.settle();
+    emitEvent(gateway, "chat.metadata.changed");
+    await page.settle();
+    expect(modelCalls()).toHaveLength(1);
+    click(page, '[data-test-id="cron-new-task"]');
+    await waitForCronPage(() => expect(modelCalls()).toHaveLength(2));
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["editor-model"]));
+  } finally {
+    page.remove();
+  }
 });

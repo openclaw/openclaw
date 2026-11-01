@@ -480,6 +480,56 @@ describe("Git checkout execution", () => {
     },
   );
 
+  it.each(["main", "feature"] as const)(
+    "preserves operator edits made during the update instead of resetting the checkout (%s)",
+    async (startBranch) => {
+      const target = await advanceRemote();
+      if (startBranch === "feature") {
+        await git(root, "checkout", "-b", "feature");
+      }
+      const result = await update({
+        runGitDoctor: async () => {
+          // The operator works in the checkout while activation is still running.
+          await fs.writeFile(path.join(root, "candidate.txt"), "operator edit\n");
+          await fs.writeFile(path.join(root, "operator-notes.txt"), "keep me\n");
+          return null;
+        },
+      });
+
+      expect(result).toMatchObject({
+        status: "error",
+        reason: "doctor-entry-missing",
+        recovery: { serviceRestartSafe: false, reason: "source-rollback-failed" },
+        rollbackOutcome: { status: "failed" },
+      });
+      expect(result.steps.map((step) => step.name)).not.toContain("git-rollback-clean");
+      const preserve = result.steps.find((step) => step.name === "git-rollback-preserve");
+      expect(preserve?.stderrTail).toContain("?? operator-notes.txt");
+      expect(await fs.readFile(path.join(root, "candidate.txt"), "utf8")).toBe("operator edit\n");
+      expect(await fs.readFile(path.join(root, "operator-notes.txt"), "utf8")).toBe("keep me\n");
+      expect(await head()).toBe(target);
+      await expectRuntime(root, beforeSha);
+
+      // After saving their work elsewhere, the printed commands restore the original commit.
+      await git(root, "checkout", "--", "candidate.txt");
+      await fs.rm(path.join(root, "operator-notes.txt"));
+      const commands = preserve?.stderrTail
+        ?.split("restore the checkout with: ")[1]
+        ?.split(", then ");
+      expect(commands).toHaveLength(2);
+      for (const command of commands ?? []) {
+        const args = command
+          .split(" ")
+          .slice(3)
+          .map((arg) => arg.replace(/^'(.*)'$/u, "$1"));
+        await git(root, ...args);
+      }
+      expect(await head()).toBe(beforeSha);
+      expect(await git(root, "branch", "--show-current")).toBe(startBranch);
+      expect(await git(root, "status", "--porcelain")).toBe("");
+    },
+  );
+
   it.each([true, false])(
     "walks back build failures but not confirmed storage exhaustion (capacity: %s)",
     async (capacity) => {

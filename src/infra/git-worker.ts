@@ -33,10 +33,16 @@ import type {
 import { GIT_WORKER_HOST_BATCH_LIMIT } from "./git-worker-contract.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { WorkerTaskError, WorkerTaskPool, type WorkerTaskResponse } from "./worker-task-pool.js";
+import {
+  WorkerTaskError,
+  createOwnedWorkerTaskPool,
+  type WorkerTaskResponse,
+} from "./worker-task-pool.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
-type GitPool = WorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>;
+type GitPool = ReturnType<
+  typeof createOwnedWorkerTaskPool<GitWorkerCommand, GitWorkerReply<GitWorkerResult>>
+>;
 const POOL_OWNERS = [
   "reads",
   "summary",
@@ -79,6 +85,7 @@ const SPAWN_OPERATIONS = {
   "workspace.inventory.existing": "workspace.inventory",
   "workspace.inventory.paths": "workspace.inventory",
   "workspace.inventory.staged-directories": "workspace.inventory",
+  "workspace.manifest.local": "workspace.manifest",
   "workspace.manifest.capture": "workspace.manifest",
   "workspace.manifest.base-refresh": "workspace.manifest",
   "workspace.manifest.equal": "workspace.manifest",
@@ -152,25 +159,29 @@ function poolFor(
   // Each worktree lane stays serial; host allocation and shared-ref guards still own writes.
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
   // Summary polls and their revision scans share one worker outside the full-content queue.
-  return (state[owner] ??= new WorkerTaskPool({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
-    workerClass:
-      owner === "summary"
-        ? "singleton"
-        : owner === "reads" || owner === "content"
-          ? "reader"
-          : owner === "workspace"
-            ? "compute"
-            : "writer",
-    // Summary's singleton keeps the reader heap bound; overlay retains three manifests.
-    workerOptions:
-      owner === "summary" || owner === "workspace"
-        ? { resourceLimits: { maxOldGenerationSizeMb: owner === "summary" ? 512 : 1024 } }
-        : undefined,
-    // Discovery refreshes and PR polls can leave readers idle for just over a minute.
-    idleTimeoutMs: owner === "reads" ? 120_000 : undefined,
-    sharedCompute: owner === "workspace",
-  }));
+  return (state[owner] ??= createOwnedWorkerTaskPool(
+    {
+      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitOperations),
+      workerClass:
+        owner === "summary"
+          ? "singleton"
+          : owner === "reads" || owner === "content"
+            ? "reader"
+            : owner === "workspace"
+              ? "compute"
+              : "writer",
+      // Summary's singleton keeps the reader heap bound; overlay retains three manifests.
+      workerOptions:
+        owner === "summary" || owner === "workspace"
+          ? { resourceLimits: { maxOldGenerationSizeMb: owner === "summary" ? 512 : 1024 } }
+          : undefined,
+      // Discovery refreshes and PR polls can leave readers idle for just over a minute.
+      idleTimeoutMs: owner === "reads" ? 120_000 : undefined,
+      sharedCompute: owner === "workspace",
+    },
+    // Other owners retain checkout observations whose lifetime includes idle expiry.
+    owner === "content" || owner === "workspace" ? { retainOneIdleWorker: true } : undefined,
+  ));
 }
 
 export type GitWorkerOperationOptions = {

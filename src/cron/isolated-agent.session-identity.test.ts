@@ -10,6 +10,11 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
+import { admitScheduledOccurrence } from "./execution-context-admission.js";
+import {
+  readScheduledMemoryParent,
+  readScheduledToolTargets,
+} from "./execution-context-registry.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import * as f from "./isolated-agent.test-harness.js";
 import {
@@ -72,10 +77,11 @@ function runSessionTurn(
   job: CronStoredJob,
   sessionKey = "cron:job-1",
   agentId?: string,
+  occurrence = TEST_SCHEDULED_OCCURRENCE,
 ) {
   setRuntimeConfigSnapshot(cfg);
   return runCronIsolatedAgentTurn({
-    occurrence: TEST_SCHEDULED_OCCURRENCE,
+    occurrence,
     deliveryAttemptFence: null,
     cfg,
     deps: makeDeps(),
@@ -205,6 +211,69 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     await expect(readCronSessionEntry(storePath, boundSessionKey)).resolves.toMatchObject({
       sessionId: "bound-session",
     });
+  });
+
+  it("runs a linked current job as a child of its conversation", async ({ home }) => {
+    const parentKey = "agent:main:dashboard:creator";
+    const parentWorkspace = path.join(home, "creator-workspace");
+    await fs.mkdir(parentWorkspace, { recursive: true });
+    const parentRow = {
+      sessionId: "creator-session",
+      lifecycleRevision: "rev-1",
+      updatedAt: Date.now() - 1_000,
+      spawnedWorkspaceDir: parentWorkspace,
+      spawnedCwd: parentWorkspace,
+      systemSent: true,
+    };
+    const storePath = await f.writeSessionStoreEntries(home, { [parentKey]: parentRow });
+    const cfg = f.makeCfg(home, storePath);
+    const job: CronStoredJob = {
+      ...(normalizeCronJobCreate(sessionJob({ sessionTarget: "current" }), {
+        sessionContext: { sessionKey: parentKey },
+      }) as CronJob),
+      sourceConversation: {
+        sessionKey: parentKey,
+        sessionId: "creator-session",
+        lifecycleRevision: "rev-1",
+      },
+    };
+    const occurrence = await admitScheduledOccurrence({
+      cfg,
+      job,
+      agentId: "main",
+      trigger: "cron",
+    });
+    let seen: Record<string, unknown> | undefined;
+    h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+      const admitted = await input.preparedRunAdmission!.admit("gateway", input.runId);
+      seen = {
+        sessionKey: input.sessionKey,
+        workspaceDir: input.workspaceDir,
+        board: readScheduledToolTargets(admitted)?.boardSessionKey,
+        placement: readScheduledToolTargets(admitted)?.placement,
+        memory: readScheduledMemoryParent(admitted.operationalRunInstance)?.sessionKey,
+      };
+      return embeddedResult(input.sessionId);
+    });
+
+    let res;
+    try {
+      res = await runSessionTurn(cfg, job, parentKey, undefined, occurrence);
+    } finally {
+      occurrence.release();
+    }
+
+    expect(res.status, res.error).toBe("ok");
+    // The child runs under its own run key, so it never joins a live parent turn,
+    // and takes the parent's board, memory and workspace.
+    expect(seen).toEqual({
+      sessionKey: expect.stringMatching(new RegExp(`^agent:main:cron:${job.id}:run:`)),
+      workspaceDir: parentWorkspace,
+      board: parentKey,
+      placement: "child",
+      memory: parentKey,
+    });
+    await expect(readCronSessionEntry(storePath, parentKey)).resolves.toMatchObject(parentRow);
   });
 
   it("uses lightweight bootstrap context for command-style cron payloads", async ({ home }) => {

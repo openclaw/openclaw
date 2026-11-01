@@ -477,11 +477,22 @@ suite.define(() => {
             ]);
           }
         };
-        await runningCount.waitFor();
+        // While it waits, the line names the session it waits on, linked to that session.
+        const waitingOn = indicator.locator(".chat-subagent-wait a");
+        await waitingOn.waitFor();
+        expect(await waitingOn.getAttribute("href")).toMatch(
+          /\/chat\/main\/implementation-child$/u,
+        );
         expect(await indicator.count()).toBe(1);
         expect(await indicator.locator(".chat-reading-indicator").count()).toBe(0);
         expect(await indicator.locator("openclaw-working-phrase").count()).toBe(0);
-        expect(await indicator.textContent()).not.toContain("Backend implementation");
+        await expect
+          .poll(async () =>
+            (await indicator.locator(".chat-subagent-wait").textContent())
+              ?.replace(/\s+/gu, " ")
+              .trim(),
+          )
+          .toBe("Waiting on Backend implementation · 1m 13s");
         expect(await activePane.locator(".agent-chat__composer-run-status--waiting").count()).toBe(
           0,
         );
@@ -516,10 +527,10 @@ suite.define(() => {
           waitingParent,
           "run-start",
         );
-        // The count opens the collection; opening a child does not navigate the parent.
+        // The Subagents panel opens the collection; opening a child does not navigate the parent.
         const selectedTitle = activePane.locator(".chat-pane__session-title-text").first();
         const detailTitle = panel.locator(".subagents-desktop__child-name");
-        await runningCount.click();
+        await selectChatLayoutAction(activePane, "Subagents");
         await panelRow.waitFor();
         await expect
           .poll(() => panelRow.textContent())
@@ -560,7 +571,7 @@ suite.define(() => {
             },
           ]),
         );
-        await runningCount.waitFor();
+        await waitingOn.getByText("Backend implementation refreshed", { exact: true }).waitFor();
         const refreshedDetails = await openChatDetails(activePane);
         const refreshedGroup = refreshedDetails.locator('[data-details-group="subagents"]');
         if (
@@ -603,9 +614,9 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
-        // A later batch restores the footer count without reopening the panel.
+        // A later batch restores the wait without reopening the panel.
         // An explicit open still hydrates its independent roster.
-        await runningCount.waitFor();
+        await waitingOn.waitFor();
         expect(await indicator.count()).toBe(1);
         expect(await panel.isVisible()).toBe(false);
         await selectChatLayoutAction(activePane, "Subagents");

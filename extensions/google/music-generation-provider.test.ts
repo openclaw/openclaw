@@ -18,7 +18,10 @@ import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/p
 import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
 import { googleMusicGenerationProvider } from "./music-generation-provider.js";
 
-type GoogleGenAIConfig = { apiKey?: string; httpOptions?: { baseUrl?: string; timeout?: number } };
+type GoogleGenAIConfig = {
+  apiKey?: string;
+  httpOptions?: { baseUrl?: string; apiVersion?: string; timeout?: number };
+};
 type GenerateContentRequest = { model?: string; config?: unknown };
 
 type GoogleMusicCandidate = NonNullable<GoogleGenerateContentResponse["candidates"]>[number];
@@ -101,9 +104,10 @@ it("submits generation and returns inline audio bytes plus lyrics", async () => 
     instrumental: true,
     cfg: googleConfig({ baseUrl: "https://proxy.example.com/v1beta/route" }),
   });
-  expect(createGoogleGenAIMock.mock.calls.at(-1)?.[0].httpOptions?.baseUrl).toBe(
-    "https://proxy.example.com/v1beta/route",
-  );
+  expect(createGoogleGenAIMock.mock.calls.at(-1)?.[0].httpOptions).toMatchObject({
+    baseUrl: "https://proxy.example.com/v1beta/route",
+    apiVersion: "",
+  });
   expect(generateContentMock.mock.calls[0]?.[0]).toEqual({
     model: "lyria-3-clip-preview",
     contents: expect.anything(),
@@ -118,6 +122,29 @@ it("submits generation and returns inline audio bytes plus lyrics", async () => 
 });
 
 it.each([
+  [undefined, undefined, "v1beta"],
+  ["https://proxy.example.com", "https://proxy.example.com", "v1beta"],
+  ["https://proxy.example.com/v1beta", "https://proxy.example.com/v1beta", ""],
+  ["https://proxy.example.com/v1alpha", "https://proxy.example.com/v1alpha", ""],
+  ["https://proxy.example.com/v1", "https://proxy.example.com/v1", ""],
+])(
+  "preserves the SDK API version for base URL %s",
+  async (baseUrl, expectedBaseUrl, apiVersion) => {
+    generateContentMock.mockResolvedValue(googleMusicAudioResponse());
+
+    await generateMusic({ cfg: baseUrl ? googleConfig({ baseUrl }) : {} });
+
+    const httpOptions = createGoogleGenAIMock.mock.calls.at(-1)?.[0].httpOptions;
+    expect(httpOptions).toMatchObject({ apiVersion });
+    if (expectedBaseUrl) {
+      expect(httpOptions?.baseUrl).toBe(expectedBaseUrl);
+    } else {
+      expect(httpOptions).not.toHaveProperty("baseUrl");
+    }
+  },
+);
+
+it.each([
   ["non-canonical pad bits", "ZE=="],
   ["mixed alphabet", "aGVsbG8+_"],
 ])("rejects %s in inline audio", async (_scenario, data) => {
@@ -129,7 +156,7 @@ it.each([
 });
 
 it("shares the configured timeout budget across a no-audio retry", async () => {
-  vi.spyOn(Date, "now")
+  vi.spyOn(performance, "now")
     .mockReturnValueOnce(1_000)
     .mockReturnValueOnce(1_000)
     .mockReturnValue(2_500);

@@ -155,6 +155,21 @@ remains absent until the normal usage writer records it.
 
 Both methods accept `activeOnly: true` to select currently running or queued sessions before pagination. Activity comes from the live runtime owners, not a stored status flag. Ordinary listing behavior is unchanged when the option is omitted or false. Active-only results include each visible agent-owned `global` and `unknown` session with its raw key and captured `agentId`; callers identify rows by agent, key, and `sessionId` together. Literal `agent:<id>:global` and `agent:<id>:unknown` sessions remain different rows. Active-only raw sentinel rows omit the optional `childSessions` and `hasActiveSubagentRun` fields; use `hasActiveRun` for direct activity. Normal permissions, archive/inclusion filters, and page limits still apply. Sessionless/internal runs are outside the session index.
 
+Subagent child rows carry an optional `subagentRunState` from the subagent
+registry's current run for that child: `active` (running or queued), `paused`
+(the run called `sessions_yield` and waits for a continuation, either a message
+or its own children's results), `interrupted`, or `historical` (ended). A paused
+row keeps the `status` and `endedAt` its yielded turn recorded, usually
+`done`, so clients that do not know `paused` keep their current presentation.
+Clients that show a paused child should check `subagentRunState` before
+`status`, and should still let `hasActiveRun` win: a separate follow-up turn can
+run in a child whose delegated task stays paused. A continuation, completion,
+kill, or settlement replaces or clears the pause and publishes the row through
+`sessions.changed`; the pause survives a Gateway restart because the task can
+still be continued. The row exposes no acknowledgment text or other child
+content. `sessions.changed` events carry the same field. Rows without a
+subagent run omit it, and the `dashboard` row mode does not include it.
+
 Both methods accept `ownerFirst: true` to prepend up to 60 matching viewer-owned
 rows (or `limit`, when smaller) to the normal first page, deduplicated by session key. This applies only
 when `offset` is zero or omitted; later pages use normal pagination. Owned rows

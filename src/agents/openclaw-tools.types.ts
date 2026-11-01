@@ -33,8 +33,6 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
-  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
-  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -115,6 +113,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Internal inventory projection; the resulting GitHub tool cannot execute. */
+  githubPublicationPreview?: true;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
   sandbox?: import("./sandbox/types.js").SandboxContext | null;
   abortSignal?: AbortSignal;

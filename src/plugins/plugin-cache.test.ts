@@ -495,9 +495,29 @@ it("shares checked aliases without discarding artifacts resolved before the firs
   aliasRecord.artifacts.set("missing-surface", null);
   const first = readFile(alias, "package.json");
   const open = vi.spyOn(fs, "openSync");
+  const resolve = vi.spyOn(path, "resolve");
+  expect(readFile(alias, "package.json")).toBe(first);
   expect(readFile(root, "package.json")).toBe(first);
+  expect(callsFor(resolve.mock.calls, alias, root)).toEqual([]);
   expect(getPluginCacheRoot(root).artifacts.has("missing-surface")).toBe(true);
   expect(open).not.toHaveBeenCalled();
+});
+
+it("scopes relative metadata roots to the current working directory", () => {
+  const { file } = fixture({
+    "first/plugin/package.json": '{"name":"first"}',
+    "second/plugin/package.json": '{"name":"second"}',
+  });
+  const firstDirectory = file("first");
+  const secondDirectory = file("second");
+  const cwd = vi.spyOn(process, "cwd").mockReturnValue(firstDirectory);
+  const first = readFile("plugin", "package.json");
+  cwd.mockReturnValue(secondDirectory);
+  const second = readFile("plugin", "package.json");
+  expect(first.ok && first.contents.toString()).toBe('{"name":"first"}');
+  expect(second.ok && second.contents.toString()).toBe('{"name":"second"}');
+  cwd.mockReturnValue(firstDirectory);
+  expect(readFile("plugin", "package.json")).toBe(first);
 });
 
 it("keeps checked source aliases authoritative within their explicit cache generation", () => {

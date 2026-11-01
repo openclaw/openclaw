@@ -2,14 +2,66 @@
 export function installPaneChromeProbe() {
   const selectors = {
     headerTrailing: ".chat-pane__header-trailing",
+    headerIdentity: ".chat-pane__identity-actions",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
+    breadcrumb: ".chat-pane__parent-session",
+    composerState: ".agent-chat__disabled-banner, .agent-chat__input",
   };
   type Region = keyof typeof selectors;
   type Signature = { nodes: number; hash: number; truncated: boolean };
-  type Frame = { at: number; regions: Record<Region, Signature> };
+  type Frame = { at: number; regions: Record<Region, Signature>; composerHeight: number };
   const frames: Frame[] = [];
+  let connectionIndicatorFrames = 0;
+  const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
+  let detailsSignature = "";
+  const sampleDetails = (at: number) => {
+    const sections = Array.from(document.querySelectorAll(".chat-details[data-desktop]"))
+      .filter((panel) => panel.getBoundingClientRect().width > 0 && !panel.closest("[inert]"))
+      .flatMap((panel) =>
+        Array.from(
+          panel.querySelectorAll(
+            "[data-details-group], [data-progress-card-placement='details'], [data-panel-skeleton]",
+          ),
+        ).map((section) => {
+          const box = section.getBoundingClientRect();
+          const panelBox = panel.getBoundingClientRect();
+          return {
+            section:
+              section.getAttribute("data-details-group") ??
+              section.getAttribute("data-progress-card-placement") ??
+              "skeleton",
+            top: Math.round(box.top - panelBox.top),
+            left: Math.round(box.left - panelBox.left),
+            width: Math.round(box.width),
+            panelLeft: Math.round(panelBox.left),
+            panelTop: Math.round(panelBox.top),
+            panelWidth: Math.round(panelBox.width),
+            height: Math.round(box.height),
+            outputCount:
+              section.querySelector(".chat-details-desktop-section__count")?.textContent?.trim() ??
+              null,
+            refresh: Boolean(section.querySelector(".task-progress-details__refresh")),
+            titleMasks: Array.from(
+              section.querySelectorAll(".chat-summary__automation-title"),
+              (title) => getComputedStyle(title).maskImage,
+            ),
+            visible: box.height > 0 && box.top < panelBox.bottom && box.bottom > panelBox.top,
+            nodes: section.querySelectorAll("*").length,
+            images: Array.from(section.querySelectorAll("img")).map((image) => ({
+              loaded: image.complete && image.naturalWidth > 0,
+              src: image.getAttribute("src"),
+            })),
+          };
+        }),
+      );
+    const nextSignature = JSON.stringify(sections);
+    if (nextSignature !== detailsSignature && detailsFrames.length < 256) {
+      detailsSignature = nextSignature;
+      detailsFrames.push({ at, sections });
+    }
+  };
   const shifts: Array<{ at: number; value: number; regions: Region[] }> = [];
   const nodeRegions = new WeakMap<Node, Region>();
   const regions = Object.keys(selectors) as Region[];
@@ -46,9 +98,10 @@ export function installPaneChromeProbe() {
       }
       nodes++;
       nodeRegions.set(element, region);
-      add(
-        `<${element.localName}:${[...element.classList].filter((name) => !name.endsWith("--disabled")).join(".")}>`,
-      );
+      add(`<${element.localName}:${element.classList.value}>`);
+      if (element.matches(".chat-controls__inline-select-trigger")) {
+        add(`${style.opacity}:${style.color}:${style.cursor}`);
+      }
       if (element instanceof HTMLImageElement) {
         add(element.getAttribute("src") ?? "");
       }
@@ -106,6 +159,14 @@ export function installPaneChromeProbe() {
   shiftObserver.observe({ type: "layout-shift", buffered: true });
   return {
     sample(at: number) {
+      if (
+        document
+          .querySelector(".chat-pane-cache__pane--active .chat-pane__connection-state")
+          ?.checkVisibility()
+      ) {
+        connectionIndicatorFrames++;
+      }
+      sampleDetails(at);
       if (!dirty) {
         return;
       }
@@ -120,7 +181,14 @@ export function installPaneChromeProbe() {
         truncated = true;
         return;
       }
-      frames.push({ at, regions: next });
+      frames.push({
+        at,
+        regions: next,
+        composerHeight:
+          document
+            .querySelector(".chat-pane-cache__pane--active .agent-chat__composer-shell")
+            ?.getBoundingClientRect().height ?? 0,
+      });
     },
     read(firstTranscriptPaint: number | null) {
       observer.disconnect();
@@ -143,10 +211,12 @@ export function installPaneChromeProbe() {
         (shift) => firstTranscriptPaint !== null && shift.at > firstTranscriptPaint,
       );
       return {
+        connectionIndicatorFrames,
         firstTranscriptPaint,
         changesAfterContent: firstTranscriptPaint === null ? null : changes.length,
         changes,
         frames,
+        detailsFrames,
         shifts,
         clsAfterContent: afterContent.reduce((sum, shift) => sum + shift.value, 0),
         byRegion: Object.fromEntries(

@@ -145,21 +145,35 @@ function AgentSkillsContent(
   const allowSet = createMemo(() => new Set(params.allowlist ?? []));
   const usingAllowlist = () => params.allowlist !== undefined;
   const rawSkills = createMemo(() => params.report?.skills ?? []);
-  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
-  const filtered = createMemo(() =>
-    filter()
-      ? rawSkills().filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter()),
-        )
-      : rawSkills(),
+  const searchableSkills = createMemo(() =>
+    rawSkills().map((skill) => ({
+      skill,
+      text: normalizeLowercaseStringOrEmpty(
+        [skill.name, skill.description, skill.source].join(" "),
+      ).normalize("NFC"),
+    })),
+  );
+  const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC"));
+  const filtered = createMemo(
+    () =>
+      filter()
+        ? searchableSkills()
+            .filter((entry) => entry.text.includes(filter()))
+            .map((entry) => entry.skill)
+        : rawSkills(),
+    {
+      equals: (previous, next) =>
+        previous.length === next.length && previous.every((skill, index) => skill === next[index]),
+    },
   );
   const groups = createMemo(() => groupSkills(filtered()));
   const enabledCount = createMemo(() =>
     usingAllowlist()
       ? rawSkills().filter((skill) => isWorkshopSkill(skill) || allowSet().has(skill.name)).length
       : rawSkills().length,
+  );
+  const inventoryReady = createMemo(
+    () => !params.pending && !params.readError && Boolean(params.report),
   );
 
   return (
@@ -228,7 +242,11 @@ function AgentSkillsContent(
       >
         <SettingsRow
           title={t("agents.skillsPanel.filter")}
-          description={t("agents.skillsPanel.shown", { count: String(filtered().length) })}
+          description={
+            inventoryReady()
+              ? t("agents.skillsPanel.shown", { count: String(filtered().length) })
+              : undefined
+          }
           control={
             <input
               class="settings-input"
@@ -241,7 +259,7 @@ function AgentSkillsContent(
             />
           }
         />
-        {filtered().length === 0 ? (
+        {inventoryReady() && filtered().length === 0 ? (
           <SettingsEmpty message={t("agents.skillsPanel.empty")} />
         ) : (
           <div class="agents-panel-body agent-skills-groups">

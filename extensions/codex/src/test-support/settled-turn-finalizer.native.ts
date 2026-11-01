@@ -32,6 +32,7 @@ export type Cleanup = () => Promise<void>;
 type NativePhase =
   | "probe"
   | "action"
+  | "action-reasoning"
   | "side"
   | "hold"
   | "overload"
@@ -95,7 +96,7 @@ async function createNativeFixture(
         response.writeHead(400).end();
         return;
       }
-      const actionPhase = phase === "action" || phase === "side";
+      const actionPhase = phase === "action" || phase === "action-reasoning" || phase === "side";
       if (actionPhase) {
         actionRequests += 1;
       }
@@ -162,6 +163,12 @@ async function createNativeFixture(
               login: false,
               max_output_tokens: 1000,
             }),
+          };
+        } else if (phase === "action-reasoning") {
+          item = {
+            type: "reasoning",
+            id: "terminal-reasoning",
+            summary: [{ type: "summary_text", text: "The command completed once." }],
           };
         } else if (phase !== "action") {
           const output = phase === "summary" || phase === "side" ? SUMMARY : "Ready.";

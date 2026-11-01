@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   readFileSync,
@@ -10,8 +10,8 @@ import {
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readWorkflow, runWorkflowCommand } from "./ci-workflow.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const repository = "openclaw/openclaw";
@@ -29,7 +29,7 @@ type Fault =
   | "symlink";
 
 function fixture(file: string, jobName: string, fault: Fault) {
-  const workflow = parse(readFileSync(file, "utf8")) as Workflow;
+  const workflow = readWorkflow(file) as Workflow;
   const restoration = workflow.jobs[jobName]?.steps.find((step) => step.name === restoreName);
   const script = restoration?.run;
   const harnessPath = restoration?.env?.HARNESS_PATH;
@@ -121,9 +121,8 @@ function fixture(file: string, jobName: string, fault: Fault) {
     ].join("\n") + "\n",
     { mode: 0o755 },
   );
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+  const result = runWorkflowCommand("bash", ["--noprofile", "--norc", "-c", script], {
     cwd: root,
-    encoding: "utf8",
     env: {
       ...env,
       PATH: bin + delimiter + originalPath,
@@ -155,11 +154,6 @@ function fixture(file: string, jobName: string, fault: Fault) {
 
 // These acquisition jobs run on Ubuntu; the script contract is Bash plus native Git.
 describe.skipIf(process.platform === "win32").each([
-  {
-    label: "installer warning relay",
-    file: ".github/workflows/install-smoke-reusable.yml",
-    job: "install-smoke-fast",
-  },
   {
     label: "installer harness",
     file: ".github/workflows/install-smoke-reusable.yml",

@@ -110,7 +110,8 @@ async function openSession(
 
 suite.define(() => {
   it("shows, dismisses, and reloads durable conflict recovery guidance", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
+    const options = { ...pageOptions, permissions: ["clipboard-read", "clipboard-write"] };
+    await suite.withPage(options, async ({ page }) => {
       const gateway = await openSession(
         page,
         [historyEvent("cloud-workspace-conflict", "2 cloud conflicts.", conflict)],
@@ -156,6 +157,12 @@ suite.define(() => {
         expect(itemBox.y + itemBox.height).toBeLessThanOrEqual(noticeBox.y + noticeBox.height);
       }
 
+      await notice.locator(".chat-workspace-conflict-notice__summary").click();
+      await notice.locator(".chat-workspace-conflict-path-actions button").first().click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe("git show 'refs/openclaw/worker-results/claim-proof:src/local.ts'");
+
       await dismiss.click();
       await notice.waitFor({ state: "detached" });
       await historyCard.waitFor();
@@ -173,31 +180,39 @@ suite.define(() => {
     });
   });
 
-  it.each([
-    {
-      customType: "cloud-workspace-recovery-failed",
-      content:
-        "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
-    },
-    {
-      customType: "run-failed-before-reply",
-      content: "This turn did not run: Cloud worker is unavailable. Choose another runner.",
-    },
-  ])(
-    "renders durable $customType notices from transcript history",
-    async ({ customType, content }) => {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        await openSession(page, [historyEvent(customType, content)]);
+  it("renders durable failure notices from transcript history", async () => {
+    const notices = [
+      {
+        customType: "cloud-workspace-recovery-failed",
+        content:
+          "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
+      },
+      {
+        customType: "run-failed-before-reply",
+        content: "This turn did not run: Cloud worker is unavailable. Choose another runner.",
+      },
+    ];
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await openSession(
+        page,
+        notices.map(({ customType, content }) => historyEvent(customType, content)),
+      );
+      for (const { content } of notices) {
+        await page
+          .locator(".chat-group.other")
+          .filter({ hasText: content })
+          .waitFor({ timeout: 10_000 });
+      }
+      expect(await page.locator(".chat-group.assistant").count()).toBe(0);
+      await page.reload();
+      for (const { content } of notices) {
         const notice = page.locator(".chat-group.other").filter({ hasText: content });
-        await notice.waitFor({ timeout: 10_000 });
-        expect(await page.locator(".chat-group.assistant").count()).toBe(0);
-        await page.reload();
         await notice.waitFor({ timeout: 10_000 });
         expect(await notice.count()).toBe(1);
         expect(await notice.locator(".chat-sender-name").textContent()).toBe("Error");
-      });
-    },
-  );
+      }
+    });
+  });
 
   it.each(["failed", "reclaimed", "request"])(
     "exposes the full %s diagnostic with keyboard and clipboard access",

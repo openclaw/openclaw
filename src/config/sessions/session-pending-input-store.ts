@@ -6,7 +6,6 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -15,11 +14,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { runSessionActorCommand } from "./session-actor-scope.js";
-import {
-  acquireSessionActorStorage,
-  captureSessionActorStorageOwner,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
+import type { SessionInputLifecycleAdmission } from "./session-input-lifecycle.js";
 import { prepareMemoryPendingInputStore } from "./session-pending-input-memory-store.js";
 import {
   readPendingInputMutationReceipt,
@@ -29,7 +27,7 @@ import {
   type PendingInputRead,
 } from "./session-pending-input-operations.types.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import {
   settleSessionWorkerReceipt,
   type SessionWorkerReceiptAdmission,
@@ -274,25 +272,32 @@ export async function preparePendingInputStore(
                 }
               },
             };
-            let expectedState: ReturnType<typeof buildRestartRecoveryExpectedState> | undefined;
+            let expectedState:
+              | ReturnType<typeof buildSessionTranscriptTurnExpectedState>
+              | undefined;
             let receipt: PendingInputMutationReceipt | undefined;
             const outcome = await runSessionActorCommand(
               inputActor.actor,
               authority,
               async (snapshot) => {
-                const hot = snapshot ?? (await inputActor.actor.read(authority));
-                if (!hot.entry) {
+                let hot = snapshot;
+                let entry = hot?.entry ?? inputActor.actor.snapshotEntry(authority)?.entry;
+                if (!entry) {
+                  hot ??= await inputActor.actor.read(authority);
+                  entry = hot.entry;
+                }
+                if (!entry) {
                   throw new Error("Input actor lost its staged session");
                 }
                 // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
                 const resume = input.expected.existing ? undefined : lifecycleAdmission;
                 expectedState ??=
-                  resume?.expectedState ?? buildRestartRecoveryExpectedState(hot.entry);
+                  resume?.expectedState ?? buildSessionTranscriptTurnExpectedState(entry);
                 return inputActor.actor.acceptInput(
                   {
                     commandId: randomUUID(),
                     phaseId: `accept:${input.runId}`,
-                    expected: hot.version,
+                    expected: hot?.version,
                     pending: input,
                     lifecycle: resume?.lifecycle ?? {},
                     expectedState,

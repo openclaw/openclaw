@@ -1,4 +1,5 @@
 // Memory Core coordinates published-index readers with atomic shadow publication.
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
 type Waiter = {
   kind: "read" | "write";
@@ -11,7 +12,9 @@ type GenerationLeaseState = {
   queue: Waiter[];
 };
 
-const states = new Map<string, GenerationLeaseState>();
+const states = resolveGlobalMap<string, GenerationLeaseState>(
+  Symbol.for("openclaw.memoryCore.indexGenerationLeases"),
+);
 
 function createGenerationLeaseAbortError(signal?: AbortSignal): Error {
   return new Error("Memory index generation lease acquisition aborted", { cause: signal?.reason });

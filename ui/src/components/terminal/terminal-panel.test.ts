@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { prepareCatalogTerminal } from "../../lib/sessions/catalog-terminal-start.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
@@ -67,6 +68,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   beforeEach(async () => {
+    preserveDocumentStyle();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     await i18n.setLocale("en");
@@ -288,6 +290,102 @@ describe("OpenClawTerminalPanel", () => {
       });
     });
   });
+
+  it("keeps the attached terminal canvas while typing and submitting composer input", async () => {
+    const controller = createTerminalController();
+    createGhosttyTerminalMock.mockResolvedValue(controller);
+    const { client } = eventGateway((method) =>
+      method === "terminal.open"
+        ? terminalOpenResult("session-1")
+        : method === "terminal.list"
+          ? { sessions: [] }
+          : { ok: true },
+    );
+    const panel = mount(
+      TERMINAL_PANEL_ELEMENT_NAME,
+      { client, available: true, embedded: true, mobile: true },
+      false,
+    );
+    await waitForFast(() => expect(controller.terminal.focus).toHaveBeenCalled());
+    await panel.updateComplete;
+    const host = createGhosttyTerminalMock.mock.calls[0]![0].parent;
+    const input = panel.querySelector<HTMLInputElement>(".tp-composer input")!;
+    expect(host.parentElement).toBe(panel.findTerminalPanelViewport());
+    controller.fit.mockClear();
+    controller.terminal.renderer.render.mockClear();
+
+    input.value = "echo census";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    expect(controller.fit).not.toHaveBeenCalled();
+    expect(controller.terminal.renderer.render).not.toHaveBeenCalled();
+
+    panel
+      .querySelector<HTMLFormElement>(".tp-composer")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await panel.updateComplete;
+    expect(controller.terminal.paste).toHaveBeenCalledWith("echo census");
+    expect(controller.terminal.input).toHaveBeenCalledWith("\r", true);
+    expect(input.value).toBe("");
+    expect(host.parentElement).toBe(panel.findTerminalPanelViewport());
+    expect(controller.terminal.renderer.render).not.toHaveBeenCalled();
+  });
+
+  it.each(["active", "inactive", "both"] as const)(
+    "repaints only a surviving revealed terminal after closing %s tabs",
+    async (closed) => {
+      const active = closed !== "inactive";
+      const controllers = [createTerminalController(), createTerminalController()] as const;
+      createGhosttyTerminalMock
+        .mockResolvedValueOnce(controllers[0])
+        .mockResolvedValueOnce(controllers[1]);
+      let session = 0;
+      const { client } = eventGateway((method) =>
+        method === "terminal.open"
+          ? terminalOpenResult(`session-${++session}`)
+          : method === "terminal.list"
+            ? { sessions: [] }
+            : { ok: true },
+      );
+      const panel = mount(TERMINAL_PANEL_ELEMENT_NAME, { client, available: true });
+      await waitForFast(() => expect(controllers[0].terminal.focus).toHaveBeenCalled());
+      panel.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
+      await waitForFast(() => expect(controllers[1].terminal.focus).toHaveBeenCalled());
+      await panel.updateComplete;
+      const replacement = controllers[active ? 0 : 1];
+      const host = createGhosttyTerminalMock.mock.calls[active ? 0 : 1]![0].parent;
+      expect(host.parentElement).toBe(panel.findTerminalPanelViewport());
+      expect(host.style.display).toBe(active ? "none" : "block");
+      for (const controller of controllers) {
+        controller.terminal.renderer.render.mockClear();
+        controller.terminal.focus.mockClear();
+      }
+
+      panel.querySelectorAll<HTMLButtonElement>(".tabstrip-tab__close")[active ? 1 : 0]!.click();
+      if (closed === "both") {
+        panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+      }
+      await panel.updateComplete;
+
+      expect(host.isConnected).toBe(closed !== "both");
+      if (closed !== "both") {
+        expect(host.parentElement).toBe(panel.findTerminalPanelViewport());
+        expect(host.style.display).toBe("block");
+      }
+      expect(replacement.terminal.focus).not.toHaveBeenCalled();
+      if (closed === "active") {
+        expect(replacement.terminal.renderer.render).toHaveBeenCalledWith(
+          replacement.terminal.wasmTerm,
+          true,
+          0,
+          replacement.terminal,
+          0,
+        );
+      } else {
+        expect(replacement.terminal.renderer.render).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("forces a full render after hiding and showing the panel", async () => {
     const controller = createTerminalController();

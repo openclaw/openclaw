@@ -7,7 +7,6 @@ import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
@@ -36,6 +35,8 @@ export type TranscriptCallbacks = {
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
   canFollowEnd?: () => boolean;
+  /** A queued send/latest command supersedes reader anchoring before its first frame. */
+  hasPendingScrollCommand?: () => boolean;
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
@@ -48,7 +49,7 @@ export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 export const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
 
 export type TranscriptHeader = {
-  props: ChatHistoryBoundaryProps;
+  content: JSX.Element;
   /** Fixed pixel height; becomes the virtualizer's scrollMargin so row offsets stay exact. */
   height: number;
 };

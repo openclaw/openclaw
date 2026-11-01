@@ -11,6 +11,8 @@
 // All fixtures are synthetic; identity probes run separately from measured calls.
 // --hydration retained reprojects the same writable startup history each request.
 // --boundary-owner /absolute/base.ts selects the baseline request-boundary module.
+// --observer-owner /absolute/base.ts selects a baseline request-observer module.
+// Pair it with --observability-owner when that observer imports a different tracker module.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
@@ -23,8 +25,6 @@ import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { fingerprintMessage } from "../../src/agents/embedded-agent-runner/prompt-cache-history.js";
-import { clearPromptCacheObservations } from "../../src/agents/embedded-agent-runner/prompt-cache-observability.js";
-import { createPromptCacheRequestObserver } from "../../src/agents/embedded-agent-runner/prompt-cache-request-observer.js";
 import { applyRuntimeContextCarrierRetention } from "../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   createToolResultPromptProjectionState,
@@ -47,6 +47,8 @@ const { values } = parseArgs({
     "reuse-view": { type: "boolean", default: false },
     hydration: { type: "string", default: "shared" },
     "boundary-owner": { type: "string" },
+    "observer-owner": { type: "string" },
+    "observability-owner": { type: "string" },
     sessions: { type: "string", default: "16" },
     messages: { type: "string", default: "128" },
     rounds: { type: "string", default: "20" },
@@ -65,6 +67,22 @@ const rounds = Number(values.rounds);
 for (const count of [sessionCount, messageCount, rounds]) {
   assert.ok(Number.isSafeInteger(count) && count > 0);
 }
+const {
+  clearPromptCacheObservations,
+}: typeof import("../../src/agents/embedded-agent-runner/prompt-cache-observability.js") =
+  await import(
+    values["observability-owner"]
+      ? pathToFileURL(values["observability-owner"]).href
+      : "../../src/agents/embedded-agent-runner/prompt-cache-observability.js"
+  );
+const {
+  createPromptCacheRequestObserver,
+}: typeof import("../../src/agents/embedded-agent-runner/prompt-cache-request-observer.js") =
+  await import(
+    values["observer-owner"]
+      ? pathToFileURL(values["observer-owner"]).href
+      : "../../src/agents/embedded-agent-runner/prompt-cache-request-observer.js"
+  );
 const {
   normalizeMessagesForLlmBoundary,
 }: typeof import("../../src/agents/embedded-agent-runner/run/attempt-llm-boundary.js") =

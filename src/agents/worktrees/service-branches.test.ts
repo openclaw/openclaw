@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -72,6 +73,8 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-worktree-branches-", await fs.realpath(os.tmpdir()));
+    // Inherited command-line config disables the worker's filesystem cache admission.
+    vi.stubEnv("GIT_CONFIG_PARAMETERS", undefined);
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "global.gitconfig"));
     const template = path.join(root, "git-template");
@@ -92,6 +95,7 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
     vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
@@ -185,6 +189,42 @@ describe("ManagedWorktreeService branch discovery", () => {
         }
       } finally {
         logs.cleanup();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "checks linked reservations without rejected missing-file reads (unreadable: %s)",
+    async (unreadable) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await createChildCommit();
+      await createRemote(remoteHead);
+      const linked = path.join(root, "idle-linked");
+      await git(repo, "worktree", "add", "--detach", linked);
+      const gitDir = await git(linked, "rev-parse", "--absolute-git-dir");
+      if (unreadable) {
+        // A directory produces EISDIR, which must not be treated as an absent reservation.
+        await fs.mkdir(path.join(gitDir, "BISECT_START"));
+      }
+      const reads = vi.spyOn(fs, "readFile");
+      const selected = await resolveWorktreeBase(
+        repo,
+        undefined,
+        undefined,
+        undefined,
+        "fast-forward",
+      );
+      expect(selected.commit).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(unreadable ? localHead : remoteHead);
+      if (unreadable) {
+        expect(selected.warning).toContain("Git worktree operation state could not be checked");
+      } else {
+        expect(selected.warning).toBeUndefined();
+        expect(
+          reads.mock.calls.filter(
+            ([file]) => typeof file === "string" && file.startsWith(`${gitDir}${path.sep}`),
+          ),
+        ).toHaveLength(0);
       }
     },
   );
@@ -524,8 +564,16 @@ describe("ManagedWorktreeService branch discovery", () => {
       ),
     );
     const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
-    await expectWarmBranchAdmission(repo, () => run.mockClear());
+    const directories = vi.spyOn(fsSync, "readdirSync");
+    syncBuiltinESMExports();
+    await expectWarmBranchAdmission(repo, () => {
+      run.mockClear();
+      directories.mockClear();
+    });
     expect(run).toHaveBeenCalledTimes(0);
+    expect(directories.mock.calls.filter(([dir]) => dir === path.join(repo, ".git"))).toHaveLength(
+      1,
+    );
     await git(repo, "branch", "new-branch");
     expireBranchSuggestions();
     expect((await readRepositoryBranches(repo)).branches).toContainEqual({

@@ -68,7 +68,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   };
   const { classificationAgentId: sandboxAgentId, sandboxed } = sandboxRuntime;
   const executionWorkspace = resolveSessionSkillExecutionWorkspace(
-    targetSessionEntry?.worktree?.canonicalWorkspaceDir,
+    targetSessionEntry,
     workspaceDir,
   );
   const existingSkillsSnapshot: SkillSnapshot | undefined = targetSessionEntry?.skillsSnapshot;

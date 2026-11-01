@@ -1,8 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred as deferred } from "../../test/helpers/promise.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
@@ -10,10 +14,6 @@ import {
   runWithAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 

@@ -1,4 +1,4 @@
-import type { Model } from "@openclaw/llm-core";
+import { observeAsyncIterator, type Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { APIError } from "openai";
 import { Stream } from "openai/core/streaming";
@@ -21,9 +21,10 @@ import {
   nextResponsesServiceTier,
 } from "./openai-responses-service-tier.js";
 import { log } from "./openai-transport-shared.js";
-import { iterateSseFrames } from "./transport-stream-shared.js";
+import { decodeSseFrames } from "./transport-stream-shared.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
+const PRELUDE_TYPES = new Set(["response.created", "response.in_progress", "response.queued"]);
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return (
@@ -43,9 +44,7 @@ export function readResponsesRecoveryEvent(event: unknown) {
           ? (record.error ?? record)
           : undefined,
     hasResponseOutput: Array.isArray(response?.output) && response.output.length > 0,
-    isPrelude:
-      record !== undefined &&
-      ["response.created", "response.in_progress", "response.queued"].includes(String(record.type)),
+    isPrelude: record !== undefined && PRELUDE_TYPES.has(String(record.type)),
   };
 }
 
@@ -211,9 +210,15 @@ export async function createResponsesStreamWithRecovery(params: {
     const reader = body.getReader();
     let terminal = false;
     let firstFrame = true;
+    const decoder = decodeSseFrames();
     try {
-      // This owner keeps the reader for terminal draining; framing only borrows reads.
-      frames: for await (const { frame } of iterateSseFrames(() => reader.read())) {
+      // Frame parsing stays synchronous within each read; this owner retains terminal draining.
+      frames: for (let next = decoder.next(); !next.done;) {
+        if (next.value === undefined) {
+          next = decoder.next(await reader.read());
+          continue;
+        }
+        const { frame } = next.value;
         let eventName: string | null = null;
         let data: string | undefined;
         let start = 0;
@@ -282,6 +287,7 @@ export async function createResponsesStreamWithRecovery(params: {
           data = undefined;
         }
         firstFrame = false;
+        next = decoder.next();
       }
     } catch (error) {
       // Match SDK transport cancellation without swallowing provider API errors.
@@ -464,13 +470,23 @@ export async function createResponsesStreamWithRecovery(params: {
           let sourceError: unknown;
           const source = current.stream;
           const providerStream = {
-            async *[Symbol.asyncIterator]() {
-              try {
-                yield* source;
-              } catch (error) {
-                sourceError = error;
-                throw error;
-              }
+            [Symbol.asyncIterator]() {
+              return observeAsyncIterator({
+                iterator: () => source[Symbol.asyncIterator](),
+                onEvent() {},
+                onError(error) {
+                  sourceError = error;
+                },
+                // Closing can fail at the provider boundary too, independently of the hook.
+                async onClose(iterator) {
+                  try {
+                    await iterator?.return?.();
+                  } catch (error) {
+                    sourceError = error;
+                    throw error;
+                  }
+                },
+              });
             },
           };
           try {

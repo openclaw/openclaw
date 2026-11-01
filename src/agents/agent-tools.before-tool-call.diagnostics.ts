@@ -299,7 +299,8 @@ function canonicalSkillFile(value: string | undefined): string | undefined {
     : undefined;
 }
 
-function resolvedSkillUsageMatch(params: {
+/** Builds the usage match for one resolved skill, keyed by its canonical SKILL.md file. */
+export function resolvedSkillUsageMatch(params: {
   activation: SkillUsageMatch["activation"];
   skill: Pick<Skill, "name" | "filePath"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
 }): SkillUsageMatch {

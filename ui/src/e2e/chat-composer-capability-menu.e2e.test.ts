@@ -343,7 +343,11 @@ suite.define(() => {
       for (const mode of ["dark", "light"] as const) {
         themeBackgrounds.push(
           await menu.evaluate((node, nextMode) => {
-            document.documentElement.dataset.themeMode = nextMode;
+            const root = document.documentElement;
+            root.dataset.theme = nextMode;
+            root.dataset.themeMode = nextMode;
+            root.dataset.themeResolved = nextMode;
+            root.style.colorScheme = nextMode;
             const surface = node.querySelector(".oc-menu");
             return surface ? getComputedStyle(surface).backgroundColor : "";
           }, mode),

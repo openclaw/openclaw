@@ -7,6 +7,10 @@ import {
   getDatabaseEngineSelection,
   type DatabaseEngineSelection,
 } from "./database-engine/context.js";
+import {
+  withGatewayServiceInstallation,
+  type GatewayServiceInstallation,
+} from "./gateway-service-installation-context.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
@@ -22,6 +26,7 @@ export type SqliteWorkerStateContext = {
   /** Known agent paths preserve deletion-history uncertainty during native initialization. */
   initializationAgentPaths?: readonly string[];
   existingSchemaPath?: string;
+  gatewayServiceInstallation?: GatewayServiceInstallation;
   stateIntegrity?: OpenClawStateIntegrityAdmission;
   artifactPreservingReads?: true;
   /** Actor-owned exclusion for autonomous WAL work, never write authority. */
@@ -42,6 +47,7 @@ export function captureSqliteWorkerStateContext(
       ? { initializationAgentPaths: [...context.initializationAgentPaths] }
       : {}),
     existingSchemaPath: context.existingSchemaPath,
+    gatewayServiceInstallation: context.gatewayServiceInstallation,
     ...(context.stateIntegrity ? { stateIntegrity: context.stateIntegrity } : {}),
     artifactPreservingReads: context.artifactPreservingReads,
     ...(context.scheduledMaintenanceSuspension
@@ -70,6 +76,7 @@ export function sqliteWorkerRequestBytes(
       ),
     input.byteLength +
       Buffer.byteLength(JSON.stringify(context?.databaseEngineSelection) ?? "", "utf8") +
+      Buffer.byteLength(JSON.stringify(context?.gatewayServiceInstallation) ?? "", "utf8") +
       (preparation?.byteLength ?? 0) +
       agentPathBytes +
       Buffer.byteLength(context?.initializationCronDefaultStoreKey ?? "", "utf8") +
@@ -135,10 +142,12 @@ export function runWithSqliteWorkerStateContext<T>(
   operation: () => T,
 ): T {
   const run = () =>
-    stateContexts.run(context, () =>
-      context.existingSchemaPath === undefined
-        ? operation()
-        : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
+    withGatewayServiceInstallation({ installation: context.gatewayServiceInstallation }, () =>
+      stateContexts.run(context, () =>
+        context.existingSchemaPath === undefined
+          ? operation()
+          : withExistingOpenClawStateSchema({ path: context.existingSchemaPath }, operation),
+      ),
     );
   return context.artifactPreservingReads
     ? withArtifactPreservingStateReads(run, { agentDatabases: true })

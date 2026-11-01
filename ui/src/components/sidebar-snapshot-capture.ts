@@ -124,19 +124,17 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(
-      host.sessionPullRequests,
-      row,
-      host.sidebarAgentsMode === "roster",
-    ),
+    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
       scope: agents.scope,
     },
-    roster: bootRoster,
+    // The read receipt is not a display change.
+    roster: { ...bootRoster, result: { ...bootRoster.result, ts: 0 } },
     mode: host.sidebarAgentsMode,
+    grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
@@ -155,7 +153,10 @@ export function captureSidebarSnapshotModel(
     ),
     entries: zone.sidebarEntries.filter((value) => {
       const entry = parseSidebarEntry(value);
-      return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
+      return (
+        entry?.type !== "session" ||
+        (!isIncognitoSessionKey(entry.key) && !context.sessions.deletionState(entry.key))
+      );
     }),
     issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),

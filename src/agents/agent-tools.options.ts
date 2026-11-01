@@ -139,6 +139,8 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** Describe prospective GitHub actions before policy filtering; never executable. */
+  githubPublicationPreview?: true;
   assertInvocationCurrent?: () => void;
   /** Live harness-owned local execution, independent of the Gateway tool catalog. */
   nativeHarnessExecution?: true;

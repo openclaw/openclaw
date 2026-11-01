@@ -29,6 +29,7 @@ it("reserves declared and saved widget height before the lazy renderer arrives",
         options={{
           widgetLayout: {
             read: () => savedHeight(),
+            readRows: () => undefined,
             write: () => undefined,
             writeRows: () => {},
             invalidateRow: () => {},

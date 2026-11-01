@@ -205,7 +205,7 @@ describe("tailscale helpers", () => {
 
     it("hands over to the route claim once the deadline passes", async () => {
       let now = 0;
-      vi.spyOn(Date, "now").mockImplementation(() => (now += 45_000));
+      vi.spyOn(performance, "now").mockImplementation(() => (now += 45_000));
       const exec = vi.spyOn(processExec, "runExec").mockResolvedValue(status("NoState"));
       const info = vi.fn();
       vi.mocked(sleep).mockResolvedValueOnce(undefined);

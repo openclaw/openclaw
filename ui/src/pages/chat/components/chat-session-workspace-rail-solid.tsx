@@ -1,13 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } from "solid-js";
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { formatByteSize } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -21,7 +22,7 @@ import { createSessionWorkspaceRead } from "./chat-session-workspace-read.ts";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 const SESSION_KIND_LABELS = {
   modified: "chat.workspaceFiles.changed",
@@ -165,9 +166,9 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
     const artifacts = workspace.list?.artifacts ?? [];
     const browser = workspace.list?.browser;
     const entries = browser?.entries ?? [];
-    const search = normalizeOptionalString(workspace.browserSearch)?.toLowerCase() ?? "";
+    const search = foldSearchCase(normalizeOptionalString(workspace.browserSearch) ?? "");
     const matches = (...values: (string | undefined)[]) =>
-      values.some((value) => value?.toLowerCase().includes(search));
+      values.some((value) => value !== undefined && foldSearchCase(value).includes(search));
     const modified = files.filter((file) => file.kind === "modified");
     const readFiles = files.filter((file) => file.kind === "read");
     const filters = [

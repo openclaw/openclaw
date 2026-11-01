@@ -32,7 +32,8 @@ import {
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
-import { consumeSessionManagerReload, readSessionManagerReload } from "./session-manager-reload.js";
+import { consumeSessionManagerReload } from "./session-manager-reload.js";
+import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 import type {
   FileEntry,
   NewSessionOptions,

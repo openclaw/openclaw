@@ -8,7 +8,7 @@ import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import {
   scheduleSkillExperienceReview,
-  scheduleUnusedWorkshopSkillArchive,
+  scheduleDailyWorkshopMaintenance,
 } from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
 import {
@@ -69,7 +69,7 @@ function runCoreAgentEndSideEffects(
     log.warn(`skill experience review scheduling failed: ${String(error)}`);
   };
   try {
-    scheduleUnusedWorkshopSkillArchive(config, foregroundPromptContext.agentId);
+    scheduleDailyWorkshopMaintenance(config, foregroundPromptContext.agentId);
     // CLI hook contexts omit skillWorkshopAvailable, so isEligibleContext rejects them.
     const source = params.skillExperienceReviewSource;
     if (!source) {

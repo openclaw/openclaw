@@ -28,6 +28,7 @@ import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
 import {
   createAuthenticatedGitHubIdentitySync,
   resolveTrustedEnterpriseGitHubAccountId,
+  resolveRepositoryConnectionIdentity,
 } from "../../github-user-identity.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import {
@@ -194,12 +195,21 @@ export async function attachAuthenticatedGatewayConnect(
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
   const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
-  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+  const repositoryIdentity = resolveRepositoryConnectionIdentity({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     config: context.configSnapshot,
     requestHeaders: context.handler.upgradeReq.headers,
     assertCurrent: profileLifecycle.assertCurrent,
+  });
+  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    repositoryIdentity,
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+    requestHeaders: context.handler.upgradeReq.headers,
+    assertCurrent: profileLifecycle.assertCurrent,
+    recordTiming: context.recordAttachTiming,
   });
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   // Only an owner-bound ingress grant receives the shared owner role bypass.
@@ -416,6 +426,12 @@ export async function attachAuthenticatedGatewayConnect(
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedFactoryGitHubAccountId ? { authenticatedFactoryGitHubAccountId } : {}),
+    ...(repositoryIdentity
+      ? {
+          authenticatedGitHubAccountId: repositoryIdentity.accountId,
+          authenticatedRepositoryCredentialSource: repositoryIdentity.credentialSource,
+        }
+      : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,

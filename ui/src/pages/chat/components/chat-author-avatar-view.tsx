@@ -25,6 +25,7 @@ export type ChatAuthorAvatarProps = {
   agentAvatar?: { avatar?: string | null; textAvatar?: string | null };
   channelAvatar?: ChannelSenderAvatarSource;
   hideTooltip?: boolean;
+  mediaReadAllowed?: boolean;
 };
 
 function InitialsAvatar(props: {
@@ -96,7 +97,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
           <ChannelAvatar
             routeUrl={channelPhoto()}
             authTokens={gateway().authTokens}
-            authReady={Boolean(gateway().origin)}
+            authReady={props.mediaReadAllowed !== false && Boolean(gateway().origin)}
           >
             <InitialsAvatar avatar={childProps.view.fallback} />
           </ChannelAvatar>
@@ -111,7 +112,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
         <Show
           when={sender().identity?.type === "agent"}
           fallback={
-            <IdentityAvatar identity={sender()}>
+            <IdentityAvatar identity={sender()} cachedOnly={props.mediaReadAllowed === false}>
               {(view) => <ProfileAuthorAvatar view={view()} sender={sender()} label={label()!} />}
             </IdentityAvatar>
           }
@@ -124,6 +125,7 @@ export function ChatAuthorAvatar(props: ChatAuthorAvatarProps) {
             title={props.hideTooltip ? undefined : label()!}
           >
             <AgentIdentityAvatar
+              cachedOnly={props.mediaReadAllowed === false}
               agent={{
                 id: sender().identity!.id,
                 avatar: props.agentAvatar?.avatar ?? avatar(),

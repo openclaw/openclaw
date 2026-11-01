@@ -13,6 +13,7 @@ import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
+import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
 
@@ -157,7 +158,7 @@ export function dismissChatError(state: { chatError?: string | null; lastError: 
 }
 
 export function chatSubmitState(
-  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange">,
+  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange" | "sessionsResult">,
   unavailable: boolean,
   nativeChat: boolean,
 ) {
@@ -170,6 +171,7 @@ export function chatSubmitState(
   const controlCommand = isChatControlCommand(state.chatMessage);
   const routePending = state.isRouteSessionPending?.() === true;
   return {
+    goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
     ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
     submitDisabledReason:
       pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),

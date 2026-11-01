@@ -20,7 +20,12 @@
  * is a setup smoke. The clients are in-process recipients, not live sockets.
  * <output>.wire.json captures packed bytes with fixture profile IDs and snapshotAt
  * normalized; packedGolden compares those bytes across revisions and preserves field order.
+ * --page-size 200 --churn replaces one visible row before each measured read;
+ * measures full-page packing under writes. Call latency excludes the write;
+ * CPU/allocation include it. Use identical churn on both revisions.
  * --repeats N reuses fixture setup, writing <output>.<1-based repeat>.json.
+ * --row-mode compact|full measures recipient diagnostics; --sandbox-required
+ * selects a role that cannot read the fixture's unsandboxed host workspace.
  * With --barrier-dir <fresh directory> --side base|fix, publish <side>.ready
  * after warmup and wait for <repeat>.<side>.go before each measured repeat.
  * A controller can alternate the two prepared processes without overlapping measured reads.
@@ -43,6 +48,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
 import { transformSync } from "esbuild";
+import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
@@ -61,6 +67,10 @@ const { values } = parseArgs({
     side: { type: "string" },
     repeats: { type: "string", default: "1" },
     sessions: { type: "string", default: "10000" },
+    "page-size": { type: "string", default: "100" },
+    "row-mode": { type: "string", default: "sidebar" },
+    "sandbox-required": { type: "boolean", default: false },
+    churn: { type: "boolean", default: false },
     clients: { type: "string", default: "10" },
     operations: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
@@ -69,8 +79,16 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(global.gc, "run with --expose-gc");
-const integer = (name: "sessions" | "clients" | "operations" | "repeats", min: number) =>
-  parseStrictIntegerOption({ raw: values[name], label: name, min, fallback: min });
+assert(
+  values["row-mode"] === "sidebar" ||
+    values["row-mode"] === "compact" ||
+    values["row-mode"] === "full",
+);
+const rowMode = values["row-mode"] === "full" ? undefined : values["row-mode"];
+const integer = (
+  name: "sessions" | "clients" | "operations" | "repeats" | "page-size",
+  min: number,
+) => parseStrictIntegerOption({ raw: values[name], label: name, min, fallback: min });
 const sessions = integer("sessions", 2);
 const clients = integer("clients", 2);
 const operations = integer("operations", 1);
@@ -94,7 +112,7 @@ if (barrierDir) {
   assert(values.side === "base" || values.side === "fix", "--barrier-dir requires --side base|fix");
   mkdirSync(barrierDir, { recursive: true });
 }
-const pageSize = Math.min(100, sessions);
+const pageSize = Math.min(integer("page-size", 2), sessions);
 const keyFor = (index: number) => `agent:main:sidebar-${index.toString().padStart(5, "0")}`;
 const root = path.resolve(values["state-dir"]);
 mkdirSync(root);
@@ -137,6 +155,7 @@ const cfg: OpenClawConfig = {
       default: "view",
       definitions: {
         view: {
+          ...(values["sandbox-required"] ? { sandbox: "required" } : {}),
           sessions: { others: "view" },
           agents: "*",
           scopes: ["operator.read", "operator.write"],
@@ -167,6 +186,7 @@ marker("identify-stop");
 const [
   { setRuntimeConfigSnapshot },
   { writeSessionEntry },
+  { replaceSessionEntrySync },
   { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync },
   { closeOpenClawStateDatabaseAsync },
   { ensureProfileForEmail },
@@ -180,6 +200,7 @@ const [
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+  import("../../src/config/sessions/session-accessor.js"),
   import("../../src/state/openclaw-agent-db.js"),
   import("../../src/state/openclaw-state-db.js"),
   import("../../src/state/user-profiles.js"),
@@ -273,12 +294,19 @@ try {
     },
     { agentId: "main" },
   );
+  const coldStart = performance.now();
+  const coldCpu = process.cpuUsage();
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.prepareSelection();
   await projection.ensureMaterialized();
+  const coldUsedCpu = process.cpuUsage(coldCpu);
+  const coldProjection = {
+    elapsedMs: performance.now() - coldStart,
+    cpuMs: (coldUsedCpu.user + coldUsedCpu.system) / 1000,
+  };
   const revisions: (string | undefined)[] = Array.from({ length: clients });
-  const opts = {
-    rowMode: "sidebar" as const,
+  const opts: SessionsListParams = {
+    rowMode,
     source: "sidebar" as const,
     limit: pageSize,
     archived: "all" as const,
@@ -288,12 +316,14 @@ try {
     const result = await listProjectedSessions({
       projection: projection!,
       client: recipients[slot],
-      opts: { ...opts, ifRowsRevision: conditional ? revisions[slot] : undefined },
+      opts: { ...opts, ifRowsRevision: conditional ? (revisions[slot] ?? "") : undefined },
       acceptsSerializedJson: true,
     });
     assert.equal(result.count, pageSize);
     assert.equal(result.totalCount, sessions);
-    revisions[slot] = result.rowsRevision;
+    if (result.rowsRevision !== undefined) {
+      revisions[slot] = result.rowsRevision;
+    }
     // Exercise the real response encoder without a socket or a retained response backlog.
     serializeGatewayFrame({ type: "res", id: "sidebar", ok: true, payload: result });
     return result;
@@ -308,6 +338,8 @@ try {
   );
   const backfillDeadline = Date.now() + 120_000;
   while (pendingBackfill.size) {
+    // Keep admitting the live page while optional transcript facts settle.
+    await list(0);
     for (const key of pendingBackfill) {
       if (
         projection.capture({ agentId: "main", key })?.retainedDatabaseFacts
@@ -400,8 +432,30 @@ try {
     loop.reset();
     start = performance.now();
     for (let index = 0; index < operations; index++) {
+      if (values.churn) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: keyFor(sessions - 1) },
+          {
+            sessionId: `sidebar-${sessions - 1}`,
+            updatedAt: 1_800_000_000_000 + sessions - 1,
+            label: `Changed sidebar row ${index}`,
+            visibility: "shared",
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: profiles[(sessions - 1) % profiles.length]!.id,
+            },
+          },
+        );
+      }
       const at = performance.now();
-      assert.equal((await list(index)).rowsUnchanged, true);
+      const result = await list(index);
+      if (values.churn) {
+        assert.equal(result.sessions.length, pageSize);
+        assert.equal(result.sessions[0]?.label, `Changed sidebar row ${index}`);
+      } else {
+        assert.equal(result.rowsUnchanged, true);
+      }
       latencies.push(performance.now() - at);
       await nextTurn();
     }
@@ -457,14 +511,40 @@ try {
         presentationBytesPerCall: presentationBytes / operations,
       };
     }
+    if (values.churn) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: keyFor(sessions - 1) },
+        {
+          sessionId: `sidebar-${sessions - 1}`,
+          updatedAt: 1_800_000_000_000 + sessions - 1,
+          label: `Synthetic sidebar row ${sessions - 1}`,
+          visibility: "shared",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: profiles[(sessions - 1) % profiles.length]!.id,
+          },
+        },
+      );
+    }
+    const churnPackedGolden: string[] = [];
     for (let index = 0; index < clients; index++) {
       const result = await list(index, false);
       const digest = createHash("sha256")
         .update(JSON.stringify(expandSessionRowFacts(result.sessions, result.sharedFacts)))
         .digest("hex");
-      assert.equal(digest, golden[index], "warm recipient facts changed without a publication");
-      assert.equal(packedDigest(result), packedGolden[index], "warm packed wire bytes changed");
+      if (!values.churn) {
+        assert.equal(digest, golden[index], "warm recipient facts changed without a publication");
+      }
+      if (values.churn) {
+        // Replacing the row changes snapshotAt and can regroup shared facts even after
+        // its label is restored. Compare these exact normalized bytes across revisions.
+        churnPackedGolden.push(packedDigest(result));
+      } else {
+        assert.equal(packedDigest(result), packedGolden[index], "warm packed wire bytes changed");
+      }
     }
+    writeFileSync(`${repeatOutput}.wire.json`, JSON.stringify([...packedSamples.values()]));
     const gc = (kind?: number) =>
       distribution(
         collections
@@ -488,6 +568,7 @@ try {
       sourceHashes: Object.fromEntries(
         [
           "session-row-presentation.ts",
+          "session-list-view-cache.ts",
           "session-row-prepared-read.ts",
           "session-utils-display.ts",
         ].map((name) => [
@@ -501,15 +582,19 @@ try {
       clients,
       identities: profiles.length,
       pageSize,
+      rowMode: values["row-mode"],
+      sandboxRequired: values["sandbox-required"],
       operations,
       warmCalls,
       preparedBackfillRows: pageSize,
+      coldProjection,
       repeat,
       repeats,
+      churn: values.churn,
       counts: {
         calls: operations,
         selectedRows: operations * pageSize,
-        unchangedReplies: operations,
+        unchangedReplies: values.churn ? undefined : operations,
       },
       goldenScope:
         "within-run stability only; includes generated profile IDs and presentation timestamps",
@@ -517,6 +602,7 @@ try {
       packedGoldenScope:
         "Exact sessions/sharedFacts JSON, with generated profile IDs and snapshotAt normalized",
       packedGolden,
+      churnPackedGolden,
       loadStart,
       heapSpaces,
       loadEnd: loadavg(),

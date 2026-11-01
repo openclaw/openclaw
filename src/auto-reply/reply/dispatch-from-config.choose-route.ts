@@ -11,7 +11,6 @@ import { createPluginSubagentRequesterContext } from "../../plugins/runtime/suba
 import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
-  isCaptionedFinalTextPayload,
   mergeDeferredFinalText,
   shouldDeferFinalTtsText,
 } from "../../tts/captioned-final.js";
@@ -20,6 +19,7 @@ import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -356,7 +356,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       markInboundDedupeReplayUnsafe();
       finalReplyDeliveryStarted = true;
     }
-    const shouldAttachDeferredText = deferFinalTtsText && isCaptionedFinalTextPayload(payload);
+    const shouldAttachDeferredText = deferFinalTtsText && isReplyPayloadTerminalContent(payload);
     const deferredRawText = shouldAttachDeferredText
       ? mergeDeferredFinalText(options.deferredTtsText ?? "", payload.text)
       : undefined;

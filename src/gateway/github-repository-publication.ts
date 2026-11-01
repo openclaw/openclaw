@@ -26,7 +26,6 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   sameGitHubPublicationWorkspace,
-  type PublicationSessionIdentity as SessionIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import {
@@ -41,6 +40,7 @@ import {
 import type { GitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { insertRepositoryGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity as SessionIdentity } from "./github-publication-session.types.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
   listRepositoryGitHubPublicationsAsync,
@@ -463,7 +463,8 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,
       isExecuting: (requestId) => active.has(requestId),
-      execute: (row, assertCustody) => execute(row, { assertCustody }),
+      execute: (row, assertCustody, recoveryResult) =>
+        execute(row, { assertCustody, recoveryResult }),
     }),
     preparePersonalStatus,
     async personalStatusAsync(

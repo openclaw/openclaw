@@ -45,6 +45,7 @@ suite.define(() => {
         userPrompt("Show preview.", "widget-prompt", runId, startedAt),
         {
           role: "assistant",
+          stopReason: "toolUse",
           content: [
             text("Preparing the interactive preview."),
             { type: "toolCall", id: "show-preview", name: "show_widget", arguments: {} },

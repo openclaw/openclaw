@@ -2,7 +2,7 @@ import { once } from "node:events";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { Worker, type WorkerOptions } from "node:worker_threads";
+import { MessageChannel, Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, assert, describe, expect, it as baseIt, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
@@ -12,6 +12,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../infra/sqlite-worker-operation-admission.js";
+import { createUpdateErrorFact } from "../infra/update-failure-facts.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -41,7 +42,7 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 
 const heartbeatWorkers = vi.hoisted(() => ({
   beforeCreate: undefined as (() => void) | undefined,
-  onCreate: undefined as ((worker: Worker) => void) | undefined,
+  onCreate: undefined as ((worker: Worker, options: WorkerOptions) => void) | undefined,
 }));
 
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -60,7 +61,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         }
         super(filename, workerOptions);
         if (String(filename) === heartbeatUrl.href) {
-          heartbeatWorkers.onCreate?.(this);
+          heartbeatWorkers.onCreate?.(this, workerOptions);
         }
       }
     },
@@ -157,6 +158,7 @@ describe("maintenance lease heartbeat", () => {
       }),
     ).rejects.toMatchObject({
       code: "OPENCLAW_STATE_LEASE_LOST",
+      loss: { reason: "storage-failed" },
       cause: {
         message: expect.stringContaining("synthetic renewal failure"),
         cause: {
@@ -257,6 +259,18 @@ describe("maintenance lease heartbeat", () => {
   it.for(["replacement", "expiry", "deletion"] as const)(
     "does not resurrect ownership after %s",
     async (failure, { state }) => {
+      let observation: BigInt64Array | undefined;
+      heartbeatWorkers.onCreate = (_worker, workerOptions) => {
+        observation = new BigInt64Array(workerOptions.workerData.shared);
+      };
+      let fact: ReturnType<typeof createUpdateErrorFact> | undefined;
+      let observedStatus: bigint | undefined;
+      let after: ReturnType<typeof readLease>;
+      const reason = {
+        replacement: "replaced",
+        expiry: "expired",
+        deletion: "missing",
+      }[failure];
       let changed: ReturnType<typeof readLease>;
       await expect(
         withOpenClawStateLease({ ...options(state.env), leaseMs: 1_000 }, async (lease) => {
@@ -274,12 +288,23 @@ describe("maintenance lease heartbeat", () => {
           );
           changed = readLease(state.env);
           block(450);
-          expect(() => lease.assertOwned()).toThrowError(
-            expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }),
-          );
-          expect(readLease(state.env)).toEqual(changed);
+          observedStatus = Atomics.load(observation!, leaseHeartbeatState.status);
+          try {
+            lease.assertOwned();
+          } catch {
+            /* The owner also rejects at scope exit. */
+          }
+          fact = createUpdateErrorFact("doctor", lease.signal.reason, state.env);
+          after = readLease(state.env);
         }),
-      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+      ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST", loss: { reason } });
+      expect(observedStatus).toBe(leaseHeartbeatState.lost);
+      expect(fact).toMatchObject({
+        leaseLoss: {
+          reason,
+        },
+      });
+      expect(after).toEqual(changed);
       expect(readLease(state.env)).toEqual(failure === "replacement" ? changed : undefined);
     },
   );
@@ -357,9 +382,11 @@ it("defers activation until contended renewal commits", async ({ state }) => {
   );
   const driverUrl = pathToFileURL(driver);
   const databaseAdmission = createSqliteDatabaseAdmissionRelay(() => {});
+  const loss = new MessageChannel();
   const worker = new Worker(driverUrl, {
     workerData: {
       databaseAdmissionPort: databaseAdmission.port,
+      lossPort: loss.port2,
       path: database.path,
       expectedIdentity: readDatabasePathIdentitySync(database.path).key,
       identity,
@@ -370,7 +397,7 @@ it("defers activation until contended renewal commits", async ({ state }) => {
       shared: shared.buffer,
       renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
     } satisfies LeaseHeartbeatWorkerData,
-    transferList: [databaseAdmission.port],
+    transferList: [databaseAdmission.port, loss.port2],
     execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
     env: {},
   });
@@ -424,6 +451,8 @@ it("defers activation until contended renewal commits", async ({ state }) => {
     }
     writer.close();
     await worker.terminate();
+    loss.port1.close();
+    loss.port2.close();
   }
 });
 

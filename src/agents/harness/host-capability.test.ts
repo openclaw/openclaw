@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+  type InternalToolExecutionPreparer,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -29,11 +34,6 @@ import {
 } from "../agent-tools.before-tool-call.js";
 import * as agentTools from "../agent-tools.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-  type InternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   getGatewayToolCallerIdentity,

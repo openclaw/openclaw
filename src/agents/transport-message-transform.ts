@@ -4,7 +4,7 @@
  * strict provider tool-result gaps when supported.
  */
 import type { AiTransformTransportMessages } from "@openclaw/ai";
-import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+import { prepareModelBoundThinkingReplay } from "@openclaw/ai/internal/anthropic";
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   FAILED_ASSISTANT_REPLAY_TEXT,
@@ -40,6 +40,7 @@ export function transformTransportMessages(
     ? "aborted"
     : DEFAULT_MISSING_TOOL_RESULT_TEXT;
   const toolCallIdMap = new Map<string, string>();
+  const thinkingReplay = prepareModelBoundThinkingReplay(model);
   let hasCrossModelAsyncCalls = false;
   const transformed = messages.map((msg) => {
     if (msg.role === "toolResult") {
@@ -70,19 +71,11 @@ export function transformTransportMessages(
     if (msg.role !== "assistant") {
       return msg;
     }
-    const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
-      source: {
-        provider: msg.provider,
-        api: msg.api,
-        modelId: msg.model,
-        responseModelId: msg.responseModel,
-      },
-      target: {
-        provider: model.provider,
-        api: model.api,
-        modelId: model.id,
-        modelParams: model.params,
-      },
+    const modelBoundThinkingReplayMode = thinkingReplay({
+      provider: msg.provider,
+      api: msg.api,
+      modelId: msg.model,
+      responseModelId: msg.responseModel,
     });
     const isSameModel =
       modelBoundThinkingReplayMode === "preserve" ||
@@ -141,7 +134,14 @@ export function transformTransportMessages(
       }
       content.push(normalizedToolCall);
     }
-    return { ...msg, content };
+    // Mutable replay callers still own a detached shell and content array.
+    return Array.isArray(msg.content) &&
+      Object.isFrozen(msg) &&
+      Object.isFrozen(msg.content) &&
+      content.length === msg.content.length &&
+      content.every((block, index) => block === msg.content[index])
+      ? msg
+      : { ...msg, content };
   });
   // Pairing-aware transports must let shared repair see errored tool-call frames and
   // their adjacent results together; pre-filtering the call can misattribute its result

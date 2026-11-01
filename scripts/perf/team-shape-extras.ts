@@ -36,6 +36,7 @@ export type TeamShapeExtrasOptions = {
   sessions: FixtureSession[];
   retainedRuns: number;
   settledRuns?: boolean;
+  teamStress?: boolean;
   approvals: number;
   cronJobs: number;
   cronAnnounceLast?: boolean;
@@ -56,21 +57,37 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   const childCount = options.sessions.length - rootCount;
   const childOffset = index % childCount;
   const child = options.sessions[rootCount + childOffset]!;
-  const parent = options.sessions[childOffset % rootCount]!;
+  // Keep collector fan-out on the same bounded parents the stress writer updates.
+  const collector = options.teamStress && options.settledRuns;
+  const parent = options.sessions[childOffset % (collector ? Math.min(64, rootCount) : rootCount)]!;
   const runId = `team-shape-run-${index}`;
-  const endedAt =
-    options.now - 60_000 - (options.retainedRuns - 1 - index) * TEAM_SHAPE_RUN_SLOT_MS;
+  // Collector retention is derived from completion time, not the stored archive deadline.
+  const slotMs = collector
+    ? Math.max(
+        1,
+        Math.min(TEAM_SHAPE_RUN_SLOT_MS, Math.floor((30 * 60_000) / options.retainedRuns)),
+      )
+    : TEAM_SHAPE_RUN_SLOT_MS;
+  const endedAt = options.now - 60_000 - (options.retainedRuns - 1 - index) * slotMs;
   const startedAt = endedAt - 30_000 - (index % 100) * 1_000;
   const slot = index % 20;
   const failed = slot >= 12 && slot < 15;
   const pending =
     !options.settledRuns && slot >= 15 && slot < 18 && index + childCount >= options.retainedRuns;
-  const interrupted = !options.settledRuns && slot >= 18;
-  const outcome = failed
-    ? { status: "error" as const, error: "Synthetic tool exited with status 1" }
-    : { status: "ok" as const };
+  const cancelled = !options.settledRuns && slot >= 18;
+  const outcome =
+    failed || cancelled
+      ? {
+          status: "error" as const,
+          error: cancelled ? "Synthetic Gateway shutdown" : "Synthetic tool exited with status 1",
+        }
+      : { status: "ok" as const };
   const task = `Inspect synthetic project ${index % Math.max(1, options.projects)} and report findings.`;
-  const resultText = failed ? "Synthetic validation failed." : "Synthetic inspection completed.";
+  const resultText = cancelled
+    ? null
+    : failed
+      ? "Synthetic validation failed."
+      : "Synthetic inspection completed.";
   return {
     runId,
     childSessionKey: child.sessionKey,
@@ -86,41 +103,48 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
     generation: Math.floor(index / childCount) + 1,
     createdAt: startedAt - 1_000,
     archiveAtMs: options.now + 30 * DAY_MS,
-    expectsCompletionMessage: !interrupted,
-    endedReason: failed ? "subagent-error" : "subagent-complete",
-    execution: interrupted
+    ...(collector
       ? {
-          status: "interrupted",
-          interruptionReason: "gateway-restart",
-          startedAt,
-          endedAt,
-          interruptedAt: endedAt,
+          collect: true,
+          groupId: `team-shape-collector-${childOffset % Math.min(64, rootCount)}`,
+          swarmRequesterSessionKey: parent.sessionKey,
+          collectorCompletion: { status: failed ? "failed" : "done" },
         }
-      : { status: "terminal", startedAt, endedAt, outcome },
-    completion: { required: !interrupted, resultText, capturedAt: endedAt },
-    delivery: interrupted
-      ? { status: "not_required" }
-      : pending
-        ? {
-            status: "pending",
-            createdAt: endedAt,
-            attemptCount: 1,
-            lastAttemptAt: endedAt,
-            lastError: "Synthetic requester temporarily unavailable",
-            nextAttemptAt: options.now + DAY_MS,
-            payload: {
-              requesterSessionKey: parent.sessionKey,
-              requesterDisplayKey: parent.sessionKey,
-              childSessionKey: child.sessionKey,
-              childRunId: runId,
-              task,
-              startedAt,
-              endedAt,
-              outcome,
-              expectsCompletionMessage: true,
-            },
-          }
-        : { status: "delivered", deliveredAt: endedAt + 500 },
+      : {}),
+    expectsCompletionMessage: !collector && !cancelled,
+    endedReason: cancelled ? "subagent-killed" : failed ? "subagent-error" : "subagent-complete",
+    execution: {
+      status: "terminal",
+      startedAt,
+      endedAt,
+      outcome,
+      suppressSessionEffects: cancelled ? true : undefined,
+    },
+    completion: { required: !collector && !cancelled, resultText, capturedAt: endedAt },
+    delivery:
+      cancelled || collector
+        ? { status: "not_required" }
+        : pending
+          ? {
+              status: "pending",
+              createdAt: endedAt,
+              attemptCount: 1,
+              lastAttemptAt: endedAt,
+              lastError: "Synthetic requester temporarily unavailable",
+              nextAttemptAt: options.now + DAY_MS,
+              payload: {
+                requesterSessionKey: parent.sessionKey,
+                requesterDisplayKey: parent.sessionKey,
+                childSessionKey: child.sessionKey,
+                childRunId: runId,
+                task,
+                startedAt,
+                endedAt,
+                outcome,
+                expectsCompletionMessage: true,
+              },
+            }
+          : { status: "delivered", deliveredAt: endedAt + 500 },
     ...(!pending ? { cleanupHandled: true, cleanupCompletedAt: endedAt + 1_000 } : {}),
   };
 }
@@ -308,11 +332,11 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     retainedRun(index, options),
   );
   const latestRuns = new Map(records.map((run) => [run.childSessionKey, run]));
-  const retainedRunStates = { successful: 0, failed: 0, pending: 0, interrupted: 0 };
+  const retainedRunStates = { successful: 0, failed: 0, pending: 0, cancelled: 0 };
   for (const run of records) {
     const state =
-      run.execution.status === "interrupted"
-        ? "interrupted"
+      run.endedReason === "subagent-killed"
+        ? "cancelled"
         : run.delivery?.status === "pending"
           ? "pending"
           : run.execution.outcome?.status === "error"
@@ -361,8 +385,8 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
           entry.lastActivityAt = Math.max(entry.lastActivityAt ?? 0, settledAt);
           entry.lastInteractionAt = Math.max(entry.lastInteractionAt ?? 0, settledAt);
           entry.status =
-            run.execution.status === "interrupted"
-              ? "interrupted"
+            run.endedReason === "subagent-killed"
+              ? "killed"
               : run.execution.outcome?.status === "error"
                 ? "failed"
                 : "done";

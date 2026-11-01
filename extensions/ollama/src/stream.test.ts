@@ -65,6 +65,10 @@ const readEvents = async (stream: ReturnType<ReturnType<typeof createOllamaStrea
   Array.fromAsync(await stream);
 
 const realContext = { messages: [{ role: "user" as const, content: "test", timestamp: 0 }] };
+const toolContext = (name: string, parameters: Record<string, unknown> = { type: "object" }) => ({
+  ...realContext,
+  tools: [{ name, description: name, parameters }],
+});
 const requestEvents = (
   streamFn: ReturnType<typeof createOllamaStreamFn>,
   options: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] = {},
@@ -161,22 +165,16 @@ it.each([
 });
 
 describe("buildAssistantMessage", () => {
-  it.each<[string, ReturnType<typeof buildAssistantMessage>["content"]]>([
-    [
-      "From thinking field",
-      [
-        { type: "thinking", thinking: "From thinking field" },
-        { type: "text", text: "Answer" },
-      ],
-    ],
-    ["", [{ type: "text", text: "Answer" }]],
-  ])("prefers thinking=%s over the reasoning alias", (thinking, content) => {
+  it.each(["From thinking field", ""])("prefers thinking=%s over reasoning", (thinking) => {
     const response = makeOllamaResponse({
       thinking,
       reasoning: "From reasoning field",
       content: "Answer",
     });
-    expect(buildAssistantMessage(response, MODEL_INFO).content).toEqual(content);
+    expect(buildAssistantMessage(response, MODEL_INFO).content).toEqual([
+      ...(thinking ? [{ type: "thinking", thinking }] : []),
+      { type: "text", text: "Answer" },
+    ]);
   });
 
   it("keeps a length stop authoritative over complete-looking tool calls", () => {
@@ -228,17 +226,11 @@ describe("createOllamaStreamFn thinking events", () => {
           }),
         ],
         {},
-        {
-          messages: [{ role: "user", content: "Read README.md." }],
-          tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
-        } as never,
+        toolContext("read"),
       );
       const done = doneEvent(events);
       expect(
-        events
-          .filter((event) => event.type === "text_delta")
-          .map((event) => event.delta)
-          .join(""),
+        events.flatMap((event) => (event.type === "text_delta" ? [event.delta] : [])).join(""),
       ).toBe("Let me read README.md.");
       expect(
         events.find((event) => event.type === "toolcall_delta")?.partial.content,
@@ -302,38 +294,20 @@ describe("createOllamaStreamFn thinking events", () => {
   });
 
   it.each([
-    {
-      format: "bracketed",
-      name: "search_docs",
-      raw: '[search_docs]\n{"query":"x"}\n[END_TOOL_REQUEST]',
-      args: { query: "x" },
-      parameters: { type: "object", properties: {} },
-    },
-    {
-      format: "Harmony",
-      name: "read",
-      raw: 'commentary to=read code {"path":"x"}',
-      args: { path: "x" },
-      parameters: { type: "object" },
-    },
-  ])(
-    "promotes standalone $format text to a structured tool call",
-    async ({ name, raw, args, parameters }) => {
-      const events = await streamOllamaEvents(
-        [chunk({ content: raw }), terminalChunk({ prompt_eval_count: 10, eval_count: 5 })],
-        {},
-        {
-          messages: [{ role: "user", content: "test", timestamp: 0 }],
-          tools: [{ name, description: name, parameters }],
-        },
-      );
-      expectEventTypes(events, "start toolcall_start toolcall_delta toolcall_end done");
-      expect(doneEvent(events)).toMatchObject({
-        reason: "toolUse",
-        message: { stopReason: "toolUse", content: [{ type: "toolCall", name, arguments: args }] },
-      });
-    },
-  );
+    ["search_docs", '[search_docs]\n{"query":"x"}\n[END_TOOL_REQUEST]', { query: "x" }],
+    ["read", 'commentary to=read code {"path":"x"}', { path: "x" }],
+  ] as const)("promotes standalone %s text to a tool call", async (name, raw, args) => {
+    const events = await streamOllamaEvents(
+      [chunk({ content: raw }), terminalChunk({ prompt_eval_count: 10, eval_count: 5 })],
+      {},
+      toolContext(name, { type: "object", properties: {} }),
+    );
+    expectEventTypes(events, "start toolcall_start toolcall_delta toolcall_end done");
+    expect(doneEvent(events)).toMatchObject({
+      reason: "toolUse",
+      message: { stopReason: "toolUse", content: [{ type: "toolCall", name, arguments: args }] },
+    });
+  });
 
   it("preserves a fenced Ollama text tool call as visible text", async () => {
     const text = [
@@ -344,16 +318,7 @@ describe("createOllamaStreamFn thinking events", () => {
     const events = await streamOllamaEvents(
       [makeOllamaResponse({ content: text })],
       {},
-      {
-        messages: [{ role: "user", content: "Use exec to run echo hello", timestamp: 0 }],
-        tools: [
-          {
-            name: "exec",
-            description: "Run a command",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      },
+      toolContext("exec", { type: "object", properties: {} }),
     );
 
     expectEventTypes(events, "start text_start text_delta text_end done");
@@ -566,6 +531,7 @@ describe("createOllamaStreamFn thinking events", () => {
         cacheWrite: 0,
         cacheTelemetry: { state: cacheRead ? "available" : "unavailable" },
         usageReport: { state: contextUsage ? "available" : "unavailable" },
+        totalTokens: expectedInput + cacheRead + expectedOutput,
       });
       expect(usage?.contextUsage).toEqual(contextUsage);
     },
@@ -697,6 +663,7 @@ async function sentThinking(
           "wrapped stream",
         );
   const body = await successfulRequest(model, {}, realContext, streamFn);
+  expect(body.options).not.toHaveProperty("think");
   return { url: fetchWithSsrFGuardMock.mock.calls[0]?.[0].url, think: body.think };
 }
 
@@ -706,6 +673,7 @@ describe("Ollama mandatory thinking", () => {
     [{ id: "glm-5.3-flash" }, "off", "low"],
     [{ ...local, id: "glm-5.3:cloud" }, "off", "low"],
     [{ params: { think: false } }, "off", "low"],
+    [{ ...local, id: "qwen3:32b", params: { thinking: "medium" } }, "off", "medium"],
     [{ params: { think: false }, reasoning: false }, "high", "low"],
     [{ ...hiddenReasoning, thinkingLevelMap: { off: "true", high: "true" } }, "high", true],
     [{}, "high", "high"],

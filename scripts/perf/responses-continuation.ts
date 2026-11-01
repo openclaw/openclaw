@@ -4,7 +4,7 @@
  * Run separate timing and allocation processes, alternating baseline/candidate:
  *   node --expose-gc --import ./scripts/tsx.mjs scripts/perf/responses-continuation.ts \
  *     --flow commit --conversations 10 [--allocation] [--module <path>]
- * Repeat with --flow prefix. Defaults to the working-tree owner. For a baseline:
+ * Repeat with --flow prefix or --flow resolve. Defaults to the working-tree owner. For a baseline:
  *   git show <base>:packages/ai/src/transports/openai-responses-continuation.ts \
  *     > packages/ai/src/transports/.responses-continuation-baseline.ts
  * Pass that file to --module, then remove it after comparison. Keeping it beside
@@ -12,6 +12,8 @@
  * Commit flow uses real claim/commit across each conversation, then cleanup.
  * Explicit previous_response_id isolates commit from history comparison; it is not a
  * Gateway or model-turn latency measurement. Prefix flow hashes full prefixes.
+ * Resolve flow measures the continuation decision with cloned replay history;
+ * preparation, commit accounting, and wire encoding are outside that window.
  * Allocation sampling includes collected objects. Its CPU is diagnostic only.
  */
 import assert from "node:assert/strict";
@@ -28,6 +30,7 @@ import type {
   ResponsesContinuationRequest,
   ResponsesContinuationState,
 } from "../../packages/ai/src/transports/openai-responses-continuation.js";
+import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
 
 const { values } = parseArgs({
   options: {
@@ -37,7 +40,7 @@ const { values } = parseArgs({
     allocation: { type: "boolean", default: false },
   },
 });
-assert(values.flow === "commit" || values.flow === "prefix");
+assert(values.flow === "commit" || values.flow === "prefix" || values.flow === "resolve");
 const conversations = Number(values.conversations);
 assert(Number.isSafeInteger(conversations) && conversations > 0);
 assert(globalThis.gc, "Use --expose-gc");
@@ -90,9 +93,34 @@ const fixtures = Array.from({ length: turns }, (_, index) => {
   history.push(...output);
   return { request, response: { id: `resp_${index}`, output } };
 });
+const continuations = (values.flow === "resolve" ? fixtures : []).map(({ request, response }) => ({
+  state: {
+    lastRequest: request,
+    lastResponseId: response.id,
+    lastResponseItems: response.output,
+  },
+  request: {
+    ...request,
+    previous_response_id: undefined,
+    input: structuredClone([
+      ...(request.input ?? []),
+      ...response.output,
+      { type: "message" as const, role: "user" as const, content: "Continue" },
+    ]),
+  },
+}));
 let lastHash = "";
 function run(count: number): void {
   for (let conversation = 0; conversation < count; conversation++) {
+    if (values.flow === "resolve") {
+      for (const { state, request } of continuations) {
+        const result = owner.resolveResponsesContinuationRequest(state, request);
+        assert.equal(result.continuationStatus, "continued");
+        assert.equal(result.request.previous_response_id, state.lastResponseId);
+        assert.equal(result.request.input?.length, 1);
+      }
+      continue;
+    }
     for (const { request, response } of fixtures) {
       if (values.flow === "prefix") {
         lastHash = owner.responsesContinuationPrefixFingerprint(
@@ -165,17 +193,7 @@ console.log(
     sampledBytes,
     sampledBytesPerTurn: sampledBytes === undefined ? undefined : sampledBytes / iterations,
     samples,
-    gc: [...new Set(collections.map((entry) => entry.gcType))].map((kind) => {
-      const pauses = collections
-        .filter((entry) => entry.gcType === kind)
-        .map((entry) => entry.cost / 1000);
-      return {
-        kind,
-        count: pauses.length,
-        totalMs: pauses.reduce((sum, ms) => sum + ms, 0),
-        maxMs: Math.max(0, ...pauses),
-      };
-    }),
+    gc: summarizeGcByKind(collections),
     memoryBefore,
     memoryAfter,
     hostLoadBefore,

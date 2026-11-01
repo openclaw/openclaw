@@ -12,6 +12,7 @@ import {
   buildGatewayCrashLoopBreakerDecision,
   maintenanceStartupReasons,
 } from "./gateway-boot-lifecycle.kernel.js";
+import { resolveGatewayPlatformSupervisor } from "./gateway-supervision.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
@@ -174,9 +175,18 @@ export async function completeGatewayBootLifecycle(
       }),
     );
     if (signal && recentStops !== undefined && recentStops >= 3) {
-      gatewayLifecycleLog.warn(
-        formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
-      );
+      // A declared platform supervisor stops and replaces processes on purpose
+      // (Pod deletes, rollouts); repeated stops there are not a competing owner.
+      const platformSupervisor = resolveGatewayPlatformSupervisor(env);
+      if (platformSupervisor) {
+        gatewayLifecycleLog.info(
+          `stopped after ${signal} ${recentStops} times in 5 min (${platformSupervisor === "kubernetes" ? "Kubernetes" : "external supervisor"} manages this Gateway)`,
+        );
+      } else {
+        gatewayLifecycleLog.warn(
+          formatGatewayRepeatedSignalHint(signal, recentStops, "stopped after"),
+        );
+      }
     }
   } catch (err) {
     gatewayLifecycleLog.warn(`failed to persist gateway boot outcome; fail-open: ${String(err)}`);

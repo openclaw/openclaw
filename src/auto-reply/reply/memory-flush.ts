@@ -15,6 +15,24 @@ import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TranscriptTokenEstimate } from "./agent-runner-memory-transcript-context.js";
 
+// Leave room for large assistant outputs when checking near-threshold usage.
+export const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
+
+/** Refresh unknown usage, or include the last output when it could cross the flush threshold. */
+export function shouldReadMemoryFlushTranscript(params: {
+  persistedPromptTokens?: number;
+  promptTokenEstimate?: number;
+  flushThreshold: number;
+}): boolean {
+  return (
+    params.persistedPromptTokens === undefined ||
+    (params.promptTokenEstimate !== undefined &&
+      params.flushThreshold > 0 &&
+      params.persistedPromptTokens + params.promptTokenEstimate >=
+        params.flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS)
+  );
+}
+
 function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,

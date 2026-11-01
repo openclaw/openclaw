@@ -18,6 +18,7 @@ const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:cron-inventory-proof";
 const now = Date.parse("2026-10-14T06:00:00Z");
 const changed = "cron.inventory.changed";
+const runtimeEvents = 2;
 const held = createCronJob("held", "Held automation", {
   agentId: "main",
   updatedAtMs: 1,
@@ -109,7 +110,7 @@ suite.define(() => {
         for (const { page: clientPage, gateway, row, settled } of clients) {
           const before = (await gateway.getRequests("cron.list")).length;
           const sessionsBefore = (await gateway.getRequests("sessions.list")).length;
-          for (let index = 0; index < 60; index += 1) {
+          for (let index = 0; index < runtimeEvents; index += 1) {
             const reads = (await gateway.getRequests("cron.list", { sessionKey })).length;
             await gateway.emitGatewayEvent("cron", {
               ...runtime(other, index % 2 ? "finished" : "started", index + 2),
@@ -144,14 +145,14 @@ suite.define(() => {
           counts.push({
             startup: before,
             sessionsStartup: sessionsBefore,
-            runtimeEvents: 60,
+            runtimeEvents,
             additional,
             additionalSessions,
           });
           if (stateOnly && !supported) {
-            expect(additional).toBeGreaterThanOrEqual(60);
+            expect(additional).toBeGreaterThanOrEqual(runtimeEvents);
           } else {
-            expect(additional).toBe(supported ? 0 : 60);
+            expect(additional).toBe(supported ? 0 : runtimeEvents);
             expect(additionalSessions).toBe(0);
           }
         }

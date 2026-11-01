@@ -1,12 +1,19 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import { createRouter, type RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { INTERNAL_AGENT_PATH_PARAM } from "../../app-route-paths.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
-import { gateway, settingsSelection, snapshot } from "./agents-page.test-support.ts";
+import {
+  agentsCapability,
+  gateway,
+  pageContext,
+  settingsSelection,
+  snapshot,
+} from "./agents-page.test-support.ts";
 import { page, type AgentsRouteData } from "./route.ts";
 
 const agentsList: AgentsListResult = makeBootRoster({
@@ -62,6 +69,52 @@ async function loadRoute(url: string, basePath = "") {
 }
 
 describe("agents route", () => {
+  it("retires selection receipts while keeping the warm roster, module, and current intent", async () => {
+    const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
+    agents.state.agentsList = agentsList;
+    const context = { ...pageContext(gateway(snapshot(null, false)), agents), basePath: "" };
+    const selection = context.settingsAgentSelection;
+    const component = vi.fn(async () => ({ renderSolid: () => null }));
+    const loader = vi.fn<NonNullable<typeof page.loader>>(page.loader);
+    const router = createRouter({ routes: [{ ...page, component, loader }] });
+    try {
+      expect(component).not.toHaveBeenCalled();
+      for (const agentId of ["main", "research", "main", "main"]) {
+        selection.set(agentId);
+        await router.navigate("agents", context, {}, location(`/settings/agents/${agentId}`));
+        expect(router.getState().cachedMatches).toHaveLength(0);
+        expect(router.getState().matches[0]?.data).toMatchObject({
+          requestedAgentId: agentId,
+          settingsAgentSelection: selection,
+          selectionIntentRevision: selection.intentRevision,
+        });
+      }
+      expect(component).toHaveBeenCalledTimes(1);
+
+      selection.set("research");
+      const destination = location("/settings/agents/research");
+      const preloadSearch = new URLSearchParams({
+        [INTERNAL_AGENT_PATH_PARAM]: destination.pathname,
+      });
+      loader.mockClear();
+      await router.preloadLocation(location(`/settings/agents?${preloadSearch}`), context);
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(loader.mock.calls[0]?.[1].cause).toBe("preload");
+      expect(router.getState().cachedMatches).toHaveLength(0);
+      await router.navigate("agents", context, {}, destination);
+      expect(loader).toHaveBeenCalledTimes(2);
+      expect(router.getState().cachedMatches).toHaveLength(0);
+      expect(router.getState().matches[0]?.data).toMatchObject({
+        requestedAgentId: "research",
+        selectionIntentRevision: selection.intentRevision,
+      });
+      expect(component).toHaveBeenCalledTimes(1);
+      expect(agents.ensureList).not.toHaveBeenCalled();
+    } finally {
+      router.stop();
+    }
+  });
+
   it("keeps a requested agent and panel when the roster loads on a cold deep link", async () => {
     const result = await loadRoute("/settings/agents/research/tools");
 

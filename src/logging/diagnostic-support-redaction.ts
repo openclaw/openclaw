@@ -11,6 +11,7 @@ import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "../infra/update-preflight-details.js";
 import { tokenizeConcreteConfigPath } from "../shared/dot-path.js";
+import { readPublicSupportCauses } from "./diagnostic-support-causes.js";
 import { createSupportKeyChecker } from "./diagnostic-support-key-check.js";
 import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
@@ -411,16 +412,20 @@ export function redactSupportDiagnosticLine(
     /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
     "[redacted-command]",
   );
-  // Loader errors lead with a library path, and can arrive as a later worker cause.
-  // Retain only the numeric ABI requirement before either boundary removes it.
+  // Causes can follow a path, URL, or progress banner (git prints "Cloning into" first),
+  // or arrive as a later worker cause. Retain closed causes before either boundary removes them.
   const missingGlibc = /\bversion [`'"](GLIBC_\d{1,3}(?:\.\d{1,3}){1,2})['"] not found\b/u.exec(
     value,
   )?.[1];
-  const diagnostic =
-    missingGlibc && !commandRedacted.includes(`${missingGlibc} not found`)
-      ? `${missingGlibc} not found; ${commandRedacted.trim()}`
-      : commandRedacted.trim();
-  return truncateUtf16Safe(diagnostic, maxLength);
+  const kept = commandRedacted.trim();
+  const causes = [
+    ...(missingGlibc ? [`${missingGlibc} not found`] : []),
+    ...readPublicSupportCauses(stripAnsi(value)),
+  ].filter(
+    (cause, index, all) =>
+      all.indexOf(cause) === index && !kept.toLowerCase().includes(cause.toLowerCase()),
+  );
+  return truncateUtf16Safe([...causes, kept].filter(Boolean).join("; "), maxLength);
 }
 
 const PUBLIC_ERROR_CODES = new Set([
@@ -658,11 +663,7 @@ export function redactPublicSupportDiagnosticLine(
   const codes = (lines.match(/\b[A-Z][A-Z0-9_]+\b/gu) ?? []).filter((code) =>
     normalizeSupportDiagnosticErrorCode(code),
   );
-  const causes = (
-    lines.match(
-      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot (?:hash|size) mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|attempt state write refused|sentinel transaction (?:refused|unavailable)|pipe closed|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
-    ) ?? []
-  ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
+  const causes = readPublicSupportCauses(lines);
   // Candidate admission's existing text protocol carries only these fixed validation lines.
   const configFields = parsePublicConfigDiagnosticLines(value).map(
     (issue) =>

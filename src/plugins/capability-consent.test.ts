@@ -482,7 +482,7 @@ it.each(["missing", "invalid"])(
 );
 
 it.each(["current acceptance", "official provenance"] as const)(
-  "requires Claw-owner review despite %s",
+  "requires Template-owner review despite %s",
   async (basis) => {
     const official = basis === "official provenance";
     const pluginId = official ? "acpx" : "plugin";

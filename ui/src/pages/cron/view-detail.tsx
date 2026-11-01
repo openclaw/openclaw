@@ -3,7 +3,6 @@ import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   AdminRequired,
@@ -13,7 +12,7 @@ import {
   NoticeBanner,
 } from "./view-controls.tsx";
 import { Editor } from "./view-editor.tsx";
-import { describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
+import { describeJobNextRun, describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
 import { RunsSection } from "./view-runs.tsx";
 import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
@@ -56,7 +55,7 @@ export function DetailView(
         <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
         <AdminRequired {...props} />
         {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
-        <ErrorBanner error={props.error} reads={props.reads} />
+        <ErrorBanner error={props.error} reads={showHistory() ? undefined : props.reads} />
         <NoticeBanner notice={props.notice} />
         <div
           id="cron-detail-panel"
@@ -95,11 +94,8 @@ function DetailHeader(
     props.mode === "job" ? props.selectedJob?.description?.trim() : undefined;
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
-  const nextRunAtMs = () => props.selectedJob?.state?.nextRunAtMs;
   const nextRunSuffix = () =>
-    nextRunAtMs() !== undefined
-      ? ` · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs())}`
-      : "";
+    props.selectedJob ? ` · ${describeJobNextRun(props.selectedJob)}` : "";
   const subtitle = () =>
     props.mode === "job" && props.selectedJob
       ? `${describeJobSchedule(props.selectedJob)}${nextRunSuffix()}`

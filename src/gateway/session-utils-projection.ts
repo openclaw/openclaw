@@ -20,6 +20,7 @@ import {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
@@ -107,8 +108,10 @@ export function buildProjectedSubagentActivity(
 
 /** Child presentation needs live ownership and sharing facts, never the child's stored payload. */
 export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
-  return links?.map(({ key, entry }) => ({
+  return links?.map(({ key, entry, agentId, storePath }) => ({
     key,
+    agentId,
+    storePath,
     parsedKey: parseAgentSessionKey(key),
     entry: {
       sessionId: entry.sessionId,
@@ -135,10 +138,12 @@ export function reuseSessionRowChildLinks(
 ) {
   return previous &&
     previous.length === links.length &&
-    links.every(({ key, entry }, index) => {
+    links.every(({ key, entry, agentId, storePath }, index) => {
       const before = previous[index]!;
       return (
         key === before.key &&
+        agentId === before.agentId &&
+        storePath === before.storePath &&
         // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
         (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
           (field) =>
@@ -238,27 +243,36 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   preparedAcpMeta?: SessionEntry["acp"] | null;
   rowContext?: SessionListRowContext;
   metadataSnapshot?: PluginMetadataSnapshot | null;
+  runtimeResolution?: SessionRuntimeResolution;
 }) {
-  const { entry } = params;
+  const { entry, runtimeResolution } = params;
   const acpMeta = params.preparedAcpMeta ?? undefined;
-  const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
-    cfg: params.cfg,
-    agentScope: { kind: "prepared", agentId: params.agentId },
-    provider: params.provider,
-    model: params.model,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.entry,
-    acpRuntime: acpMeta != null,
-    acpBackend: acpMeta?.backend,
-  });
-  if (agentRuntime.id === "auto" && entry) {
-    agentRuntime.id = resolveWorkerPlacementModelRuntime({
-      ...params,
-      entry,
-      preparedEnvironment: params.rowContext
-        ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
-        : undefined,
+  let agentRuntime =
+    runtimeResolution?.metadata(params) ??
+    resolveCurrentSessionAgentRuntimeMetadata({
+      cfg: params.cfg,
+      agentScope: { kind: "prepared", agentId: params.agentId },
+      provider: params.provider,
+      model: params.model,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.entry,
+      acpRuntime: acpMeta != null,
+      acpBackend: acpMeta?.backend,
     });
+  if (agentRuntime.id === "auto" && entry) {
+    agentRuntime = {
+      ...agentRuntime,
+      id: resolveWorkerPlacementModelRuntime({
+        ...params,
+        entry,
+        resolveEmbeddedRuntime: runtimeResolution
+          ? () => runtimeResolution.effective(params)
+          : undefined,
+        preparedEnvironment: params.rowContext
+          ? (params.rowContext.workerPlacementEnvironment ??= captureRuntimeStateEnvironment())
+          : undefined,
+      }),
+    };
   }
   return {
     acpMeta,

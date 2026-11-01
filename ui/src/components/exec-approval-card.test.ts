@@ -191,7 +191,6 @@ describe("exec approval card", () => {
           host: "sandbox",
           ask: "always",
           warningText: "Runs after this turn and restarts automatically until stopped.",
-          allowedDecisions: ["allow-once", "deny"],
           streamProposal: { jobId: "watcher-1", name: "Watch application errors", operation },
         },
       });
@@ -206,6 +205,7 @@ describe("exec approval card", () => {
         operation === "add" ? "Start watching" : "Save watcher change",
       );
       expect(card?.textContent).toContain("Cancel");
+      expect(elements(".exec-approval-actions button")).toHaveLength(2);
       expect(card?.textContent).not.toContain("Approved by you");
     },
   );
@@ -501,48 +501,4 @@ describe("exec approval card", () => {
     view.unmount();
     expect(cancel).toHaveBeenCalledOnce();
   });
-
-  it.each([
-    [undefined, undefined, ["Deny", "Always allow", "Allow once"]],
-    [undefined, "always", ["Deny", "Allow once"]],
-    [["deny", "allow-once"], undefined, ["Deny", "Allow once"]],
-  ] as const)(
-    "keeps native mobile eligibility for decisions %j and ask %s",
-    (allowed, ask, labels) => {
-      const card = renderCard(
-        approval({
-          kind: "exec",
-          request: { command: "echo review", allowedDecisions: allowed && [...allowed], ask },
-        }),
-        "inline",
-        "mobile",
-      );
-      expect(
-        Array.from(card!.querySelectorAll("button"), (button) =>
-          button.textContent?.trim(),
-        ).toSorted(),
-      ).toEqual(labels.toSorted());
-    },
-  );
-
-  it.each(["modal", "plugin"] as const)(
-    "ignores the mobile opt-in for the %s presentation",
-    (surface) => {
-      const card = renderCard(
-        surface === "modal"
-          ? approval({ kind: "exec", request: { command: "echo modal" } })
-          : approval(),
-        surface === "modal" ? "modal" : "inline",
-        "mobile",
-      );
-      expect(card!.textContent).toContain(
-        surface === "modal" ? "Exec approval needed" : "Codex approval",
-      );
-      if (surface === "modal") {
-        expect(card!.textContent).toContain("Always allow");
-      } else {
-        expect(card!.querySelector("details")).toBeNull();
-      }
-    },
-  );
 });

@@ -33,7 +33,7 @@ import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
 import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
@@ -67,7 +67,7 @@ it("preserves run adoption and its reducers through hydration and repairs derive
         commandId: "adopt-with-activity",
         phaseId: "adoption",
         sessionId: f.scope.sessionId,
-        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        expectedState: buildSessionTranscriptTurnExpectedState(initial.entry!),
         runId: "current-run",
         lifecycle: { startedAt: 2 },
         reducers: [
@@ -90,7 +90,7 @@ it("preserves run adoption and its reducers through hydration and repairs derive
           ...command.input,
           expected: snapshot.version,
           commandId,
-          expectedState: buildRestartRecoveryExpectedState(snapshot.entry!),
+          expectedState: buildSessionTranscriptTurnExpectedState(snapshot.entry!),
           // Clearing an absent optional field changes shape, not the stored row.
           lifecycle: { endedAt: undefined },
           reducers: [],
@@ -758,7 +758,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
         commandId: "oversized-activity",
         phaseId: "terminal-accounting",
         sessionId: f.scope.sessionId,
-        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        expectedState: buildSessionTranscriptTurnExpectedState(initial.entry!),
         runId: "oversized-run",
         lifecycle: {},
         reducers: [

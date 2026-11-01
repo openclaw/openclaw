@@ -108,6 +108,7 @@ suite.define(() => {
           messages: rows,
           hasMore,
           nextOffset,
+          ...(hasMore ? { olderCursor: `older-export-${nextOffset}` } : {}),
           totalMessages: messages.length,
           sessionId: "export-pagination",
           deltaCursor: "stable-export-cursor",
@@ -187,10 +188,11 @@ suite.define(() => {
           nodes.findIndex((node) => node.textContent?.trim().startsWith("/viewport-15")),
         );
         expect(targetIndex).toBeGreaterThan(10);
+        await polledAttribute(options.first(), "aria-selected").toBe("true");
         for (let index = 0; index < targetIndex; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
-        await polledAttribute(options.nth(targetIndex), "aria-selected").toBe("true");
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         if (selection === "pointer") {
           await options.nth(targetIndex).click();
@@ -228,6 +230,7 @@ suite.define(() => {
         expect(activeIndex).toBeGreaterThanOrEqual(0);
         for (let index = activeIndex; index < choices.length - 1; index += 1) {
           await composer.press("ArrowDown");
+          await polledAttribute(options.nth(index + 1), "aria-selected").toBe("true");
         }
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await composer.fill("/viewport-");
@@ -259,6 +262,7 @@ suite.define(() => {
         )
         .toEqual(["/pair", "/pair-device", "/openclaw"]);
 
+      await polledAttribute(options.first(), "aria-selected").toBe("true");
       await composer.press("ArrowDown");
       await polledAttribute(options.nth(1), "aria-selected").toBe("true");
       await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");

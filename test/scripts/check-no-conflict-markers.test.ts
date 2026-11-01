@@ -78,10 +78,17 @@ it("detects markers in a file larger than the previous scan byte limit without r
   ]);
 });
 
-it("main reports tracked violations with paths relative to cwd", () => {
+it.each([false, true])("main reports tracked violations through a symlink: %s", (symlink) => {
   const rootDir = createRepository({ "src/conflict.ts": conflict });
   const scriptPath = path.resolve(__dirname, "../../scripts/check-no-conflict-markers.mjs");
-  const result = spawnSync(process.execPath, [scriptPath], { cwd: rootDir, encoding: "utf8" });
+  const alias = path.join(rootDir, "script-alias");
+  fs.symlinkSync(path.dirname(scriptPath), alias, "junction");
+  const entry = symlink ? path.join(alias, path.basename(scriptPath)) : scriptPath;
+  const result = spawnSync(process.execPath, [entry], {
+    cwd: rootDir,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
   expect(result.error).toBeUndefined();
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("Found unresolved merge conflict markers:");

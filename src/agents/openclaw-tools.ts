@@ -27,6 +27,7 @@ import {
 } from "./openclaw-plugin-tools.js";
 import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
+import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -163,6 +164,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     config: captured.config,
     agentId: captured.requesterAgentIdOverride,
   });
+  captured.fsPolicy = resolveCapturedOpenClawToolsFsPolicy(captured, sessionAgentId);
   captured.authProfileStore ??= ensureAuthProfileStoreWithoutExternalProfiles(
     captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
     { allowKeychainPrompt: false },
@@ -472,6 +474,7 @@ function* createOpenClawToolsSteps(
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  const githubSettingsOffered = options?.listingClientCaps?.includes("ui-agent-github-settings");
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -496,7 +499,6 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
-            readOnly: options?.forceRestartSafeTools,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
@@ -521,6 +523,7 @@ function* createOpenClawToolsSteps(
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
+            githubIdentitySettingsAvailable: githubSettingsOffered,
           }),
           createThemeTool(),
           ...(options?.sandboxed
@@ -558,11 +561,14 @@ function* createOpenClawToolsSteps(
         }),
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
-    options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
+    options?.githubPublicationAvailable !== undefined
+      ? createGitHubIdentityStatusTool(options)
+      : null,
     options?.githubPublicationAvailable !== undefined
       ? createGitHubPublishTool({
           ...options,
           publicationAvailable: options.githubPublicationAvailable,
+          preview: options.githubPublicationPreview,
         })
       : null,
     transcriptsTool,

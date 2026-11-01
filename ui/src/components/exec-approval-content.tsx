@@ -132,12 +132,14 @@ export function ExecApprovalBody(props: {
   lastError?: string;
 }) {
   const detailsId = createUniqueId();
+  const destination = () =>
+    props.request.host === "node" && (props.nodeDisplayName || props.request.nodeId);
   return (
     <div class="exec-approval-terminal">
       <div class="exec-approval-shell mono">
-        <Show when={(props.request.host && props.request.host !== "gateway") || props.request.cwd}>
+        <Show when={destination() || props.request.cwd}>
           <div class="exec-approval-prompt">
-            <Show when={props.request.host && props.request.host !== "gateway"}>
+            <Show when={destination()}>
               <span>
                 <span class="sr-only">{t("execApproval.labels.host")}: </span>
                 <ExecApprovalHost request={props.request} nodeDisplayName={props.nodeDisplayName} />

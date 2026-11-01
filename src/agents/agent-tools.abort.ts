@@ -1,4 +1,8 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Combines per-call cancellation with run-level aborts while preserving
@@ -7,10 +11,6 @@ import { createAbortError } from "../infra/abort-signal.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 
 function throwAbortError(): never {

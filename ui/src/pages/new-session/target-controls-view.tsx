@@ -125,7 +125,7 @@ export function NewSessionPlaceControls(props: {
     const { context, data, gateway, place } = props.params;
     const browser = place.browser;
     const nativeTerminal = catalog.isTarget(data);
-    const cloudProfiles = nativeTerminal || !place.isAdmin() ? [] : gateway.cloudProfiles;
+    const cloudProfiles = nativeTerminal ? [] : gateway.cloudProfiles;
     const projects = nativeTerminal ? [] : browser.projects;
     const recents = nativeTerminal
       ? []

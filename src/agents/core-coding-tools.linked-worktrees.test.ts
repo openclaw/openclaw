@@ -1,7 +1,8 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { git, initializeGitFixture } from "./worktrees/git-fixture.test-support.js";
@@ -25,10 +26,8 @@ function fileTools(root: string) {
     execDefaults: {},
     processDefaults: {},
   });
-  return async (name: string, args: Record<string, unknown>) => {
-    const tool = tools.find((entry) => entry.name === name)!;
-    return tool.execute(name, args);
-  };
+  return async (name: string, args: Record<string, unknown>) =>
+    tools.find((entry) => entry.name === name)!.execute(name, args);
 }
 
 it("explains how to bind a worker before editing another repository's linked worktree", async () => {
@@ -36,8 +35,6 @@ it("explains how to bind a worker before editing another repository's linked wor
   const workspace = path.join(fixture, "workspace");
   await fs.mkdir(workspace);
   const repo = await repository(fixture, "repo");
-  const unbound = fileTools(workspace);
-  const bound = fileTools(repo);
   const linked = path.join(fixture, "repo-wt", "worker");
   await git(repo, "worktree", "add", "--quiet", "--detach", linked);
   const target = path.join(linked, "seed.txt");
@@ -45,11 +42,11 @@ it("explains how to bind a worker before editing another repository's linked wor
     input: `*** Begin Patch\n*** Update File: ${target}\n@@\n-fixture\n+patched\n*** End Patch`,
   };
 
-  await expect(unbound("apply_patch", patch)).rejects.toThrow(
+  await expect(fileTools(workspace)("apply_patch", patch)).rejects.toThrow(
     /Path escapes sandbox root .*parent.*sessions_spawn.*cwd.*repository.*exec.*workdir/s,
   );
   await expect(fs.readFile(target, "utf8")).resolves.toBe("fixture\n");
-  await bound("apply_patch", patch);
+  await fileTools(repo)("apply_patch", patch);
   await expect(fs.readFile(target, "utf8")).resolves.toBe("patched\n");
 });
 
@@ -63,18 +60,20 @@ it("uses newly registered linked worktrees for host file tools and observes unre
 
   await execute("write", { path: target, content: "created\n" });
   await execute("edit", { path: target, edits: [{ oldText: "created", newText: "edited" }] });
-  await expect(fs.readFile(target, "utf8")).resolves.toBe("edited\n");
+  using syncRead = vi.spyOn(syncFs, "readFileSync");
   const read = await execute("read", { path: target });
   expect(read.content).toEqual(
     expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("edited") })]),
   );
+  expect(
+    syncRead.mock.calls.some(
+      ([file]) => typeof file === "string" && path.basename(file) === ".git",
+    ),
+  ).toBe(false);
   await execute("apply_patch", {
     input: `*** Begin Patch\n*** Add File: ${path.join(linked, "patch.txt")}\n+created\n*** Update File: ${target}\n@@\n-edited\n+patched\n*** End Patch`,
   });
   await expect(fs.readFile(path.join(linked, "patch.txt"), "utf8")).resolves.toBe("created\n");
-  await expect(fs.readFile(target, "utf8")).resolves.toBe("patched\n");
-
-  // A linked root must resolve the same common repository as the main checkout.
   const sibling = path.join(fixture, "sibling");
   await git(root, "worktree", "add", "--quiet", "--detach", sibling);
   await fileTools(linked)("write", { path: path.join(sibling, "note.txt"), content: "created\n" });

@@ -3,6 +3,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
+let latestCopyFocusAttempt = 0;
 export function copyMarkdownLabel(): string {
   return t("chat.actions.copyAsMarkdown");
 }
@@ -53,6 +54,9 @@ export async function handleCopyButton(
   if (!button || button.dataset.copyState === "copying") {
     return false;
   }
+  const ownerDocument = button.ownerDocument;
+  const restoreFocus = ownerDocument.activeElement === button;
+  const focusAttempt = ++latestCopyFocusAttempt;
 
   // Older reset timers must not replace feedback from a newer copy attempt.
   const attempt = String(Number(button.dataset.copyAttempt ?? "0") + 1);
@@ -71,6 +75,19 @@ export async function handleCopyButton(
   button.disabled = false;
   if (!isCurrent()) {
     return false;
+  }
+  if (restoreFocus) {
+    // Let the clipboard fallback restore newer focus before checking the button.
+    window.setTimeout(() => {
+      const { activeElement, body } = ownerDocument;
+      if (
+        isCurrent() &&
+        focusAttempt === latestCopyFocusAttempt &&
+        (!activeElement || activeElement === body)
+      ) {
+        button.focus({ preventScroll: true });
+      }
+    }, 0);
   }
 
   button.dataset.copyState = copied ? "copied" : "error";

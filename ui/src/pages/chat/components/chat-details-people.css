@@ -64,17 +64,22 @@ a.chat-details-people__row:focus-visible {
   text-align: end;
 }
 
+[data-details-group="people"][data-expanded] > .chat-details-desktop-section__heading > svg {
+  visibility: hidden;
+}
+
+[data-details-group="people"]
+  > .chat-details-desktop-section__heading
+  > .chat-details-desktop-section__metadata,
 .chat-details-people__summary {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  margin-inline-start: auto;
-  font-variant-numeric: tabular-nums;
+  display: contents;
 }
 
 .chat-details-people__preview {
   display: inline-flex;
   align-items: center;
+  order: 2;
+  margin-inline-start: auto;
 }
 
 .chat-details-people__preview-avatar {

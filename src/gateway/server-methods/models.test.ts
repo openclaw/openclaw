@@ -971,16 +971,7 @@ describe("models.list", () => {
         }).models,
       } as unknown as OpenClawConfig;
 
-      const loadConfiguredCatalog = catalogLoader(catalog);
-      const { request: configuredRequest, respond: configuredRespond } = requestModelsList({
-        view: "configured",
-        includeDefaultModels: false,
-        runtimeConfig: cfg,
-        loadGatewayModelCatalog: loadConfiguredCatalog,
-      });
-      await configuredRequest;
-
-      expectModels(configuredRespond, [
+      const configuredModels = [
         {
           ...GPT_CODEX,
           agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
@@ -999,45 +990,38 @@ describe("models.list", () => {
         },
         { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
         { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-      ]);
+      ];
+      const loadConfiguredCatalog = catalogLoader(catalog);
+      await expectModelsList(
+        {
+          view: "configured",
+          includeDefaultModels: false,
+          runtimeConfig: cfg,
+          loadGatewayModelCatalog: loadConfiguredCatalog,
+        },
+        configuredModels,
+      );
       expect(loadConfiguredCatalog).toHaveBeenCalledWith(
         expect.objectContaining({ readOnly: true }),
       );
 
-      const { request: allRequest, respond: allRespond } = requestModelsList({
-        view: "all",
-        runtimeConfig: cfg,
-        loadGatewayModelCatalog: catalogLoader(catalog),
-      });
-      await allRequest;
-
-      expectModels(allRespond, [
+      await expectModelsList(
         {
-          id: "claude-test",
-          name: "Claude Test",
-          provider: "anthropic",
-          available: false,
-          unavailableReason: "missing-auth",
+          view: "all",
+          runtimeConfig: cfg,
+          loadGatewayModelCatalog: catalogLoader(catalog),
         },
-        {
-          ...GPT_CODEX,
-          agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
-          cyberAccessProgramDefault: "standard",
-          local: false,
-          available: true,
-        },
-        {
-          id: "gpt-codex-test",
-          name: "GPT Codex Test",
-          provider: "openai",
-          agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
-          cyberAccessProgramDefault: "standard",
-          local: false,
-          available: true,
-        },
-        { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-        { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
-      ]);
+        [
+          {
+            id: "claude-test",
+            name: "Claude Test",
+            provider: "anthropic",
+            available: false,
+            unavailableReason: "missing-auth",
+          },
+          ...configuredModels,
+        ],
+      );
     });
   });
 
@@ -1203,6 +1187,7 @@ describe("models.list", () => {
                     source: "model",
                   },
                   available,
+                  supportsFastMode: false,
                   tags: ["configured"],
                   ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                 },
@@ -1330,11 +1315,7 @@ describe("models.list", () => {
         },
       ]);
 
-      try {
-        await expectDemoAvailability(false);
-      } finally {
-        clearRuntimeAuthProfileStoreSnapshots();
-      }
+      await expectDemoAvailability(false);
     });
   });
 
@@ -1463,11 +1444,7 @@ describe("models.list", () => {
           },
         },
       ]);
-      try {
-        await expectDemoAvailability(true, { secrets: FILE_SECRETS });
-      } finally {
-        clearRuntimeAuthProfileStoreSnapshots();
-      }
+      await expectDemoAvailability(true, { secrets: FILE_SECRETS });
     });
   });
 

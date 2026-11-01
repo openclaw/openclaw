@@ -216,6 +216,7 @@ export async function startTeamStressTelemetry(options: Options) {
         count: loop.count,
         p95Ms: loop.count ? loop.percentile(95) / 1e6 : null,
         p99Ms: loop.count ? loop.percentile(99) / 1e6 : null,
+        p999Ms: loop.count ? loop.percentile(99.9) / 1e6 : null,
         maxMs: loop.count ? loop.max / 1e6 : null,
         resolutionMs: 20,
       },
@@ -289,6 +290,7 @@ export async function startTeamStressTelemetry(options: Options) {
           count: allLoop.count,
           p95Ms: allLoop.count ? allLoop.percentile(95) / 1e6 : null,
           p99Ms: allLoop.count ? allLoop.percentile(99) / 1e6 : null,
+          p999Ms: allLoop.count ? allLoop.percentile(99.9) / 1e6 : null,
           maxMs: allLoop.count ? allLoop.max / 1e6 : null,
         },
         stalls: totalStalls,
@@ -350,6 +352,12 @@ export function installTeamStressTelemetryIpc() {
   }
   let stop: Awaited<ReturnType<typeof startTeamStressTelemetry>> | undefined;
   let pending = Promise.resolve();
+  let pendingReplies = 0;
+  const replied = () => {
+    if (--pendingReplies === 0) {
+      process.channel?.unref();
+    }
+  };
   process.on("message", (message: unknown) => {
     if (
       !message ||
@@ -361,6 +369,8 @@ export function installTeamStressTelemetryIpc() {
       return;
     }
     const action = message.action;
+    pendingReplies++;
+    process.channel?.ref();
     pending = pending
       .then(async () => {
         if (
@@ -382,12 +392,16 @@ export function installTeamStressTelemetryIpc() {
         } else {
           throw new Error("Invalid Team stress telemetry command or lifecycle");
         }
-        process.send?.({ channel: "team-shape-stress", action, ok: true });
+        process.send?.({ channel: "team-shape-stress", action, ok: true }, replied);
       })
       .catch((error: unknown) => {
-        process.send?.({ channel: "team-shape-stress", action, ok: false, error: String(error) });
+        process.send?.(
+          { channel: "team-shape-stress", action, ok: false, error: String(error) },
+          replied,
+        );
       });
   });
+  process.channel?.unref();
   process.once("disconnect", () => {
     void pending.then(() => stop?.()).catch(() => {});
   });

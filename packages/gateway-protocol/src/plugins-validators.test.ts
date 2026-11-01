@@ -73,7 +73,7 @@ describe("plugin lifecycle protocol validators", () => {
     for (const trust of [
       { trustedSourceLinkedOfficialInstall: true },
       { bundledOrigin: true },
-      { clawManaged: true },
+      { templateManaged: true },
     ]) {
       install.rejects({ ...request, ...trust });
     }

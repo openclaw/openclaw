@@ -75,6 +75,27 @@ async function readArtifacts(dir: string) {
   );
 }
 
+async function expectPreservedArtifacts(dir: string) {
+  const artifacts = await readArtifacts(dir);
+  expect(artifacts[0]).toContain("QA_GATEWAY_ATTEMPT_1 apiKey=<redacted>");
+  expect(artifacts[1]).toContain("QA_GATEWAY_STDERR apiKey=<redacted>");
+  expect(artifacts[2]).toContain("Only sanitized gateway debug artifacts");
+  expect(artifacts.join("\n")).not.toContain("synthetic-fixture-secret");
+  return artifacts;
+}
+
+function denyRemoval(targetPath: string, message: string, once = false) {
+  const originalRm = fs.rm;
+  let failed = false;
+  return vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+    if (target === targetPath && (!once || !failed)) {
+      failed = true;
+      throw Object.assign(new Error(message), { code: "EACCES" });
+    }
+    return originalRm(target, options);
+  });
+}
+
 async function fixture(failReplacement: boolean | "descendant" = false, privateState = false) {
   const root = await dirs.makeTempDir("qa-lifetime-");
   const record = path.join(root, "children.json");
@@ -172,6 +193,7 @@ async function startFixture(
     command: { ...fixtureState.params.command, usePackagedPlugins: packaged },
   });
   const gateway = await owner.start();
+  fixtureState.pids();
   return { ...fixtureState, owner, gateway };
 }
 
@@ -312,21 +334,6 @@ http.createServer((request, response) => {`,
     expect(await fs.readdir(root)).toEqual(["gateway.mjs"]);
   });
 
-  it("cleans retained fixture roots after stopped work", async () => {
-    const { params, owner, gateway } = await startFixture(false, false);
-    const stagedRoot = resolveQaStagedBundledPluginsRoot({
-      repoRoot: params.repoRoot,
-      tempRoot: gateway.tempRoot,
-    });
-    await expectStopped(owner.stop({ keepTemp: true }));
-    await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
-    await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
-
-    await expectStopped(owner.stop({ keepTemp: false }));
-    await expectGone(gateway.tempRoot);
-    await expectGone(stagedRoot);
-  });
-
   it("owns an unaccepted launcher and separates boundary diagnostics from termination", async () => {
     const { params } = await fixture();
     const rejected = new Error("verified acceptance failed");
@@ -403,7 +410,6 @@ http.createServer((request, response) => {`,
     async ({ failurePhase, destination }) => {
       const failsStaging = failurePhase === "staging removal";
       const { params, pids, owner, gateway } = await startFixture(false, !failsStaging);
-      pids();
       const preserveToDir = await makeArtifactDir();
       const failure = new Error("gateway RPC close failed");
       const stagedRoot = resolveQaStagedBundledPluginsRoot({
@@ -412,15 +418,7 @@ http.createServer((request, response) => {`,
       });
       if (failsStaging) {
         await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
-        const originalRm = fs.rm;
-        let failed = false;
-        vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-          if (target === stagedRoot && !failed) {
-            failed = true;
-            throw Object.assign(new Error("EACCES: staging removal denied"), { code: "EACCES" });
-          }
-          return originalRm(target, options);
-        });
+        denyRemoval(stagedRoot, "EACCES: staging removal denied", true);
       } else {
         rpcStop.mockRejectedValueOnce(failure);
       }
@@ -437,11 +435,7 @@ http.createServer((request, response) => {`,
         expect(stopped.errors).toEqual([failure]);
       }
       await expectGone(gateway.tempRoot);
-      const artifacts = await readArtifacts(preserveToDir);
-      expect(artifacts[0]).toContain("QA_GATEWAY_ATTEMPT_1 apiKey=<redacted>");
-      expect(artifacts[1]).toContain("QA_GATEWAY_STDERR apiKey=<redacted>");
-      expect(artifacts[2]).toContain("Only sanitized gateway debug artifacts");
-      expect(artifacts.join("\n")).not.toContain("synthetic-fixture-secret");
+      const artifacts = await expectPreservedArtifacts(preserveToDir);
       const retryDir = destination === "same" ? preserveToDir : await makeArtifactDir();
       await expectStopped(owner.stop({ preserveToDir: retryDir }));
       expect(rpcStop).toHaveBeenCalledTimes(2);
@@ -459,8 +453,11 @@ http.createServer((request, response) => {`,
   it.each([true, false])(
     "only exports on retry if the first stop retained temporary logs (keepTemp=%s)",
     async (keepTemp) => {
-      const { pids, owner, gateway } = await startFixture();
-      pids();
+      const { params, owner, gateway } = await startFixture(false, false);
+      const stagedRoot = resolveQaStagedBundledPluginsRoot({
+        repoRoot: params.repoRoot,
+        tempRoot: gateway.tempRoot,
+      });
       const preserveToDir = await makeArtifactDir();
       const failure = new Error("gateway RPC close failed");
       rpcStop.mockRejectedValueOnce(failure);
@@ -471,6 +468,7 @@ http.createServer((request, response) => {`,
       expect(await fs.readdir(preserveToDir)).toEqual([]);
       if (keepTemp) {
         await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+        await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
       } else {
         await expectGone(gateway.tempRoot);
       }
@@ -483,6 +481,7 @@ http.createServer((request, response) => {`,
         expect(await fs.readdir(preserveToDir)).toEqual([]);
       }
       await expectGone(gateway.tempRoot);
+      await expectGone(stagedRoot);
     },
   );
 
@@ -578,7 +577,6 @@ http.createServer((request, response) => {`,
 
   it("does not spawn a replacement after stop closes an awaited mutation", async () => {
     const { pids, owner, gateway } = await startFixture();
-    pids();
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const restarting = gateway.restartAfterStateMutation(async () => {
@@ -596,14 +594,7 @@ http.createServer((request, response) => {`,
 
   it("reports failed runtime removal without undoing confirmed shutdown and retries cleanup", async () => {
     const { pids, owner, gateway } = await startFixture();
-    pids();
-    const originalRm = fs.rm;
-    const fault = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (target === gateway.tempRoot) {
-        throw Object.assign(new Error("EACCES: runtime removal denied"), { code: "EACCES" });
-      }
-      return originalRm(target, options);
-    });
+    const fault = denyRemoval(gateway.tempRoot, "EACCES: runtime removal denied");
     try {
       const result = await owner.stop();
       expect(result.process).toBe("confirmed-stopped");
@@ -671,14 +662,7 @@ http.createServer((request, response) => {`,
       );
       expect(gateway.cliCommand).toBeUndefined();
       pids();
-      const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-        if (target === gateway.tempRoot) {
-          throw Object.assign(new Error("isolated state belongs to another UID"), {
-            code: "EACCES",
-          });
-        }
-        return originalRm(target, options);
-      });
+      const denied = denyRemoval(gateway.tempRoot, "isolated state belongs to another UID");
       try {
         await expectStopped(owner.stop({ preserveToDir }));
         expect(cleanup).toHaveBeenCalledOnce();
@@ -691,7 +675,6 @@ http.createServer((request, response) => {`,
 
   it("retries failed preservation after confirming process shutdown", async () => {
     const { pids, owner, gateway } = await startFixture();
-    pids();
     const invalidOptions = {
       preserveToDir: path.resolve(process.cwd(), "../qa-artifacts-outside-repo"),
     };
@@ -703,10 +686,7 @@ http.createServer((request, response) => {`,
     }
     const preserveToDir = await makeArtifactDir();
     await expectStopped(owner.stop({ preserveToDir }));
-    const [stdout, stderr, readme] = await readArtifacts(preserveToDir);
-    expect(stdout).toContain("QA_GATEWAY_ATTEMPT_1 apiKey=<redacted>");
-    expect(stderr).toContain("QA_GATEWAY_STDERR apiKey=<redacted>");
-    expect(readme).toContain("Only sanitized gateway debug artifacts");
+    await expectPreservedArtifacts(preserveToDir);
     expectDead(pids());
     await expectGone(gateway.tempRoot);
   });

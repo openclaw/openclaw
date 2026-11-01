@@ -1,6 +1,7 @@
 import { isMainThread } from "node:worker_threads";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
@@ -307,9 +308,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         expectedIdentity ? { expectedIdentity } : {},
       )
     : undefined;
-  const assertSourceCurrent = () => {
+  const assertSourceCurrent = (operation?: RetainedWorkerTransactionAdmission) => {
     execution?.assertCurrent();
-    params.commitGuard?.();
+    params.commitGuard?.(operation);
   };
   // Exact metadata removals already carry their expected row. The deletion
   // transaction compares it once; transcript reclamation still needs planning.
@@ -385,8 +386,8 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         resolved,
         prepared.targetSnapshot,
         async (assertCurrent, _capture, settleReceipts) => {
-          const assertDeletionCurrent = () => {
-            assertSourceCurrent();
+          const assertDeletionCurrent = (operation?: RetainedWorkerTransactionAdmission) => {
+            assertSourceCurrent(operation);
             assertCurrent();
           };
           const validation = {

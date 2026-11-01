@@ -390,7 +390,10 @@ it("attributes worker receipts without retaining labels or treating unsized mess
   expect(JSON.stringify(tasks)).not.toContain("fixture-private-task");
 });
 
-it("attributes broadcast allocations through deep stacks without double counting", async () => {
+it.each([
+  ["broadcastInternal", "gateway-prewarm.js"],
+  ["", new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href],
+])("attributes deep broadcast stacks under %s (%s)", async (name, url) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-broadcast-profile-"));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   const frame = (
@@ -414,10 +417,7 @@ it("attributes broadcast allocations through deep stacks without double counting
     projection = frame("wrapper", "", 0, [projection]);
   }
   const profile: HeapProfiler.SamplingHeapProfile = {
-    head: frame("root", "", 0, [
-      frame("unrelated", "", 1000),
-      frame("broadcastInternal", "server-broadcast.ts", 100, [projection]),
-    ]),
+    head: frame("root", "", 0, [frame("unrelated", "", 1000), frame(name, url, 100, [projection])]),
   };
   const file = path.join(directory, "allocation.heapprofile");
   await writeFile(file, JSON.stringify(profile));

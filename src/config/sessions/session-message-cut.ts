@@ -137,7 +137,12 @@ export async function mutateSessionHistoryInWorker(
         }
         return false;
       },
-      assertCandidate: () => preconditions?.assertUpstreamCurrent?.(),
+      assertCandidate: (candidate) => {
+        preconditions?.assertUpstreamCurrent?.();
+        if (intent.mode === "fork" && candidate.result.status === "created") {
+          preconditions?.assertForkVisibilityAllowed?.(candidate.result.entry.visibility);
+        }
+      },
       candidateKind: "session-message-cut" as const,
       onAcknowledged(candidate: SessionMessageCutCandidate) {
         if (candidate.result.status === "created") {

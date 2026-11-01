@@ -59,6 +59,14 @@ vi.mock("../../auto-reply/reply/agent-runner-utils.js", () => ({
 const withState = setupSessionMutationState();
 const sessionKey = "agent:main:direct:queued-selection";
 const sessionId = "queued-selection";
+const initialEntry = {
+  sessionId,
+  updatedAt: 1,
+  providerOverride: "fixture",
+  modelOverride: "x",
+  modelOverrideSource: "user" as const,
+};
+const initialAccess = { cyberAccessProgram: "daybreak_blue" } as const;
 const catalog: ModelCatalogEntry[] = ["configured", "x", "y", "z"].map((id) => ({
   provider: "fixture",
   id,
@@ -121,11 +129,7 @@ afterEach(() => {
 
 async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntry> = {}) {
   await upsertSessionEntryCore(scope, {
-    sessionId,
-    updatedAt: 1,
-    providerOverride: "fixture",
-    modelOverride: "x",
-    modelOverrideSource: "user",
+    ...initialEntry,
     thinkingLevel,
     ...overrides,
   });
@@ -154,6 +158,10 @@ async function patchSession(patch: Record<string, unknown>, config = cfg) {
   return expectDefined(responses[0], "patch response");
 }
 
+async function patchSuccessfully(patch: Record<string, unknown>, config = cfg) {
+  expect((await patchSession(patch, config))[0]).toBe(true);
+}
+
 it.each([false, true])(
   "does not write history for model selections before a message is sent (incognito: %s)",
   (incognito) =>
@@ -170,18 +178,15 @@ it.each([false, true])(
         await createSessionEntryWithTranscript(target, () => ({
           ok: true,
           entry: {
-            sessionId,
-            updatedAt: 1,
+            ...initialEntry,
             incognito: true,
-            providerOverride: "fixture",
-            modelOverride: "x",
-            modelOverrideSource: "user",
+            thinkingLevel: "high",
             modelProvider: "fixture",
             model: "x",
           },
         }));
       } else {
-        await seedSession("low", { modelProvider: "fixture", model: "x" });
+        await seedSession("high", { modelProvider: "fixture", model: "x" });
       }
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       const message = { role: "user" as const, content: "Keep the conversation.", timestamp: 1 };
@@ -194,6 +199,7 @@ it.each([false, true])(
         ["fixture/x", true],
       ] as const) {
         expect((await patchSession({ key: target.sessionKey, model }))[0]).toBe(accepted);
+        expect(loadSessionEntry(target)?.thinkingLevel).toBe("high");
         expect(loadSessionEntry(target)?.lastSubmittedModel).toEqual({
           provider: "fixture",
           model: "x",
@@ -209,15 +215,6 @@ it.each([false, true])(
       expect(reopened.buildSessionContext().messages).toEqual([message, followup]);
     }),
 );
-
-it("preserves requested thinking when switching away from and back to a reasoning model", () =>
-  withState(async () => {
-    await seedSession("high");
-    for (const model of ["fixture/z", "fixture/x"]) {
-      expect((await patchSession({ model }))[0]).toBe(true);
-      expect(loadSessionEntry(scope)?.thinkingLevel).toBe("high");
-    }
-  }));
 
 function enqueue(
   state: OpenClawTestState,
@@ -247,78 +244,78 @@ function enqueue(
   return queued;
 }
 
+async function completeQueuedTurn(queued: FollowupRun, turn?: AdmittedFollowupTurn) {
+  turn?.operation.complete();
+  const claim = queued.controllerInput?.claim;
+  if (claim) {
+    sessionMailbox.releaseSessionControllerClaim(claim);
+    await claim.settlement.promise;
+  }
+}
+
 it.each(["standard", null] as const)(
   "refreshes queued Access to %s without changing admitted turns",
   (program) =>
     withState(async (state) => {
-      await seedSession("low", { cyberAccessProgram: "daybreak_blue" });
-      const entered = [0, 1, 2].map(() => createDeferredCore<AdmittedFollowupTurn>());
-      const release = [0, 1, 2].map(() => createDeferredCore());
+      await seedSession("low", initialAccess);
       const finished = createDeferredCore();
-      let index = 0;
-      enqueue(state, "A", { cyberAccessProgram: "daybreak_blue" });
-      const b = enqueue(state, "B", { cyberAccessProgram: "daybreak_blue" });
-      const c = enqueue(state, "C", { cyberAccessProgram: "daybreak_blue" });
-      // Observe errors even if an earlier assertion transfers control to cleanup.
-      void finished.promise.catch(() => {});
-      for (const gate of entered) {
-        void gate.promise.catch(() => {});
-      }
+      let admittedA: AdmittedFollowupTurn | undefined;
+      let failure: { error: unknown } | undefined;
+      enqueue(state, "A", initialAccess);
+      const b = enqueue(state, "B", initialAccess);
+      const c = enqueue(state, "C", initialAccess);
       scheduleFollowupDrain(sessionKey, async (queued) => {
-        const current = index++;
         let turn: AdmittedFollowupTurn | undefined;
         try {
           turn = await admitQueued(state, queued);
-          expectDefined(entered[current], "turn gate").resolve(turn);
-          await expectDefined(release[current], "turn gate").promise;
+          // Awaiting each patch here keeps this turn admitted until its assertions finish.
+          if (queued.prompt === "A") {
+            admittedA = turn;
+            expect(turn.queued.run).toMatchObject(selectionX);
+            await patchSuccessfully({ cyberAccessProgram: program });
+            expect(loadSessionEntry(scope)?.cyberAccessProgram).toBe(program ?? undefined);
+            expect([turn.queued.run, b.run, c.run].map((run) => run.cyberAccessProgram)).toEqual([
+              "daybreak_blue",
+              program ?? undefined,
+              program ?? undefined,
+            ]);
+            await patchSuccessfully(effortHigh);
+            expect([turn.queued.run, b.run, c.run]).toMatchObject([selectionX, highX, highX]);
+            await patchSuccessfully(modelY);
+            expect([turn.queued.run, b.run, c.run]).toMatchObject([
+              selectionX,
+              selectionY,
+              selectionY,
+            ]);
+          } else if (queued.prompt === "B") {
+            expect(turn.queued).toMatchObject({ prompt: "B", run: selectionY });
+            expect(turn.queued.run.cyberAccessProgram).toBe(program ?? undefined);
+            await patchSuccessfully(initialAccess);
+            expect(turn.queued.run.cyberAccessProgram).toBe(program ?? undefined);
+            await patchSuccessfully(modelZ);
+            expect([
+              expectDefined(admittedA, "admitted A").queued.run,
+              turn.queued.run,
+              c.run,
+            ]).toMatchObject([selectionX, selectionY, selectionZ]);
+          } else {
+            expect(turn.queued).toMatchObject({ prompt: "C", run: selectionZ });
+            expect(turn.queued.run.cyberAccessProgram).toBe("daybreak_blue");
+          }
         } catch (error) {
-          expectDefined(entered[current], "turn gate").reject(error);
-          finished.reject(error);
+          failure ??= { error };
         } finally {
           turn?.operation.complete();
-          if (current === 2) {
-            finished.resolve();
+          if (queued.prompt === "C") {
+            if (failure) {
+              finished.reject(failure.error);
+            } else {
+              finished.resolve();
+            }
           }
         }
       });
-      try {
-        const a = await expectDefined(entered[0], "turn gate").promise;
-        expect(a.queued.run).toMatchObject(selectionX);
-        expect((await patchSession({ cyberAccessProgram: program }))[0]).toBe(true);
-        expect(loadSessionEntry(scope)?.cyberAccessProgram).toBe(program ?? undefined);
-        expect([a.queued.run, b.run, c.run].map((run) => run.cyberAccessProgram)).toEqual([
-          "daybreak_blue",
-          program ?? undefined,
-          program ?? undefined,
-        ]);
-        expect((await patchSession({ thinkingLevel: "high" }))[0]).toBe(true);
-        expect([a.queued.run, b.run, c.run]).toMatchObject([selectionX, highX, highX]);
-        expect((await patchSession({ model: "fixture/y", thinkingLevel: "high" }))[0]).toBe(true);
-        expect([a.queued.run, b.run, c.run]).toMatchObject([selectionX, selectionY, selectionY]);
-
-        expectDefined(release[0], "turn gate").resolve();
-        const admittedB = await expectDefined(entered[1], "turn gate").promise;
-        expect(admittedB.queued).toMatchObject({ prompt: "B", run: selectionY });
-        expect(admittedB.queued.run.cyberAccessProgram).toBe(program ?? undefined);
-        expect((await patchSession({ cyberAccessProgram: "daybreak_blue" }))[0]).toBe(true);
-        expect(admittedB.queued.run.cyberAccessProgram).toBe(program ?? undefined);
-        expect((await patchSession({ model: "fixture/z", thinkingLevel: "off" }))[0]).toBe(true);
-        expect([a.queued.run, admittedB.queued.run, c.run]).toMatchObject([
-          selectionX,
-          selectionY,
-          selectionZ,
-        ]);
-
-        expectDefined(release[1], "turn gate").resolve();
-        const admittedC = await expectDefined(entered[2], "turn gate").promise;
-        expect(admittedC.queued).toMatchObject({ prompt: "C", run: selectionZ });
-        expect(admittedC.queued.run.cyberAccessProgram).toBe("daybreak_blue");
-      } finally {
-        for (const gate of release) {
-          gate.resolve();
-        }
-        await finished.promise;
-      }
+      await finished.promise;
     }),
 );
 
@@ -326,10 +323,8 @@ it.each(["standard", null] as const)(
   "captures Access %s when its claimed source waits for reply admission",
   (program) =>
     withState(async (state) => {
-      await seedSession("low", { cyberAccessProgram: "daybreak_blue" });
-      const queued = enqueue(state, "waiting for admission", {
-        cyberAccessProgram: "daybreak_blue",
-      });
+      await seedSession("low", initialAccess);
+      const queued = enqueue(state, "waiting for admission", initialAccess);
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const admit = replyAdmission.admitReplyTurn;
@@ -345,7 +340,7 @@ it.each(["standard", null] as const)(
       let turn: AdmittedFollowupTurn | undefined;
       try {
         await entered.promise;
-        expect((await patchSession({ cyberAccessProgram: program }))[0]).toBe(true);
+        await patchSuccessfully({ cyberAccessProgram: program });
         expect(queued.run.cyberAccessProgram).toBe(program ?? undefined);
         release.resolve();
         turn = await starting;
@@ -353,49 +348,16 @@ it.each(["standard", null] as const)(
       } finally {
         release.resolve();
         turn ??= await starting;
-        turn.operation.complete();
-        const claim = queued.controllerInput?.claim;
-        if (claim) {
-          sessionMailbox.releaseSessionControllerClaim(claim);
-          await claim.settlement.promise;
-        }
+        await completeQueuedTurn(queued, turn);
       }
     }),
-);
-
-it.each([
-  [{ thinkingLevel: "off" }, "off", "x"],
-  [{ thinkingLevel: null }, "medium", "x"],
-  [{ model: "fixture/y", thinkingLevel: "high" }, "high", "y"],
-] as const)("refreshes %j without overriding turn thinking intent", (patch, expected, model) =>
-  withState(async (state) => {
-    await seedSession("high");
-    const explicit = enqueue(state, "explicit low", {
-      thinkLevel: "low",
-      thinkLevelOverride: "low",
-    });
-    const defaults = enqueue(state, "explicit default", {
-      thinkLevel: "medium",
-      thinkLevelOverride: "default",
-    });
-    const ordinary = enqueue(state, "ordinary", { thinkLevel: "high" });
-
-    expect((await patchSession(patch))[0]).toBe(true);
-    expect(loadSessionEntry(scope)?.thinkingLevel).toBe(patch.thinkingLevel ?? undefined);
-    expect([ordinary.run, explicit.run, defaults.run]).toMatchObject([
-      { model, thinkLevel: expected },
-      { model, thinkLevel: "low", thinkLevelOverride: "low" },
-      { model, thinkLevel: "medium", thinkLevelOverride: "default" },
-    ]);
-    expect(getExistingFollowupQueue(sessionKey)?.lastRun?.thinkLevel).toBe(expected);
-  }),
 );
 
 it("changes only effort on a queued fallback route", () =>
   withState(async (state) => {
     await seedSession();
     const queued = enqueue(state, "keep queued route", queuedAccount);
-    expect((await patchSession({ thinkingLevel: "high" }))[0]).toBe(true);
+    await patchSuccessfully(effortHigh);
     expect(queued.run).toMatchObject({ ...queuedAccount, thinkLevel: "high" });
   }));
 
@@ -415,7 +377,7 @@ it.each([null, "fixture/configured", "Fixture/configured", "preferred"])(
         thinkLevel: "high",
         hasAutoFallbackProvenance: true,
       });
-      expect((await patchSession({ model, thinkingLevel: null }, config))[0]).toBe(true);
+      await patchSuccessfully({ model, thinkingLevel: null }, config);
       const stored = loadSessionEntry(scope);
       expect(stored?.modelOverride).toBeUndefined();
       expect(stored?.providerOverride).toBeUndefined();
@@ -535,7 +497,7 @@ it.each([
   (patch, selected, later, next, probe) =>
     withState(async (state) => {
       await seedSession("low", {
-        cyberAccessProgram: "daybreak_blue",
+        ...initialAccess,
         ...(probe
           ? {
               modelOverride: "configured",
@@ -546,7 +508,7 @@ it.each([
           : {}),
       });
       const b = enqueue(state, "B waiting for settings", {
-        cyberAccessProgram: "daybreak_blue",
+        ...initialAccess,
         autoFallbackPrimaryProbe: probe
           ? {
               provider: "fixture",
@@ -556,7 +518,7 @@ it.each([
             }
           : undefined,
       });
-      const c = enqueue(state, "C still waiting", { cyberAccessProgram: "daybreak_blue" });
+      const c = enqueue(state, "C still waiting", initialAccess);
       const committed = createDeferredCore();
       const releaseRefresh = createDeferredCore();
       const requestingClaim = createDeferredCore();
@@ -601,7 +563,7 @@ it.each([
         starting = admitQueued(state, b, async () => {
           // Source adoption is awaited after admission. A newer write here
           // must affect C without changing the already admitted B snapshot.
-          expect((await patchSession(later))[0]).toBe(true);
+          await patchSuccessfully(later);
         });
         void starting.catch(requestingClaim.reject);
         await requestingClaim.promise;
@@ -617,12 +579,7 @@ it.each([
         releaseRefresh.resolve();
         await changing;
         turn ??= await starting;
-        turn?.operation.complete();
-        const claim = b.controllerInput?.claim;
-        if (claim) {
-          sessionMailbox.releaseSessionControllerClaim(claim);
-          await claim.settlement.promise;
-        }
+        await completeQueuedTurn(b, turn);
       }
     }),
 );

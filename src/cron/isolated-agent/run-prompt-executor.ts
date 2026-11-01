@@ -33,6 +33,7 @@ import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
+import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -49,6 +50,7 @@ import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import {
   assertCronCandidateSandboxPlacement,
   assertCronRuntimeAuthorityCandidate,
+  resolveCliChildAbortSignal,
   resolveCronSandboxPlacement,
   type CronSandboxPlacement,
 } from "./run-admission.js";
@@ -79,18 +81,6 @@ const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
 
-// A CLI child in its parent's workspace runs native tools no tool check sees, so
-// its process also ends when the parent resets.
-function resolveCliChildAbortSignal(
-  runSignal: AbortSignal | undefined,
-  parentSignal: AbortSignal | undefined,
-): AbortSignal | undefined {
-  if (!parentSignal) {
-    return runSignal;
-  }
-  return runSignal ? AbortSignal.any([runSignal, parentSignal]) : parentSignal;
-}
-
 function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
   return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
 }
@@ -107,7 +97,8 @@ export function createCronPromptExecutor(
 ) {
   const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
-    params.modelFallbacksOverride ?? resolveCronFallbacksOverride(params);
+    params.modelFallbacksOverride ??
+    resolveCronFallbacksOverride({ ...params, selectedModel: params.liveSelection });
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -455,6 +446,7 @@ export function createCronPromptExecutor(
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
+            inputProvenance: params.inputProvenance,
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
@@ -648,7 +640,7 @@ export function createCronPromptExecutor(
         });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
-        const result = await runEmbeddedAgent({
+        const embeddedRunParams: Parameters<CronEmbeddedRuntime["runEmbeddedAgent"]>[0] = {
           ...buildCommonRunParams(),
           promptCacheKey,
           cleanupBundleMcpOnRunEnd: params.usesDetachedRunSession,
@@ -698,7 +690,12 @@ export function createCronPromptExecutor(
           assistantErrorTranscript: runOptions.assistantErrorTranscript,
           abortSignal: params.abortSignal,
           onLaneWait: params.onLaneWait,
+        };
+        embeddedRunParams.joinObservation = captureReplyMessageJoinObservation({
+          run: { ...embeddedRunParams, sessionFile: params.runSessionKey },
+          sessionEntry: params.cronSession.sessionEntry,
         });
+        const result = await runEmbeddedAgent(embeddedRunParams);
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );

@@ -6,7 +6,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Cached composer display reconciliation" });
 
 suite.define(() => {
-  it("restores disabled composer facts before hello, then accepts changed and cleared live settings", async () => {
+  it("keeps cached composer controls visually settled without accepting input before live settings", async () => {
     await suite.withPage(
       { viewport: { width: 1719, height: 1000 }, serviceWorkers: "block" },
       async ({ page }) => {
@@ -65,8 +65,47 @@ suite.define(() => {
             await Reflect.get(active!, "sessionSnapshotStore").flush();
           });
         await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
+        await expect
+          .poll(() => model.getAttribute("data-chat-select-value"))
+          .toBe("example/reasoning-example");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
+        await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
         await flushSnapshot();
+
+        const appearance = () =>
+          pane
+            .locator(
+              "[data-chat-model-select], [data-chat-thinking-select], [data-chat-permission-select]",
+            )
+            .evaluateAll((controls) =>
+              controls.map((control) => {
+                const style = getComputedStyle(control);
+                return {
+                  class: control.className,
+                  opacity: style.opacity,
+                  color: style.color,
+                  cursor: style.cursor,
+                };
+              }),
+            );
+        const liveAppearance = await appearance();
+        await page.reload();
+        await gateway.waitForRequest("connect");
+        await page.getByText(text, { exact: true }).waitFor();
+        expect(await appearance()).toEqual(liveAppearance);
+        for (const control of [model, effort, permission]) {
+          expect(await control.getAttribute("aria-disabled")).toBe("true");
+          expect(await control.getAttribute("aria-description")).toContain("Refreshing");
+          await control.click({ force: true });
+          await control.press("Enter");
+          await control.press("Space");
+        }
+        expect(await pane.locator("details[open], :popover-open").count()).toBe(0);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await gateway.resolveDeferred("connect");
+        await expect.poll(() => permission.isEnabled()).toBe(true);
+        expect(await appearance()).toEqual(liveAppearance);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
         const live = {
           ...cached,

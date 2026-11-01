@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setImmediate as waitForPluginEventHandlers } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
@@ -74,12 +75,6 @@ import {
 import type { OpenClawPluginApi } from "../types.js";
 import { registerHostHookFixture } from "./host-hook-fixture.js";
 import { hostHookUiProjection } from "./test-helpers/host-hook-ui-projection.js";
-
-async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 function createHostHookFixtureRegistry() {
   return createPluginRegistryFixture({
@@ -729,18 +724,23 @@ describe("host-hook fixture plugin contract", () => {
   );
 
   it("validates plugin-owned JSON values as plain JSON-compatible data", () => {
-    expect(
-      isPluginJsonValue({
-        state: "waiting",
-        attempts: 1,
-        nested: [{ ok: true }, null],
-      }),
-    ).toBe(true);
+    const valid = { state: "waiting", attempts: 1, nested: [{ ok: true }, null] };
+    expect(isPluginJsonValue(valid)).toBe(true);
     expect(isPluginJsonValue({ value: Number.NaN })).toBe(false);
     expect(isPluginJsonValue({ value: undefined })).toBe(false);
     expect(isPluginJsonValue(new Date(0))).toBe(false);
     expect(isPluginJsonValue(new Map([["state", "waiting"]]))).toBe(false);
     expect(isPluginJsonValue({ value: "x".repeat(70 * 1024) })).toBe(false);
+    let reads = 0;
+    const value = Object.create(null);
+    for (let index = 0; index < 513; index++) {
+      Object.defineProperty(value, `field${index}`, {
+        enumerable: true,
+        get: () => ++reads,
+      });
+    }
+    expect(isPluginJsonValue(value)).toBe(false);
+    expect(reads).toBe(0);
   });
 
   it("rejects non-JSON descriptor schemas before projecting Control UI descriptors", () => {

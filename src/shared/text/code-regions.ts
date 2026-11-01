@@ -34,7 +34,11 @@ export function findTextCheckpoint(
   text: string,
   referenceLength: number,
   resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
-) {
+): {
+  offset: number;
+  context: string;
+  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
+} {
   const state = createProtectionScanState();
   let cursor = referenceLength;
   let lastLineStart = cursor;
@@ -50,6 +54,9 @@ export function findTextCheckpoint(
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
       const ownership = resolveOwnership(text);
+      if (ownership.continuation) {
+        return { ...ownership.continuation, definitions: ownership.definitions };
+      }
       const retain = ownership.retainStart;
       let start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
       const startsDefinition = ownership.definitions.some(

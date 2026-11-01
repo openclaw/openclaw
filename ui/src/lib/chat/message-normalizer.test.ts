@@ -57,6 +57,7 @@ const failures = [
   ...[
     ["unsupported-format", "settings.toml", "application/toml"],
     ["delivery-failed", "bundle.7z", "application/x-7z-compressed"],
+    ["file-too-large", "orders-large.zip", "application/zip"],
   ].map(([code, label, mimeType]) =>
     attachment({ code, kind: "document", label, mimeType }, "attachment_error"),
   ),
@@ -64,6 +65,27 @@ const failures = [
 
 describe("message-normalizer", () => {
   afterEach(() => vi.useRealTimers());
+
+  it.each(["assistant", "user"])(
+    "omits only confirmed assistant companion blocks for %s",
+    (role) => {
+      const notice = {
+        type: "text",
+        text: "Operational status",
+        openclawFallback: true,
+      };
+      const answer = { type: "text", text: "The work continued." };
+      const ordinary = { type: "text", text: "Other status", openclawStatusNotice: true };
+      const source = { role, content: [notice, answer, ordinary] };
+      const normalized = normalizeMessage(source);
+      expect(
+        normalized.content
+          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+          .join("\n"),
+      ).toBe([...(role === "user" ? [notice.text] : []), answer.text, ordinary.text].join("\n"));
+      expect(source.content).toEqual([notice, answer, ordinary]);
+    },
+  );
 
   it("degrades missing transcript entries to an empty unknown message", () => {
     expect(normalizeMessage(undefined)).toMatchObject({ role: "unknown", content: [] });
@@ -142,6 +164,18 @@ describe("message-normalizer", () => {
     expect(assistant(structuredClone(input)).content).toEqual(expected);
   });
 
+  it("keeps structured size failures instead of the text-only client fallback", () => {
+    const failure = attachment(
+      { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+      "attachment_error",
+    );
+    expect(
+      assistant([text("Created the export."), failure], {
+        text: "Created the export.\norders-large.zip is too large to attach.",
+      }).content,
+    ).toEqual([text("Created the export."), failure]);
+  });
+
   it("normalizes mixed text, thinking, and tool content without a standalone tool envelope", () => {
     const tool = { type: "tool_use", name: "bash", args: { command: "ls" } };
     const thinking = { type: "thinking", thinking: "Checking." };
@@ -187,11 +221,17 @@ describe("message-normalizer", () => {
     expect([result.replyTarget, result.audioAsVoice]).toEqual([undefined, undefined]);
   });
 
-  it("accepts assistant Responses input blocks but rejects user output blocks", () => {
-    expect(assistant([{ type: "input_text", text: "Answer" }]).content).toEqual([text("Answer")]);
-    expect(user({ content: [{ type: "output_text", text: "Answer" }] }).content).not.toContainEqual(
-      text("Answer"),
-    );
+  it.each([
+    ["assistant", "input_text", "text"],
+    ["assistant", "output_text", "text"],
+    ["user", "input_text", "text"],
+    ["user", "output_text", "output_text"],
+    ["custom", "input_text", "input_text"],
+    ["custom", "output_text", "output_text"],
+  ])("classifies %s %s as %s", (role, type, expectedType) => {
+    expect(normalizeMessage({ role, content: [{ type, text: "Answer" }] }).content).toMatchObject([
+      { type: expectedType, text: "Answer" },
+    ]);
   });
 
   it("does not turn non-assistant structured audio into attachments", () => {

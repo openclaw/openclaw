@@ -6,7 +6,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ArtifactSummary } from "../../packages/gateway-protocol/src/index.js";
 import {
-  type ArtifactBase64Payload,
   base64FromDataUrl,
   mimeFromDataUrl,
   readArtifactBase64Payload,
@@ -66,15 +65,15 @@ export function resolveBlockDownload(
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
     (value) => typeof value === "string" && /^data:/i.test(value),
   );
-  const base64FromDetectedDataUrl = readArtifactBase64Payload(
-    dataUrl ? base64FromDataUrl(dataUrl) : undefined,
-    opts,
-  );
-  const directBase64 = [data, sourceData, content]
-    .filter((value): value is string => typeof value === "string" && !/^data:/i.test(value))
-    .map((value) => readArtifactBase64Payload(value, opts))
-    .find((value): value is ArtifactBase64Payload => value !== undefined);
-  const base64 = base64FromDetectedDataUrl ?? directBase64;
+  let base64 = readArtifactBase64Payload(dataUrl ? base64FromDataUrl(dataUrl) : undefined, opts);
+  for (const value of [data, sourceData, content]) {
+    if (base64) {
+      break;
+    }
+    if (typeof value === "string" && !/^data:/i.test(value)) {
+      base64 = readArtifactBase64Payload(value, opts);
+    }
+  }
   const remoteUrl = [url, sourceUrl, imageUrl, audioUrl].find(
     (value) => typeof value === "string" && isSafeDownloadUrl(value),
   );

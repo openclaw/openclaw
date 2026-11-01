@@ -1,7 +1,8 @@
-import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
+import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import {
@@ -11,6 +12,7 @@ import {
 } from "../../lib/presence-users.ts";
 import { profileAvatarUrl, profileDirectory } from "../../lib/profile-directory.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
@@ -31,22 +33,22 @@ const SESSION_PEOPLE_RETRY_MS = 30_000;
 const SESSION_PEOPLE_TIMEOUT_MS = 15_000;
 const MAX_SESSION_PEOPLE_READS = 16;
 type SessionPeopleRead = { expiresAt: number; read: Promise<UsersMentionableResult | null> };
-// Keyed by handshake: reconnects and auth changes retire every cached session roster.
+// Keyed by handshake: reconnects and auth changes retire every cached roster.
 const sessionPeople = new WeakMap<object, Map<string, SessionPeopleRead>>();
 
-/** Session-scoped people for callers without directory access; one bounded read per label. */
-function readSessionPeople(
+/** Mentionable people for callers without directory access; one bounded read per form and label. */
+function readMentionablePeople(
   hello: object,
   client: GatewayBrowserClient,
-  sessionKey: string,
-  query: string,
+  params: UsersMentionableParams,
 ) {
   let reads = sessionPeople.get(hello);
   if (!reads) {
     reads = new Map();
     sessionPeople.set(hello, reads);
   }
-  const key = JSON.stringify([sessionKey, query]);
+  // Session and agent forms name different fields, so their keys never collide.
+  const key = JSON.stringify(params);
   const cached = reads.get(key);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.read;
@@ -58,11 +60,9 @@ function readSessionPeople(
   const entry: SessionPeopleRead = {
     expiresAt: Number.POSITIVE_INFINITY,
     read: client
-      .request<UsersMentionableResult>(
-        "users.mentionable",
-        { sessionKey, query },
-        { timeoutMs: SESSION_PEOPLE_TIMEOUT_MS },
-      )
+      .request<UsersMentionableResult>("users.mentionable", params, {
+        timeoutMs: SESSION_PEOPLE_TIMEOUT_MS,
+      })
       .then(
         (result) => {
           entry.expiresAt = Date.now() + SESSION_PEOPLE_FRESH_MS;
@@ -126,7 +126,7 @@ export function createPersonReferenceCard(options: {
         };
       } else if (!directory.result) {
         // Only a refused or failed directory falls back; an answered miss stays unresolved.
-        resolved = await resolveSessionPerson(context.gateway, scope.client, requestedId);
+        resolved = await resolveSessionPerson(context, scope.client, requestedId);
       }
     } catch {
       // An unavailable or unauthorized profile remains an explicit, unresolved reference.
@@ -140,24 +140,41 @@ export function createPersonReferenceCard(options: {
 
   /**
    * Callers without directory access (guests) still see the mention's person: the session's
-   * mention roster supplies an exact profile match, otherwise the transcript label stands in.
+   * mention roster, or outside a session the new-session roster for the selected agent, supplies
+   * an exact profile match; otherwise the transcript label stands in.
    */
   async function resolveSessionPerson(
-    gateway: ApplicationContext["gateway"],
+    app: ApplicationContext,
     client: GatewayBrowserClient,
     requestedId: string,
   ): Promise<PresenceViewer | null> {
     const sessionKey = host.closest<HTMLElement>("[data-chat-session-key]")?.dataset.chatSessionKey;
-    const { hello, selfUser } = gateway.snapshot;
-    if (!sessionKey || !hello) {
+    const { snapshot } = app.gateway;
+    const { hello, selfUser } = snapshot;
+    // Outside a session only callers without directory access fall back; a failed staff
+    // directory read keeps its retry status.
+    if (!hello || (!sessionKey && hasOperatorReadAccess(hello.auth ?? null))) {
       return null;
     }
     const name = label().replace(/^@/u, "").trim();
+    const query = name.slice(0, 128);
+    // The agent form lists who could join the caller's new session, exactly what the
+    // New Session @ menu offers, so it is read only where that menu is available.
+    const params: UsersMentionableParams | undefined = sessionKey
+      ? { sessionKey, query }
+      : readSessionMethodAccess(snapshot, { method: "sessions.create", sessionScope: true }).allowed
+        ? {
+            agentId:
+              app.agentSelection.state.selectedId ??
+              resolveUiDefaultAgentId({ agentsList: app.agents.state.agentsList, hello }),
+            query,
+          }
+        : undefined;
     // The roster excludes the caller, so their own mention never needs the read.
     const user =
-      selfUser?.identity?.id === requestedId
+      selfUser?.identity?.id === requestedId || !params
         ? undefined
-        : (await readSessionPeople(hello, client, sessionKey, name.slice(0, 128)))?.users.find(
+        : (await readMentionablePeople(hello, client, params))?.users.find(
             (candidate) => candidate.profileId === requestedId,
           );
     fallbackIdentity = { type: "profile", id: requestedId };

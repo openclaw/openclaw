@@ -197,7 +197,6 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       triggerClass={[
         "chat-controls__inline-select-trigger chat-controls__permission-trigger",
         {
-          "chat-controls__inline-select-trigger--disabled": props.disabled,
           "chat-controls__permission-trigger--default": !props.mode,
           "chat-controls__permission-trigger--full": (props.mode ?? props.defaultMode) === "full",
         },
@@ -206,6 +205,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         "data-chat-permission-select": "true",
         "data-chat-select-value": props.mode ?? "",
         title: props.disabledReason ?? t("chat.permissionControls.help"),
+        "aria-description": props.disabledReason,
         "aria-busy": props.pending ? "true" : undefined,
       }}
       disabled={Boolean(props.disabled)}

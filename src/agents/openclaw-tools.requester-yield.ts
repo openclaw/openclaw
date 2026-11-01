@@ -9,21 +9,8 @@ import type {
   SessionsYieldRuntimeClaim,
 } from "./tools/sessions-yield-tool.js";
 
-const AUTOMATION_YIELD_UNSUPPORTED_ERROR =
-  "Automation turns cannot use sessions_yield because no requester continuation is available. Finish this turn so the scheduler can handle child output under the job's delivery policy.";
-
 const SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR =
   "Collector runs cannot use sessions_yield because their results are collected explicitly instead of announced. Finish this turn so the collected result is recorded for whoever waits on this run.";
-
-// Apply after inherited policy snapshots: cron's missing continuation is not a child restriction.
-export function filterRequesterYieldTools<T extends { name: string }>(
-  tools: T[],
-  requesterSessionKey: string | undefined,
-): T[] {
-  return isCronSessionKey(requesterSessionKey)
-    ? tools.filter((tool) => tool.name !== "sessions_yield")
-    : tools;
-}
 
 type YieldCompletionClaim = (
   intent?: SessionsYieldIntent,
@@ -38,21 +25,19 @@ export function createRequesterYieldCallback(params: {
   scheduledToolTargets?: Pick<ScheduledToolTargets, "placement">;
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
 }): YieldCompletionClaim | undefined {
-  // Requester settlement never resumes a scheduled occurrence, whatever its
-  // placement. A `session:` run keeps the tool definition, so its session's tool
-  // catalog (and native CLI session reuse) stays stable, but the call is refused
-  // like an isolated run's. Reject before checking claims or writing yield intent.
-  if (
-    isCronSessionKey(params.requesterSessionKey) ||
-    params.scheduledToolTargets?.placement !== undefined
-  ) {
-    return () => ({ error: AUTOMATION_YIELD_UNSUPPORTED_ERROR });
-  }
   // A collector result is read by an explicit wait, never delivered by a requester
   // continuation, so a collector yield can only park the run its waiter is blocked
   // on. Reject before any claim source runs so no durable yield intent is recorded.
   if (params.swarmCollector === true) {
     return () => ({ error: SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR });
+  }
+  // The scheduler owns child output and delivery for every automation placement.
+  // End the model turn without arming an interactive requester continuation.
+  if (
+    isCronSessionKey(params.requesterSessionKey) ||
+    params.scheduledToolTargets?.placement !== undefined
+  ) {
+    return () => ({ schedulerOwned: true });
   }
   const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
   const hasRegistryClaim = Boolean(requesterSessionKey && params.requesterTurnRunId);

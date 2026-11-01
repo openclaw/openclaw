@@ -97,6 +97,8 @@ export function prepareCliRunTerminalReply(context: PreparedCliRunContext, outpu
     sourceReplyMirror,
     completedFinalSource,
     text,
+    // The final model message alone, transformed; `text` keeps earlier narration for delivery.
+    ...(prepared.terminalReply.disposition === "visible" ? { finalMessageText: finalText } : {}),
     terminalReply:
       prepared.terminalReply.disposition === "visible"
         ? sanitizeAgentRunTerminalReply(finalText)

@@ -380,9 +380,9 @@ describe("sandbox exec preparation failures", () => {
 
   it("settles the registered session once when sandbox authorization fails before spawn", async () => {
     const registry = await import("./bash-process-registry.js");
-    const sessionSlugs = await import("./session-slug.js");
+    const sessionIds = await import("./bash-process-id.js");
     const sessionId = "sandbox-preparation-failure";
-    using _ = vi.spyOn(sessionSlugs, "createSessionSlug").mockReturnValue(sessionId);
+    using _ = vi.spyOn(sessionIds, "createProcessSessionId").mockReturnValue(sessionId);
     const preparation = createDeferred<ReturnType<typeof sandboxSpec>>();
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
     const onSettledBeforeNotify = vi.fn();

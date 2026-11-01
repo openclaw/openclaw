@@ -483,7 +483,7 @@ environment values. Check that operation against the selected daemon before retr
 The default image is `node:24.22.1-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
-to the engine. The image must provide a supported Node.js 24.22.1+ or 26.12.1+ runtime on
+to the engine. The image must provide a compatible Node.js 24.16.0+ on 24.x or 26.1.0+ runtime (24.22.1+/26.12.1+ strongly recommended for security) on
 its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the

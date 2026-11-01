@@ -33,7 +33,7 @@ import type {
   ReplySessionInitializationCommitContext,
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
-import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";

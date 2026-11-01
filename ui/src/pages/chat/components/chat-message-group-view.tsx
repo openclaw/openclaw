@@ -4,13 +4,17 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
+import { readHandoffDisplay } from "../chat-sessions-yield.ts";
+import { listResumedHandoffSessions } from "../chat-subagent-wait.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
+import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ActivityGroupContent } from "./chat-message-activity-view.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
@@ -57,6 +61,7 @@ function MessageActionsRow(props: {
   options: NativeMessageGroupOptions;
   class?: string;
   reactionGroup?: MessageGroupData;
+  timestamp?: number;
 }) {
   let owner: HTMLDivElement | undefined;
   return (
@@ -83,6 +88,9 @@ function MessageActionsRow(props: {
         actionOwner={() => owner}
         messageKey={props.messageKey}
       />
+      <Show when={props.timestamp !== undefined}>
+        <MessageMeta timestamp={props.timestamp!} meta={null} />
+      </Show>
     </div>
   );
 }
@@ -144,11 +152,16 @@ function PreparedMessage(props: {
             },
           }
         : {}),
-      duplicateCount: props.item.duplicateCount ?? 1,
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
       messageActions: actionDetails,
     };
+  });
+  // A spoken handoff acknowledgment marks where its run resumed.
+  const resumed = createMemo(() => {
+    const handoff = readHandoffDisplay(props.item.message);
+    const resumedAt = handoff?.resumedAt;
+    return handoff && resumedAt !== undefined ? { ...handoff, resumedAt } : undefined;
   });
   return (
     <>
@@ -158,6 +171,23 @@ function PreparedMessage(props: {
         options={options()}
         onOpenSidebar={props.options.onOpenSidebar}
       />
+      <Show when={resumed()}>
+        {(handoff) => (
+          <ChatHandoffResume
+            handoff={handoff()}
+            links={props.options.handoffSessionLinks}
+            sessions={
+              props.options.sessionKey && props.options.subagents
+                ? listResumedHandoffSessions(
+                    props.options.sessionKey,
+                    props.options.subagents,
+                    handoff(),
+                  )
+                : []
+            }
+          />
+        )}
+      </Show>
       <Show when={props.showReactions !== false}>
         <GroupMessageReactions
           group={props.group}
@@ -420,6 +450,11 @@ function FramedMessage(props: {
               options={frame().options}
               class="chat-message-actions-row"
               reactionGroup={frame().group}
+              timestamp={
+                frame().normalizedRole === "user"
+                  ? prepared().source.normalizedMessage.timestamp
+                  : undefined
+              }
             />
           }
         >
@@ -462,7 +497,11 @@ function FramedMessageGroup(props: {
     <div
       ref={(element) => (replyElements.group = element)}
       class={frame().className}
-      style={frame().style}
+      style={
+        frame().normalizedRole === "user" || frame().isForwarded
+          ? participantPalette.read()?.style(frame().senderHue)
+          : undefined
+      }
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}
@@ -548,21 +587,27 @@ function FramedMessageGroup(props: {
                 {frame().normalizedRole === "user" &&
                 frame().showAvatar &&
                 frame().avatarPlacement === "footer" ? (
-                  <Show
-                    when={options().mediaReadAllowed !== false}
-                    fallback={<span class="chat-author-avatar" aria-hidden="true" />}
-                  >
-                    <ChatAuthorAvatar
-                      sender={props.group.sender}
-                      channelAvatar={options().channelAvatar}
-                    />
-                  </Show>
+                  <ChatAuthorAvatar
+                    sender={props.group.sender}
+                    channelAvatar={options().channelAvatar}
+                    mediaReadAllowed={options().mediaReadAllowed}
+                  />
                 ) : undefined}
                 <SenderIdentity frame={frame()} />
                 {/* Keep delivery status and timestamp in one slot to avoid wrapping them together. */}
                 <Show
                   when={frame().sendStatus}
-                  fallback={<MessageMeta timestamp={props.group.timestamp} meta={frame().meta} />}
+                  fallback={
+                    <MessageMeta
+                      timestamp={
+                        frame().normalizedRole === "user"
+                          ? frame().preparedMessages[frame().lastMessageIndex]!.source
+                              .normalizedMessage.timestamp
+                          : props.group.timestamp
+                      }
+                      meta={frame().meta}
+                    />
+                  }
                 >
                   <ChatSendStatus status={frame().sendStatus} actions={options()} />
                 </Show>

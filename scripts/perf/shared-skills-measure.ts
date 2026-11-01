@@ -1,6 +1,14 @@
-/** Prepare once with --prepare, then measure: node --expose-gc --import ./scripts/tsx.mjs scripts/perf/shared-skills-measure.ts <fixture-dir> [--sample-allocations] */
+/**
+ * Prepare once with --prepare, then measure:
+ * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/shared-skills-measure.ts <fixture-dir> [--sample-allocations] [--team-config]
+ * --team-config uses 40 synthetic plugin configurations and 2,000 fresh snapshots.
+ * Add --long-window for 10,000 snapshots when short GC windows are inconclusive.
+ * Alternate base/candidate timing and separate allocation runs at least five times.
+ * The production selection/projection owner is measured; discovery setup is untimed.
+ */
 import fs from "node:fs/promises";
 import inspector from "node:inspector/promises";
+import os from "node:os";
 import path from "node:path";
 import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as yieldTurn } from "node:timers/promises";
@@ -20,7 +28,8 @@ if (!root || !global.gc) {
 const workspace = path.resolve(root);
 const skillCount = 100;
 const sessions = 100;
-const runs = 3;
+const teamConfig = process.argv.includes("--team-config");
+const runs = process.argv.includes("--long-window") ? 100 : teamConfig ? 20 : 3;
 const names = Array.from(
   { length: skillCount },
   (_, index) => `skill-${String(index).padStart(3, "0")}`,
@@ -63,7 +72,29 @@ const request = {
   additionalBins: [],
 };
 const config = {
-  plugins: { enabled: false },
+  plugins: {
+    enabled: false,
+    ...(teamConfig
+      ? {
+          entries: Object.fromEntries(
+            Array.from({ length: 40 }, (_, index) => [
+              `synthetic-plugin-${index}`,
+              {
+                enabled: true,
+                config: {
+                  routes: Array.from({ length: 20 }, (_entry, route) => ({
+                    name: `synthetic-route-${route}`,
+                    description:
+                      "Synthetic routing configuration for the isolated skill benchmark.",
+                    target: `synthetic-target-${index}-${route}`,
+                  })),
+                },
+              },
+            ]),
+          ),
+        }
+      : {}),
+  },
   agents: { entries: { writer: { skills: names }, reader: { skills: names.slice(0, 50) } } },
   skills: { limits: { maxSkillsInPrompt: 100, maxSkillsPromptChars: 100_000 } },
 };
@@ -151,6 +182,8 @@ try {
   console.log(
     JSON.stringify({
       node: process.version,
+      hostLoad: os.loadavg(),
+      configBytes: Buffer.byteLength(JSON.stringify(config)),
       skillCount,
       sessions,
       runs,
@@ -161,6 +194,7 @@ try {
       cpuMs: (cpu.user + cpu.system) / 1000,
       cpuMsPerSnapshot: (cpu.user + cpu.system) / 1000 / retained.length,
       medianMs: samples[Math.floor(samples.length / 2)],
+      p90Ms: samples[Math.ceil(samples.length * 0.9) - 1],
       p95Ms: samples[Math.ceil(samples.length * 0.95) - 1],
       latencySamples: samples.length,
       gcCount: gcEvents.length,

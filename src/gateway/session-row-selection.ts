@@ -16,6 +16,7 @@ import {
   type SelectionChange,
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
+import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
@@ -233,6 +234,21 @@ export function createSessionRowSelection(
       duplicates.add(key);
     } else {
       duplicates.delete(key);
+    }
+    // Raw selections without an owner snapshot still need structural comparison.
+    if (
+      winner &&
+      oldWinner &&
+      winner !== oldWinner &&
+      (oldWinner.row.selectionFactsRevision && winner.row.selectionFactsRevision
+        ? rowIdentity(oldWinner.row) === rowIdentity(winner.row) &&
+          oldWinner.row.selectionFactsRevision === winner.row.selectionFactsRevision
+        : sameSelectionFacts(oldWinner.row, winner.row))
+    ) {
+      oldWinner.row = winner.row;
+      oldWinner.pair[1] = winner.row.entry;
+      group?.set(rowIdentity(winner.row), oldWinner);
+      return;
     }
     if (winner) {
       winners.set(key, winner);

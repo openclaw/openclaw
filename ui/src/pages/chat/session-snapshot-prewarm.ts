@@ -4,8 +4,10 @@ import {
   type BootRecord,
 } from "../../app/boot-record.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
+import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   sidebarSnapshotInvalidationMatches,
+  sidebarSnapshotDeletedSessionKey,
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
@@ -63,8 +65,7 @@ export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   const entry: PrewarmedSnapshot = {
     cacheKey,
     cancelled: false,
-    promise: import("./session-snapshot-database.ts")
-      .then(({ readStoredChatSnapshotRecord }) => readStoredChatSnapshotRecord(cacheKey))
+    promise: readStoredChatSnapshotRecord(cacheKey)
       .then((record) =>
         entry.cancelled || generation !== snapshotStoreGeneration ? undefined : record,
       )
@@ -97,8 +98,16 @@ subscribeSnapshotInvalidation((invalidation) => {
   if (!scopePrefix || pending?.cacheKey.startsWith(scopePrefix)) {
     discardPrewarmedChatSnapshot(sessionKey);
   }
-  for (const [gateway, { scope }] of sidebarScopes) {
-    if (sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), invalidation)) {
+  for (const [gateway, entry] of sidebarScopes) {
+    const key = sidebarSnapshotScopeKey(entry.scope);
+    const deleted = sidebarSnapshotDeletedSessionKey(key, invalidation);
+    if (deleted) {
+      entry.snapshot = entry.snapshot.then(async (model) => {
+        const { removeSidebarSnapshotSession } =
+          await import("../../components/sidebar-snapshot-data.ts");
+        return model && removeSidebarSnapshotSession(model, deleted);
+      });
+    } else if (sidebarSnapshotInvalidationMatches(key, invalidation)) {
       sidebarScopes.delete(gateway);
     }
   }

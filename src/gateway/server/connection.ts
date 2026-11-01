@@ -64,6 +64,8 @@ export type GatewayConnectionOptions = Pick<
   | "rateLimiter"
   | "browserRateLimiter"
   | "nodeReapprovalCoordinator"
+  | "isConnectPending"
+  | "startupMethodsReady"
   | "isStartupPending"
   | "isPendingWorkerNodeSetup"
   | "admitsNodeSetupCompletion"

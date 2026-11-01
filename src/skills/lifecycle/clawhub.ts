@@ -186,7 +186,7 @@ export async function preflightSkillFromClawHub(params: {
 export async function installSkillFromClawHub(
   params: Omit<ClawHubInstallParams, "ownerHandle" | "requestedReference" | "trustState">,
 ): Promise<InstallClawHubSkillResult> {
-  if (params.clawManaged) {
+  if (params.templateManaged) {
     return await installClawHubSkillReference(params, "requested");
   }
   return await withClawPackageLifecycleLease(

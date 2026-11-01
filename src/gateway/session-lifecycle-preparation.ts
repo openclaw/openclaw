@@ -8,10 +8,8 @@ import {
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
-import {
-  acquireSessionActorStorage,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
@@ -404,6 +402,7 @@ export async function rollbackGatewaySessionPreparation(params: {
 /** Publish accepted workspace ownership before releasing preparation; roll back only unbound work. */
 export async function commitPreparedSessionWorkspace(params: {
   prepared: PreparedGatewaySessionLifecycle;
+  signal?: AbortSignal;
   target: { agentId: string; sessionKey: string; storePath: string };
   assertCurrent: SessionSourceAssertion;
   assertEntry: (entry: SessionEntry) => void;
@@ -414,7 +413,11 @@ export async function commitPreparedSessionWorkspace(params: {
   missingSessionMessage: string;
 }): Promise<SessionEntry> {
   const { prepared } = params;
-  const bind = async (assertSourceCurrent: SessionSourceAssertion) => {
+  const bind = async (assertSourceCurrent: SessionSourceAssertion, sourceSignal?: AbortSignal) => {
+    const signal =
+      params.signal && sourceSignal
+        ? AbortSignal.any([params.signal, sourceSignal])
+        : (params.signal ?? sourceSignal);
     const assertCurrent = composeSessionSourceAssertion([
       params.assertCurrent,
       assertSourceCurrent,
@@ -438,6 +441,7 @@ export async function commitPreparedSessionWorkspace(params: {
       },
       {
         ...sessionEntryCommitGuardOptions(assertCurrent),
+        signal,
         requireWriteSuccess: true,
         skipMaintenance: true,
         onCommitted: params.onCommitted,
@@ -541,6 +545,7 @@ export async function ensureSessionWorkspaceForPlacement(params: {
       }
       return await commitPreparedSessionWorkspace({
         prepared: prepared.value,
+        signal: params.signal,
         onCommitted: params.onCommitted,
         target: { ...target, sessionKey: target.canonicalKey },
         assertCurrent: params.assertCurrent,

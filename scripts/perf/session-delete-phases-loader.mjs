@@ -364,8 +364,12 @@ if (output) {
         rows = [];
       }
       if (message.action === "snapshot") {
-        process.send?.({ channel: "delete-phase", rows, installed: [...installed] });
+        process.channel?.ref();
+        process.send?.({ channel: "delete-phase", rows, installed: [...installed] }, () =>
+          process.channel?.unref(),
+        );
       }
     });
+    process.channel?.unref();
   }
 }

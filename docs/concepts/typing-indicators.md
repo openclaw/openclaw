@@ -62,6 +62,7 @@ Override the policy for one agent:
 - `message` mode does not start from silent reply tokens, but active execution can still show typing before any assistant text is available.
 - `thinking` still reacts to streamed reasoning (`reasoningLevel: "stream"`), and can also start from active execution before reasoning deltas arrive.
 - Migrated heartbeat monitors use ordinary automation delivery. They no longer have a separate heartbeat typing policy or target.
+- Telegram also shows typing while a detached child that owes a visible completion is running, using the originating account, chat, and topic. Typing stops when the child ends or its requester is reset, deleted, or rebound to another route. Quiet children do not start typing.
 - `agents.defaults.typingIntervalSeconds` controls the **refresh cadence** for every agent, not the start time. Default: 6 seconds.
 
 ## Related

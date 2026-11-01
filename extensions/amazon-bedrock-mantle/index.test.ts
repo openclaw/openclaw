@@ -20,6 +20,29 @@ describe("amazon-bedrock-mantle provider plugin", () => {
   const mockModels = (data: unknown[]) =>
     vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data }));
 
+  it.each(["chat", "decision"] as const)(
+    "prepares %s credentials without requiring chat model limits",
+    async (capability) => {
+      const prepare = provider.prepareRuntimeAuthV2;
+      assert(prepare, "expected capability-aware auth hook");
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("unexpected fetch"));
+      expect(
+        await prepare({
+          capability,
+          provider: "amazon-bedrock-mantle",
+          modelId: "fixture-model",
+          model: { id: "fixture-model", provider: "amazon-bedrock-mantle" },
+          apiKey: "fixture-token",
+          authMode: "api-key",
+          env,
+        }),
+      ).toEqual({ apiKey: "fixture-token" });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses live plugin config to disable catalog discovery", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected fetch"));
     const result = await catalog({
