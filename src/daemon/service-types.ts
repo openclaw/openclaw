@@ -207,6 +207,8 @@ export type SystemdGatewayInstallation =
 
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
+  /** Inspect systemd environment sources and mount mappings before comparing state. */
+  inspectStateIdentity?: boolean;
   systemdReadTarget?: SystemdServiceReadTarget;
   systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
@@ -304,6 +306,8 @@ export type GatewayServiceCommandSnapshot = {
   workingDirectory?: string;
   environment?: Record<string, string>;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
+  /** Omitted environment or namespace facts cannot prove separate state. */
+  stateIdentityUnverified?: true;
 };
 
 export type GatewayServiceManagedOverrides = {
