@@ -353,7 +353,7 @@ suite.define(() => {
     }
   });
 
-  it("renders plugin identity as chips with a severity accent", async () => {
+  it("renders plugin identity as chips with severity in the status badge", async () => {
     const pending = pendingPluginApproval("");
     const surface = await createSurface({ pending, viewport: DESKTOP_VIEWPORT });
 
@@ -368,6 +368,22 @@ suite.define(() => {
       { plugin: ["codex"], tool: ["workspace.exec"], agent: ["main"] },
       [],
     );
+    const presentation = await surface.page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--danger)";
+      document.body.append(probe);
+      const danger = getComputedStyle(probe).color;
+      probe.remove();
+      const card = getComputedStyle(document.querySelector(".approval-page__card")!);
+      const dot = getComputedStyle(document.querySelector(".approval-page__status-dot")!);
+      return {
+        bar: card.borderLeftWidth,
+        badgeIsDanger: dot.backgroundColor === danger,
+        bracket: getComputedStyle(document.querySelector(".approval-page__card")!, "::after")
+          .content,
+      };
+    });
+    expect(presentation).toEqual({ bar: "1px", badgeIsDanger: true, bracket: "none" });
     await captureProof(surface.page, "after-pending-plugin.png");
     expect(surface.pageErrors).toEqual([]);
   });

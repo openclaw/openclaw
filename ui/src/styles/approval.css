@@ -28,38 +28,14 @@
 }
 
 .approval-page__card {
-  --approval-page-accent: var(--border);
-
   position: relative;
   z-index: 1;
   width: 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--approval-page-accent) 45%, var(--border));
-  border-left: 3px solid var(--approval-page-accent);
-  border-radius: 4px 18px 18px 4px;
-  background: color-mix(in srgb, var(--approval-page-accent) 5%, var(--card));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
   box-shadow: var(--shadow-xl);
-}
-
-.approval-page__card--severity-warning {
-  --approval-page-accent: var(--warn);
-}
-
-.approval-page__card--severity-danger {
-  --approval-page-accent: var(--danger);
-}
-
-.approval-page__card::after {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 72px;
-  height: 72px;
-  border-top: 1px solid color-mix(in srgb, var(--approval-page-accent) 55%, transparent);
-  border-right: 1px solid color-mix(in srgb, var(--approval-page-accent) 55%, transparent);
-  border-radius: 0 17px 0 0;
-  content: "";
-  pointer-events: none;
 }
 
 .approval-page__brand {
@@ -127,6 +103,17 @@
 .approval-page__status-dot--allowed {
   background: var(--ok);
   box-shadow: 0 0 0 4px var(--ok-subtle);
+}
+
+/* The card stays neutral, so a pending request states its severity in this badge. */
+.approval-page__card--severity-info .approval-page__status-dot--pending {
+  background: var(--muted);
+  box-shadow: none;
+}
+
+.approval-page__card--severity-danger .approval-page__status-dot--pending {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px var(--danger-subtle);
 }
 
 .approval-page__status-dot--denied,
@@ -402,7 +389,7 @@
   }
 
   .approval-page__card {
-    border-radius: 3px 14px 14px 3px;
+    border-radius: var(--radius-lg);
   }
 
   .approval-page__brand {
