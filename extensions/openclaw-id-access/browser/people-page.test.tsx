@@ -6,6 +6,7 @@ import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PeoplePage } from "./people-page.js";
+import { InviteForm } from "./people-sections.js";
 import type { StatusResult } from "./types.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
@@ -84,6 +85,7 @@ function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
   const controller = new AbortController();
   const host = {
     locale: "en-US",
+    redact: (text: string) => text.replace(/Bearer \S+/g, "Bearer [redacted]"),
     signal: controller.signal,
     connection: { connected: true, canRead: true, canWrite: true, canAdmin: true },
     request,
@@ -167,18 +169,57 @@ describe("People page", () => {
     expect(registerPage).not.toHaveBeenCalled();
   });
 
+  it("directs unlinked owners to turn on remote access on the claw's computer", async () => {
+    const { container, request } = await mountPage([linked({ linked: false })]);
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Turn on remote access before inviting people."),
+    );
+    expect(container.textContent).toContain("On the computer that runs this claw");
+    expect(container.textContent).not.toMatch(/Make reachable|Control UI/);
+    expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
+  });
+
+  it("keeps invite expiry, permission ceiling, private sharing and owner approval explicit", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onCreate = async () => ({
+      email: "friend@example.test",
+      url: "https://example.test/#synthetic-invite",
+      expiresAt: 1_800_600_000,
+    });
+    disposers.push(
+      render(() => <InviteForm disabled={false} locale="en-US" onCreate={onCreate} />, container),
+    );
+    const input = container.querySelector("input")!;
+    input.value = "friend@example.test";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(container.textContent).toContain("The link expires in 7 days.");
+    expect(container.textContent).toContain("Invites cannot grant owner access.");
+    expect(container.querySelector('option[value="operator"]')?.textContent).toBe(
+      "Operator · chat, run tools, and use connected services",
+    );
+    expect(container.querySelector('option[value="owner"]')).toBeNull();
+    button(container, "Create invite link")!.click();
+    await vi.waitFor(() => expect(container.textContent).toContain("Send this link privately."));
+    expect(container.textContent).toContain(
+      "Anyone with it can request access, but only you can approve them.",
+    );
+  });
+
   it("shows who is asking, from which device, and which invite they used", async () => {
     const { container } = await mountPage([linked()]);
-    await vi.waitFor(() =>
-      expect(container.textContent).toMatch(/Device fingerprint: fp:[a-f0-9]{64}/),
-    );
+    await vi.waitFor(() => expect(container.textContent).toMatch(/Device ID: fp:[a-f0-9]{64}/));
     expect(container.textContent).toContain("Operator invite · created");
     expect(container.textContent).toContain(
-      "member@example.test · browser unavailable on unknown OS · Falkenstein, DE",
+      "member@example.test · Device details unavailable · Falkenstein, DE",
     );
     expect(container.textContent?.match(/member@example.test/g)).toHaveLength(1);
     expect(container.querySelector("details")?.open).toBe(false);
     expect(container.querySelector("details code")?.textContent).toMatch(/^fp:[a-f0-9]{64}$/);
+    expect(container.querySelector("details")?.textContent).toContain(
+      "OpenClaw ID provided this email and approximate location. Device details are unavailable.",
+    );
     expect(container.querySelector("header")?.textContent?.trim()).toBe("People");
     expect(button(container, "Refresh")).toBeUndefined();
     // Owner devices live in the account menu, not on People.
@@ -201,7 +242,7 @@ describe("People page", () => {
       }),
     ]);
     await vi.waitFor(() =>
-      expect(container.textContent).toContain("member@example.test · browser unavailable"),
+      expect(container.textContent).toContain("member@example.test · Device details unavailable"),
     );
     await vi.waitFor(() => expect(button(container, "Approve")?.disabled).toBe(false));
     button(container, "Approve")!.click();
@@ -253,6 +294,12 @@ describe("People page", () => {
     button(container, "Remove")!.click();
     await vi.waitFor(() => expect(button(container, "Remove Bob")).toBeDefined());
     expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+    expect(container.textContent).toContain(
+      "Their devices disconnect now, and their running tasks stop.",
+    );
+    expect(container.textContent).toContain(
+      "Completed work and conversations stay here. They need a new invite to return.",
+    );
     button(container, "Remove Bob")!.click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("openclawId.authority", {
@@ -261,7 +308,7 @@ describe("People page", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(container.textContent).toContain("Bob removed · 1 connection closed · 1 run stopped"),
+      expect(container.textContent).toContain("Bob removed · 1 connection closed · 1 task stopped"),
     );
   });
 
@@ -306,7 +353,7 @@ describe("People page", () => {
     disposers.push(render(() => <PeoplePage host={host} />, container));
     await vi.waitFor(() =>
       expect(container.textContent).toContain(
-        "Only an owner device of this claw can see who has access.",
+        "Only the owner can see who has access. Open this page from an approved owner browser.",
       ),
     );
     expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
@@ -319,7 +366,7 @@ describe("People page", () => {
     });
     const { container } = await mountPage([status]);
     await vi.waitFor(() =>
-      expect(container.textContent).toContain("is not an owner device for this claw"),
+      expect(container.textContent).toContain("can view people but cannot change access"),
     );
     expect(button(container, "Approve")?.disabled).toBe(true);
   });
@@ -469,13 +516,60 @@ describe("People page", () => {
     harness.emit();
     await vi.advanceTimersByTimeAsync(250);
     flush();
-    expect(harness.container.querySelector('[role="alert"]')?.textContent).toBe(
-      "People unavailable",
+    const alert = harness.container.querySelector('[role="alert"]');
+    expect(alert?.querySelector("p")?.textContent).toBe(
+      "Could not load people. Refresh this page to try again.",
+    );
+    expect(alert?.querySelector("details")?.open).toBe(false);
+    expect(alert?.querySelector("summary")?.textContent).toBe("Technical details");
+    expect(alert?.querySelector("code")?.textContent).toBe("People unavailable");
+    alert!.querySelector("details")!.open = true;
+    harness.request.mockRejectedValueOnce(
+      Object.assign(new Error("<img src=x> private diagnostic"), {
+        code: "INVALID_REQUEST",
+        details: { code: "not_owner" },
+      }),
     );
     harness.emit();
     await vi.advanceTimersByTimeAsync(250);
     flush();
+    const nextAlert = harness.container.querySelector('[role="alert"]');
+    expect(nextAlert?.querySelector("p")?.textContent).toContain(
+      "Only the owner can see who has access.",
+    );
+    expect(nextAlert?.querySelector("details")?.open).toBe(false);
+    expect(nextAlert?.querySelector("code")?.textContent).toContain("<img src=x>");
+    expect(nextAlert?.querySelector("img")).toBeNull();
+    harness.emit();
+    await vi.advanceTimersByTimeAsync(250);
+    flush();
     expect(harness.container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps an uncertain approval separate from raw diagnostics and never suggests a blind retry", async () => {
+    const harness = await mountPage([linked()]);
+    await vi.waitFor(() => expect(button(harness.container, "Approve")?.disabled).toBe(false));
+    const initialRequest = harness.request.getMockImplementation()!;
+    harness.request.mockImplementation(async (method: string) => {
+      if (method === "openclawId.authority") {
+        throw new Error("handoff failed Bearer private-token https://example.test/#invite-secret");
+      }
+      return initialRequest(method);
+    });
+    button(harness.container, "Approve")!.click();
+    await vi.waitFor(() =>
+      expect(harness.container.querySelector('[role="alert"]')).not.toBeNull(),
+    );
+    const alert = harness.container.querySelector('[role="alert"]')!;
+    expect(alert.querySelector("p")?.textContent).toBe(
+      "Could not confirm whether access was approved. Refresh this page and check the person's access before approving again.",
+    );
+    expect(alert.querySelector("details")?.open).toBe(false);
+    expect(alert.querySelector("code")?.textContent).toContain("handoff failed");
+    expect(alert.textContent).not.toMatch(/private-token|invite-secret|Try again/);
+    expect(
+      harness.request.mock.calls.filter(([method]) => method === "openclawId.authority"),
+    ).toHaveLength(1);
   });
 
   it("releases event and connection listeners and cancels queued reads on disposal", async () => {

@@ -5,7 +5,7 @@ import type { OpenClawIdLinkPreparation } from "./link.ts";
 export type OpenClawIdPublication =
   | { state: "published"; ownerAccountId: string | null; snapshotSeq: number }
   | { state: "needs_enrollment_code" }
-  | { state: "failed"; code: string; message: string };
+  | { state: "failed"; code: string; message: string; retryable?: boolean; retryAt?: number };
 
 /** The parts of `openclawId.status` the account menu needs. */
 export type OpenClawIdStatusResult = {

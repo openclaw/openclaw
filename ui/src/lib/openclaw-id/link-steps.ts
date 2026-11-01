@@ -29,7 +29,7 @@ export type LinkStepActions = {
 
 /** Messages for the non-fatal outcomes, supplied by the dialog's catalog. */
 export type LinkStepMessages = {
-  notPublished: (detail: string) => string;
+  notPublished: (publication: OpenClawIdPublication | null) => string;
   relayOffline: string;
 };
 
@@ -64,8 +64,7 @@ export async function runLinkSteps(
   if (publication?.state === "published") {
     report("reserve", { state: "done" });
   } else {
-    const detail = publication?.state === "failed" ? publication.message : "not registered yet";
-    report("reserve", { state: "warning", message: messages.notPublished(detail) });
+    report("reserve", { state: "warning", message: messages.notPublished(publication) });
   }
   report("relay", { state: "running" });
   const online = await actions.relayOnline().catch(() => false);

@@ -1,6 +1,7 @@
 // "Your devices" from the account menu (OCF-280): the claw's active owner
 // devices, which one is this browser, and Revoke for the others. Revoking also
 // ends the devices the revoked one approved; the dialog names them first.
+import "./owner-devices-dialog.css";
 import { createSignal, For, Show } from "solid-js";
 import {
   displayFingerprint,
@@ -9,7 +10,6 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { openClawIdAccount } from "../../lib/openclaw-id/account.ts";
 import {
   devicesApprovedBy,
@@ -21,9 +21,15 @@ import type {
   OpenClawIdOwnerDevice,
   OpenClawIdPeopleLink,
 } from "../../lib/openclaw-id/types.ts";
+import {
+  openClawIdUiError,
+  openClawIdErrorToast,
+  type OpenClawIdUiError,
+} from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
+import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
 import { showRegenerateOwnerKeyDialog } from "./regenerate-owner-key-dialog.tsx";
 
@@ -123,7 +129,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
       const [ownerFp, setOwnerFp] = createSignal<string | null>(null);
       const [localOperator, setLocalOperator] = createSignal(false);
       const [busy, setBusy] = createSignal(false);
-      const [error, setError] = createSignal<string | null>(null);
+      const [error, setError] = createSignal<OpenClawIdUiError | null>(null);
       const refresh = async () => {
         try {
           const [next, status] = await Promise.all([
@@ -135,7 +141,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           setOwnerFp(await ownerFingerprint(next));
           setLink(next);
         } catch (failure) {
-          setError(formatUiError(failure));
+          setError(openClawIdUiError(failure, "devices"));
         }
       };
       const revoke = async (device: OpenClawIdOwnerDevice) => {
@@ -149,7 +155,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
           const statement = await signOwnerDeviceRevocation(current, device);
           await params.client.request("openclawId.authority", { action: "submit", statement });
         } catch (failure) {
-          setError(formatUiError(failure));
+          setError(openClawIdUiError(failure, "remove"));
         } finally {
           setBusy(false);
           await refresh();
@@ -161,7 +167,9 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
         void showRegenerateOwnerKeyDialog({
           client: params.client,
           signedIn: openClawIdAccount(),
-        }).catch((failure: unknown) => showToast({ message: formatUiError(failure) }));
+        }).catch((failure: unknown) =>
+          showToast({ message: openClawIdErrorToast(failure, "reset") }),
+        );
       };
       void refresh();
       const devices = () => link()?.ownerDevices ?? [];
@@ -177,7 +185,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
             <Show when={error()}>
               {(message) => (
                 <div class="callout danger" role="alert">
-                  {message()}
+                  <OpenClawIdErrorMessage error={message()} />
                 </div>
               )}
             </Show>
@@ -220,9 +228,13 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
             </Show>
             <Show when={ownerFp()}>
               {(fp) => (
-                <p class="muted openclaw-id-devices__hint">
-                  {t("openclawId.recoveryKitLine", { fingerprint: fp() })}
-                </p>
+                <div class="muted openclaw-id-devices__hint">
+                  <p>{t("openclawId.recoveryKitLine")}</p>
+                  <details>
+                    <summary>{t("openclawId.securityDetails")}</summary>
+                    {t("openclawId.kitOwnerFingerprint")}: {fp()}
+                  </details>
+                </div>
               )}
             </Show>
             <Show when={localOperator() && link()?.frozen}>

@@ -92,7 +92,7 @@ describe("approved OpenClaw ID account menu", () => {
   it("local signed-out shows one sign-in action, explanation, and the local header", () => {
     const current = status({ link: linked });
     expect(openClawIdMenuIdentity(current)).toEqual({
-      name: "Local operator",
+      name: "Local access",
       detail: "This computer",
     });
     expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
@@ -127,7 +127,7 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).text).not.toMatch(
       /reachable|crabd|People|Sign in|Regenerate|never-display/,
     );
-    expect((menu(current).rows[0]?.details as HTMLElement).textContent).toBe("2");
+    expect((menu(current).rows[0]?.details as HTMLElement | undefined)?.textContent).toBe("2");
   });
 
   it.each(["viewer", "operator"] as const)(
@@ -205,9 +205,9 @@ describe("approved OpenClaw ID account menu", () => {
         connection: { kind: "local", accountEmail: account.email, accountName: account.name },
       });
       await signIn(current);
-      expect(openClawIdMenuIdentity(current).detail).toBe("owner@example.test · Local operator");
+      expect(openClawIdMenuIdentity(current).detail).toBe("owner@example.test · Local access");
       expect(menu(current).labels).toEqual([
-        "Copy remote link",
+        "Copy claw link",
         "Your devices",
         "Sign out of OpenClaw ID",
       ]);
@@ -221,7 +221,7 @@ describe("approved OpenClaw ID account menu", () => {
   it("only offers Make reachable after sign-in, without trusting browser profile storage", async () => {
     const current = status();
     const request = await signIn(current);
-    expect(menu(current).labels).toEqual(["Make reachable", "Sign out of OpenClaw ID"]);
+    expect(menu(current).labels).toEqual(["Turn on remote access", "Sign out of OpenClaw ID"]);
     expect(openClawIdMenuIdentity(current).name).toBe("OpenClaw ID account");
     expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
       action: "account_complete",

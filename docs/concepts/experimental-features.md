@@ -30,7 +30,7 @@ available for user-installed browser code.
 | Templates      | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
 | Host Desktop   | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
 | Advisor        | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
-| OpenClaw ID    | `gateway.openclawId.enabled`                                            | You want to reach this Gateway from your other devices through OpenClaw ID and an iroh relay, without opening a port              | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
+| OpenClaw ID    | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
 | Speech bubbles | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search    | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
 
@@ -306,7 +306,7 @@ access**, or in config:
     openclawId: {
       enabled: true,
       relayUrl: "https://relay.example.com/",
-      // Needed to link a claw ("Make reachable"):
+      // Needed to turn on remote access for a claw:
       issuerUrl: "https://id.example.com/api/auth",
       discoveryUrl: "https://discovery.example.com",
       loaderDomain: "claws.example.com",
@@ -323,10 +323,19 @@ No service URL has a production default yet; the Gateway reports
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
 - **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
-  OpenClaw ID**, **Make reachable**, **Members & invites** and **Sign out**.
-- **Members & invites**: a page from the bundled `openclaw-id-access` plugin
-  (enabled by default) to invite someone, approve or deny their request, remove
-  members, and list or revoke owner devices.
+  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
+  and **Sign out of OpenClaw ID**, depending on your connection and setup state.
+- **People**, under **Pages**: a page from the bundled `openclaw-id-access` plugin
+  (enabled by default) to invite someone, approve or deny their request, and
+  remove members. Use an approved owner browser to change access.
+- **Your devices**, in the account menu: view approved owner browsers and choose
+  **Remove access** for a browser. The confirmation lists any other devices that
+  will also lose access. They disconnect immediately; use another approved owner
+  browser or your recovery kit to restore access.
+- **Reset owner access**, inside **Your devices** on the computer running the claw:
+  create and save a new recovery kit, then confirm the reset. Only this browser
+  keeps owner access, other owner browsers disconnect, and the old recovery kit
+  stops working. Members keep their access.
 
 ### Sign in with OpenClaw ID
 
@@ -338,7 +347,7 @@ the short-lived pending sign-in. The popup returns to
 `<Control UI origin>/openclaw-id/callback`, so register that redirect for the
 client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port). The
 browser keeps the account and its ID token until the token expires or you sign
-out. While signed in, **Make reachable** gets its link code from your account
+out. While signed in, **Turn on remote access** gets its link code from your account
 instead of asking you to paste one.
 
 ### How the tunnel reaches the Gateway
@@ -361,11 +370,14 @@ instead of asking you to paste one.
   as direct loopback, even though they arrive on the local host. Linking a claw
   and other root ceremonies are allowed only on direct loopback.
 
-### Make a claw reachable
+<a id="make-a-claw-reachable" />
 
-With the lab on, the account menu shows **Make reachable**. It works only in a
-Control UI opened on the Gateway machine itself (direct loopback). If you are
-not signed in, paste a link code from `https://claws.<loaderDomain>/link`:
+### Turn on remote access
+
+With the lab on, sign in with OpenClaw ID from the account menu, then choose
+**Turn on remote access**. It works only in OpenClaw on the computer that runs
+this claw (direct loopback). If setup asks for a **Link code**, get one from the
+**Add a claw** page at `https://claws.<loaderDomain>/link` and paste it into setup:
 
 1. The Gateway creates the claw id and its signing key, and reports the tunnel's
    endpoint key.
@@ -377,7 +389,7 @@ not signed in, paste a link code from `https://claws.<loaderDomain>/link`:
 4. The Gateway pins the owner root's fingerprint and admits the owner device.
    The kit secret and root key never leave the browser and are dropped as soon
    as the statements are signed.
-5. With an OpenClaw ID enrollment code, the Gateway registers the claw with
+5. With a link code, the Gateway registers the claw with
    Discovery and publishes its descriptor and membership snapshot. Without one,
    the claw is linked locally and can be published later.
 

@@ -10,14 +10,11 @@ import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
 import { createInvite, decideInvite, removeMember } from "./invites.js";
 import { thisOwnerDevice } from "./owner-signing.js";
+import { peopleError, type PeopleError, type PeopleErrorAction } from "./people-error.js";
 import { memberName, removalNote } from "./people-format.js";
 import { observePeople } from "./people-refresh.js";
 import { InviteForm, Members, PendingRequests } from "./people-sections.js";
 import type { Invite, Link, Member, StatusResult } from "./types.js";
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 // Canonical device fingerprints stay available in the request's details disclosure.
 async function pendingFingerprints(invites: Invite[]): Promise<ReadonlyMap<string, string>> {
@@ -52,9 +49,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
   const [fingerprints, setFingerprints] = createSignal<ReadonlyMap<string, string>>(new Map());
   const [nowMs, setNowMs] = createSignal(Date.now());
   const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
+  const [error, setError] = createSignal<PeopleError | null>(null);
   const [notice, setNotice] = createSignal<string | null>(null);
-  const [readError, setReadError] = createSignal<string | null>(null);
+  const [readError, setReadError] = createSignal<PeopleError | null>(null);
   let observer: ReturnType<typeof observePeople> | undefined;
   let disposed = false;
   let actionInFlight = false;
@@ -88,7 +85,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       setReadError(null);
     } catch (failure) {
       if (isCurrent()) {
-        setReadError(errorText(failure));
+        setReadError(peopleError(failure, "load", host.redact));
       }
     }
   };
@@ -105,7 +102,10 @@ export function PeoplePage(props: { host: ControlUiHost }) {
   // action signs against the owner state read now, not the page's last read: the
   // claw's seq moves on its own (a member's device joining, another owner device),
   // and a change signed at an old seq is refused.
-  const run = async <T,>(action: (link: Link) => Promise<T>): Promise<T | undefined> => {
+  const run = async <T,>(
+    action: (link: Link) => Promise<T>,
+    kind: PeopleErrorAction = "update",
+  ): Promise<T | undefined> => {
     if (disposed || !state()?.link || actionInFlight || !host.connection.connected) {
       return undefined;
     }
@@ -121,7 +121,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       return await action(link);
     } catch (failure) {
       if (!disposed) {
-        setError(errorText(failure));
+        setError(peopleError(failure, kind, host.redact));
       }
       return undefined;
     } finally {
@@ -149,10 +149,18 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       <header class="ocid-access__header">
         <h1>People</h1>
       </header>
-      <Show when={latest(error) ?? latest(readError)}>
-        {(message) => (
-          <div class="callout danger" role="alert">
-            {message()}
+      <Show when={latest(error) ?? latest(readError)} keyed>
+        {(failure) => (
+          <div class="callout danger ocid-access__error" role="alert">
+            <p>{failure.message}</p>
+            <Show when={failure.diagnostic}>
+              {(diagnostic) => (
+                <details class="ocid-access__details">
+                  <summary>Technical details</summary>
+                  <code>{diagnostic()}</code>
+                </details>
+              )}
+            </Show>
           </div>
         )}
       </Show>
@@ -178,8 +186,8 @@ export function PeoplePage(props: { host: ControlUiHost }) {
               when={current().link.linked}
               fallback={
                 <p class="ocid-access__empty">
-                  This claw is not reachable yet. Open the account menu on this machine's Control UI
-                  and choose Make reachable.
+                  Turn on remote access before inviting people. On the computer that runs this claw,
+                  open the account menu and choose Turn on remote access.
                 </p>
               }
             >
@@ -187,14 +195,15 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                 when={current().owner}
                 fallback={
                   <p class="ocid-access__empty">
-                    Only an owner device of this claw can see who has access.
+                    Only the owner can see who has access. Open this page from an approved owner
+                    browser.
                   </p>
                 }
               >
                 <Show when={!latest(ownDevicePub)}>
                   <div class="callout info" role="note">
-                    This browser is not an owner device for this claw, so it can only view people.
-                    Use an owner device to invite, approve or remove.
+                    This browser can view people but cannot change access. Use an approved owner
+                    browser to invite, approve, or remove people.
                   </div>
                 </Show>
                 <PendingRequests
@@ -203,7 +212,10 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   disabled={!canManage()}
                   locale={host.locale}
                   onDecide={(invite, approve) =>
-                    void run((link) => decideInvite(host.request, link, invite, approve))
+                    void run(
+                      (link) => decideInvite(host.request, link, invite, approve),
+                      approve ? "approve" : "update",
+                    )
                   }
                 />
                 <Members

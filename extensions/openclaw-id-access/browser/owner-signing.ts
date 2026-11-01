@@ -1,5 +1,5 @@
 // Signs owner statements with this browser's owner device key D. The Control
-// UI's Make reachable (and the claw loader on a claw origin) stores D per claw
+// UI's remote access setup (and the claw loader on a claw origin) stores D per claw
 // in IndexedDB "openclaw-id" / "owner-devices" as a non-extractable key pair.
 import {
   formatEd25519PublicKey,
@@ -19,8 +19,10 @@ type StoredDeviceKey = { privateKey: CryptoKey; publicKey: CryptoKey };
 
 /** Raised when this browser holds no owner device key for the claw. */
 export class NoOwnerKeyError extends Error {
+  readonly code = "no_owner_key";
+
   constructor() {
-    super("This browser has no owner device key for this claw. Use an owner device.");
+    super("This browser cannot manage access to this claw. Use an approved owner browser.");
   }
 }
 

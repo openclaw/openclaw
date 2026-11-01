@@ -43,7 +43,7 @@ it.each([false, true])(
         idToken: "synthetic",
       },
     });
-    await click("Regenerate");
+    await click("Create new recovery kit");
     await vi.waitFor(() =>
       expect(document.querySelector('input[autocomplete="new-password"]')).not.toBeNull(),
     );
@@ -59,7 +59,7 @@ it.each([false, true])(
     form.addEventListener("submit", submitted);
     if (continueReset) {
       document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
-      await click("Replace owner key");
+      await click("Reset owner access");
       await click("Done");
       expect(submitted).toHaveBeenCalledOnce();
       expect(request).toHaveBeenCalledTimes(2);

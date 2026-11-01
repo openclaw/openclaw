@@ -1,0 +1,10 @@
+/* Long removal labels wrap below the explanation before they squeeze safety copy. */
+.openclaw-id-devices__row {
+  flex-wrap: wrap;
+}
+
+.openclaw-id-devices__text {
+  flex: 1 1 16rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

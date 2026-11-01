@@ -123,7 +123,7 @@ export async function signInWithOpenClawId(params: {
     }
     const returned = await awaitCallback(started.state);
     if (returned.error || !returned.code) {
-      throw new Error(`Sign-in was not completed (${returned.error ?? "no code"}).`);
+      throw new Error("Sign-in did not finish. Try again.");
     }
     const done = await params.client.request<{
       account: Omit<OpenClawIdSignedIn, "idToken">;

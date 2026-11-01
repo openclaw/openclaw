@@ -47,9 +47,8 @@ export function InviteForm(props: {
     <section class="ocid-access__section" aria-labelledby="ocid-access-invite">
       <h2 id="ocid-access-invite">Invite someone</h2>
       <p class="ocid-access__hint">
-        Name one person and how much they can do. Operator is the most an invite can grant. You send
-        the link yourself; they sign in with OpenClaw ID and you approve them here. Invites expire
-        after 7 days.
+        Choose their access, then send them the link. You approve their request here. The link
+        expires in 7 days.
       </p>
       <div class="ocid-access__form">
         <input
@@ -65,10 +64,11 @@ export function InviteForm(props: {
         <select
           class="settings-input"
           aria-label="Role"
+          aria-describedby="ocid-access-role-hint"
           value={role()}
           onChange={(event) => setRole(event.currentTarget.value as MemberRole)}
         >
-          <option value="operator">Operator · chat, run tools, use channels</option>
+          <option value="operator">Operator · chat, run tools, and use connected services</option>
           <option value="viewer">Viewer · read conversations only</option>
         </select>
         <button
@@ -80,6 +80,9 @@ export function InviteForm(props: {
           Create invite link
         </button>
       </div>
+      <p class="ocid-access__hint" id="ocid-access-role-hint">
+        Invites cannot grant owner access. Connected services keep their own permissions.
+      </p>
       <Show when={latest(created)}>
         {(made) => (
           <div class="callout info stack ocid-access__link" role="status">
@@ -91,8 +94,8 @@ export function InviteForm(props: {
               {latest(copied) ? "Copied" : "Copy link"}
             </button>
             <p class="ocid-access__hint">
-              Send it privately. The part after # never reaches OpenClaw. Anyone with the link can
-              ask to join; nobody gets in until you approve.
+              Send this link privately. Anyone with it can request access, but only you can approve
+              them.
             </p>
           </div>
         )}
@@ -126,7 +129,7 @@ export function PendingRequests(props: {
                 <li class="ocid-access__row ocid-access__row--request">
                   <div>
                     <div class="ocid-access__title">
-                      {who()} · browser unavailable on unknown OS ·{" "}
+                      {who()} · Device details unavailable ·{" "}
                       {pending().reported.locationHint ?? "location unknown"}
                     </div>
                     <div class="ocid-access__hint">
@@ -136,12 +139,12 @@ export function PendingRequests(props: {
                     <details class="ocid-access__details">
                       <summary>Request details</summary>
                       <p class="ocid-access__hint">
-                        Device fingerprint:{" "}
+                        Device ID:{" "}
                         <code>{props.fingerprints.get(pending().devicePub) ?? "unavailable"}</code>
                       </p>
                       <p class="ocid-access__hint">
-                        Email and approximate location reported by OpenClaw ID. Browser and
-                        operating system were not provided.
+                        OpenClaw ID provided this email and approximate location. Device details are
+                        unavailable.
                       </p>
                     </details>
                   </div>
@@ -202,9 +205,8 @@ function MemberRow(props: {
         <div class="ocid-access__hint">{details()}</div>
         <Show when={latest(confirming)}>
           <p class="ocid-access__hint" role="note">
-            Their browser disconnects right away and anything they are running stops (what it
-            finished is kept). Sessions they started stay here. They can come back only with a new
-            invite.
+            Their devices disconnect now, and their running tasks stop. Completed work and
+            conversations stay here. They need a new invite to return.
           </p>
         </Show>
       </div>

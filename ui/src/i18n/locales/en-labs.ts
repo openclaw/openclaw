@@ -77,7 +77,7 @@ const enLabs = {
     openclawId: {
       title: "OpenClaw ID remote access",
       description:
-        "Reach this Gateway from your other devices through OpenClaw ID, without opening a port. When on, sign in and make this claw reachable from the account menu (bottom left); invites and members are on the Members & invites page. Off by default; while off the Gateway starts no tunnel and contacts no OpenClaw ID service.",
+        "Open this claw from your other devices and invite people. To get started, sign in from the account menu and choose Turn on remote access. Manage invitations in People. While off, this feature does not contact OpenClaw ID.",
     },
     workerDesktop: {
       title: "Cloud Worker Desktop",

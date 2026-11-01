@@ -17,13 +17,13 @@ export function recoveryKitLines(details: RecoveryKitDetails): string[] {
   return [
     "OpenClaw Recovery Kit",
     "",
-    `Secret key: ${details.kit.text}`,
-    `Owner fingerprint: ${details.kit.rootFingerprint}`,
+    `Recovery code: ${details.kit.text}`,
+    `Recovery kit ID: ${details.kit.rootFingerprint}`,
     ...(details.owner ? [`Owner: ${details.owner}`] : []),
     `Created: ${details.createdAt.toISOString().slice(0, 10)}`,
     `First claw: https://${details.hostname}`,
     "",
-    "Anyone with this kit can act as the owner of all your claws. Keep it private.",
+    "Anyone with this kit can control the claws it protects. Never share it or read it to anyone.",
   ];
 }
 

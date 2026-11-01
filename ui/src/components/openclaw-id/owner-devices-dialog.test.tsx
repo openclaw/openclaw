@@ -23,7 +23,7 @@ describe("owner key regeneration placement", () => {
       await vi.waitFor(() =>
         expect(document.body.textContent).toContain(
           channel === "local_operator"
-            ? "Use your recovery kit or another owner device"
+            ? "Use your recovery kit or another approved owner browser"
             : "This browser",
         ),
       );
@@ -32,7 +32,7 @@ describe("owner key regeneration placement", () => {
           (button) => button.textContent?.trim() === "Approve a new device",
         ),
       ).toBe(false);
-      expect(document.body.textContent?.includes("Regenerate owner key")).toBe(
+      expect(document.body.textContent?.includes("Reset owner access")).toBe(
         channel === "local_operator",
       );
       const close = Array.from(document.querySelectorAll("button")).find(

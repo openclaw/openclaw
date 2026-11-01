@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { runLinkSteps, type LinkStep, type LinkStepState } from "./link-steps.ts";
 
 const messages = {
-  notPublished: (detail: string) => `not listed (${detail})`,
+  notPublished: (publication: Parameters<Parameters<typeof runLinkSteps>[1]["notPublished"]>[0]) =>
+    `not listed (${publication?.state === "failed" ? publication.code : "pending"})`,
   relayOffline: "relay offline",
 };
 
@@ -63,7 +64,7 @@ describe("Make reachable linking steps", () => {
       commit: async () => ({ state: "failed", code: "discovery", message: "HTTP 503" }),
       relayOnline: async () => false,
     });
-    expect(states.reserve).toEqual({ state: "warning", message: "not listed (HTTP 503)" });
+    expect(states.reserve).toEqual({ state: "warning", message: "not listed (discovery)" });
     expect(states.relay).toEqual({ state: "warning", message: "relay offline" });
   });
 });

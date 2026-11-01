@@ -3,16 +3,79 @@ import { en } from "./en.ts";
 
 const enOpenClawId = {
   openclawId: {
+    errorRecoveryReused:
+      "This recovery kit was already used for an earlier owner reset. Create a new recovery kit.",
+    errorApprovalSignIn: "Sign in with OpenClaw ID to approve another browser.",
+    errorApprovalBrowser:
+      "This browser cannot approve another browser. Use a different approved owner browser or your recovery kit.",
+    errorApprovalTab:
+      "Another tab is waiting for browsers to approve. Use that tab, or close it and retry here.",
+    errorApprovalExpired:
+      "This browser request expired or was cancelled. Start a new request on the other browser.",
+    errorApprovalWait:
+      "Wait for the verification number on both screens. Approve only if the numbers match.",
+    technicalDetails: "Technical details",
+    errorNotPrepared: "Setup is not ready. Close this dialog and start again.",
+    errorAlreadyLinked:
+      "Remote access is already set up. Close this dialog and check its status in the account menu.",
+    errorNotLinked:
+      "Remote access is not set up. Turn it on from the computer that runs this claw.",
+    errorIssuerUnavailable: "Could not reach OpenClaw ID. Try again shortly.",
+    errorIssuerInvalid:
+      "Sign-in stopped because OpenClaw ID could not be verified. Ask the person who manages this claw to check its setup.",
+    errorAccountInvalid:
+      "Sign-in stopped because your account could not be verified. Start sign-in again.",
+    errorSignInExpired: "This sign-in expired or was already used. Start sign-in again.",
+    errorSignedOut: "Your OpenClaw ID sign-in expired. Sign in again.",
+    errorTokenExchange: "Could not finish signing in. Start again.",
+    errorVerification:
+      "This change stopped because the claw or access request could not be verified. Review its details before trying again.",
+    errorAddressMismatch:
+      "Setup stopped because the claw address did not match. Ask the person who manages this claw to check its setup.",
+    errorRegistrationMismatch:
+      "Setup stopped because this claw does not match the saved ownership details. Ask the person who manages it to check its setup.",
+    errorNotOwner: "Use an approved owner browser to manage access to this claw.",
+    errorExpired:
+      "This access approval expired. Use an approved owner browser or your recovery kit.",
+    errorNotYetValid:
+      "This access approval is not valid yet. Check the date and time on your devices.",
+    errorConcurrentChange:
+      "Access changed while you were making this update. Refresh and review its status before trying again.",
+    errorNotPending: "This request is no longer waiting for approval. Refresh to see its status.",
+    errorNameTaken: "This claw name is taken. Choose another name.",
+    errorRemoteNotReady: "Remote access is not ready yet. Try again shortly.",
+    errorConflict:
+      "The saved setup or access details conflict with this request. Refresh and review them before trying again.",
+    errorRequest: "The request could not be accepted. Check the details you entered and try again.",
+    errorResetLocal: "Reset owner access from the computer that runs this claw.",
+    errorSignInLocal: "Sign in from OpenClaw on the computer that runs this claw.",
+    errorLinkCodeUnavailable: "Could not get a link code. Try again shortly.",
+    errorUnavailable: "Could not finish remote access setup. Try again shortly.",
+    error_setup:
+      "Could not confirm that setup finished. Check remote access in the account menu before trying again.",
+    error_signIn: "Sign-in did not finish. Try again.",
+    error_linkCode:
+      "Could not prepare setup automatically. Get a link code from Add a claw and paste it below.",
+    error_reset:
+      "Could not confirm that owner access was reset. Keep your new recovery kit and check Your devices before trying again.",
+    error_devices: "Could not load your devices. Close this dialog and try again.",
+    error_remove:
+      "Could not confirm that access was removed. Check Your devices before trying again.",
+    error_approval:
+      "Could not confirm the approval. Check Your devices. If the new browser has access, remove its access before starting a new request.",
+    error_saveKit: "Could not save the kit this way. Use another option or copy it.",
+    error_signOut: "Could not sign out of this claw. Reload this page and try again.",
+    error_open: "Could not open this. Try again.",
     menuTitle: "OpenClaw ID",
     approveNewDevice: "Approve a new device",
-    approvalNotice: "A new browser wants to become an owner device",
+    approvalNotice: "A new browser is asking for owner access",
     signIn: "Sign in with OpenClaw ID",
-    signInLocalOnly: "Sign in from the Control UI on this machine (127.0.0.1).",
-    signInUnconfigured: "Set gateway.openclawId.clientId to sign in.",
+    signInLocalOnly: "Sign in on the computer that runs this claw.",
+    signInUnconfigured:
+      "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
     signedIn: "Signed in to OpenClaw ID as {account}",
-    signInFailed: "OpenClaw ID sign-in failed: {error}",
     signOut: "Sign out of OpenClaw ID",
-    localOperator: "Local operator",
+    localOperator: "Local access",
     thisComputer: "This computer",
     accountFallback: "OpenClaw ID account",
     ownerRole: "Owner",
@@ -21,27 +84,26 @@ const enOpenClawId = {
     signInBody: "Reach this claw from other devices and invite people",
     encryptedConnection: "End-to-end encrypted",
     thisDevice: "{label} · this device",
-    unnamedDevice: "Owner device",
+    unnamedDevice: "Approved browser",
     invitedBy: "Invited by {owner}",
     remoteAccessOn: "Remote access on",
     online: "Online",
     offline: "Offline",
-    copyRemoteLink: "Copy remote link",
-    remoteLinkCopied: "Remote link copied",
-    remoteLinkCopyFailed: "Couldn't copy the remote link. Try again.",
+    copyRemoteLink: "Copy claw link",
+    remoteLinkCopied: "Claw link copied",
+    remoteLinkCopyFailed: "Could not copy the claw link. Try again.",
     yourDevices: "Your devices",
     reachOffer: "Signed in as {account}. Reach this claw from anywhere?",
     makeReachableLocalOnly:
-      "Open the Control UI on this machine (127.0.0.1) to make it reachable. Linking never runs over a remote connection.",
+      "To turn on remote access, open OpenClaw on the computer that runs this claw.",
     needsLoaderDomain:
-      "Set gateway.openclawId.loaderDomain to choose the address this claw is reachable at.",
-    actionFailed: "Couldn't open that: {error}",
-    makeReachable: "Make reachable",
+      "Remote access is not set up for this claw. Ask the person who manages it to finish setup.",
+    makeReachable: "Turn on remote access",
     roleOperator: "Operator",
     roleViewer: "Viewer",
-    regenerateOwnerKey: "Regenerate owner key",
+    regenerateOwnerKey: "Reset owner access",
     frozenAlert:
-      "Conflicting owner-key changes reached this claw. Regenerate the owner key here to resolve them.",
+      "Conflicting ownership changes paused remote ownership updates. Reset owner access on this computer to continue.",
   },
 } satisfies TranslationMap;
 

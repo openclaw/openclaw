@@ -37,7 +37,7 @@ describe("local owner matching-number dialog", () => {
     await vi.waitFor(() => expect(document.body.textContent).toContain("Firefox on Linux"));
     const approve = () =>
       [...document.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Numbers match"),
+        button.textContent?.includes("The numbers match"),
       )!;
     expect(approve().disabled).toBe(true);
     expect(document.body.textContent).not.toContain("verified");

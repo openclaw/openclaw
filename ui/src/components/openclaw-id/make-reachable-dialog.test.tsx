@@ -33,50 +33,88 @@ async function click(label: string) {
 describe("Make reachable publication outcome", () => {
   afterEach(cleanupSolid);
 
-  it("shows the failure cause and automatic retry to a signed-in owner, not enrollment guidance", async () => {
-    const request = vi.fn(async (method: string, params: { action?: string }) => {
-      if (method === "openclawId.status") {
-        return { status: { state: "on", tunnel: { state: "running", relayOnline: true } } };
+  it.each([
+    { code: "unavailable", retryable: true, expected: "will keep trying", online: true },
+    { code: "internal", retryable: true, expected: "will keep trying", online: true },
+    {
+      code: "registration_mismatch",
+      retryable: false,
+      expected: "does not match the saved ownership details",
+      online: false,
+    },
+    {
+      code: "unavailable",
+      retryable: false,
+      expected: "Remote access setup could not finish",
+      online: true,
+    },
+  ])(
+    "maps publication $code (retryable $retryable) without claiming readiness",
+    async ({ code, retryable, expected, online }) => {
+      const request = vi.fn(async (method: string, params: { action?: string }) => {
+        if (method === "openclawId.status") {
+          return { status: { state: "on", tunnel: { state: "running", relayOnline: online } } };
+        }
+        if (params.action === "account_link_code") {
+          return { code: "synthetic-code" };
+        }
+        if (params.action === "commit") {
+          return {
+            publication: {
+              state: "failed",
+              code,
+              message: "HTTP 503",
+              retryable,
+            },
+          };
+        }
+        return { claw_id: "synthetic-claw", hostname: "studio-test.claws.test", available: true };
+      });
+      const done = showMakeReachableDialog({
+        client: { request } as unknown as GatewayBrowserClient,
+        loaderDomain: "claws.test",
+        signedIn: {
+          sub: "owner",
+          email: "owner@example.test",
+          name: null,
+          exp: 2_000_000_000,
+          idToken: "synthetic",
+        },
+      });
+      await click("Continue");
+      await click("Create recovery kit");
+      await vi.waitFor(() =>
+        expect(document.querySelector('input[type="checkbox"]')).not.toBeNull(),
+      );
+      const password = document.querySelector<HTMLInputElement>(
+        'input[autocomplete="new-password"]',
+      )!;
+      expect(password.value).toBe("synthetic kit");
+      expect(request.mock.calls.some(([, params]) => params.action === "commit")).toBe(false);
+      const form = password.form!;
+      const submitted = vi.fn();
+      form.addEventListener("submit", submitted);
+      (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+      await click("Continue");
+      await vi.waitFor(() => expect(document.body.textContent).toContain("HTTP 503"));
+      expect(submitted).toHaveBeenCalledOnce();
+      form.removeEventListener("submit", submitted);
+      expect(password.value).toBe("");
+      expect(document.body.textContent).toContain(expected);
+      if (online && !retryable) {
+        expect(document.body.textContent).not.toContain("will keep trying");
       }
-      if (params.action === "account_link_code") {
-        return { code: "synthetic-code" };
+      if (!online) {
+        expect(document.body.textContent).toContain("Remote access is not connected yet");
       }
-      if (params.action === "commit") {
-        return { publication: { state: "failed", code: "unavailable", message: "HTTP 503" } };
-      }
-      return { claw_id: "synthetic-claw", hostname: "studio-test.claws.test", available: true };
-    });
-    const done = showMakeReachableDialog({
-      client: { request } as unknown as GatewayBrowserClient,
-      loaderDomain: "claws.test",
-      signedIn: {
-        sub: "owner",
-        email: "owner@example.test",
-        name: null,
-        exp: 2_000_000_000,
-        idToken: "synthetic",
-      },
-    });
-    await click("Continue");
-    await click("Create owner key");
-    await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
-    const password = document.querySelector<HTMLInputElement>(
-      'input[autocomplete="new-password"]',
-    )!;
-    expect(password.value).toBe("synthetic kit");
-    expect(request.mock.calls.some(([, params]) => params.action === "commit")).toBe(false);
-    const form = password.form!;
-    const submitted = vi.fn();
-    form.addEventListener("submit", submitted);
-    (document.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
-    await click("Continue");
-    await vi.waitFor(() => expect(document.body.textContent).toContain("HTTP 503"));
-    expect(submitted).toHaveBeenCalledOnce();
-    form.removeEventListener("submit", submitted);
-    expect(password.value).toBe("");
-    expect(document.body.textContent).toContain("retries automatically");
-    expect(document.body.textContent).not.toMatch(/add an enrollment code/i);
-    await click("Done");
-    expect(await done).toBe(true);
-  });
+      const details = [...document.querySelectorAll("details")].find((item) =>
+        item.textContent?.includes("HTTP 503"),
+      );
+      expect(details?.open).toBe(false);
+      expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+      expect(document.body.textContent).not.toMatch(/add an enrollment code/i);
+      await click("Done");
+      expect(await done).toBe(true);
+    },
+  );
 });

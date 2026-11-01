@@ -3,7 +3,6 @@ import { createSignal, For, Match, Show, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
 import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
 import type { RecoveryKitDetails } from "../../lib/openclaw-id/kit-export.ts";
@@ -20,11 +19,13 @@ import type {
   OpenClawIdSignedIn,
   OpenClawIdStatusResult,
 } from "../../lib/openclaw-id/types.ts";
+import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { Icon } from "../solid/icon.tsx";
 import { SettingsRow } from "../solid/settings-ui.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
+import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { RecoveryKitForm } from "./recovery-kit-form.tsx";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 
@@ -37,7 +38,7 @@ type Step =
   | { kind: "kit"; preparation: OpenClawIdLinkPreparation; details: RecoveryKitDetails }
   | { kind: "linking"; hostname: string }
   | { kind: "done"; hostname: string; publication: OpenClawIdPublication | null }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: OpenClawIdUiError };
 
 // Whether the claw's outbound relay connection is up (openclawId.status tunnel).
 async function readRelayOnline(client: GatewayBrowserClient): Promise<boolean> {
@@ -46,15 +47,25 @@ async function readRelayOnline(client: GatewayBrowserClient): Promise<boolean> {
   return result.status.state === "on" && tunnel?.state === "running" && tunnel.relayOnline === true;
 }
 
-// Preserve the Gateway's failure cause in both progress and completion copy.
-function publicationDetail(publication: OpenClawIdPublication | null): string {
-  return publication?.state === "failed"
-    ? publication.message
-    : t(
-        publication?.state === "needs_enrollment_code"
-          ? "openclawId.publicationNeedsAccount"
-          : "openclawId.publicationPending",
-      );
+// Publication codes distinguish temporary outages from setup and security refusals.
+function publicationError(publication: OpenClawIdPublication | null): OpenClawIdUiError {
+  if (publication?.state === "failed") {
+    const mapped = openClawIdUiError(publication, "setup");
+    if (publication.retryable === true) {
+      return { ...mapped, message: `${mapped.message} ${t("openclawId.setupRetrying")}` };
+    }
+    return ["unavailable", "registration_unavailable"].includes(publication.code)
+      ? { ...mapped, message: t("openclawId.publicationStopped") }
+      : mapped;
+  }
+  return {
+    message: t(
+      publication?.state === "needs_enrollment_code"
+        ? "openclawId.doneNeedsLinkCode"
+        : "openclawId.publicationPending",
+    ),
+    detail: "",
+  };
 }
 
 // The mark of a linking step: waiting, running, done or a problem.
@@ -101,9 +112,10 @@ export function showMakeReachableDialog(params: {
       const [enrollmentCode, setEnrollmentCode] = createSignal("");
       const [name, setName] = createSignal(DEFAULT_CLAW_NAME);
       const [check, setCheck] = createSignal<NameCheck | null>(null);
-      const [nameError, setNameError] = createSignal<string | null>(null);
+      const [nameError, setNameError] = createSignal<OpenClawIdUiError | null>(null);
       const [codeFromAccount, setCodeFromAccount] = createSignal(false);
       const [codeNote, setCodeNote] = createSignal<string | null>(null);
+      const [codeError, setCodeError] = createSignal<OpenClawIdUiError | null>(null);
       const nameRequest = () => ({
         enrollmentCode: enrollmentCode().trim(),
         name: name().trim().toLowerCase(),
@@ -123,7 +135,7 @@ export function showMakeReachableDialog(params: {
             }),
           );
         } catch (error) {
-          setNameError(formatUiError(error));
+          setNameError(openClawIdUiError(error, "setup"));
         }
       };
       // Fills the link code from the signed-in account, then checks the default name.
@@ -135,7 +147,7 @@ export function showMakeReachableDialog(params: {
           setCodeNote(t("openclawId.signedInLinkCode", { account }));
           await checkName();
         } catch (error) {
-          setCodeNote(t("openclawId.linkCodeFailed", { error: formatUiError(error) }));
+          setCodeError(openClawIdUiError(error, "linkCode"));
         }
       };
       // The account is fixed for this dialog; prefill once it has rendered.
@@ -153,7 +165,7 @@ export function showMakeReachableDialog(params: {
           );
           setStep({ kind: "ownerKey", preparation });
         } catch (error) {
-          setNameError(formatUiError(error));
+          setNameError(openClawIdUiError(error, "setup"));
         }
       };
       const finish = (linked: boolean) => {
@@ -170,7 +182,7 @@ export function showMakeReachableDialog(params: {
             details: { kit, hostname: preparation.hostname, owner, createdAt: new Date() },
           });
         } catch (error) {
-          setStep({ kind: "error", message: formatUiError(error) });
+          setStep({ kind: "error", message: openClawIdUiError(error, "setup") });
         }
       };
       const [linkStates, setLinkStates] = createSignal<Record<LinkStep, LinkStepState>>(
@@ -210,7 +222,7 @@ export function showMakeReachableDialog(params: {
               relayOnline: () => readRelayOnline(params.client),
             },
             {
-              notPublished: (detail) => t("openclawId.stepNotPublished", { detail }),
+              notPublished: (outcome) => publicationError(outcome).message,
               relayOffline: t("openclawId.stepRelayOffline"),
             },
             (id, state) => setLinkStates((current) => ({ ...current, [id]: state })),
@@ -218,7 +230,7 @@ export function showMakeReachableDialog(params: {
           setStep({ kind: "done", hostname: preparation.hostname, publication });
         } catch (error) {
           ceremony.discard();
-          setStep({ kind: "error", message: formatUiError(error) });
+          setStep({ kind: "error", message: openClawIdUiError(error, "setup") });
         }
       };
       const cancel = (event: Event) => {
@@ -254,6 +266,13 @@ export function showMakeReachableDialog(params: {
                     <p class="secret-reveal__note" role="status">
                       {note()}
                     </p>
+                  )}
+                </Show>
+                <Show when={codeError()}>
+                  {(error) => (
+                    <div class="callout danger" role="alert">
+                      <OpenClawIdErrorMessage error={error()} />
+                    </div>
                   )}
                 </Show>
                 <Show when={!codeFromAccount()}>
@@ -317,7 +336,7 @@ export function showMakeReachableDialog(params: {
                 <Show when={nameError()}>
                   {(message) => (
                     <div class="callout danger" role="alert">
-                      {message()}
+                      <OpenClawIdErrorMessage error={message()} />
                     </div>
                   )}
                 </Show>
@@ -349,24 +368,6 @@ export function showMakeReachableDialog(params: {
                         <strong>{t("openclawId.ownerKeyTitle")}</strong>
                       </p>
                       <p>{t("openclawId.ownerKeyBody")}</p>
-                      <div class="list openclaw-id-facts">
-                        <div>
-                          <span class="muted">{t("openclawId.ownerKeyFactKey")}</span>{" "}
-                          {t("openclawId.ownerKeyFactKeyValue")}
-                        </div>
-                        <div>
-                          <span class="muted">{t("openclawId.ownerKeyFactBrowser")}</span>{" "}
-                          {t("openclawId.ownerKeyFactBrowserValue")}
-                        </div>
-                        <div>
-                          <span class="muted">
-                            {t("openclawId.ownerKeyFactClaw", {
-                              name: clawNameFromHostname(ownerKey().preparation.hostname),
-                            })}
-                          </span>{" "}
-                          {t("openclawId.ownerKeyFactClawValue")}
-                        </div>
-                      </div>
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
                       <button type="button" class="btn" onClick={() => finish(false)}>
@@ -441,11 +442,11 @@ export function showMakeReachableDialog(params: {
                                   name: clawNameFromHostname(linking().hostname),
                                   host: linking().hostname,
                                 })}
-                                <div class="muted">
-                                  {"message" in current()
-                                    ? (current() as { message: string }).message
-                                    : t(`openclawId.step_${id}_hint`)}
-                                </div>
+                                <Show when={"message" in current()}>
+                                  <div class="muted">
+                                    {(current() as { message: string }).message}
+                                  </div>
+                                </Show>
                               </div>
                             </div>
                           );
@@ -460,16 +461,11 @@ export function showMakeReachableDialog(params: {
                   <>
                     <div class="secret-reveal__body">
                       <p>{t("openclawId.doneBody", { host: done().hostname })}</p>
+                      <Show when={linkStates().relay.state === "warning"}>
+                        <p>{t("openclawId.stepRelayOffline")}</p>
+                      </Show>
                       <Show when={done().publication?.state !== "published"}>
-                        <p>
-                          {!params.signedIn &&
-                          !codeFromAccount() &&
-                          done().publication?.state === "needs_enrollment_code"
-                            ? t("openclawId.doneNeedsLinkCode")
-                            : t("openclawId.doneNotPublished", {
-                                detail: publicationDetail(done().publication),
-                              })}
-                        </p>
+                        <OpenClawIdErrorMessage error={publicationError(done().publication)} />
                       </Show>
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
@@ -489,7 +485,7 @@ export function showMakeReachableDialog(params: {
                 {(failed) => (
                   <>
                     <div class="callout danger" role="alert">
-                      {failed().message}
+                      <OpenClawIdErrorMessage error={failed().message} />
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
                       <button type="button" class="btn" autofocus onClick={() => finish(false)}>

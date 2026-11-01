@@ -26,7 +26,7 @@ describe("People page wording", () => {
 
   it("states what a removal cut", () => {
     expect(removalNote("Bob", { devices: 1, connectionsClosed: 2, runsCancelled: 0 })).toBe(
-      "Bob removed · 2 connections closed · 0 runs stopped",
+      "Bob removed · 2 connections closed · 0 tasks stopped",
     );
     expect(removalNote("Bob", null)).toBe("Bob removed");
   });

@@ -11,8 +11,8 @@ describe("recovery kit export", () => {
     });
     expect(lines).toEqual(
       expect.arrayContaining([
-        "Secret key: OCK1-TEST",
-        "Owner fingerprint: 4F2KQ-9XW7M",
+        "Recovery code: OCK1-TEST",
+        "Recovery kit ID: 4F2KQ-9XW7M",
         "Owner: owner@example.test",
         "Created: 2026-10-31",
         "First claw: https://studio-k7x2q.crabd.xyz",

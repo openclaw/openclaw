@@ -2,15 +2,16 @@
 // code and its facts, save options (download, print/PDF, copy) and
 // the "saved" toggle. A save action that succeeds counts as saved.
 import { createSignal, Show } from "solid-js";
-import { formatUiError } from "../../lib/format-error.ts";
 import {
   downloadRecoveryKit,
   printRecoveryKit,
   type RecoveryKitDetails,
 } from "../../lib/openclaw-id/kit-export.ts";
+import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { CopyButton } from "../solid/copy-button.tsx";
 import { SettingsToggleRow } from "../solid/settings-ui.tsx";
+import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { RecoveryCodeField } from "./recovery-kit-form.tsx";
 
 /** The kit, its save options and the "I've saved it" toggle. */
@@ -19,7 +20,7 @@ export function RecoveryKitPanel(props: {
   saved: boolean;
   onSaved: (saved: boolean) => void;
 }) {
-  const [note, setNote] = createSignal<string | null>(null);
+  const [note, setNote] = createSignal<OpenClawIdUiError | null>(null);
   // Marks the kit saved after a save action, as ticking the box does.
   const save = async (action: () => boolean | Promise<boolean>) => {
     setNote(null);
@@ -27,10 +28,10 @@ export function RecoveryKitPanel(props: {
       if (await action()) {
         props.onSaved(true);
       } else {
-        setNote(t("openclawId.kitActionUnavailable"));
+        setNote({ message: t("openclawId.kitActionUnavailable"), detail: "" });
       }
     } catch (error) {
-      setNote(t("openclawId.kitActionFailed", { error: formatUiError(error) }));
+      setNote(openClawIdUiError(error, "saveKit"));
     }
   };
   return (
@@ -84,9 +85,9 @@ export function RecoveryKitPanel(props: {
       </div>
       <Show when={note()}>
         {(message) => (
-          <p class="secret-reveal__note" role="status">
-            {message()}
-          </p>
+          <div class="secret-reveal__note" role="status">
+            <OpenClawIdErrorMessage error={message()} />
+          </div>
         )}
       </Show>
       <SettingsToggleRow

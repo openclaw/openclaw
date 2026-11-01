@@ -3,14 +3,15 @@ import { createSignal, Match, Show, Switch } from "solid-js";
 import type { OwnerKeyRegenerationPreparation } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { generateOwnerDeviceKey, saveOwnerDeviceKey } from "../../lib/openclaw-id/device-key.ts";
 import type { RecoveryKitDetails } from "../../lib/openclaw-id/kit-export.ts";
 import { createOpenClawIdCeremony } from "../../lib/openclaw-id/link.ts";
 import type { OpenClawIdSignedIn } from "../../lib/openclaw-id/types.ts";
+import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { Icon } from "../solid/icon.tsx";
+import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { RecoveryKitForm } from "./recovery-kit-form.tsx";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 
@@ -21,7 +22,7 @@ type Step =
   | { kind: "kit"; preparation: OwnerKeyRegenerationPreparation; details: RecoveryKitDetails }
   | { kind: "working" }
   | { kind: "done" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: OpenClawIdUiError };
 
 /**
  * Parses the optional expiry field (whole days from now) into Unix seconds; null
@@ -69,7 +70,7 @@ export function showRegenerateOwnerKeyDialog(params: {
       };
       const fail = (error: unknown) => {
         ceremony.discard();
-        setStep({ kind: "error", message: formatUiError(error) });
+        setStep({ kind: "error", message: openClawIdUiError(error, "reset") });
       };
       // Asks what to sign, then creates and shows the new kit.
       const start = async () => {
@@ -213,7 +214,7 @@ export function showRegenerateOwnerKeyDialog(params: {
                 {(failed) => (
                   <>
                     <div class="callout danger" role="alert">
-                      {failed().message}
+                      <OpenClawIdErrorMessage error={failed().message} />
                     </div>
                     <openclaw-modal-actions class="exec-approval-actions">
                       <button type="button" class="btn" autofocus onClick={() => finish(false)}>

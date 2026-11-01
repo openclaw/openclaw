@@ -94,3 +94,11 @@
 .ocid-access__details code {
   overflow-wrap: anywhere;
 }
+
+.ocid-access__error p {
+  margin: 0;
+}
+
+.ocid-access__error code {
+  white-space: pre-wrap;
+}

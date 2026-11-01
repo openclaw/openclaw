@@ -4,7 +4,6 @@ import { createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import {
   openClawIdAccount,
   signInWithOpenClawId,
@@ -12,6 +11,10 @@ import {
 } from "../../lib/openclaw-id/account.ts";
 import { signOutOfRemoteOpenClawId } from "../../lib/openclaw-id/remote-sign-out.ts";
 import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import {
+  openClawIdErrorToast,
+  type OpenClawIdErrorContext,
+} from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import { renderSidebarMenuAction } from "../app-sidebar-dropdown.tsx";
@@ -211,10 +214,10 @@ export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null):
 }
 
 // Runs a lazily loaded dialog; a failed load or dialog error shows one toast.
-function openDialog(open: () => Promise<unknown>) {
+function openDialog(open: () => Promise<unknown>, context: OpenClawIdErrorContext = "open") {
   open().catch((error: unknown) =>
     showToast({
-      message: t("openclawId.actionFailed", { error: formatUiError(error) }),
+      message: openClawIdErrorToast(error, context),
       durationMs: 12_000,
     }),
   );
@@ -279,7 +282,7 @@ export function selectOpenClawIdMenuValue(
     );
   } else if (value === SIGN_OUT) {
     if (status?.channel === "tunnel") {
-      openDialog(signOutOfRemoteOpenClawId);
+      openDialog(signOutOfRemoteOpenClawId, "signOut");
     } else {
       signOutOfOpenClawId();
     }
@@ -289,7 +292,7 @@ export function selectOpenClawIdMenuValue(
         offerMakeReachable(client, status, signedIn.email ?? t("openclawId.accountFallback")),
       (error: unknown) =>
         showToast({
-          message: t("openclawId.signInFailed", { error: formatUiError(error) }),
+          message: openClawIdErrorToast(error, "signIn"),
           durationMs: 12_000,
         }),
     );

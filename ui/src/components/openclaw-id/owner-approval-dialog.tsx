@@ -5,9 +5,11 @@ import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { ownerApprovalFor } from "../../lib/openclaw-id/owner-approval-lifetime.ts";
 import type { OwnerApproval, OwnerApprovalRequest } from "../../lib/openclaw-id/owner-approval.ts";
+import { openClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
+import { OpenClawIdErrorMessage } from "./error-message.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -46,7 +48,7 @@ function ApprovalRow(props: { request: OwnerApprovalRequest; owner: OwnerApprova
       <Show when={props.request.error}>
         {(message) => (
           <div class="callout danger" role="alert">
-            {message()}
+            <OpenClawIdErrorMessage error={openClawIdUiError(message(), "approval")} />
           </div>
         )}
       </Show>
@@ -97,12 +99,12 @@ export function showOwnerApprovalDialog(params: { client: GatewayBrowserClient }
             </Show>
             <Show when={projection?.read().error}>
               {(message) => (
-                <p class="callout danger" role="alert">
-                  {message()}
+                <div class="callout danger" role="alert">
+                  <OpenClawIdErrorMessage error={openClawIdUiError(message(), "approval")} />
                   <button type="button" class="btn" onClick={() => owner?.retry()}>
                     {t("common.retry")}
                   </button>
-                </p>
+                </div>
               )}
             </Show>
             <Show when={owner && projection?.read().requests.length === 0}>

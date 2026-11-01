@@ -76,7 +76,7 @@ export function inviteUsed(invite: Invite, locale: string): string {
   return `${role} invite · created ${formatDay(invite.createdAt, locale)}`;
 }
 
-/** What a removal changed, e.g. "Bob removed · 1 device disconnected · 1 run stopped". */
+/** What a removal changed, e.g. "Bob removed · 1 connection closed · 1 task stopped". */
 export function removalNote(name: string, removal: RemovalSummary | null): string {
   if (!removal) {
     return `${name} removed`;
@@ -85,6 +85,6 @@ export function removalNote(name: string, removal: RemovalSummary | null): strin
   parts.push(
     `${removal.connectionsClosed} ${removal.connectionsClosed === 1 ? "connection" : "connections"} closed`,
   );
-  parts.push(`${removal.runsCancelled} ${removal.runsCancelled === 1 ? "run" : "runs"} stopped`);
+  parts.push(`${removal.runsCancelled} ${removal.runsCancelled === 1 ? "task" : "tasks"} stopped`);
   return parts.join(" · ");
 }
