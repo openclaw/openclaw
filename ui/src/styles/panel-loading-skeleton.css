@@ -33,8 +33,9 @@ openclaw-panel-loading-skeleton {
   .desktop-spinner {
     width: 24px;
     height: 24px;
-    border: 2px solid var(--border);
-    border-top-color: var(--muted);
+    color: var(--accent);
+    background: currentColor;
+    mask: var(--spinner-mask-large);
     border-radius: 50%;
     animation: panel-skeleton-spin 1s linear infinite;
   }

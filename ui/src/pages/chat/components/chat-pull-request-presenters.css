@@ -612,7 +612,7 @@
 .chat-pr-menu--drill :is(.oc-menu-item, .chat-pr-menu__fact, .chat-pr__checks-row) {
   min-height: 32px;
   font: inherit;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
 }
 
 .chat-pr-menu--drill .chat-pr-menu__group {
@@ -659,7 +659,7 @@
   gap: 10px;
   min-height: 60px;
   padding: 10px 8px;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   font: inherit;
 }
 
@@ -681,7 +681,7 @@
   gap: 10px;
   min-height: 32px;
   padding: 6px 8px;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   font: inherit;
 }
 
@@ -697,12 +697,10 @@
 
 @supports (corner-shape: superellipse(1.5)) {
   .chat-pr-menu--drill.oc-menu {
-    border-radius: calc(var(--radius-xl) * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  .chat-pr-menu--drill
-    :is(.oc-menu-item, .chat-ci__automation-option--menu, .chat-ci__job-summary) {
+    border-radius: max(
+      var(--menu-radius),
+      calc(var(--radius-xl) * var(--openclaw-corner-radius-scale))
+    );
     corner-shape: superellipse(1.5);
   }
 }

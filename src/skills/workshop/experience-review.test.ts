@@ -164,8 +164,8 @@ it("holds Gateway drain until the notice of committed changes settles", async ()
     summary: "tightened reconciliation step",
     createdAtMs: 1,
   };
-  const noticeStarted = createDeferred<void>();
-  const noticeRelease = createDeferred<void>();
+  const noticeStarted = createDeferred();
+  const noticeRelease = createDeferred();
   mocks.listWorkshopChanges.mockResolvedValue([committed]);
   mocks.runEmbeddedAgent.mockResolvedValue(completedReview);
   mocks.postWorkshopChangeNotice.mockImplementationOnce(async () => {

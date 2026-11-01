@@ -82,8 +82,14 @@
   cursor: var(--cursor-action);
 }
 
-/* Navigation highlight and selection are separate: the highlight is a fill drawn
-   behind the row, while selection is the row's weight and check. */
+/* Windowed rows are absolute, so their gap comes from the virtualizer. */
+.picker-select__option + .picker-select__option:not(.picker-select__option--windowed),
+.multi-select__option + .multi-select__option {
+  margin-block-start: var(--menu-item-gap);
+}
+
+/* Navigation highlight and selection are separate fills drawn behind the row. A
+   multi-select's aria-selected names its highlight: chosen values leave its list. */
 .picker-select__option::before,
 .multi-select__option::before {
   content: "";
@@ -91,7 +97,7 @@
   z-index: -1;
   inset: 0;
   border-radius: inherit;
-  background: var(--surface-hover);
+  background: var(--menu-hover);
   opacity: 0;
   scale: 0.98;
   transition: scale var(--menu-enter-duration) var(--overlay-ease-enter);
@@ -106,6 +112,19 @@
 .picker-select__option:active:not([aria-disabled="true"])::before,
 .multi-select__option:active:not([aria-disabled="true"])::before {
   scale: 0.98;
+}
+
+.picker-select__option[aria-selected="true"]::before {
+  background: var(--menu-selected);
+  opacity: 1;
+  scale: 1;
+}
+
+/* Opening a picker highlights its current value, which stays the plain selected fill. */
+.picker-select__option[aria-selected="true"]:hover:not([aria-disabled="true"])::before,
+[data-keyboard]
+  .picker-select__option[aria-selected="true"][data-active]:not([aria-disabled="true"])::before {
+  background: var(--surface-selected-hover);
 }
 
 /* Keyboard navigation also needs a non-text indicator that holds up in every theme. */
@@ -214,6 +233,12 @@ openclaw-select-picker {
   flex: 0 0 16px;
   width: 16px;
   margin-inline-start: auto;
+}
+
+/* Safari collapses an unsized svg in this inline-flex rail. */
+.picker-select__check svg {
+  width: 16px;
+  height: 16px;
 }
 
 .picker-select__menu.oc-overlay {
