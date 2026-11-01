@@ -180,6 +180,12 @@ describe("buildGoogleInteractionsParams", () => {
     expect(converted.generation_config?.tool_choice).toBe("any");
   });
 
+  it("forwards sampling options into generation_config", () => {
+    expect(
+      params([user("Answer briefly")], { temperature: 0.2, topP: 0.4 }).generation_config,
+    ).toEqual({ temperature: 0.2, top_p: 0.4 });
+  });
+
   it("applies the model's minimum supported reasoning when direct options disable thinking", () => {
     expect(
       params(

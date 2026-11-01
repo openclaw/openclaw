@@ -376,6 +376,11 @@ it("forwards stop sequences to Google generation config", () => {
   expect(params.config?.stopSequences).toEqual(["STOP"]);
 });
 
+it("forwards nucleus sampling to Google generation config", () => {
+  const params = buildParams(model, { messages: [user("hello")] }, { topP: 0.4 });
+  expect(params.config?.topP).toBe(0.4);
+});
+
 it("strips the internal cache boundary marker from systemInstruction", () => {
   const params = buildParams(model, {
     systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
