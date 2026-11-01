@@ -11,8 +11,8 @@ import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { parseTtsDirectives } from "./directives.js";
 import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
-import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
 import { resolveTtsProvider, resolveTtsProviderAsync } from "./tts-provider-resolution.js";
+import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./tts-runtime-types.js";
 import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsPrefsPathAsync } from "./tts-settings.js";
 
 type PreparedTtsRequest = {
