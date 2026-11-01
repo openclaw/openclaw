@@ -770,8 +770,8 @@ it.each([
     const handle = createEmbeddedRunHandle({ runId: params.runId });
     await withGatewayToolCallerIdentity(
       {
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
+        agentId,
+        sessionKey: canonicalKey,
         operationalRunInstance: params.preparedRunAdmission?.operationalRunInstance,
       },
       () =>
