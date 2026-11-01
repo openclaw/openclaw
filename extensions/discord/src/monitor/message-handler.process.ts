@@ -35,6 +35,7 @@ import {
   createDiscordMessageReplyRuntime,
   formatDiscordReasoningQuote,
   formatDiscordGroupThreadReply,
+  isProgressModeSuppressedBlock,
 } from "./message-handler.process-reply-runtime.js";
 import { completeDiscordSessionConflict } from "./message-handler.retry.js";
 import {
@@ -514,9 +515,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       draftPreview.isProgressMode &&
       info.kind === "block" &&
       !deliverablePayload.isCommentary &&
-      !deliverablePayload.isCompactionNotice &&
-      !resolveSendableOutboundReplyParts(deliverablePayload).hasMedia &&
-      !deliverablePayload.isError
+      isProgressModeSuppressedBlock(deliverablePayload)
     ) {
       return { visibleReplySent: false };
     }

@@ -5,12 +5,16 @@ import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testi
 import {
   createReplyDispatcher,
   type ReplyDispatchRuntimeInfo,
+  type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { RequestClient } from "../internal/discord.js";
 import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
-import { createDiscordBeforePayloadDelivery } from "./message-handler.process-reply-runtime.js";
+import {
+  createDiscordBeforePayloadDelivery,
+  isProgressModeSuppressedBlock,
+} from "./message-handler.process-reply-runtime.js";
 
 type Preview = ReturnType<typeof createDiscordDraftPreviewController>;
 type PreviewOptions = Parameters<typeof createDiscordDraftPreviewController>[0];
@@ -507,5 +511,30 @@ describe("Discord draft preview REST lifecycle", () => {
 
     expect([...visible]).toEqual([]);
     expect(requests).toEqual(["POST", "DELETE", "DELETE", "DELETE"]);
+  });
+});
+
+describe("progress-mode compaction notice delivery", () => {
+  it("delivers a compaction notice block while ordinary deltas stay suppressed", async () => {
+    const { controller } = createContinuationHarness({ mode: "progress" });
+    try {
+      const beforeDeliver = createDiscordBeforePayloadDelivery({
+        getDeliverTarget: () => "channel:c1",
+        draftPreview: controller,
+        isFallbackOnlyToolWarningFinal: () => false,
+      });
+      controller.draftStream?.update("Compacting context…");
+      const notice: ReplyPayload = { text: "Compacting context", isCompactionNotice: true };
+      expect(beforeDeliver(notice, { kind: "block" })).toBe(notice);
+      expect(beforeDeliver({ text: "next delta" }, { kind: "block" })).toBeNull();
+    } finally {
+      await controller.cleanup();
+    }
+  });
+
+  it("keeps errors deliverable and holds the shared suppression predicate", () => {
+    expect(isProgressModeSuppressedBlock({ text: "next delta" })).toBe(true);
+    expect(isProgressModeSuppressedBlock({ text: "notice", isCompactionNotice: true })).toBe(false);
+    expect(isProgressModeSuppressedBlock({ text: "failed", isError: true })).toBe(false);
   });
 });

@@ -42,6 +42,16 @@ export function formatDiscordReasoningQuote(quoteText: string): string | undefin
   return lines.map((line) => `> ${line}`).join("\n");
 }
 
+export function isProgressModeSuppressedBlock(payload: ReplyPayload): boolean {
+  // Compaction notices are operator-facing status, not answer deltas: they
+  // must survive progress mode so an enabled notification reaches the
+  // channel while streamed answer text is held back by the draft.
+  if (payload.isError || payload.isCompactionNotice) {
+    return false;
+  }
+  return !resolveSendableOutboundReplyParts(payload).hasMedia;
+}
+
 export function createDiscordBeforePayloadDelivery(params: {
   abortSignal?: AbortSignal;
   getDeliverTarget: () => string;
@@ -68,8 +78,7 @@ export function createDiscordBeforePayloadDelivery(params: {
       params.draftPreview.draftStream &&
       params.draftPreview.isProgressMode &&
       info.kind === "block" &&
-      !resolveSendableOutboundReplyParts(payload).hasMedia &&
-      !payload.isError
+      isProgressModeSuppressedBlock(payload)
     ) {
       return null;
     }
