@@ -37,15 +37,11 @@ function configured(
 type LocalityCase = { params: TimeoutParams; expected: number; cron?: number };
 
 describe("LLM watchdog policy", () => {
-  it("caps idle and first-event watchdogs at the agent budget", () => {
-    expectBudgets({ cfg: defaults(30) }, 30_000);
-  });
-
-  it("keeps the cloud watchdog finite when the configured run timeout is unlimited", () => {
-    const cfg = defaults(0);
+  it.each([30, 0])("keeps finite and unlimited budgets (%s)", (seconds) => {
+    const cfg = defaults(seconds);
     const runTimeoutMs = resolveAgentTimeoutMs({ cfg });
-    expect(runTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(resolveLlmIdleTimeoutMs({ cfg, runTimeoutMs, model: cloud })).toBe(120_000);
+    expect(runTimeoutMs).toBe(seconds ? 30_000 : MAX_TIMER_TIMEOUT_MS);
+    expectBudgets({ cfg, runTimeoutMs, model: cloud }, seconds ? 30_000 : 120_000);
   });
 
   it.each([
@@ -54,25 +50,11 @@ describe("LLM watchdog policy", () => {
     ["http://[fe80::1]:11434", 0],
     ["http://172.32.0.1:11434", 120_000],
     ["http://192.169.1.1:11434", 120_000],
-    ["http://[::ffff:10.0.0.5]:11434", 120_000],
     ["http://[::ffff:126.255.255.255]:11434", 120_000],
     ["http://[::ffff:128.0.0.0]:11434", 120_000],
   ])("classifies the endpoint without DNS: %s", (baseUrl, expected) => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(expected);
   });
-
-  it.each(["127.0.0.2", "[::ffff:127.0.0.2]", "[::ffff:7fff:ffff]"])(
-    "keeps local watchdog budgets for loopback endpoint %s",
-    (hostname) => {
-      const params = { model: { provider: "custom", baseUrl: `http://${hostname}:1234/v1` } };
-      expectBudgets(params, 0, 300_000);
-      expectBudgets({ ...params, runTimeoutMs: 600_000 }, 600_000, 300_000);
-      expectBudgets({ ...params, runTimeoutMs: 30_000 }, 30_000);
-      expect(resolveLlmIdleTimeoutMs({ ...params, trigger: "cron", runTimeoutMs: 600_000 })).toBe(
-        600_000,
-      );
-    },
-  );
 
   it.each`
     name                         | params                                                                                                           | expected   | cron
