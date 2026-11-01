@@ -1,13 +1,16 @@
 // Real CLI, Gateway handlers, and persisted cron edits; only RPC transport is replaced.
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { loadCronStore } from "../../cron/store.js";
 import {
   callCron,
   createReadService,
 } from "../../gateway/server-methods/cron-read.test-support.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
+import {
+  makeContextParams,
+  makeCronState,
+} from "../../gateway/server-request-context.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const mocks = await vi.hoisted(async () => ({
@@ -36,12 +39,14 @@ it("warns only about dropped command environment keys after a successful edit", 
         enqueueSystemEvent: vi.fn(),
         runIsolatedAgentJob: vi.fn(),
       });
-      const context = {
+      const contextParams = makeContextParams();
+      contextParams.runtime.runtimeState.cronState = makeCronState({
         cron,
-        cronStorePath: storePath,
-        getRuntimeConfig: () => ({}),
-        logGateway: createNoopLogger(),
-      };
+        storePath,
+        cronEnabled: false,
+      });
+      const context = createGatewayRequestContext(contextParams);
+    context.getRuntimeConfig = () => ({});
       let rejectUpdate = false;
       mocks.rpc.mockImplementation(async (method: string, _opts: unknown, params = {}) => {
         if (method === "cron.status") {
@@ -53,7 +58,7 @@ it("warns only about dropped command environment keys after a successful edit", 
         // Match the JSON RPC wire, which omits undefined fields in requests and responses.
         // oxlint-disable-next-line unicorn/prefer-structured-clone
         const wireParams = JSON.parse(JSON.stringify(params));
-        const response = await callCron(context as GatewayRequestContext, method, wireParams);
+        const response = await callCron(context, method, wireParams);
         const [ok, payload, error] = response.mock.calls.at(-1) ?? [];
         if (!ok) {
           throw new Error(error?.message ?? "missing Gateway response");
