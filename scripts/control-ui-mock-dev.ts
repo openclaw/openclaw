@@ -66,6 +66,7 @@ import {
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
+import { buildLogsTailMock } from "./control-ui-mock-logs.ts";
 import { mentionMockInitScript } from "./control-ui-mock-mentions.ts";
 import {
   buildPluginCatalogMock,
@@ -2484,6 +2485,7 @@ async function createChatPickerScenario(
     ],
     methodResponses: {
       ...cronMocks,
+      "logs.tail": buildLogsTailMock(),
       "agents.list": {
         agents: rosterAgents.map(({ id, name, theme, emoji, avatar }) => ({
           id,

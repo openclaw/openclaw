@@ -85,7 +85,8 @@ suite.define(() => {
         await stream.scrollIntoViewIfNeeded();
         if (action === "refresh") {
           await gateway.setMethodResponse("logs.tail", tail(10_000, 500));
-          await page.getByRole("button", { name: "Refresh", exact: true }).click();
+          await page.getByRole("button", { name: "More actions", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
           await page.getByText(/Data log 010499 routine:/).waitFor();
           await stream.scrollIntoViewIfNeeded();
           await expect
@@ -94,7 +95,18 @@ suite.define(() => {
           expect(errors).toEqual([]);
           return;
         }
-        await page.getByRole("switch", { name: "Auto-follow", exact: true }).uncheck();
+        const autoFollow = page.getByRole("switch", {
+          name: "Auto-follow",
+          exact: true,
+          includeHidden: true,
+        });
+        if (width <= 640) {
+          await page.getByRole("button", { name: "Filter", exact: true }).click();
+        }
+        await autoFollow.uncheck();
+        if (width <= 640) {
+          await page.keyboard.press("Escape");
+        }
         await gateway.setMethodResponse("logs.tail", tail(2_000, 0));
         const after = await gateway.deferNext("logs.tail");
         await gateway.waitForRequest("logs.tail", { after });
@@ -125,9 +137,7 @@ suite.define(() => {
           })
           .toBe(true);
         expect(await page.locator(".log-row").count()).toBeLessThan(100);
-        expect(
-          await page.getByRole("switch", { name: "Auto-follow", exact: true }).isChecked(),
-        ).toBe(false);
+        expect(await autoFollow.isChecked()).toBe(false);
         expect(errors).toEqual([]);
       } finally {
         await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());
