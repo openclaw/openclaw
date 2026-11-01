@@ -29,8 +29,21 @@ export async function tryRunUpdateAdmissionBeforeStartup(
   // The supervisor parses stdout as one verdict; raised console levels must not prefix it.
   const { routeLogsToStderr } = await import("../logging/console.js");
   routeLogsToStderr();
+  const preflight = invocation.commandPath[1] === "preflight";
   const reject = (message: string) => {
     console.error(message);
+    if (preflight) {
+      process.stdout.write(
+        `${JSON.stringify({
+          protocol: 1,
+          mode: "preflight",
+          coverage: "isolated-core-startup",
+          candidateVersion: null,
+          status: "unverified",
+          reason: "preflight-execution-failed",
+        })}\n`,
+      );
+    }
     process.exitCode = 2;
     return true;
   };
@@ -39,10 +52,11 @@ export async function tryRunUpdateAdmissionBeforeStartup(
     return reject(profile.error);
   }
   const args = getCommandArgsWithRootOptions(profile.argv, {
-    commandPath: invocation.commandPath,
+    // Preserve the parent timeout together with the leaf arguments.
+    commandPath: preflight ? ["update"] : invocation.commandPath,
     mode: "command-path",
   });
-  const preflight = invocation.commandPath[1] === "preflight";
+  let preflightLeafSeen = false;
   let contextPath: string | undefined;
   const preflightOptions: { sourceRoot?: string; timeout?: string } = {};
   if (args) {
@@ -51,9 +65,14 @@ export async function tryRunUpdateAdmissionBeforeStartup(
       const rootConsumed = consumeRootCommandOptionToken(args, index);
       if (rootConsumed > 0) {
         index += rootConsumed - 1;
+      } else if (preflight && !preflightLeafSeen && arg === "preflight") {
+        preflightLeafSeen = true;
       } else if (preflight && arg === "--json") {
         continue;
-      } else if (preflight && (arg === "--source-root" || arg === "--timeout")) {
+      } else if (
+        preflight &&
+        (arg === "--timeout" || (preflightLeafSeen && arg === "--source-root"))
+      ) {
         const value = args[++index];
         if (!value || value.startsWith("--")) {
           return reject(`Candidate preflight requires a value for ${arg}.`);
@@ -61,7 +80,7 @@ export async function tryRunUpdateAdmissionBeforeStartup(
         preflightOptions[arg === "--source-root" ? "sourceRoot" : "timeout"] = value;
       } else if (
         preflight &&
-        (arg?.startsWith("--source-root=") || arg?.startsWith("--timeout="))
+        ((preflightLeafSeen && arg?.startsWith("--source-root=")) || arg?.startsWith("--timeout="))
       ) {
         const separator = arg.indexOf("=");
         const value = arg.slice(separator + 1);
@@ -82,8 +101,12 @@ export async function tryRunUpdateAdmissionBeforeStartup(
       }
     }
   }
-  if (!args || (!preflight && (!contextPath || !path.isAbsolute(contextPath)))) {
-    return reject("Candidate admission requires --context <absolute-path>.");
+  if (!args || (preflight ? !preflightLeafSeen : !contextPath || !path.isAbsolute(contextPath))) {
+    return reject(
+      preflight
+        ? "Candidate preflight arguments are invalid."
+        : "Candidate admission requires --context <absolute-path>.",
+    );
   }
   const { isUpdateAdmissionAuthorityEnvKey } =
     await import("../infra/update-admission-contract.js");
