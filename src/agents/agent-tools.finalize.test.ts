@@ -3,10 +3,18 @@ import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { bindAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  bindAgentToolAvailability,
+  getAgentToolAvailabilityBinding,
+  resolveAgentToolExecutionSchema,
+} from "./agent-tool-availability.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { getBeforeToolCallHookContext } from "./before-tool-call-metadata.js";
+import {
+  isCallableCollectorReader,
+  markCollectorReaderTool,
+} from "./subagents/swarm/swarm-collector-capability.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -268,6 +276,38 @@ describe("finalized tool descriptor snapshots", () => {
     expect(refreshed.description).toBe("New description");
     expect(refreshed.parameters).toEqual(replacement);
     expect(refreshed.outputSchema).toEqual(replacement);
+  });
+
+  it("keeps an owner-declared execution schema over the canonical provider contract", async () => {
+    const parameters = {
+      type: "object",
+      properties: { optional: { type: "boolean", const: true } },
+    };
+    const ownerSchema = { type: "object", properties: { optional: { type: "boolean" } } };
+    const owner = bindAgentToolAvailability(tool(parameters), {
+      prepare: () => undefined,
+      executionSchema: () => ownerSchema,
+    });
+    const finalized = attempt([owner], {
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+    }).tool();
+    expect(resolveAgentToolExecutionSchema(finalized, finalized.parameters)).toBe(ownerSchema);
+  });
+
+  it("keeps native collector identity when a projected route binds a canonical schema", async () => {
+    const reader = markCollectorReaderTool(
+      tool({ type: "object", properties: { runId: { type: "string" } } }, { name: "agents_wait" }),
+    );
+    const ownerBinding = getAgentToolAvailabilityBinding(reader);
+    const google = attempt([reader], {
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+    });
+    const finalized = google.tool();
+    expect(getAgentToolAvailabilityBinding(finalized)).toBe(ownerBinding);
+    expect(isCallableCollectorReader(finalized)).toBe(true);
+    await google.settle();
   });
 
   it("never restores a previous availability schema or hook context", async () => {

@@ -11,7 +11,10 @@ import {
 } from "../../../../src/infra/runtime-worker-url.js";
 import { configureAiTransportHost } from "../host.js";
 import type { Tool } from "../types.js";
-import { normalizeToolParameterSchema as normalize } from "./agent-tools-parameter-schema.js";
+import {
+  getCanonicalToolParameterSchema,
+  normalizeToolParameterSchema as normalize,
+} from "./agent-tools-parameter-schema.js";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 import {
   cleanSchemaForLlamacppGbnf,
@@ -178,6 +181,26 @@ it.each([
   const normalized = normalize(batch, options);
   expect(normalized).not.toHaveProperty("$defs");
   expect(JSON.stringify(normalized)).not.toContain('"$ref"');
+});
+
+it.each([
+  { modelProvider: "google", modelId: "gemini-2.5-pro" },
+  { modelProvider: "openai", modelCompat: { toolSchemaProfile: "gemini" } },
+])("retains the canonical contract behind a Gemini enum projection: %j", (options) => {
+  const canonical = required({ optional: { type: "boolean", const: true } });
+  const normalized = normalize(canonical, options);
+  expect(normalized).toHaveProperty("properties.optional.enum", ["true"]);
+  expect(getCanonicalToolParameterSchema(normalized)).toEqual(canonical);
+});
+
+it("retains the canonical contract behind a stripped-keyword projection", () => {
+  const canonical = required({ value: { type: "string" } });
+  const normalized = normalize(canonical, {
+    modelProvider: "openai",
+    modelCompat: { unsupportedToolSchemaKeywords: ["required"] },
+  });
+  expect(normalized).not.toHaveProperty("required");
+  expect(getCanonicalToolParameterSchema(normalized)).toEqual(canonical);
 });
 
 it("inlines mixed OpenAPI refs rather than leaving dangling components", () => {

@@ -13,12 +13,15 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
+  describeToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
 import {
   singleToolCallStreamFn as createSingleToolCallStreamFn,
@@ -263,6 +266,87 @@ describe("Tool Search input schemas", () => {
       result: { details: { input: { maxFires: 10 } } },
     });
     expect(target.execute).toHaveBeenCalledOnce();
+  });
+
+  it("accepts read optional on a Gemini-routed catalog through the canonical contract", async () => {
+    const readTool = fakeTool("read", readToolInputSchema);
+    const finalized = finalizeAgentTools({
+      tools: [readTool],
+      hookContext: { sessionId: "gemini-read" },
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+      wrapBeforeToolCallHook: false,
+    });
+    const { catalogRef, runtime } = createRuntime(finalized);
+    expect(catalogRef.current?.entries[0]?.parameters).toHaveProperty("properties.optional.enum", [
+      "true",
+    ]);
+
+    await expect(
+      runtime.call("read", { path: "nonexistent.txt", optional: true }),
+    ).resolves.toBeDefined();
+    expect(readTool.execute).toHaveBeenCalledOnce();
+    expect(vi.mocked(readTool.execute).mock.calls[0]?.[1]).toEqual({
+      path: "nonexistent.txt",
+      optional: true,
+    });
+  });
+
+  it("keeps the canonical contract through publication, metadata change, and reuse", async () => {
+    const cleanups: Array<(reason: string) => Promise<void>> = [];
+    const attempt = (description: string) =>
+      finalizeAgentTools({
+        tools: [{ ...fakeTool("read", readToolInputSchema), description }],
+        hookContext: { sessionId: "gemini-read-reuse" },
+        modelProvider: "google",
+        modelId: "gemini-4-argon",
+        wrapBeforeToolCallHook: false,
+        registerRunCleanup: (cleanup) => cleanups.push(cleanup),
+      });
+    const settle = async () => {
+      await Promise.all(cleanups.splice(0).map((cleanup) => cleanup("finished")));
+    };
+
+    const cold = attempt("Run read");
+    expect(cold[0]?.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+    await settle();
+
+    // A metadata change rebuilds the pending descriptor from the published schema.
+    const warm = attempt("Run read with a new description");
+    await expect(
+      createRuntime(warm).runtime.call("read", { path: "nonexistent.txt", optional: true }),
+    ).resolves.toBeDefined();
+    await settle();
+
+    const rebuilt = createRuntime(attempt("Run read with a new description"));
+    expect(rebuilt.catalogRef.current?.entries[0]?.parameters).toHaveProperty(
+      "properties.optional.enum",
+      ["true"],
+    );
+    await expect(
+      rebuilt.runtime.call("read", { path: "nonexistent.txt", optional: true }),
+    ).resolves.toBeDefined();
+    await settle();
+  });
+
+  it("advertises the canonical contract in catalog discovery", async () => {
+    const finalized = finalizeAgentTools({
+      tools: [fakeTool("read", readToolInputSchema)],
+      hookContext: { sessionId: "gemini-read-discovery" },
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+      wrapBeforeToolCallHook: false,
+    });
+    const { catalogRef } = createRuntime(finalized);
+    const entry = catalogRef.current?.entries[0];
+    expect(entry).toBeDefined();
+    const compact = compactToolSearchCatalogEntry(entry!);
+    expect(compact.input).toContain("optional?: true");
+    expect(compact.input).not.toContain('optional?: "true"');
+    expect(describeToolSearchCatalogEntry(entry!).parameters).toHaveProperty(
+      "properties.optional.const",
+      true,
+    );
   });
 
   it.each([

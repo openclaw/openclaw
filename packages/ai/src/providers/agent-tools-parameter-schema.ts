@@ -90,6 +90,22 @@ export type ToolParameterSchemaOptions = {
 };
 
 const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>();
+const canonicalToolParameterSchemas = new WeakMap<object, unknown>();
+
+/**
+ * The provider-neutral schema a tool's arguments must satisfy before execution.
+ *
+ * Provider projections are model-facing: Gemini stringifies enum/const values and
+ * providers may drop unsupported keywords. Validating tool arguments against that
+ * projection rejects values the tool contract accepts (for example a boolean
+ * `const: true` that became `enum: ["true"]`). Local validation must therefore keep
+ * the canonical contract that produced the projection.
+ */
+export function getCanonicalToolParameterSchema(schema: unknown): unknown {
+  return schema !== null && typeof schema === "object"
+    ? canonicalToolParameterSchemas.get(schema)
+    : undefined;
+}
 
 function extractEnumValues(schema: unknown, requireAllVariants = false): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -322,6 +338,10 @@ export function normalizeToolParameterSchema(
       s,
       omitEmptyArrayItems ? "normalize" : "add",
     );
+    const projectsToProvider =
+      isLlamacppGbnfProfile ||
+      (isGeminiProvider && !isAnthropicProvider) ||
+      unsupportedToolSchemaKeywords.size > 0;
     if (isLlamacppGbnfProfile) {
       arrayItemsCompatibleSchema = cleanSchemaForLlamacppGbnf(arrayItemsCompatibleSchema);
     }
@@ -334,7 +354,11 @@ export function normalizeToolParameterSchema(
         unsupportedToolSchemaKeywords,
       );
     }
-    return rememberResult(arrayItemsCompatibleSchema as TSchema);
+    const result = rememberResult(arrayItemsCompatibleSchema as TSchema);
+    if (projectsToProvider) {
+      canonicalToolParameterSchemas.set(result, inlinedSchema);
+    }
+    return result;
   }
 
   const flattenableVariantKey = Array.isArray(schemaRecord.anyOf)

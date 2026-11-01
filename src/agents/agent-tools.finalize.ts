@@ -1,4 +1,5 @@
 import {
+  getCanonicalToolParameterSchema,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
   normalizeToolParameterSchema,
@@ -14,7 +15,10 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
-import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  bindAgentToolExecutionSchema,
+  finalizeAgentToolAvailability,
+} from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
@@ -28,6 +32,11 @@ type PreparedDescriptor = {
   readonly normalized: AnyAgentTool["parameters"];
   readonly finalSource: AnyAgentTool["parameters"];
   readonly outputSource: AnyAgentTool["outputSchema"];
+  /**
+   * Provider-neutral contract for local validation. Kept beside the published descriptor:
+   * publication detaches the normalized schema, which would otherwise lose the binding.
+   */
+  readonly executionSchema?: unknown;
   readonly descriptor: Readonly<ToolDescriptor>;
 };
 type DescriptorSnapshot = {
@@ -91,6 +100,7 @@ function normalizeToolParameters(
 function bindToolParameterSchema(
   tool: AnyAgentTool,
   parameters: AnyAgentTool["parameters"],
+  executionSchema?: unknown,
 ): AnyAgentTool {
   const normalized = { ...tool, parameters };
   if (isObjectSchemaWithNoRequiredParams(parameters)) {
@@ -99,7 +109,10 @@ function bindToolParameterSchema(
       return prepared === null || prepared === undefined ? {} : prepared;
     };
   }
-  return copyAgentToolMetadata(tool, normalized);
+  const bound = copyAgentToolMetadata(tool, normalized);
+  // The provider projection is model-facing only; local validation keeps the contract.
+  const canonical = executionSchema ?? getCanonicalToolParameterSchema(parameters);
+  return canonical === undefined ? bound : bindAgentToolExecutionSchema(bound, canonical);
 }
 
 function publishParameters(parameters: AnyAgentTool["parameters"], name: string) {
@@ -161,9 +174,9 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
   const sources = options.tools.map((tool) => tool.parameters);
   const normalized = options.tools.map((tool, index) => {
     const entry = entries?.[index];
-    const prepared = entry && entry.source === tool.parameters ? entry.normalized : undefined;
-    return prepared
-      ? bindToolParameterSchema(tool, prepared)
+    const reusable = entry && entry.source === tool.parameters ? entry : undefined;
+    return reusable
+      ? bindToolParameterSchema(tool, reusable.normalized, reusable.executionSchema)
       : normalizeToolParameters(tool, {
           modelProvider: options.modelProvider,
           modelId: options.modelId,
@@ -232,6 +245,11 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
       normalized: normalizedSchemas[index]!,
       finalSource: tool.parameters,
       outputSource: tool.outputSchema,
+      // A rebuilt descriptor may reuse the previous attempt's published schema, which has no
+      // canonical entry of its own; the matched source schema keeps that contract alive.
+      executionSchema:
+        getCanonicalToolParameterSchema(normalizedSchemas[index]!) ??
+        (entry && entry.source === sources[index] ? entry.executionSchema : undefined),
       descriptor: {
         name: tool.name,
         description: tool.description,
@@ -290,6 +308,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
         outputSource: entry.outputSource,
         normalized: normalizedSchema,
         finalSource: entry.finalSource === entry.normalized ? normalizedSchema : entry.finalSource,
+        executionSchema: entry.executionSchema ?? getCanonicalToolParameterSchema(entry.normalized),
         descriptor,
       };
     });
