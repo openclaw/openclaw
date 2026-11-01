@@ -112,7 +112,7 @@ recovery, including previously retained inputs. Similarly named source files
 such as `.gitignore`, `.gitmodules`, and `.git-notes` still reconcile normally.
 
 At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
-`.cache/ms-playwright/`, `.local/share/pnpm/store/`, and `.openclaw/.pnpm-store/` caches stay with the runtime
+`.cache/ms-playwright/`, `.local/share/pnpm/store/`, `.openclaw/.pnpm-store/`, and `.openclaw/tools/` caches stay with the runtime
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
@@ -130,6 +130,7 @@ runtime-owned lock subtree by replacing its parent directory.
 
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
 `.openclaw` mount and its home store cannot hard-link into that project.
+Managed binary installers use `.openclaw/tools/` for re-downloadable tools such as Crabbox.
 
 Changed user files remain limited to 64 MiB each. If one exceeds the limit, reduce
 it or move it outside synchronization before retrying; repeated messages cannot
