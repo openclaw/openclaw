@@ -245,6 +245,7 @@ function SkillsToolbar(props: {
             : t("common.refresh")}
         </button>
       </Loading>
+      {props.view.pageMenu?.()}
     </div>
   );
 }

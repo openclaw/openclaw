@@ -483,6 +483,14 @@
   height: var(--settings-control-height);
 }
 
+.skill-library-search {
+  display: contents;
+}
+
+.skill-library-search__action {
+  display: none;
+}
+
 .plugins-toolbar__hint {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -1460,6 +1468,59 @@ openclaw-plugins-page
   openclaw-skills-page .plugins-toolbar > .btn {
     max-width: 100%;
     white-space: normal;
+  }
+
+  openclaw-skills-page .settings-page:has(> .skill-library-search) {
+    gap: var(--space-3);
+  }
+
+  openclaw-skills-page .settings-page:has(> .skill-library-search) > p.muted {
+    margin: 0;
+  }
+
+  openclaw-skills-page :is(.skill-library-toolbar__actions, .skill-library-toolbar__refresh) {
+    display: none;
+  }
+
+  openclaw-skills-page .skill-library-search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  openclaw-skills-page .skill-library-search > .field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The placeholder names the field; the label stays for assistive technology. */
+  openclaw-skills-page .skill-library-search > .field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  openclaw-skills-page .skill-library-search input {
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+
+  openclaw-skills-page .skill-library-search__action {
+    display: inline-flex;
+    flex: none;
+  }
+
+  openclaw-skills-page .skill-library-search .btn--icon,
+  openclaw-skills-page .skill-library-search__action .btn--icon {
+    width: var(--settings-control-height);
+    height: var(--settings-control-height);
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields:has(> .skill-library-search__action) {
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
 }
 
