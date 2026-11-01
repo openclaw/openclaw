@@ -1233,6 +1233,19 @@ textarea.settings-input {
     align-self: flex-end;
   }
 
+  /* A lone icon fits beside the heading; stacking is for full-size controls. */
+  .settings-section__header:has(.settings-section__copy):has(
+      > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button
+    ) {
+    align-items: flex-start;
+    flex-direction: row;
+
+    .settings-section__actions {
+      align-self: flex-start;
+      margin-block-start: -12px;
+    }
+  }
+
   .settings-row {
     flex-wrap: wrap;
   }
