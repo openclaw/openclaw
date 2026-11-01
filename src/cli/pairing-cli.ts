@@ -23,7 +23,7 @@ import { approveChannelPairingCode, listChannelPairingRequests } from "../pairin
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
-import { throwExpectedCliError } from "./failure-output.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 
@@ -47,12 +47,12 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   }
 
   // Allow extension channels: validate format but don't require registry
-  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(value)) {
-    throwExpectedCliError(
-      `Invalid channel "${value}". Use lowercase letters, numbers, "_" or "-", for example "telegram".`,
-    );
+  if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) {
+    return value as PairingChannel;
   }
-  return value as PairingChannel;
+  throwExpectedCliError(
+    `Invalid channel "${value}". Use lowercase letters, numbers, "_" or "-", for example "telegram".`,
+  );
 }
 
 function resolveAccountId(raw: unknown): string | undefined {
