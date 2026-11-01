@@ -2615,99 +2615,81 @@ describe("runReplyAgent typing", () => {
       }
     },
   );
-  it("announces model fallback transitions across verbose levels", async () => {
-    const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-fallback-pin-"));
-    const storePath = join(storeRoot, "sessions.json");
-    const cases = [
-      { name: "verbose on", verbose: "on" as const },
-      { name: "verbose off", verbose: "off" as const },
-    ] as const;
-    for (const testCase of cases) {
-      const sessionEntry = makeSessionEntry({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        modelOverrideSource: "user",
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
+  it("keeps the user-pinned selection while announcing fallback", async () => {
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.6-sol",
+      modelOverrideSource: "user",
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+    });
+    vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+      const { onFallbackStep } = args;
+      expect(args.provider).toBe("openai");
+      expect(args.model).toBe("gpt-5.6-sol");
+      await onFallbackStep?.({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "openai/gpt-5.6-sol",
+        fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
+        fallbackStepFromFailureReason: "rate_limit",
+        fallbackStepFinalOutcome: "succeeded",
       });
-      await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
-      const sessionStore = { main: sessionEntry };
-      state.runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "final" }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      });
-      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
-        const { onFallbackStep } = args;
-        expect(args.provider, testCase.name).toBe("openai");
-        expect(args.model, testCase.name).toBe("gpt-5.6-sol");
-        await onFallbackStep?.({
-          fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-5.6-sol",
-          fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
-          fallbackStepFromFailureReason: "rate_limit",
-          fallbackStepFinalOutcome: "succeeded",
-        });
-        return {
-          outcome: "completed" as const,
-          result: await runFallbackModelAttempt(
-            args,
-            "deepinfra",
-            "moonshotai/Kimi-K2.5",
-            "rate_limit",
-          ),
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "openai",
-              model: "gpt-5.6-sol",
-              error: "Provider openai is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
-        };
-      });
+      return {
+        outcome: "completed" as const,
+        result: await runFallbackModelAttempt(
+          args,
+          "deepinfra",
+          "moonshotai/Kimi-K2.5",
+          "rate_limit",
+        ),
+        provider: "deepinfra",
+        model: "moonshotai/Kimi-K2.5",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.6-sol",
+            error: "Provider openai is in cooldown (all profiles unavailable)",
+            reason: "rate_limit",
+          },
+        ],
+      };
+    });
 
-      const { run } = createMinimalRun({
-        resolvedVerboseLevel: testCase.verbose,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-        runOverrides: { provider: "openai", model: "gpt-5.6-sol" },
-      });
-      const phases: string[] = [];
-      const off = onAgentEvent((evt) => {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
-        if (evt.stream === "lifecycle" && phase) {
-          phases.push(phase);
-        }
-      });
-      const res = await run();
-      off();
-      const payload = Array.isArray(res)
-        ? (res[0] as { text?: string })
-        : (res as { text?: string });
-      const stored = requireStoredSessionEntry(storePath);
-      expect(payload.text, testCase.name).toContain("Model Fallback:");
-      expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
-      expect(stored.providerOverride, testCase.name).toBe("openai");
-      expect(stored.modelOverride, testCase.name).toBe("gpt-5.6-sol");
-      expect(stored.modelOverrideSource, testCase.name).toBe("user");
-      expect(stored.modelProvider, testCase.name).toBe("openai");
-      expect(stored.model, testCase.name).toBe("gpt-5.6-sol");
-      expect(stored.fallbackNotice?.selectedModel, testCase.name).toBe("openai/gpt-5.6-sol");
-      expect(stored.fallbackNotice?.activeModel, testCase.name).toBe(
-        "deepinfra/moonshotai/Kimi-K2.5",
-      );
-      expect(stored.fallbackNotice?.reason, testCase.name).toBe("rate limit");
-      expect(
-        phases.filter((phase) => phase === "fallback"),
-        testCase.name,
-      ).toHaveLength(1);
-      expect(phases, testCase.name).toContain("fallback_step");
-    }
-    await rm(storeRoot, { recursive: true, force: true });
+    const { run } = createMinimalRun({
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      runOverrides: { provider: "openai", model: "gpt-5.6-sol" },
+    });
+    const phases: string[] = [];
+    const off = onAgentEvent((evt) => {
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+      if (evt.stream === "lifecycle" && phase) {
+        phases.push(phase);
+      }
+    });
+    const res = await run();
+    off();
+    const payload = Array.isArray(res) ? (res[0] as { text?: string }) : (res as { text?: string });
+    const stored = requireStoredSessionEntry(storePath);
+    expect(payload.text).toContain("Model Fallback:");
+    expect(payload.text).toContain("deepinfra/moonshotai/Kimi-K2.5");
+    expect(stored.providerOverride).toBe("openai");
+    expect(stored.modelOverride).toBe("gpt-5.6-sol");
+    expect(stored.modelOverrideSource).toBe("user");
+    expect(stored.modelProvider).toBe("openai");
+    expect(stored.model).toBe("gpt-5.6-sol");
+    expect(stored.fallbackNotice?.selectedModel).toBe("openai/gpt-5.6-sol");
+    expect(stored.fallbackNotice?.activeModel).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(stored.fallbackNotice?.reason).toBe("rate limit");
+    expect(phases.filter((phase) => phase === "fallback")).toHaveLength(1);
+    expect(phases).toContain("fallback_step");
   });
 
   it("does not report an exhausted fallback candidate as a successful winner", async () => {
@@ -3584,14 +3566,16 @@ describe("runReplyAgent typing", () => {
   });
 
   it.each([
-    ["direct chats", "direct", "whatsapp", true, "on"],
-    ["direct chats with verbosity off", "direct", "whatsapp", true, "off"],
-    ["internal clients", "direct", "webchat", true, "on"],
-    ["group chats", "group", "whatsapp", false, "on"],
-    ["channels", "channel", "whatsapp", false, "on"],
+    ["direct chats", "direct", "whatsapp", true, "on", undefined],
+    ["direct chats with notices explicitly enabled", "direct", "whatsapp", true, "on", true],
+    ["direct chats with notices disabled", "direct", "whatsapp", false, "off", false],
+    ["direct chats with verbosity off", "direct", "whatsapp", true, "off", undefined],
+    ["internal clients", "direct", "webchat", true, "on", undefined],
+    ["group chats", "group", "whatsapp", false, "on", true],
+    ["channels", "channel", "whatsapp", false, "on", undefined],
   ] as const)(
     "controls fallback notices for %s without changing state or lifecycle",
-    async (_label, chatType, messageProvider, noticeVisible, verbose) => {
+    async (_label, chatType, messageProvider, noticeVisible, verbose, modelFallbackNotices) => {
       const { sessionStore, storePath } = await makeSessionFixture();
       let callCount = 0;
 
@@ -3636,7 +3620,10 @@ describe("runReplyAgent typing", () => {
               ChatType: chatType,
               MessageSid: `fallback-${++turnIndex}`,
             },
-            runOverrides: { messageProvider },
+            runOverrides: {
+              messageProvider,
+              config: { messages: { modelFallbackNotices } },
+            },
           }).run();
         const phases: string[] = [];
         const off = onAgentEvent((evt) => {
@@ -3735,6 +3722,7 @@ describe("runReplyAgent typing", () => {
       try {
         const { run } = createMinimalRun({
           resolvedVerboseLevel: "on",
+          runOverrides: { config: { messages: { modelFallbackNotices: false } } },
           sessionEntry,
           sessionStore,
           sessionKey: "main",
