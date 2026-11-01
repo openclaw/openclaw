@@ -18,7 +18,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import {
   captureResidentUserProfileAccess,
-  hasMultipleResidentSessionSharingIdentities,
   readResidentUserProfileId,
 } from "../state/user-profile-list.js";
 import {
@@ -43,7 +42,6 @@ function profileFactsKey(profileId: string, config: OpenClawConfig): string | un
   }
   return fingerprint({
     profile: captureResidentUserProfileAccess(profileId).readCurrentFacts(),
-    multipleProfiles: hasMultipleResidentSessionSharingIdentities(),
     roles: config.gateway?.roles ?? null,
   });
 }
@@ -128,12 +126,16 @@ function audienceKey(facts: ExistingSessionMutationFacts, config: OpenClawConfig
 
 export type PreparedSessionToolDiscovery = {
   presentation?: SessionToolDiscoveryPresentation;
+  /** Fences preparation only; presentation staleness never aborts admitted execution. */
   assertCurrent: () => void;
+  /** Ends the preparation fence once the tool surface and prompt are fixed. */
+  completePreparation: () => void;
   [Symbol.dispose]: () => void;
 };
 
 const noDiscovery = (): PreparedSessionToolDiscovery => ({
   assertCurrent() {},
+  completePreparation() {},
   [Symbol.dispose]() {},
 });
 
@@ -280,9 +282,17 @@ export async function prepareSessionToolDiscovery(params: {
       return noDiscovery();
     }
     assertCurrent();
+    let preparing = true;
     return {
       presentation: saved.presentation,
-      assertCurrent,
+      assertCurrent: () => {
+        if (preparing) {
+          assertCurrent();
+        }
+      },
+      completePreparation: () => {
+        preparing = false;
+      },
       [Symbol.dispose]: read.release,
     };
   } catch (error) {

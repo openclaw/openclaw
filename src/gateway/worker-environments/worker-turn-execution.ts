@@ -278,6 +278,7 @@ export async function executeWorkerTurn(
     });
     assertActive();
     using discovery = await prepareWorkerTurnToolDiscovery(turn, transcriptTarget, assertActive);
+    discovery.completePreparation();
     const authority = runtimeIdentity.approvalAuthority;
     const authorityAbort = new AbortController();
     const signal = turn.abortSignal
@@ -305,7 +306,6 @@ export async function executeWorkerTurn(
       turnClaim: params.turnClaim,
     };
     const assertToolSurfaceCurrent = () => {
-      discovery.assertCurrent();
       if (!toolRuntime || getWorkerTurnToolSurface(toolIdentity) !== toolRuntime) {
         throw new Error("Worker tool surface owner changed");
       }

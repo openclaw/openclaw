@@ -66,7 +66,7 @@ export async function runEmbeddedAttemptWithBackend(
     ...params,
     ...(attachmentMedia?.length ? { inputAttachmentMedia: attachmentMedia } : {}),
     toolDiscovery: discovery.presentation,
-    assertToolDiscoveryCurrent: discovery.assertCurrent,
+    toolDiscoveryPreparation: discovery,
   };
   const result = await runAgentHarnessAttempt(
     attachmentNote

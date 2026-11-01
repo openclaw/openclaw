@@ -84,7 +84,7 @@ it.for([
   expect(await observeScoped(hostScope)).toBe(scoped);
 });
 
-it("refuses native tool reconstruction after its captured discovery audience changes", async () => {
+it("keeps native tool reconstruction after its captured discovery audience changes", async () => {
   let current = true;
   const host = await createAdmittedHostCapabilityTestFixture({
     runId: "expired-discovery",
@@ -92,13 +92,17 @@ it("refuses native tool reconstruction after its captured discovery audience cha
     sessionId: "main-session",
     sessionKey: KEY,
     workspaceDir: "/workspace",
-    assertToolDiscoveryCurrent: () => {
-      if (!current) {
-        throw new Error("discovery audience changed");
-      }
+    toolDiscoveryPreparation: {
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("discovery audience changed");
+        }
+      },
+      completePreparation: () => {},
     },
   });
   hosts.push(host);
   current = false;
-  expect(() => host.hostCapabilities.createToolSurface?.({})).toThrow("discovery audience changed");
+  // Presentation staleness fences preparation only; current authority still fences each call.
+  expect(() => host.hostCapabilities.createToolSurface?.({})).not.toThrow();
 });

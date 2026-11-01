@@ -123,7 +123,10 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "joinObservation"
   > & {
     bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
-    assertToolDiscoveryCurrent?: () => void;
+    toolDiscoveryPreparation?: Pick<
+      import("../../../gateway/tool-discovery.js").PreparedSessionToolDiscovery,
+      "assertCurrent" | "completePreparation"
+    >;
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;

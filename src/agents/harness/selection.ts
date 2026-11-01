@@ -284,7 +284,7 @@ export async function runAgentHarnessAttempt(
           );
     try {
       modelExecution?.assertCurrent();
-      internalParams.assertToolDiscoveryCurrent?.();
+      internalParams.toolDiscoveryPreparation?.assertCurrent();
       const result = await runAgentHarnessLifecycleAttempt(
         harness,
         modelExecution
@@ -570,7 +570,7 @@ function withoutPluginHarnessPrivateState(
   const {
     admittedRunContext: _admittedRunContext,
     toolDiscoveryCapture: _toolDiscoveryCapture,
-    assertToolDiscoveryCurrent: _assertToolDiscoveryCurrent,
+    toolDiscoveryPreparation: _toolDiscoveryPreparation,
     thinkingExplicit: _thinkingExplicit,
     runtimePluginToolGrant: _runtimePluginToolGrant,
     assistantErrorTranscript: _assistantErrorTranscript,

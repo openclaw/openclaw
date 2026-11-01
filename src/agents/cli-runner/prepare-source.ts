@@ -53,6 +53,7 @@ async function prepareWithDiscovery(
       toolDiscovery: discovery.presentation,
       assertCurrent: composeSessionSourceAssertion([params.assertCurrent, discovery.assertCurrent]),
     });
+    discovery.completePreparation();
     prepared.preparedBackend.cleanup = sequenceCliCleanups(prepared.preparedBackend.cleanup, () =>
       discovery[Symbol.dispose](),
     );

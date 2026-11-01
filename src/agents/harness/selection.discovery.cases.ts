@@ -69,7 +69,7 @@ export function registerSelectionDiscoveryCases({
         conversationToolPolicySupport: "exact",
         runAttempt: async (attempt) => {
           expect(attempt).not.toHaveProperty("toolDiscoveryCapture");
-          expect(attempt).not.toHaveProperty("assertToolDiscoveryCurrent");
+          expect(attempt).not.toHaveProperty("toolDiscoveryPreparation");
           const tools = await attempt.hostCapabilities!.createToolSurfaceAsync!({
             config,
             agentId: "main",

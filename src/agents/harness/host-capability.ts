@@ -403,7 +403,6 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCreat
     assertCurrent: () => void = assertActive,
   ) => {
     assertCurrent();
-    attempt.assertToolDiscoveryCurrent?.();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
     return {
       options: {

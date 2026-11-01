@@ -89,7 +89,10 @@ export async function withOwnedHarnessGeneration<Registered, Result>(
 
 export const privateHarnessParamCases = [
   { field: "toolDiscoveryCapture", value: { kind: "clear", assertCurrent: () => undefined } },
-  { field: "assertToolDiscoveryCurrent", value: () => undefined },
+  {
+    field: "toolDiscoveryPreparation",
+    value: { assertCurrent: () => undefined, completePreparation: () => undefined },
+  },
   { field: "thinkingExplicit", value: false },
   {
     field: "runtimePluginToolGrant",

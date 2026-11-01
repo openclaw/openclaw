@@ -1,5 +1,8 @@
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import { afterEach, expect, it } from "vitest";
+import { runWithCliPreparationSource } from "../agents/cli-runner/prepare-source.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "../agents/cli-runner/types.js";
+import { replyToolDiscoveryCapture } from "../auto-reply/reply/reply-tool-discovery-capture.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   assignSessionOwner,
@@ -152,6 +155,58 @@ it("rejects saved declarations after role, account, audience, or incarnation cha
     await absent();
     await replaceSessionEntry(scope, { sessionId: "successor", updatedAt: 2 });
     await absent();
+  });
+});
+
+it("keeps presentation and admitted runs across unrelated profile and audience changes", async () => {
+  await withFixture(async ({ scope, profileId, capture, prepare }) => {
+    using prepared = await prepare(await capture());
+    // Another resident profile does not change this requester's saved presentation.
+    ensureProfileForEmail("unrelated@example.test");
+    using resumed = await prepare();
+    expect(resumed.presentation).toEqual(prepared.presentation);
+    prepared.completePreparation();
+    await addSessionMember(scope, { identityId: "later-member", addedBy: profileId });
+    // Presentation staleness fences preparation only, never the admitted execution.
+    expect(() => prepared.assertCurrent()).not.toThrow();
+  });
+});
+
+it("does not let a channel human turn inherit another requester's presentation", async () => {
+  await withFixture(async ({ capture, prepare }) => {
+    using admin = await prepare(await capture());
+    expect(admin.presentation?.automations).toBe("management");
+    const channelHuman = replyToolDiscoveryCapture(undefined, {}, true).toolDiscoveryCapture;
+    using channelTurn = await prepare(channelHuman);
+    expect(channelTurn.presentation).toBeUndefined();
+    using laterBackground = await prepare();
+    expect(laterBackground.presentation).toBeUndefined();
+  });
+});
+
+it("does not fence an admitted CLI run on later presentation changes", async () => {
+  await withFixture(async ({ config, scope, profileId, capture }) => {
+    let runAssertCurrent: (() => void) | undefined;
+    await runWithCliPreparationSource(
+      {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        storePath: scope.storePath,
+        config,
+        toolDiscoveryCapture: await capture(),
+        // SAFETY: Discovery preparation reads only these session and capture fields.
+      } as RunCliAgentParams,
+      async (params) => {
+        expect(params.toolDiscovery?.automations).toBe("management");
+        runAssertCurrent = params.assertCurrent;
+        // SAFETY: The wrapper only sequences this prepared backend's cleanup.
+        return { preparedBackend: {} } as PreparedCliRunContext;
+      },
+    );
+    ensureProfileForEmail("unrelated@example.test");
+    await addSessionMember(scope, { identityId: "later-member", addedBy: profileId });
+    expect(() => runAssertCurrent?.()).not.toThrow();
   });
 });
 

@@ -185,7 +185,7 @@ async function runEmbeddedAttemptOwned(
     config: params.config,
     assertCurrent: () => {
       externalAbortController.throwIfFired();
-      params.assertToolDiscoveryCurrent?.();
+      params.toolDiscoveryPreparation?.assertCurrent();
     },
   });
   const assertActiveRun = resolveAdmittedRunActiveAssertion(
@@ -449,7 +449,8 @@ async function runEmbeddedAttemptOwned(
           ...(params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : []),
         ],
       });
-      params.assertToolDiscoveryCurrent?.();
+      params.toolDiscoveryPreparation?.assertCurrent();
+      params.toolDiscoveryPreparation?.completePreparation();
       const executionResult = await runEmbeddedAttemptExecutionPhase({
         attempt: params,
         ...(activeContextEngine ? { activeContextEngine } : {}),
