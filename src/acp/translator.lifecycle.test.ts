@@ -294,6 +294,29 @@ it.each([true, false])(
   },
 );
 
+it("loads a bridge-created session with incomplete replay under its stored key", async () => {
+  const ledger = createTestAcpEventLedger();
+  const request = vi.fn(async (method: string) =>
+    method === "sessions.list" ? sessions([]) : { ok: true },
+  );
+  const gateway = createAcpGateway(request as GatewayClient["request"]);
+  const first = createAcpGatewayAgent(createAcpConnection(), gateway, { eventLedger: ledger });
+  const created = await first.newSession(createNewSessionRequest(cwd));
+  const key = `acp-bridge:${created.sessionId}`;
+  await first.shutdown();
+  await ledger.markIncomplete({ sessionId: created.sessionId, sessionKey: key });
+  const { agent: second, sessionStore } = createTranslatorScenario(request, {
+    eventLedger: ledger,
+    sessions: [],
+  });
+  try {
+    await second.loadSession(createLoadSessionRequest(created.sessionId));
+    expect(sessionStore.getSession(created.sessionId)?.sessionKey).toBe(key);
+  } finally {
+    await second.shutdown();
+  }
+});
+
 it.each(["resume", "load"] as const)(
   "publishes %s snapshots in the Gateway namespace",
   async (route) => {
