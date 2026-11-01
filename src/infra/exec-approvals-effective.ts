@@ -5,6 +5,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecToolConfig } from "../config/types.tools.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
@@ -136,24 +137,24 @@ export function collectExecPolicyScopeSnapshots(params: {
     }),
   ];
   const globalExecConfig = params.cfg.tools?.exec;
-  const configuredAgents = listAgentEntries(params.cfg);
-  const configAgentIds = new Set(
-    configuredAgents
-      .filter((agent) => agent.id !== defaultAgentId || agent.tools?.exec !== undefined)
-      .map((agent) => agent.id),
+  const configuredAgents = new Map(
+    listAgentEntries(params.cfg).map((agent) => [normalizeAgentId(agent.id), agent]),
   );
+  const configAgentIds = [...configuredAgents]
+    .filter(([agentId, agent]) => agentId !== defaultAgentId || agent.tools?.exec !== undefined)
+    .map(([agentId]) => agentId);
   const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
     (agentId) => agentId !== "*" && agentId !== "default" && agentId !== defaultAgentId,
   );
   const agentIds = sortUniqueStrings([...configAgentIds, ...approvalAgentIds]);
   for (const agentId of agentIds) {
-    const agentConfig = configuredAgents.find((agent) => agent.id === agentId);
+    const agentConfig = configuredAgents.get(agentId);
     snapshots.push(
       resolveExecPolicyScopeSnapshot({
         approvals: params.approvals,
         scopeExecConfig: agentConfig?.tools?.exec,
         globalExecConfig,
-        configPath: `agents.entries.${agentId}.tools.exec`,
+        configPath: `agents.entries.${agentConfig?.id ?? agentId}.tools.exec`,
         hostPath: params.hostPath,
         hostDefaults: params.hostDefaults,
         hostDefaultSource: params.hostDefaultSource,
