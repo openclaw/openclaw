@@ -1144,6 +1144,7 @@
   "ui/src/pages/chat/composer-capability-catalog.ts",
   "ui/src/pages/chat/composer-direct-dictation.ts",
   "ui/src/pages/new-session/attachment-draft.ts",
+  "ui/src/pages/new-session/background-create-preview.ts",
   "ui/src/pages/new-session/background-session-notice.ts",
   "ui/src/pages/new-session/capabilities.ts",
   "ui/src/pages/new-session/catalog-target-view.tsx",

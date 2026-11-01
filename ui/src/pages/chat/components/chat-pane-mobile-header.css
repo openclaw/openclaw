@@ -37,11 +37,6 @@
     box-shadow: none;
   }
 
-  & a.mobile-header__control[aria-disabled="true"] {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
   & :is(.mobile-header__control, .mobile-header__glyph) > svg {
     display: block;
     width: 20px;

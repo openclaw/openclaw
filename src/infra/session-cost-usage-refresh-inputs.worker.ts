@@ -22,7 +22,10 @@ import {
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import type { UsageCostPartition } from "./session-cost-usage-partitions.js";
-import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
+import {
+  USAGE_COST_ROLLUP_SCOPE,
+  type UsageCostSqliteCheckpoint,
+} from "./session-cost-usage-rollup-codec.js";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerDatabase,
@@ -75,6 +78,7 @@ export function createUsageCostCollectionAccess(params: {
   control: WorkerTaskControl;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
   readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
+  readCheckpoint?: (marker: SqliteSessionFileMarker) => UsageCostSqliteCheckpoint | undefined;
 }) {
   const { input, control, target, readStore } = params;
   const { location, operation } = input;
@@ -133,8 +137,30 @@ export function createUsageCostCollectionAccess(params: {
     },
     readSqliteStats: async (markers) => {
       const result: Array<TranscriptStats | undefined> = Array(markers.length);
+      const checkpoints = markers.map((marker) => params.readCheckpoint?.(marker));
+      const mutations = checkpoints.some(Boolean) ? await readFreshness(markers) : [];
       const groups = new Map<string, Array<{ marker: SqliteSessionFileMarker; index: number }>>();
       for (const [index, marker] of markers.entries()) {
+        const checkpoint = checkpoints[index];
+        const mutation = mutations[index];
+        // The transcript owner advances mutation time even for same-tick writes.
+        // Unchanged durable rollups already own the exact raw statistics.
+        if (
+          checkpoint &&
+          mutation &&
+          checkpoint.mtimeMs === mutation.mtimeMs &&
+          (checkpoint.generation ?? null) === mutation.generation
+        ) {
+          result[index] = {
+            eventCount: checkpoint.eventCount,
+            maxSeq: checkpoint.maxSeq,
+            sizeBytes: checkpoint.size,
+            lastMutationAtMs: mutation.mtimeMs,
+            generation: mutation.generation,
+            cold: mutation.cold,
+          };
+          continue;
+        }
         const database = target(marker.agentId, marker.storePath);
         const key = JSON.stringify(database);
         const group = groups.get(key) ?? [];
@@ -217,15 +243,18 @@ export function createUsageCostCollectionAccess(params: {
                 "rewrite.generation",
                 "cold.session_id as coldSessionId",
               ]);
-            const stored = executeSqliteQuerySync(
-              opened.db,
-              getSessionKysely(opened.db)
-                .selectFrom("session_windows")
-                .select((eb) => eb.fn.countAll<number>().as("count")),
-            ).rows[0]?.count;
+            const scanAll =
+              ids.length > 1 &&
+              ids.length * 4 >=
+                (executeSqliteQuerySync(
+                  opened.db,
+                  getSessionKysely(opened.db)
+                    .selectFrom("session_windows")
+                    .select((eb) => eb.fn.countAll<number>().as("count")),
+                ).rows[0]?.count ?? 0);
             // Overview reads ask for most sessions; one scan beats thousands of key probes.
             // Both paths return every window, including those without a transcript update time.
-            return ids.length * 4 >= (stored ?? 0)
+            return scanAll
               ? executeSqliteQuerySync(opened.db, query).rows
               : chunkItems(ids, 2_000).flatMap(
                   (chunk) =>

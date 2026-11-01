@@ -520,10 +520,10 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
               style={{ "--chat-thread-max-width": options().chatMessageMaxWidth ?? "48rem" }}
             >
               <Show when={chatHeader()}>
-                <DraftMobileHeader page={page} shell={shell} />
+                <DraftMobileHeader page={page} shell={shell} submission={visibilityControl} />
               </Show>
               <SessionBackgroundView context={page().context} surface="new-session" />
-              <Show when={!catalog.isTarget(page().data)}>
+              <Show when={!chatHeader() && !catalog.isTarget(page().data)}>
                 <NewSessionIncognitoControl
                   submission={visibilityControl}
                   draftAvailable={page().submission.capabilities.canStartAsDraft(page().context)}

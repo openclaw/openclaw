@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -16,7 +17,6 @@ import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-su
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile New conversation" });
-const draftNewSession = ".new-session-page .mobile-header__capsule a";
 const mobile = {
   viewport: { width: 390, height: 844 },
   hasTouch: true,
@@ -65,9 +65,17 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
 }
 
 suite.define(() => {
-  it("keeps the mobile welcome with its composer across phone and keyboard viewports", async () => {
+  it("docks the mobile New Session composer like the chat composer", async () => {
     await suite.withPage(mobile, async ({ page }) => {
       await installScenario(page, undefined, true);
+      const bottomGap = (selector: string) =>
+        page
+          .locator(selector)
+          .evaluate((element) => window.innerHeight - element.getBoundingClientRect().bottom);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:research:current"));
+      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await waitForLayoutSettled(page, ".chat-footer .agent-chat__composer-shell");
+      const chatGap = await bottomGap(".chat-footer .agent-chat__composer-shell");
       await page.goto(suite.server.baseUrl + "new?agent=research");
       const composer = page.locator(".new-session-page__message");
       await composer.fill("Help me plan the next release.");
@@ -109,11 +117,11 @@ suite.define(() => {
         expect(targetBox).not.toBeNull();
         expect(composerBox).not.toBeNull();
         expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeGreaterThanOrEqual(0);
-        expect(targetBox!.y - heroBox!.y - heroBox!.height).toBeLessThanOrEqual(24);
         expect(heroBox!.y).toBeGreaterThanOrEqual(54);
-        const compositionCenter = (heroBox!.y + composerBox!.y + composerBox!.height) / 2;
-        const contentCenter = 54 + (state.height - 54) / 2;
-        expect(Math.abs(compositionCenter - contentCenter)).toBeLessThanOrEqual(48);
+        expect(
+          Math.abs((await bottomGap(".new-session-page__composer")) - chatGap),
+          state.name,
+        ).toBeLessThanOrEqual(1);
         const local = page.locator("#new-session-where-trigger");
         expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
         expect(
@@ -200,14 +208,20 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(
           page,
           page.locator(".shell"),
-          [page.locator(".chat-pane__header:visible, .mobile-header__capsule:visible").first()],
+          [
+            page
+              .locator(
+                ".agent-chat__header--mobile:visible, .header-new-session:visible, .new-session-page__composer:visible",
+              )
+              .first(),
+          ],
           { animations: "disabled" },
         );
         await writeFile(path.join(dir, name + ".png"), frame.png);
       };
       await capture("closed");
       const action = page.getByRole("link", { name: "New conversation", exact: true });
-      expect(await action.count()).toBe(route === "chat" ? 0 : 1);
+      expect(await action.count()).toBe(0);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
       await navigationDrawerToggle(page).tap();
       await waitForMobileSidebarDrawerOpen(page);
@@ -227,12 +241,17 @@ suite.define(() => {
         await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
         await page.keyboard.press("Escape");
         await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        expect(await page.locator(".new-session-page__message").inputValue()).toBe(draft);
+        // Without a topbar action on New Session, the drawer owns reopening it.
+        await navigationDrawerToggle(page).tap();
+        await waitForMobileSidebarDrawerOpen(page);
       }
       await action.tap();
       await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=research" });
       const composer = page.locator(".new-session-page__message");
       await composer.waitFor();
-      expect(await page.locator(draftNewSession).count()).toBe(1);
+      // New Session is the action's destination, so its header omits the action.
+      expect(await page.locator(".new-session-page .mobile-header__capsule a").count()).toBe(0);
       if (route === "chat") {
         await expect
           .poll(() => composer.evaluate((element) => element === document.activeElement))
@@ -266,7 +285,6 @@ suite.define(() => {
       });
 
       // Everything the top bar offered stays one tap away.
-      expect(await page.locator(draftNewSession).getAttribute("href")).toBe("/new?agent=research");
       await header.locator(".mobile-header__search").tap();
       await page.locator("openclaw-command-palette [role='dialog']").first().waitFor();
       await page.keyboard.press("Escape");
@@ -276,19 +294,32 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
 
-      // Draft privacy stays below the header, clear of the capsule and of the notice.
-      const rail = page.locator(".new-session-page__incognito-rail");
-      const capsule = (await header.locator(".mobile-header__capsule").boundingBox())!;
-      expect((await rail.boundingBox())!.y).toBeGreaterThanOrEqual(capsule.y + capsule.height);
+      // Draft and incognito live in the capsule; toggling moves neither the title nor its edge.
+      expect(await page.locator(".new-session-page__incognito-rail").count()).toBe(0);
+      const capsule = header.locator(".mobile-header__capsule");
+      const incognito = capsule.locator(".new-session-page__incognito-toggle");
+      const title = header.locator(".mobile-header__title-text");
+      const titleBox = await title.boundingBox();
+      const capsuleBox = await capsule.boundingBox();
+      expect(capsuleBox!.x + capsuleBox!.width).toBe(378);
+      await incognito.tap();
+      expect(await incognito.getAttribute("aria-checked")).toBe("true");
+      expect(await header.locator(".mobile-header__incognito").count()).toBe(0);
+      expect(await incognito.textContent()).toBe("");
+      expect(await title.boundingBox()).toEqual(titleBox);
+      expect(await capsule.boundingBox()).toEqual(capsuleBox);
+      await page.locator(".new-session-page__incognito-notice--visible").waitFor();
+      await incognito.tap();
+      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
+      await page
+        .locator(".new-session-page__incognito-notice--visible")
+        .waitFor({ state: "detached" });
       const composerPlace = await page.locator(".new-session-page__composer").boundingBox();
 
       await gateway.setOnline(false);
       const notice = header.locator(".mobile-header__notices");
       await notice.waitFor();
-      const noticeBox = (await notice.boundingBox())!;
-      await expect
-        .poll(async () => (await rail.boundingBox())!.y)
-        .toBeGreaterThanOrEqual(noticeBox.y + noticeBox.height);
+      expect(await capsule.boundingBox()).toEqual(capsuleBox);
       expect(await page.locator(".new-session-page__composer").boundingBox()).toEqual(
         composerPlace,
       );
@@ -302,7 +333,7 @@ suite.define(() => {
       await installScenario(page);
       await page.goto(suite.server.baseUrl + "new?agent=research");
       await page.locator(".new-session-page__message").waitFor();
-      expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
+      expect(await page.locator(".topbar").isVisible()).toBe(true);
       expect(await page.locator(".new-session-page .agent-chat__header--mobile").count()).toBe(0);
     });
     for (const install of [
@@ -333,7 +364,10 @@ suite.define(() => {
         });
       const draft = await appearance();
       const capsule = page.locator(".mobile-header__capsule").filter({ visible: true });
-      const place = async () => [await toggle.boundingBox(), await capsule.boundingBox()];
+      const place = async () => {
+        const box = (await capsule.boundingBox())!;
+        return [await toggle.boundingBox(), box.y, box.height, box.x + box.width];
+      };
       const draftPlace = await place();
       await gateway.deferNext("sessions.create");
       await page.locator(".new-session-page__start-submit").tap();
@@ -366,14 +400,14 @@ suite.define(() => {
         await page.goto(
           state === "denied"
             ? controlUiSessionUrl(suite.server.baseUrl, "agent:research:current")
-            : suite.server.baseUrl + "new?agent=research",
+            : suite.server.baseUrl + "sessions",
         );
         if (state === "denied") {
           await navigationDrawerToggle(page).tap();
           await waitForMobileSidebarDrawerOpen(page);
         }
         const create = page.locator(
-          state === "denied" ? ".sidebar-rail .sidebar-new-session" : draftNewSession,
+          state === "denied" ? ".sidebar-rail .sidebar-new-session" : ".header-new-session",
         );
         await create.waitFor();
         if (state === "disconnected") {

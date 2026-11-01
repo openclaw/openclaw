@@ -7,6 +7,43 @@ read_when: "You are moving, stopping, or recovering a placed session, or you nee
 
 Dispatch a session to a worker, synchronize its workspace, and move, stop, or recover it. The Gateway retains the conversation and accepted workspace results even when a worker machine is lost.
 
+## Retained-disk lifecycle integration
+
+The environment owner supports an explicitly admitted retained-disk policy and
+pause/resume against its original resource receipt. This internal integration
+surface does not change profile defaults, prepared reserves, idle suspension,
+workspace mirroring, or disk-authority activation. It adopts no new Crabbox release.
+
+Acquisition policy is committed before allocation. Each lifecycle operation records
+its ID, action, and expected provider claim revision before effects. Restart and
+lost-reply recovery keep that operation and resource; uncertain observations never
+authorize deletion or replacement. Explicit Stop still requires final workspace
+save and confirmed exact-resource deletion.
+
+Compute windows are finite and never renewed by activity. Maintenance may close
+expired compute, but new compute requires an explicit authorized wake. New execution
+admission rejects expired or unfinished windows; accepted transcript/result
+settlement keeps its existing owner. The internal **ensureRetainedRunning** operation
+checks resource identity, environment epoch, and current caller authority, waits for
+the original enrolled node, and verifies runtime admission through the existing
+supervisor and bundle installer. Provider resume alone is not usable readiness.
+If initial provisioning stopped after recording the resource receipt but before
+node enrollment, retry the original creation request with the same idempotency key
+and retention policy. The fresh request revalidates caller and source authority,
+recovers compute against the same receipt and operation, and resumes normal
+provisioning admission. Background reconciliation cannot reopen that window.
+Pending provider readiness is polled without starting or renewing compute; closed
+windows still require explicit recovery.
+
+Crabbox checks Linux Azure Sandbox retention capabilities, owner binding, policy,
+window, and independent lifecycle readback. One unavailable provider cannot prevent
+unrelated environments from recovering. Cold-boot reconnect requires a separately
+qualified node/controller release; Crabbox 0.80.0 capability metadata is not that proof.
+
+Shared-state schema 39 adds nullable lifecycle custody after disk-authority schema 38.
+Older environments remain unretained. Package-only downgrade is refused; restore the
+matching pre-upgrade backup and binary only after settling retained operations and cleanup.
+
 ## Dispatch a session
 
 `sessions.dispatch` rejects a busy session without interrupting its active work. Wait for the current turn to finish, then retry. For an idle session, dispatch closes local turn admission, validates the workspace source, provisions the lease for the selected execution mode, and runs setup. With project warm images enabled, it prepares the committed checkout and node runtime and captures any needed image before enrollment. It then enrolls the node, installs the required pinned Gateway bundle, applies the session workspace, and returns once the placement reaches `active` ownership. Gateway-source inventory validation happens before provider allocation. Repository-only inventory is captured on the enrolled node after fetching the pinned source; either path reports actionable size or entry limits. Budget several minutes for the first cloud dispatch, including capture when needed; later dispatches can reuse the image, project seed, and runtime installs. After that, talk to the session as usual. OpenClaw turns route to the worker process; Codex native operations run on the authorized cloud node, paired device, or supported SSH-backed provider.
@@ -328,7 +365,23 @@ and finishes custody retirement and cleanup without reapplying an export. Missin
 exports, replaced disks, or changed session ownership keep recovery held. Existing
 mirrored pending results keep their original acceptance semantics. This uses the
 existing schema and cleanup owners; it adds no disk-mode selector or activation.
-Paused-disk preparation remains a separate prerequisite. Missing or replaced disks
+For an already-bound retained disk, explicit file reads, edits, downloads, and new
+publication snapshots request readiness from the retained lifecycle owner. That
+owner waits for the original node and current bundle; provider resume alone does
+not admit file I/O. Editor preparation runs inside the existing session mutation
+and workspace exclusion, before result custody is claimed. Downloads retain their
+current read authority across preparation and each byte window.
+
+Move records its intent and exact result custody before preparing its source and
+taking node quiescence. A runtime update may preserve the draining Move only for
+its exact original disk and retained result, including after interruption. An
+unavailable wake leaves that durable Move held for retry, without replacing its
+source. Both host admission and the native writer check that custody;
+caller revocation during installation refuses the refreshed receipt. This grants
+no new turn and does not replay input. Capture inside Move quiescence never wakes
+or refreshes the runtime again. Publication retries with
+an immutable snapshot reuse it without waking or recapturing the disk. Ordinary
+mirrored sessions and turn admission are unchanged. Missing or replaced disks
 never fall back to a stored mirror or source-only reconstruction.
 
 The shared-state schema upgrade preserves old rows with an absent receipt and

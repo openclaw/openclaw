@@ -198,6 +198,8 @@ export function ApplicationShell(props: {
                 when={
                   view().mobileNavLayout &&
                   !view().mergedChatChrome &&
+                  // New Session is already the destination of this action.
+                  view().activeRoute !== "new-session" &&
                   // The floating pill keeps its shape behind the drawer's backdrop.
                   (view().floatingHeader || !view().navDrawerOpen) &&
                   !view().onboarding &&

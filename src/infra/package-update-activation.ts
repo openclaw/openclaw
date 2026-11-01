@@ -7,6 +7,7 @@ import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveExecutablePath } from "./executable-path.js";
@@ -29,6 +30,7 @@ import {
   packageActivationIdentity,
   type PackageActivationRecord,
 } from "./package-update-activation-journal.js";
+import { assertPackageActivationSelectedLaunchers } from "./package-update-activation-launcher.js";
 import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-activation-paths.js";
 import {
   preparePackageActivationJournal,
@@ -57,6 +59,7 @@ import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
+const log = createSubsystemLogger("update/package-recovery");
 
 function isForeignLeaseDirectory(databasePath: string): boolean {
   const uid = process.getuid?.();
@@ -65,6 +68,15 @@ function isForeignLeaseDirectory(databasePath: string): boolean {
   }
   const directory = fs.lstatSync(path.dirname(databasePath), { throwIfNoEntry: false });
   return directory?.isDirectory() === true && directory.uid !== uid;
+}
+
+function isUnpublishedPreparation(record: PackageActivationRecord, installedIdentity: string) {
+  return (
+    record.phase === "prepared" &&
+    record.intent === null &&
+    record.publications.length === 0 &&
+    installedIdentity === record.descriptor.previous.identity
+  );
 }
 
 function inspectPackageActivationLease({
@@ -242,11 +254,8 @@ export function readPackageActivationReceipt(installKey: string):
     readPackageActivationContinuation(installKey);
     return undefined;
   }
-  const record = openPackageActivationJournal(anchor).read();
+  const record = openPackageActivationJournal(anchor, { readOnly: true }).read();
   const receipt = status(record);
-  if (receipt.phase !== "complete") {
-    assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
-  }
   return receipt.phase === "complete" || record.phase === "superseded"
     ? receipt
     : { ...receipt, recoveryCommand: `${recoveryCommand(record)} status` };
@@ -289,9 +298,6 @@ export async function settlePendingPackageActivation(
   const complete = isPackageActivationComplete(anchor, initial);
   const replacedInstallation = !complete && journal.isInstallationReplaced(initial);
   const identities = journal.inspectRemount(initial);
-  if (options?.operationId && !identities && !complete && !replacedInstallation) {
-    throw new Error("Separate-helper settlement requires a verified device remount.");
-  }
   if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {
     throw new Error("Completed package receipt changed; inspect recovery status before retrying.");
   }
@@ -324,6 +330,20 @@ export async function settlePendingPackageActivation(
   }
   const originalAuthority = initial.descriptor.authority;
   const replacementIdentity = packageActivationIdentity(installKey, true);
+  const lease = inspectPackageActivationLease(originalAuthority);
+  const missingPreparationLease =
+    !lease.current &&
+    !lease.foreignDirectory &&
+    isUnpublishedPreparation(initial, replacementIdentity);
+  if (
+    options?.operationId &&
+    !identities &&
+    !complete &&
+    !replacedInstallation &&
+    !missingPreparationLease
+  ) {
+    throw new Error("Separate-helper settlement requires a verified device remount.");
+  }
   if (
     options?.automatic &&
     !complete &&
@@ -334,7 +354,6 @@ export async function settlePendingPackageActivation(
   ) {
     return undefined;
   }
-  const lease = inspectPackageActivationLease(originalAuthority);
   const leaseWasMissing =
     !lease.current ||
     (initial.phase === "superseded" && initial.intent?.kind === "recovery-lease-missing");
@@ -367,6 +386,21 @@ export async function settlePendingPackageActivation(
       initial.publications.length === 0) ||
       initial.phase === "aborted");
   const publicationNotStarted = !leaseIdentityChanged && unusedPreparation;
+  const assertUnpublishedInstallation = () => {
+    if (
+      packageActivationIdentity(installKey, true) !== initial.descriptor.previous.identity ||
+      packageActivationIdentity(initial.descriptor.binDir, "parent") !==
+        initial.descriptor.binIdentity
+    ) {
+      throw new Error("Unpublished package recovery requires the recorded previous installation.");
+    }
+    assertPackageActivationSelectedLaunchers(initial, "previous");
+  };
+  if (missingPreparationLease) {
+    // No publication occurred. A reboot may discard lease authority, but cannot
+    // grant retirement over a changed live package or launcher.
+    assertUnpublishedInstallation();
+  }
   // Repair can verify an installed candidate or untouched preparation without
   // republishing files beneath a running Gateway, even when the lease is intact.
   if (
@@ -449,6 +483,9 @@ export async function settlePendingPackageActivation(
       journal.assertCurrent(initial);
       let assertReplacement = () => {
         assertCurrent();
+        if (missingPreparationLease) {
+          assertUnpublishedInstallation();
+        }
         if (packageActivationIdentity(installKey, true) !== replacementIdentity) {
           throw new Error("The installed package changed during recovery settlement.");
         }
@@ -570,11 +607,19 @@ export async function settlePendingPackageActivation(
         assertArchiveCurrent,
         onSettled: () => onSettled?.(settled),
       });
+      const preparationWarning = missingPreparationLease
+        ? `Retired unpublished prepared package update after its lease database disappeared; the previous installation and launchers are unchanged. Recovery evidence retained at ${settled.retained}.${result.archiveWarning ? ` ${result.archiveWarning}` : ""}`
+        : undefined;
+      if (preparationWarning) {
+        log.warn(preparationWarning);
+      }
       return {
         ...settled,
-        warning: replacedInstallation
-          ? `Stale package publication journal retired after an external installation replaced its package and launchers; recovery evidence retained at ${settled.retained}.${result.archiveWarning ? ` ${result.archiveWarning}` : ""}`
-          : result.archiveWarning,
+        warning: missingPreparationLease
+          ? preparationWarning
+          : replacedInstallation
+            ? `Stale package publication journal retired after an external installation replaced its package and launchers; recovery evidence retained at ${settled.retained}.${result.archiveWarning ? ` ${result.archiveWarning}` : ""}`
+            : result.archiveWarning,
       };
     },
     { existingAuthority: { ...originalAuthority, ...currentDatabase } },
@@ -584,12 +629,9 @@ export async function readPackageActivationStatus(
   anchor: string,
   operationId: string,
 ): Promise<PackageActivationStatus> {
-  const record = openPackageActivationJournal(anchor).read();
+  const record = openPackageActivationJournal(anchor, { readOnly: true }).read();
   assertPackageActivationOperation(record, operationId);
   const receipt = status(record);
-  if (receipt.phase !== "complete") {
-    assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
-  }
   return receipt;
 }
 
@@ -602,6 +644,24 @@ export async function runPackageActivationRecovery(
   const admission = await journal.readForRecovery();
   const initial = admission.record;
   assertPackageActivationOperation(initial, operationId);
+  if (
+    initial.phase === "prepared" &&
+    !inspectPackageActivationLease(initial.descriptor.authority).current &&
+    isUnpublishedPreparation(
+      initial,
+      packageActivationIdentity(initial.descriptor.authority.installKey, true),
+    )
+  ) {
+    const settled = await settlePendingPackageActivation(
+      initial.descriptor.authority.installKey,
+      undefined,
+      undefined,
+      { operationId },
+    );
+    if (settled) {
+      return { ...status(initial), phase: "complete" };
+    }
+  }
   const recoveryAction =
     action === "repair" &&
     initial.phase === "aborted" &&

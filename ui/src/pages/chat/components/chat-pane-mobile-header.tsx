@@ -37,7 +37,7 @@ export function ChatPaneMobileHeader(props: {
   people?: Element;
   /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
   actions?: Element;
-  /** A draft has no session controls; these take their place in the capsule. */
+  /** A draft has no session controls; its own take their place in the capsule. */
   draftControls?: Element;
   /** Supply only for an available session Dashboard; opens/reuses its destination. */
   onOpenDashboard?: (source: HTMLElement) => void;

@@ -4,6 +4,7 @@ import {
   createSpawnMock,
   useManagedServiceHandoffLifecycleFixture,
 } from "./update-managed-service-handoff-fixture.test-support.js";
+import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -33,6 +34,7 @@ import {
   isManagedServiceInspectionCommand,
   registerManagedHandoffOwnerTests,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import * as boundaryProcesses from "./update-managed-service-handoff-process.test-support.js";
 import type { ManagedServiceUpdateHandoffParams } from "./update-managed-service-handoff-types.js";
 import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
@@ -119,6 +121,38 @@ describe("managed service update handoff", () => {
       expect(() => tracker.add(dir), dir).toThrow(JSON.stringify(dir));
     }
     expect(tracker.dirs.size).toBe(0);
+  });
+
+  itUnix("reaps the parent when fixture setup rejects", async () => {
+    let parent: ChildProcess | undefined;
+    let closed = false;
+    const createParent = boundaryProcesses.createManagedServiceBoundaryParent;
+    const observer = vi
+      .spyOn(boundaryProcesses, "createManagedServiceBoundaryParent")
+      .mockImplementation((spawn) => {
+        const result = createParent(spawn);
+        parent = result.parent;
+        void result.parentClosed.then(() => {
+          closed = true;
+        });
+        return result;
+      });
+    try {
+      await expect(
+        runBoundary("systemd", {
+          async prepareState() {
+            await Promise.resolve();
+            throw new Error("fixture setup rejected");
+          },
+        }),
+      ).rejects.toThrow("fixture setup rejected");
+      expect(observer).toHaveBeenCalledTimes(1);
+      expect(closed).toBe(true);
+    } finally {
+      observer.mockRestore();
+      // The regression must reap its real parent even on the broken fixture.
+      await boundaryProcesses.createManagedServiceBoundaryCleanup(() => [parent])();
+    }
   });
 
   itUnix("tracks the real handoff artifacts with Bun runtime arguments", async () => {

@@ -52,31 +52,10 @@ export type SpeechSynthesisRequest = {
   timeoutMs: number;
 };
 
-/** Buffered speech synthesis result plus file/voice-note compatibility metadata. */
-export type SpeechSynthesisResult = {
-  audioBuffer: Buffer;
-  outputFormat: string;
-  fileExtension: string;
-  voiceCompatible: boolean;
-};
-
 export type SpeechSynthesisStreamRequest = SpeechSynthesisRequest;
-
-/** Streaming speech synthesis result; release frees provider transport resources. */
-export type SpeechSynthesisStreamResult = Omit<SpeechSynthesisResult, "audioBuffer"> & {
-  audioStream: ReadableStream<Uint8Array>;
-  release?: () => Promise<void>;
-};
 
 /** Telephony synthesis request for provider output that needs a fixed sample rate. */
 export type SpeechTelephonySynthesisRequest = Omit<SpeechSynthesisRequest, "target">;
-
-/** Telephony synthesis result with sample-rate metadata for call transports. */
-export type SpeechTelephonySynthesisResult = {
-  audioBuffer: Buffer;
-  outputFormat: string;
-  sampleRate: number;
-};
 
 /** Provider hook input for applying persona/config before synthesis. */
 export type SpeechProviderPrepareSynthesisContext = SpeechSynthesisRequest & {

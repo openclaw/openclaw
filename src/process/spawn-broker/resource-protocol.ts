@@ -31,6 +31,8 @@ export type BrokerResourceAttachment = {
   startupDeadline?: number;
   id: number;
   moduleUrl: string;
+  /** Resolved by the host when a compiled broker receives a source resource. */
+  sourceLoaderUrl?: string;
   input?: unknown;
   ownerPort: boolean;
 };
