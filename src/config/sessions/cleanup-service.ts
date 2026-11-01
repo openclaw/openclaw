@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { getLogger } from "../../logging/logger.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAccountId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import type { createAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
+import { listRouteBindings } from "../bindings.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   createSessionsCleanupFailure,
@@ -93,14 +99,26 @@ function isMainScopeStaleDirectSessionKey(params: {
   if (parts[0] === "agent") {
     return false;
   }
-  return (
-    (parts.length === 2 && parts[0] === "direct" && Boolean(parts[1])) ||
-    (parts.length === 3 && Boolean(parts[0]) && parts[1] === "direct" && Boolean(parts[2])) ||
-    (parts.length === 4 &&
-      Boolean(parts[0]) &&
-      Boolean(parts[1]) &&
-      parts[2] === "direct" &&
-      Boolean(parts[3]))
+  const dmScope =
+    parts.length === 2 && parts[0] === "direct" && parts[1]
+      ? "per-peer"
+      : parts.length === 3 && parts[0] && parts[1] === "direct" && parts[2]
+        ? "per-channel-peer"
+        : parts.length === 4 && parts[0] && parts[1] && parts[2] === "direct" && parts[3]
+          ? "per-account-channel-peer"
+          : undefined;
+  if (!dmScope) {
+    return false;
+  }
+  return !listRouteBindings(params.cfg).some(
+    (binding) =>
+      binding.session?.dmScope === dmScope &&
+      normalizeAgentId(binding.agentId) === normalizeAgentId(params.targetAgentId) &&
+      (dmScope === "per-peer" ||
+        normalizeLowercaseStringOrEmpty(binding.match.channel) === parts[0]) &&
+      (dmScope !== "per-account-channel-peer" ||
+        binding.match.accountId?.trim() === "*" ||
+        normalizeAccountId(binding.match.accountId) === parts[1]),
   );
 }
 
