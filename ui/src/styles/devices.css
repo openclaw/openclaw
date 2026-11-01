@@ -232,6 +232,27 @@
     justify-content: flex-start;
   }
 
+  /* A pending request is the page's one decision: start it at the card edge, approve first. */
+  .device-entry > .settings-row__control:has(> .device-entry__approve) {
+    grid-column: 1 / -1;
+  }
+
+  .device-entry > .settings-row__control > .btn.device-entry__approve {
+    border-color: transparent;
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  .device-entry
+    > .settings-row__control
+    > .btn.device-entry__approve:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: var(--primary-hover);
+  }
+
+  .device-entry__details > summary {
+    line-height: 44px;
+  }
+
   .device-resources {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--space-2);
