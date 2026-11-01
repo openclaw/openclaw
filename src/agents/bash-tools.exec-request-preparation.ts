@@ -165,7 +165,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     }));
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
-    to: defaults?.currentChannelId,
+    to: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
     accountId: defaults?.accountId,
     threadId: defaults?.currentThreadTs,
   });

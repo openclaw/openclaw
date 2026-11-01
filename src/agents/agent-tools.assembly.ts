@@ -292,6 +292,7 @@ export function* assembleOpenClawCodingTools(
               }),
               messageProvider: options?.messageProvider,
               currentChannelId: options?.currentChannelId,
+              currentMessagingTarget: options?.currentMessagingTarget,
               currentThreadTs: options?.currentThreadTs,
               channelContext: options?.channelContext,
               accountId: options?.agentAccountId,

@@ -1,0 +1,5 @@
+34
+# LOCAL 2026.11.8 row 157; source 6025882e3d5c8a93c4df689b647737763fa6f2b9.
+# Assembly forwards the existing actual messaging target into exec context and uses it for approval/background notification destination, with the prior target as fallback. Thread/account/channel handling is unchanged.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

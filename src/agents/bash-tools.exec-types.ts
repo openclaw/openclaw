@@ -89,6 +89,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
   currentChannelId?: string;
+  /** Actual conversation reply destination, including an auto-created thread. */
+  currentMessagingTarget?: string;
   currentThreadTs?: string;
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
