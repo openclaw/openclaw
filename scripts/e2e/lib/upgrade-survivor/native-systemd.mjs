@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AH's native-capture proof, maintained beside the survivor seed and assertions.
+// Native managed-service proof with shared survivor seeds and assertions.
 // Run as root on a disposable Linux Crabbox guest; never on an operator host.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -270,7 +270,6 @@ try {
       });
       oracle("state-survived", "assert-state");
       oracle("approvals-survived", "assert-exec-approvals");
-      record.status = "passed";
     } catch (error) {
       record.error = String(error);
       throw error;
@@ -293,6 +292,7 @@ try {
       assert.equal(stopped.MainPID, "0", "Owned native service did not stop");
       if (linger) run("disable-linger", "loginctl", ["disable-linger", user]);
     }
+    record.status = "passed";
     console.log(`${row.baseline} -> ${candidate.buildId}: PASS`);
   }
 } finally {
