@@ -1,6 +1,34 @@
+.debug-refresh {
+  display: inline-grid;
+  grid-template-areas: "label";
+}
+
+.debug-refresh > span,
+.debug-refresh::before,
+.debug-refresh::after {
+  grid-area: label;
+}
+
+.debug-refresh::before,
+.debug-refresh::after {
+  visibility: hidden;
+}
+
+.debug-refresh::before {
+  content: attr(data-refresh-label);
+}
+
+.debug-refresh::after {
+  content: attr(data-refreshing-label);
+}
+
 .debug-read-feedback {
   display: block;
   min-block-size: 2lh;
+}
+
+.debug-read-feedback .settings-status {
+  vertical-align: top;
 }
 
 .debug-security-status {

@@ -307,13 +307,18 @@ export function DebugPage() {
   function RefreshButton(props: { pending: boolean }) {
     return (
       <button
-        class="btn"
+        class="btn debug-refresh"
+        data-refresh-label={t("common.refresh")}
+        data-refreshing-label={t("common.refreshing")}
         disabled={gateway.read().snapshot.phase !== "connected" || props.pending}
         onClick={() => void loadDiagnostics()}
       >
-        {gateway.read().snapshot.phase === "connected" && props.pending
-          ? t("common.refreshing")
-          : t("common.refresh")}
+        <Show
+          when={gateway.read().snapshot.phase === "connected" && props.pending}
+          fallback={<span>{t("common.refresh")}</span>}
+        >
+          <span>{t("common.refreshing")}</span>
+        </Show>
       </button>
     );
   }
