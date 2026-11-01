@@ -464,6 +464,11 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       rememberStreamingSettlement(content, delivered);
       return delivered;
     });
+    if (infoKind === "block") {
+      // A recovered block reached the chat, so a later matching final reuses it.
+      blockPostDeliveries.push([content, recovery]);
+      void recovery.catch(() => undefined);
+    }
     if (result) {
       if (!recoveries) {
         recoveries = new Map();
