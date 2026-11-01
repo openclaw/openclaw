@@ -2007,7 +2007,8 @@
     flex: none;
   }
 
-  .usage-filter-sheet__trigger.btn--sm {
+  .usage-filter-sheet__trigger.btn--sm,
+  .usage-phone-actions__trigger.btn--sm {
     flex: none;
     justify-content: center;
     width: var(--settings-control-height);
@@ -2024,6 +2025,22 @@
 
   .usage-query-section .usage-query-count {
     margin-left: 0;
+  }
+
+  /* Chart selections and query terms read as one row of applied filters. */
+  .usage-applied-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .usage-applied-filters > :is(.active-filters, .usage-query-chips) {
+    display: contents;
+  }
+
+  .provider-usage-card {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   /* A full-viewport top-layer surface holding the backdrop and the bottom-anchored panel. */

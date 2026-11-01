@@ -68,7 +68,7 @@ export function UsagePhoneActions(props: UsageProps) {
           id="usage-phone-actions"
           label={t("common.actions")}
           class="usage-phone-actions"
-          triggerClass="btn btn--sm btn--icon usage-phone-actions__trigger"
+          triggerClass="btn btn--sm usage-phone-actions__trigger"
           placement="bottom-end"
           triggerAttributes={{ "aria-busy": props.data.exporting ? "true" : "false" }}
           trigger={<Icon name="moreHorizontal" />}

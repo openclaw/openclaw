@@ -38,6 +38,7 @@ export function createUsageControls(
     phone: () => boolean;
     hasOverviewData: () => boolean;
     displaySessionCount: () => number;
+    selectionChips: () => JSX.Element;
   },
 ) {
   const filterOptions = createMemo(
@@ -290,6 +291,11 @@ export function createUsageControls(
     </span>
   );
   // The range total only repeats the Sessions tile, so phones show it when the two differ.
+  const hasAppliedFilters = () =>
+    queryTerms().length > 0 ||
+    props.filters.selectedDays.length > 0 ||
+    props.filters.selectedHours.length > 0 ||
+    props.filters.selectedSessions.length > 0;
   const showPhoneCount = () =>
     ctx.hasOverviewData() && (hasQuery() || totalSessions() !== ctx.displaySessionCount());
   const queryChips = () =>
@@ -413,10 +419,15 @@ export function createUsageControls(
   const querySection = () => (
     <>
       {ctx.phone() ? (
-        <Show when={queryTerms().length > 0 || queryWarnings().length > 0 || showPhoneCount()}>
+        <Show when={hasAppliedFilters() || queryWarnings().length > 0 || showPhoneCount()}>
           <div class="usage-query-section">
+            <Show when={hasAppliedFilters()}>
+              <div class="usage-applied-filters">
+                {ctx.selectionChips()}
+                {queryChips()}
+              </div>
+            </Show>
             <Show when={showPhoneCount()}>{queryCount()}</Show>
-            {queryChips()}
             {queryWarningCallout()}
           </div>
         </Show>

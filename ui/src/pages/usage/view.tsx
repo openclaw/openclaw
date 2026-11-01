@@ -153,6 +153,8 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     phone,
     hasOverviewData: () => overview().hasOverviewData,
     displaySessionCount,
+    selectionChips: () =>
+      renderFilterChips(props.data.overview?.selectedRows ?? props.data.sessions, props),
   });
   return (
     <SettingsPage wide>
@@ -213,7 +215,9 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
                 </div>
               )}
             </div>
-            {renderFilterChips(props.data.overview?.selectedRows ?? props.data.sessions, props)}
+            {phone()
+              ? undefined
+              : renderFilterChips(props.data.overview?.selectedRows ?? props.data.sessions, props)}
 
             {controls.querySection()}
 

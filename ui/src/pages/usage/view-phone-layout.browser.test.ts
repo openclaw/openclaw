@@ -90,6 +90,18 @@ describe("Usage at phone width", () => {
     expect(root.querySelector(".usage-query-chip")?.textContent).toContain("model:a");
   });
 
+  it("puts chart selections and query terms in one row before the count", () => {
+    const { root } = mountPhoneUsage({
+      selectedDays: ["2026-05-14"],
+      query: "model:a",
+      queryDraft: "model:a",
+    });
+    const row = root.querySelector(".usage-applied-filters")!;
+    expect(row.querySelector(".filter-chip")?.textContent).toContain("2026-05-14");
+    expect(row.querySelector(".usage-query-chip")?.textContent).toContain("model:a");
+    expect(root.querySelectorAll(".usage-header .filter-chip")).toHaveLength(1);
+  });
+
   it("does not pin the header at phone width", () => {
     const { root, setDisplay, usage } = mountPhoneUsage();
     setDisplay({ ...usage.display, headerPinned: true });
