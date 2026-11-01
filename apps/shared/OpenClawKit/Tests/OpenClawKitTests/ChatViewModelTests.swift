@@ -9006,6 +9006,27 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.localCommandStatus } == nil)
     }
 
+    @Test func `new command restores draft when an attachment prevents adopting the created chat`() async throws {
+        let gate = SessionSubscribeGate()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            createSessionHook: { _, _ in await gate.wait() })
+        try await loadAndWaitBootstrap(vm: vm)
+        let task = await sendUserMessage(vm, text: "/new")
+        await gate.waitUntilBlocked()
+        await MainActor.run {
+            vm.attachments = [OpenClawPendingAttachment(
+                url: nil, data: Data("fixture".utf8), fileName: "fixture.txt",
+                mimeType: "text/plain", preview: nil)]
+        }
+        await gate.release()
+        await task?.value
+        #expect(await MainActor.run { vm.sessionKey } == "main")
+        #expect(await MainActor.run { vm.input } == "/new")
+        #expect(await MainActor.run { vm.attachments.count } == 1)
+        #expect(await MainActor.run { vm.errorText } != nil)
+    }
+
     @Test func `failed command does not overwrite newly typed draft`() async throws {
         let gate = SessionSubscribeGate()
         let (_, vm) = await makeViewModel(

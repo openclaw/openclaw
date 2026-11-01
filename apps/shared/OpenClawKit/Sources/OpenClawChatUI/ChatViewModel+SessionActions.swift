@@ -211,9 +211,13 @@ extension OpenClawChatViewModel {
             self.errorText = error.localizedDescription
             return .failed
         }
-        guard self.isCurrentSession(initiatingSession), self.canCreateSessionForImmediateSwitch() else {
+        guard self.isCurrentSession(initiatingSession) else {
             if !self.sessions.contains(where: { $0.key == next }) { self.refreshSessions() }
             return .createdElsewhere
+        }
+        guard self.canCreateSessionForImmediateSwitch() else {
+            self.refreshSessions()
+            return .failed
         }
         self.adoptCreatedSession(next)
         return .switched

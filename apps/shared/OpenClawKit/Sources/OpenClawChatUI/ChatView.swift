@@ -534,9 +534,10 @@ extension OpenClawChatView {
                         .font(OpenClawChatTypography.caption)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .allowsHitTesting(false)
                 .accessibilityIdentifier("Chat.LocalCommand.Running")
             }
-            if self.viewModel.isLoading, self.composerChrome == .full {
+            if self.viewModel.isLoading, self.viewModel.localCommandStatus == nil, self.composerChrome == .full {
                 ProgressView()
                     .controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
