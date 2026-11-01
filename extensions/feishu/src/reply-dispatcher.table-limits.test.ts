@@ -752,7 +752,7 @@ describe("createFeishuReplyDispatcher table limits and preview budget", () => {
         key: `@reviewer${index}`,
       }));
       const cards = (text: string, meta: Partial<Parameters<typeof chunkFeishuCardMarkdown>[0]>) =>
-        chunkFeishuCardMarkdown({ text, limit, mode: "line", ...meta }).length;
+        chunkFeishuCardMarkdown({ text, limit, mode: "length", ...meta }).length;
       const table = (rows: number) =>
         [
           "Name | Role",
