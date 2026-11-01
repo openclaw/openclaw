@@ -391,28 +391,41 @@ async function assertHistoricalGatewayOwnerStopped(
   onContention?: (lockPath: string) => void,
 ): Promise<void> {
   for (const lockPath of [paths.stateLockPath, paths.configLockPath]) {
-    const payload = await readLockPayload(lockPath, true);
-    if (!payload) {
-      continue;
-    }
-    if (classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown") {
-      throw new GatewayLockNamespaceError(payload, lockPath);
-    }
-    const owner = await resolveGatewayOwnerStatus(
-      payload.pid,
-      payload,
-      opts.platform ?? process.platform,
-      { trustUnknownCmdlineOwner: false, lockPath },
-    );
-    if (owner !== "dead") {
+    try {
+      await assertHistoricalLockOwnerStopped(paths, opts, lockPath);
+    } catch (error) {
+      // Any refusal here (live, unverifiable or unreadable owner) is about this file.
       onContention?.(lockPath);
-      throw new GatewayStateOwnerContentionError(
-        path.join(paths.stateDir, "state", "openclaw.sqlite"),
-        undefined,
-        describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
-        { pid: payload.pid, role: payload.role },
-      );
+      throw error;
     }
+  }
+}
+
+async function assertHistoricalLockOwnerStopped(
+  paths: ReturnType<typeof resolveGatewayLockPaths>,
+  opts: GatewayLockOptions,
+  lockPath: string,
+): Promise<void> {
+  const payload = await readLockPayload(lockPath, true);
+  if (!payload) {
+    return;
+  }
+  if (classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown") {
+    throw new GatewayLockNamespaceError(payload, lockPath);
+  }
+  const owner = await resolveGatewayOwnerStatus(
+    payload.pid,
+    payload,
+    opts.platform ?? process.platform,
+    { trustUnknownCmdlineOwner: false, lockPath },
+  );
+  if (owner !== "dead") {
+    throw new GatewayStateOwnerContentionError(
+      path.join(paths.stateDir, "state", "openclaw.sqlite"),
+      undefined,
+      describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
+      { pid: payload.pid, role: payload.role },
+    );
   }
 }
 
@@ -568,8 +581,10 @@ export async function acquireGatewayLock(
   } catch (error) {
     opts.assertCurrent?.();
     // Fall back to the owner sidecar, where ownership lives, when nothing narrowed it.
-    const lockPath = contendedLockPath ?? paths.ownerLockPath;
-    const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""} at ${lockPath}`;
+    // A database failure names the database path instead (see GatewayLockError below).
+    const lockSuffix =
+      databaseFailure?.error === error ? "" : ` at ${contendedLockPath ?? paths.ownerLockPath}`;
+    const message = `failed to acquire gateway state ownership${waited ? `; waited ${Math.round(now() - startedAt)}ms for Gateway state ownership` : ""}${lockSuffix}`;
     const detail =
       error instanceof GatewayStateOwnerContentionError
         ? `${message}: ${error.message}. ${captureStalledGatewayStartup(env)?.description ?? "Stop the Gateway or wait for the current OpenClaw operation to finish"}. Run \`openclaw gateway stop\`, then retry.`

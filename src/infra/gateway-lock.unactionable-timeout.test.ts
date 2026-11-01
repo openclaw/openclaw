@@ -186,4 +186,37 @@ describe("Gateway lock timeout diagnostics", () => {
     });
     await expect(attempt).rejects.toThrow(ownerLockPath);
   });
+
+  it("names the state lock file left by a Gateway in another PID namespace", async () => {
+    const { env, lockDir, stateLockPath, configPath, stateDir } = await makeCase();
+    await fs.mkdir(lockDir, { recursive: true });
+    // A containerized Gateway sharing this state dir records its own namespace,
+    // so the strict payload check refuses it before any owner contention.
+    await fs.writeFile(
+      stateLockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath,
+        stateDir,
+        role: "gateway",
+        processNamespace: { platform: "linux", host: "gateway-container", pidNsInode: "1" },
+      }),
+      "utf8",
+    );
+
+    const clock = createDeadlineClock();
+    const attempt = acquireGatewayLock({
+      allowInTests: true,
+      env,
+      lockDir,
+      role: "sqlite-maintenance",
+      timeoutMs: 250,
+      pollIntervalMs: 25,
+      staleMs: 10 * 60_000,
+      now: clock.now,
+      sleep: clock.sleep,
+    });
+    await expect(attempt).rejects.toThrow(stateLockPath);
+  });
 });
