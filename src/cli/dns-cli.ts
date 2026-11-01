@@ -101,14 +101,20 @@ function isPermissionFailure(error: unknown): boolean {
  * macOS carries per-file ACLs beside the mode, and a replacement inode does
  * not inherit them. The entries are printed as "0: user:name deny read"; they
  * are re-applied with chmod +a before the staged file replaces the original.
+ * The system ls is used explicitly: a user-installed GNU ls rejects the macOS
+ * ACL flags, and a capture failure has to abort the publication instead of
+ * silently dropping the operator's policy.
  */
 function readMacOsAclEntries(filePath: string): string[] {
   if (process.platform !== "darwin") {
     return [];
   }
-  const listed = spawnSync("ls", ["-lde", filePath], { encoding: "utf-8" });
+  const listed = spawnSync("/bin/ls", ["-lde", filePath], { encoding: "utf-8" });
   if (listed.status !== 0 || typeof listed.stdout !== "string") {
-    return [];
+    const reason = typeof listed.stderr === "string" ? listed.stderr.trim() : "";
+    throw new Error(
+      `could not read the configuration's access policy: ${reason || "ls -lde failed"}`,
+    );
   }
   return listed.stdout
     .split("\n")
@@ -156,13 +162,17 @@ function publishConfigFile(filePath: string, content: string): void {
     beforeRename: ({ tempPath }) => {
       if (existing) {
         // A rename publishes a new inode: hand the staged file the operator's
-        // ownership and mode before it replaces theirs. Setting a group outside
+        // ownership before it replaces theirs. Setting a group outside
         // the invoking account's memberships fails EPERM and routes the
         // publication through the privileged path below.
         fs.chownSync(tempPath, existing.uid, existing.gid);
-        fs.chmodSync(tempPath, existing.mode & 0o7777);
-        // The mode alone does not carry the operator's access policy.
+        // The mode alone does not carry the operator's access policy. The deny
+        // and allow entries are restored while the staged file is still at its
+        // private 0600 mode, so the policy is in place before any permission
+        // is widened; restoring it after the widening would expose the
+        // configuration to accounts the operator had excluded.
         applyMacOsAclEntries(tempPath, aclEntries, false);
+        fs.chmodSync(tempPath, existing.mode & 0o7777);
         return;
       }
       // A fresh file keeps the umask-sensitive creation contract of the plain
@@ -219,14 +229,20 @@ function publishConfigFileWithSudo(filePath: string, content: string): void {
     });
     assertSpawnSucceeded(`sudo tee ${tempPath}`, staged);
     if (existing) {
-      // The rename replaces the file, so carry its permissions and ownership over.
+      // The rename replaces the file, so carry its ownership over.
       run("sudo", ["chown", `${existing.uid}:${existing.gid}`, tempPath]);
+    }
+    // The mode alone does not carry the operator's access policy. The entries
+    // are restored while the staged file is still at its private 0600 mode, so
+    // the policy is in place before any permission is widened; restoring it
+    // after the widening would expose the configuration to accounts the
+    // operator had excluded.
+    applyMacOsAclEntries(tempPath, aclEntries, true);
+    if (existing) {
       run("sudo", ["chmod", (existing.mode & 0o7777).toString(8), tempPath]);
     } else {
       run("sudo", ["chmod", (0o666 & ~process.umask()).toString(8), tempPath]);
     }
-    // The mode alone does not carry the operator's access policy.
-    applyMacOsAclEntries(tempPath, aclEntries, true);
     // Flush the staged bytes before the rename, matching the ordinary
     // publisher's durability: a crash after the rename must not leave the
     // published name pointing at missing or incomplete content.

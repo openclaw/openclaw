@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const testState = vi.hoisted(() => ({ zonePath: "" }));
 const domain = "openclaw.internal";
+// Capture the real host before the platform spies run: the mock helpers
+// rewrite process.platform for the darwin code paths.
+const realPlatform = process.platform;
 const unix = process.platform === "win32" ? it.skip : it;
 
 vi.mock("node:child_process", async () => {
@@ -104,8 +107,21 @@ describe("dns-cli probe bounds", () => {
       }
       // The access policy is read and restored through the real ls and chmod:
       // the command boundary under test is the publication, not these tools.
-      if (cmd === "ls" || cmd === "chmod") {
+      // Production pins /bin/ls -lde, the macOS system utility. The tests run
+      // the darwin code path on every host, so hosts without a BSD ls get a
+      // minimal emulation of a file without access-policy entries; the
+      // darwin-only regression exercises the real ls.
+      if (cmd === "chmod") {
         return actualSpawnSync(cmd, args, { encoding: "utf-8" });
+      }
+      if (cmd === "ls" || cmd === "/bin/ls") {
+        if (realPlatform !== "darwin") {
+          const target = args.at(-1);
+          const listing =
+            typeof target === "string" ? `-rw-r--r--@ 1 operator staff 0 0 ${target}\n` : "";
+          return { ...spawnOk(listing), status: 0 };
+        }
+        return actualSpawnSync("ls", args, { encoding: "utf-8" });
       }
       // The privileged publish fallback stages and renames through the real
       // filesystem so its staged-rename contract holds in tests; sudo itself
@@ -274,7 +290,7 @@ describe("dns-cli probe bounds", () => {
       fs.chmodSync(corefilePath, 0o644);
       // A file-specific deny entry: the access policy is not expressible in
       // the mode alone, so it can only be lost by replacing the file.
-      const denied = actualSpawnSync("chmod", ["+a", "everyone deny read", corefilePath], {
+      const denied = actualSpawnSync("chmod", ["+a", "user:nobody deny read", corefilePath], {
         encoding: "utf-8",
       });
       expect(denied.status).toBe(0);
