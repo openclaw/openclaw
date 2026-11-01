@@ -116,6 +116,15 @@ existing extra bag as
 The same bag accepts `kind: "run"` for run-only assertions. These are local code
 contracts, not Gateway wire fields, operator settings, or new SDK exports.
 
+A `callGatewayTool("sessions.create", ...)` call made with only agent runtime
+identity cannot use `idempotencyKey`: idempotent creation replays only within an
+authenticated user principal, live operator run, or paired device, and the
+Gateway rejects the call with `INVALID_REQUEST`. Pass a deterministic session
+`key` instead; retrying with the same `key` adopts the existing session. An
+initial `message` starts a new turn on every retry, so send it separately when
+retries must not repeat it. See
+[session control RPCs](/gateway/protocol/rpc-session-control).
+
 Each prepared attempt also receives a versioned `params.hostCapabilities`
 object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
 and use its policy and approval operations for native actions. A native action
