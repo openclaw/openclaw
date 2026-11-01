@@ -12,7 +12,6 @@ import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
 const zstdCodec = resolveZstdCodec();
-export const SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES = 1024 * 1024;
 
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;
@@ -24,19 +23,17 @@ export function encodeSessionArchiveContent(content: string): {
   }
   // Default zstd level (3) matches the ratio/speed point Codex uses for cold
   // rollouts; archives are write-once so speed matters less than footprint.
-  const bytes = zstdCodec.compress(plain);
-  return plain.length > bytes.length + SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES
-    ? { bytes: plain, suffix: "" }
-    : { bytes, suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
+  return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
-export function readSessionArchiveContentSync(filePath: string): string {
+// Writers can bound verification by their known source size; other reads cannot trust the frame.
+export function readSessionArchiveContentSync(filePath: string, expectedBytes?: number): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
   }
   const stored = fs.readFileSync(filePath);
   // Enforce the expansion budget inside zlib's chunk loop, before concatenation.
-  const maxOutputLength = stored.length + SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES;
+  const maxOutputLength = expectedBytes ?? stored.length + 1024 * 1024;
   try {
     return zstdCodec.decompress(stored, maxOutputLength).toString("utf8");
   } catch (error) {

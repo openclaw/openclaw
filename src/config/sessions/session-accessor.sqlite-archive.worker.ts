@@ -34,7 +34,6 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES } from "./archive-compression.js";
 import {
   hashSessionArchiveBytes,
   trackSqliteArchiveTemporaryFile,
@@ -162,6 +161,9 @@ async function encodeStagedTranscriptArchive(params: {
   stagedPath: string;
 }): Promise<NonNullable<TranscriptArchiveWorkerResult["archive"]>> {
   const createdAt = Date.now();
+  const optionalZlib: Partial<typeof zlib> = zlib;
+  const createZstdCompress = optionalZlib.createZstdCompress;
+  const compressed = typeof createZstdCompress === "function";
   const archivePath = `${resolveSqliteTranscriptArchivePath({
     archiveDirectory: params.archiveDirectory,
     generation: params.generation,
@@ -169,29 +171,19 @@ async function encodeStagedTranscriptArchive(params: {
     reason: params.reason,
     sessionId: params.sessionId,
     nowMs: createdAt,
-  })}.zst`;
+  })}${compressed ? ".zst" : ""}`;
   const encodedPath = `${archivePath}.${randomUUID()}.stage`;
   trackSqliteArchiveTemporaryFile(encodedPath, true);
   try {
     await pipeline([
       fs.createReadStream(params.stagedPath),
-      zlib.createZstdCompress(),
+      ...(compressed ? [createZstdCompress.call(zlib)] : []),
       createArchiveByteLimitTransform(),
       fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
     ]);
-    const compressed =
-      fs.statSync(params.stagedPath).size <=
-      fs.statSync(encodedPath).size + SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES;
-    if (!compressed) {
-      await pipeline([
-        fs.createReadStream(params.stagedPath),
-        createArchiveByteLimitTransform(),
-        fs.createWriteStream(encodedPath, { mode: 0o600 }),
-      ]);
-    }
     const bytes = fs.readFileSync(encodedPath);
     return {
-      archiveName: path.basename(archivePath, compressed ? undefined : ".zst"),
+      archiveName: path.basename(archivePath),
       bytes,
       createdAt,
       encoding: compressed ? "zstd" : "identity",

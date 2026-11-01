@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   publishEncodedSessionTranscriptArchive,
   writeTranscriptArchive,
@@ -23,12 +23,16 @@ function archiveInput() {
 }
 
 describe("encoded transcript archive publication", () => {
-  it("keeps newly written high-expansion archives readable and reusable", () => {
+  it("verifies and reuses highly compressed archives against their source byte count", () => {
     const { archiveDirectory } = archiveInput();
     const content = "x".repeat(2 * 1024 * 1024);
     const input = { archiveDirectory, content, sessionId: "high-expansion" };
     const archivePath = writeTranscriptArchive(input);
-    expect(readSessionArchiveContentSync(archivePath)).toBe(content);
+    expect(
+      zstdDecompressSync(fs.readFileSync(archivePath), {
+        maxOutputLength: Buffer.byteLength(content),
+      }).toString("utf8"),
+    ).toBe(content);
     expect(writeTranscriptArchive(input)).toBe(archivePath);
   });
 

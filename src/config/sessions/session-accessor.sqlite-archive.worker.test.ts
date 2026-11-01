@@ -191,9 +191,9 @@ describe("SQLite transcript archive worker", () => {
     const archive = materialized[0]?.archive;
     expect(archive).toBeTruthy();
     expect(fs.existsSync(materialized[0]?.archivedTranscript?.archivedPath ?? "")).toBe(false);
-    const bytes = Buffer.from(archive?.bytes ?? new Uint8Array());
+    expect(archive?.encoding).toBe("zstd");
     expect(
-      (archive?.encoding === "zstd" ? zstdDecompressSync(bytes) : bytes).toString("utf8"),
+      zstdDecompressSync(Buffer.from(archive?.bytes ?? new Uint8Array())).toString("utf8"),
     ).toBe(jsonl(events));
   });
 
@@ -239,7 +239,12 @@ describe("SQLite transcript archive worker", () => {
       });
       const archivePath = path.join(path.dirname(storePath), archive?.archive_name ?? "");
       expect(sha256(fs.readFileSync(archivePath))).toBe(archive?.archive_sha256);
-      expect(readSessionArchiveContentSync(archivePath)).toBe(jsonl([session.event]));
+      const content = jsonl([session.event]);
+      expect(
+        zstdDecompressSync(fs.readFileSync(archivePath), {
+          maxOutputLength: Buffer.byteLength(content),
+        }).toString("utf8"),
+      ).toBe(content);
     }
   });
 
