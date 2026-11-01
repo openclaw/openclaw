@@ -60,6 +60,9 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
   if (item.kv.key.toLowerCase() !== unquoteSeg(path.field).toLowerCase()) {
     throw new OcPathEditError("unresolved");
   }
+  if (newValue.trim() === "") {
+    throw new OcPathEditError("parse-error", "Markdown item fields require a nonblank value");
+  }
   const key = item.kv.key;
   const offset = sourceLineOffset(ast.raw, item.line);
   const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:\\s*)`).exec(

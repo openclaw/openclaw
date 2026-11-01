@@ -3,7 +3,6 @@
  *
  * Collects repository, channel, and shell facts for prompt rendering.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -16,7 +15,8 @@ import {
   getActiveNodeIdentityScope,
   getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
-import { findGitRoot } from "../infra/git-root.js";
+import { findGitRootAsync } from "../infra/git-root.js";
+import { safeStat } from "../infra/path-existence.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
@@ -42,9 +42,7 @@ export function buildSystemPromptParams(params: {
 }): {
   runtimeInfo: RuntimeInfoInput;
 } {
-  const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
-    ? (params.preparedRepoRoot ?? undefined)
-    : resolveSystemPromptRepoRoot(params);
+  const repoRoot = params.preparedRepoRoot ?? undefined;
   const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
   // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
   // defeating byte-identical prompt-prefix reuse across runs of the same job.
@@ -82,21 +80,17 @@ export function resolveRuntimeAgentName(config: OpenClawConfig, agentId: string)
   return bounded && bounded !== agentId ? bounded : undefined;
 }
 
-export function resolveSystemPromptRepoRoot(params: {
+export async function resolveSystemPromptRepoRoot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   cwd?: string;
-}): string | undefined {
+}): Promise<string | undefined> {
   const configured = params.config?.agents?.defaults?.repoRoot?.trim();
   if (configured) {
-    try {
-      const resolved = path.resolve(configured);
-      const stat = fs.statSync(resolved);
-      if (stat.isDirectory()) {
-        return resolved;
-      }
-    } catch {
-      // ignore invalid config path
+    const resolved = path.resolve(configured);
+    const stat = await safeStat(resolved);
+    if (stat?.isDirectory()) {
+      return resolved;
     }
   }
   const candidates = normalizeStringEntries([params.workspaceDir ?? "", params.cwd ?? ""]);
@@ -107,7 +101,7 @@ export function resolveSystemPromptRepoRoot(params: {
       continue;
     }
     seen.add(resolved);
-    const root = findGitRoot(resolved);
+    const root = await findGitRootAsync(resolved);
     if (root) {
       return root;
     }

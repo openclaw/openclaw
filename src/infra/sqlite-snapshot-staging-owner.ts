@@ -78,6 +78,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     number,
     {
       directories: Set<string>;
+      abort(): void;
       startClose(): RetainedOperation<void>;
       serviceClose(): void;
       releaseIfComplete(): void;
@@ -212,6 +213,11 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     let pendingClose: RetainedOperation<void> | undefined;
     const preparation = {
       directories: new Set<string>(),
+      abort() {
+        if (task.read().status === "pending") {
+          abort();
+        }
+      },
       startClose,
       serviceClose: () => pendingClose?.service(),
       releaseIfComplete() {
@@ -346,6 +352,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   };
   nativeSource.retain(owner, async () => {
     admissionClosed = true;
+    // Snapshot reads can stop; token allocation and native cleanup still join normally.
+    for (const preparation of preparations.values()) {
+      preparation.abort();
+    }
     await Promise.allSettled([...activeRequests].map((request) => request.result));
     const closures = Array.from(preparations.values()).map((preparation) =>
       preparation.startClose(),

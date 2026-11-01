@@ -25,7 +25,6 @@ import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/brows
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
-import { refreshSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -60,6 +59,10 @@ import type { SkillMenuHost } from "../chat/components/chat-composer-skill-menu-
 import { SkillMenu } from "../chat/components/chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "../chat/components/chat-composer-slash-menu-state.ts";
 import { SlashMenu } from "../chat/components/chat-composer-slash-menu.tsx";
+import {
+  ComposerWidthEdge,
+  prepareComposerWidthEdge,
+} from "../chat/components/chat-composer-width-ref.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
@@ -85,6 +88,8 @@ export type NewSessionComposerOptions = {
   draftSource?: ComposerDraftSource;
   context: ApplicationContext | undefined;
   draftOwnerKey: string;
+  /** Registered project whose skills the Gateway may preview before the session exists. */
+  commandProjectId?: string;
   isCatalogTarget: boolean;
   canSubmit: boolean;
   message: string;
@@ -102,6 +107,8 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
+  chatMessageMaxWidth?: string | null;
+  onComposerWidthChange?: (value: string | undefined) => void;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
@@ -144,15 +151,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
     getDraft: () => textarea.getTextarea()?.value ?? options.message,
     commitDraft: options.onInput,
     getTextarea: textarea.getTextarea,
-    refreshCommands: commandClient
-      ? () =>
-          refreshSlashCommands({
-            client: commandClient,
-            agentId: options.agentId,
-            shouldApply: () =>
-              textarea.ownsSkillCommands(commandClient, options.agentId, options.draftOwnerKey),
-          })
-      : undefined,
+    refreshCommands: commandClient ? () => textarea.refreshSkillCommands(commandClient) : undefined,
   };
   const slashMenuHost: SlashMenuHost = {
     ...skillMenuHost,
@@ -382,11 +381,12 @@ export function NewSessionComposer(props: {
         frame().commandClient,
         options().agentId,
         options().draftOwnerKey,
+        options().commandProjectId,
         frame().mentionDirectory,
         frame().composerLocked || options().nativeTerminal || textarea.composing,
       ] as const,
-    ([client, agentId, draftOwnerKey, directory, locked]) => {
-      textarea.syncSkillCommandOwner(client, agentId, draftOwnerKey);
+    ([client, agentId, draftOwnerKey, commandProjectId, directory, locked]) => {
+      textarea.syncSkillCommandOwner(client, { agentId, draftOwnerKey, commandProjectId });
       textarea.mentionMenu.syncDirectory(directory);
       if (locked) {
         textarea.emojiMenu.close();
@@ -426,6 +426,8 @@ export function NewSessionComposer(props: {
     <div
       ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
+      onPointerEnter={() => void prepareComposerWidthEdge()}
+      onKeyDown={() => void prepareComposerWidthEdge()}
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
           event.preventDefault();
@@ -693,6 +695,7 @@ export function NewSessionComposer(props: {
           </div>
         </div>
       </div>
+      <ComposerWidthEdge options={options} />
     </div>
   );
 }

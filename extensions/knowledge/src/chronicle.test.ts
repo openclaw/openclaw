@@ -49,11 +49,13 @@ async function fixture() {
     const dir =
       kind === "claim"
         ? "claims"
-        : type === "meeting"
-          ? "meetings"
-          : type === "person"
-            ? "people"
-            : "notes";
+        : kind === "relationship"
+          ? "relationships"
+          : type === "meeting"
+            ? "meetings"
+            : type === "person"
+              ? "people"
+              : "notes";
     await mkdir(path.join(f.root, partition, "artifacts"), { recursive: true });
     await writeFile(path.join(f.root, partition, "artifacts/source.txt"), artifact);
     const m = {
@@ -214,6 +216,163 @@ it("one shared source-event claim folds its meeting while preserving separate ev
   expect((await f.service.chronicle_last_seen({ entity: "missing_entity" }, f.owner)).last).toBe(
     null,
   );
+});
+
+it("group source derives an entity Timeline from relationship notes and sourced claims", async () => {
+  const f = await fixture();
+  const sourced = (source_page: string, entities: string[], more = {}) => ({
+    kind: "claim",
+    claim_kind: "decision",
+    source_page,
+    entities,
+    ...more,
+  });
+  const edge = (from: string, to: string, label: string) => ({
+    kind: "relationship",
+    type: label,
+    label,
+    from,
+    to,
+    attribution: "Retained source",
+    evidence: [
+      {
+        path: "artifacts/source.txt",
+        sha256: createHash("sha256")
+          .update("Source says the review occurred and the task was accepted.\n")
+          .digest("hex"),
+        start_line: 1,
+        end_line: 1,
+      },
+    ],
+  });
+  await f.put("person_alice", { type: "person" });
+  await f.put("person_bobby", { type: "person" });
+  await f.put("meeting_review", { type: "meeting", fields: { occurred_at: "2020-05-10" } });
+  await f.put("meeting_undated", { type: "meeting" });
+  await f.put("note_article", {});
+  await f.put(
+    "rel_attended",
+    edge("person_alice", "meeting_review", "attended"),
+    "private",
+    "Alice presented the launch review.",
+  );
+  await f.put(
+    "event_review",
+    event("2020-05-10", {
+      entities: ["person_alice", "person_bobby"],
+      source_page: "meeting_review",
+      source_event: true,
+    }),
+    "private",
+    "The launch review took place.",
+  );
+  // A superseded note never outranks the current one, even when listed first.
+  await f.put(
+    "rel_0_old",
+    { ...edge("person_alice", "meeting_review", "attended"), lifecycle: "superseded" },
+    "private",
+    "Old note.",
+  );
+  // A past event the review reports keeps its own date and row.
+  await f.put(
+    "event_past",
+    event("2019-01-15", { entities: ["person_alice"], source_page: "meeting_review" }),
+    "private",
+    "Alice founded the team.",
+  );
+  await f.put("claim_one", sourced("meeting_review", ["person_alice"]));
+  await f.put("claim_two", sourced("meeting_review", ["person_alice"]));
+  // A dated article reaches Alice only through its event claim.
+  await f.put(
+    "event_article",
+    event("2020-06-01", {
+      entities: ["person_alice"],
+      source_page: "note_article",
+      source_event: true,
+    }),
+    "private",
+    "The article was published.",
+  );
+  // Claims from an undated source, or with no source, keep their own dated rows.
+  await f.put(
+    "event_loose",
+    event("2020-04-01", { entities: ["person_alice"] }),
+    "private",
+    "Loose event.",
+  );
+  await f.put(
+    "event_undated_source",
+    event("2020-03-01", { entities: ["person_alice"], source_page: "meeting_undated" }),
+  );
+  await f.put("claim_undated", sourced("meeting_undated", ["person_alice"]));
+
+  const alice = await f.service.timeline({ entity: "person_alice", group: "source" }, f.owner);
+  expect(Check(contract.operations.timeline.output, alice)).toBeTruthy();
+  expect(
+    alice.items.map((row) => [row.record.id, row.date, row.summary, row.claims, row.noteRecord]),
+  ).toStrictEqual([
+    ["note_article", "2020-06-01", "The article was published.", 0, undefined],
+    ["meeting_review", "2020-05-10", "Alice presented the launch review.", 2, "rel_attended"],
+    ["event_loose", "2020-04-01", "Loose event.", undefined, undefined],
+    ["event_undated_source", "2020-03-01", "Launch review evidence", undefined, undefined],
+    ["event_past", "2019-01-15", "Alice founded the team.", undefined, undefined],
+  ]);
+  // A standalone claim keeps its source reference and source summary.
+  const past = await f.service.timeline(
+    {
+      entity: "person_alice",
+      group: "source",
+      includeSources: true,
+      since: "2019-01-15",
+      until: "2019-01-15",
+    },
+    f.owner,
+  );
+  expect(past.items.map((row) => [row.record.id, row.sourcePage])).toStrictEqual([
+    ["event_past", "meeting_review"],
+  ]);
+  expect(past.sources?.map((source) => source.id)).toStrictEqual(["meeting_review"]);
+  const history = await f.service.timeline(
+    { entity: "person_alice", group: "source", eligibility: "include_inactive" },
+    f.owner,
+  );
+  expect(history.items.find((row) => row.record.id === "meeting_review")?.noteRecord).toBe(
+    "rel_attended",
+  );
+  // A note's links resolve within scope; unknown targets are left out.
+  await f.put(
+    "rel_note_links",
+    edge("person_bobby", "meeting_review", "attended"),
+    "private",
+    "Paired with [[person_alice|Alice]] and [[nobody_here|Nobody]]. <!-- project: x -->",
+  );
+  const linked = await f.service.timeline({ entity: "person_bobby", group: "source" }, f.owner);
+  expect(linked.items[0]!.links).toStrictEqual([
+    { href: "#wiki=person_alice", id: "person_alice" },
+  ]);
+  await rm(path.join(f.root, "private", "relationships", "rel_note_links.md"));
+
+  // An undated source is dated by its event claim even when that claim lists only Alice.
+  await f.put(
+    "rel_article_bobby",
+    edge("note_article", "person_bobby", "discusses"),
+    "private",
+    "Bobby is quoted in the article.",
+  );
+  const bobby = await f.service.timeline({ entity: "person_bobby", group: "source" }, f.owner);
+  expect(bobby.items.map((row) => [row.record.id, row.summary, row.claims])).toStrictEqual([
+    ["note_article", "Bobby is quoted in the article.", 0],
+    ["meeting_review", "The launch review took place.", 0],
+  ]);
+  const ranged = await f.service.timeline(
+    { entity: "person_alice", group: "source", since: "2020-05-01", order: "asc", limit: 1 },
+    f.owner,
+  );
+  expect([ids(ranged), ranged.total, ranged.nextOffset]).toStrictEqual([["meeting_review"], 2, 1]);
+  await expect(f.service.timeline({ group: "source" }, f.owner)).rejects.toThrow(/entity/);
+  await expect(
+    f.service.timeline({ entity: "person_alice", group: "source", kind: "meeting" }, f.owner),
+  ).rejects.toThrow(/kind/);
 });
 
 it("scope, withdrawn dependencies, fixture exclusion and historical eligibility precede counts", async () => {

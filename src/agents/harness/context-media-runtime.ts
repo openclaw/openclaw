@@ -33,6 +33,7 @@ export async function prepareHarnessContextMedia(params: {
   accountId?: string;
   sandbox?: { root: string; bridge: SandboxFsBridge };
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }): Promise<{ text?: string; images: ImageContent[] }> {
   params.assertCurrent();
   if (
@@ -64,6 +65,7 @@ export async function prepareHarnessContextMedia(params: {
     accountId: params.accountId,
     maxChars: params.maxChars,
     assertCurrent: params.assertCurrent,
+    signal: params.signal,
   });
   params.assertCurrent();
   const imageFacts = media.filter(isImageMediaFact);

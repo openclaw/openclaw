@@ -1,6 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  constants as fsConstants,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -13,7 +15,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   createEmptyChangedLanes,
   detectChangedLanes,
@@ -36,6 +38,7 @@ import {
 } from "../../scripts/check-changed.mts";
 import { findTypecheckInertPaths } from "../../scripts/lib/typecheck-inert.mts";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
+import { captureEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -43,6 +46,8 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const templates = useAutoCleanupTempDirTracker(afterAll);
+let template: string | undefined;
 const repoRoot = process.cwd();
 const testNodeExecPath = resolveTestNodeExecPath();
 const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
@@ -55,9 +60,10 @@ const git = (cwd: string, args: string[]) =>
     env: createNestedGitEnv(),
   }).trim();
 
-function commitAll(cwd: string, message: string): void {
-  git(cwd, ["add", "."]);
+function commitAll(cwd: string, message: string, options: string[] = []): void {
+  git(cwd, [...options, "add", "."]);
   git(cwd, [
+    ...options,
     "-c",
     "user.email=test@example.com",
     "-c",
@@ -144,9 +150,19 @@ export function createChangedCoreTestCheck() {
 
 function createGitRepo(prefix: string) {
   const dir = tempDirs.make(prefix);
-  git(dir, ["init", "-q", "--initial-branch=main"]);
-  writeRepoFile(dir, "README.md", "initial\n");
-  commitAll(dir, "initial");
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  if (template) {
+    cpSync(template, dir, copyOptions);
+  } else {
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    // Finish the seed without background maintenance, before callers stage or branch.
+    commitAll(dir, "initial", ["-c", "maintenance.auto=false", "-c", "gc.auto=0"]);
+    const seed = templates.make("openclaw-changed-lanes-template-");
+    // Copies own complete refs, indexes and objects; no shared Git metadata or hardlinks.
+    cpSync(dir, seed, copyOptions);
+    template = seed;
+  }
   return dir;
 }
 
@@ -591,7 +607,7 @@ describe("scripts/changed-lanes", () => {
     mkdirSync(path.join(dir, "src"), { recursive: true });
     writeFileSync(path.join(dir, "src", "feature.ts"), "export const value = 1;\n", "utf8");
 
-    const previousRawSync = process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
+    const environment = captureEnv(["OPENCLAW_CHANGED_LANES_RAW_SYNC"]);
     delete process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
     try {
       const normalPaths = listChangedPathsFromGit({ base: "origin/main", cwd: dir });
@@ -604,11 +620,7 @@ describe("scripts/changed-lanes", () => {
         "src/feature.ts",
       ]);
     } finally {
-      if (previousRawSync === undefined) {
-        delete process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC;
-      } else {
-        process.env.OPENCLAW_CHANGED_LANES_RAW_SYNC = previousRawSync;
-      }
+      environment.restore();
     }
   });
 
@@ -811,9 +823,11 @@ describe("scripts/changed-lanes", () => {
       const diagnostics = failed.stdout + failed.stderr;
       expect(failed.error, diagnostics).toBeUndefined();
       expect(failed.status, diagnostics).toBe(1);
-      expect(diagnostics).toContain("eslint(curly)");
+      expect(diagnostics).toMatch(/(?:eslint\(curly\)|(?:^|\s)curly(?:\s|$))/u);
       expect(
-        diagnostics.match(/typescript\(no-floating-promises\)/gu) ?? [],
+        diagnostics.match(
+          /(?:typescript\(no-floating-promises\)|@typescript-eslint\/no-floating-promises)/gu,
+        ) ?? [],
         diagnostics,
       ).toHaveLength(4);
       expect(diagnostics).toContain(broken);
@@ -1239,6 +1253,15 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs the npm package-lock guard for dependency package surfaces", () => {
+    for (const file of [
+      "scripts/lib/npm-lock-package-selection.mjs",
+      "scripts/lib/npm-lock-package-selection.d.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/record-shared.d.mts",
+    ]) {
+      expect(shouldRunNpmLockGuard([file])).toBe(true);
+      expect(createNpmLockGuardCommand([file])).not.toBeNull();
+    }
     expect(
       shouldRunNpmLockGuard([
         "extensions/slack/package.json",

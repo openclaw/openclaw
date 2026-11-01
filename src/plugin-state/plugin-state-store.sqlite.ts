@@ -475,7 +475,7 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
   }
   const range = {
     ...params,
-    keyStartInclusive: params.after === undefined ? params.prefix : `${params.after}\0`,
+    keyStartInclusive: params.after ?? params.prefix,
     keyEndExclusive: `${params.prefix}\uffff`,
   };
   validatePluginStateKeyRange(range);
@@ -486,6 +486,7 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
       ({ db }) =>
         selectPluginStateEntriesInKeyRange(db, {
           ...range,
+          exclusiveStart: params.after !== undefined,
           order: "asc",
           now: Date.now(),
         }).map((row): PluginDoctorRawStateEntry => {

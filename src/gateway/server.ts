@@ -32,24 +32,25 @@ async function loadServerStart() {
 
 async function closeWithRuntimeCleanup(
   name: string,
-  close: () => Promise<void>,
+  close: (() => Promise<void>) | undefined,
   run: () => Promise<void>,
   options: Parameters<GatewayServer["close"]>[0],
 ): Promise<void> {
   let failure: { error: unknown } | undefined;
   try {
-    await close();
+    await close?.();
   } catch (error) {
     failure = { error };
   }
   try {
     const pending = measureGatewayCloseStep(`shutdown.${name}`, run);
-    const budget = options?.exitAfterClose ? getProcessCleanupBudget() : undefined;
-    if (!budget) {
+    const budget = getProcessCleanupBudget();
+    const graceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 5_000;
+    if (!options?.exitAfterClose) {
       await pending;
-    } else if (!(await settlesWithin(pending, Math.max(0, budget.deadline - performance.now())))) {
+    } else if (!(await settlesWithin(pending, graceMs))) {
       const message = `${name} cleanup exceeded process shutdown deadline; resources remain; pending: ${formatGatewayPendingCloseSteps()}`;
-      budget.warn(message);
+      budget?.warn(message);
       throw new GatewayShutdownCleanupRetainedError([new Error(message)], message);
     }
   } catch (error) {
@@ -120,7 +121,10 @@ export async function startGatewayServer(
     if (signal?.aborted) {
       const reason = signal.reason;
       return await rethrowGatewayStartupError(reason, () =>
-        closeServer({ reason: String(reason) }),
+        closeServer({
+          reason: String(reason),
+          exitAfterClose: opts.exitAfterStartupFailure?.(reason),
+        }),
       );
     }
     return {
@@ -141,6 +145,15 @@ async function startGatewayServerWithRuntime(
   opts: GatewayServerOptions,
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
   const startupStartedAt = opts.startupStartedAt ?? Date.now();
+  if (process.platform === "linux") {
+    const [{ initializeGatewayExecCgroup }, { resolveStateDir }, { createSubsystemLogger }] =
+      await Promise.all([
+        import("../process/linux-exec-cgroup-startup.js"),
+        import("../config/paths.js"),
+        import("../logging/subsystem.js"),
+      ]);
+    createSubsystemLogger("gateway").info(await initializeGatewayExecCgroup(resolveStateDir()));
+  }
   let stopDatabaseAdmission: (() => Promise<void>) | undefined;
   const start = async () => {
     const { createSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
@@ -175,7 +188,11 @@ async function startGatewayServerWithRuntime(
           ),
       };
     } catch (error) {
-      return await rethrowGatewayStartupError(error, () => readOnlyWorkers.close());
+      return await rethrowGatewayStartupError(error, () =>
+        closeWithRuntimeCleanup("read-only-workers", undefined, () => readOnlyWorkers.close(), {
+          exitAfterClose: opts.exitAfterStartupFailure?.(error),
+        }),
+      );
     }
   };
   // Gateway brokerage targets Linux's page-table copy cost.
@@ -200,17 +217,42 @@ async function startGatewayServerWithRuntime(
     return await start();
   }
   const closeBroker = async () => {
-    // A failed required core join can stop before the admission sidecar runs.
-    await measureGatewayCloseStep("shutdown.database-admission", () => stopDatabaseAdmission?.());
-    try {
-      const { closeSqliteReadOnlyWorkersForBroker } =
-        await import("../infra/sqlite-readonly-worker.js");
-      await measureGatewayCloseStep("shutdown.broker-read-only-workers", () =>
-        closeSqliteReadOnlyWorkersForBroker(broker),
-      );
-    } finally {
+    // Core can retain connection work before reaching its process join. Keep the
+    // broker alive until command results, output, and service-child cleanup settle.
+    const errors: unknown[] = [];
+    const steps = [
+      [
+        "process-supervisor",
+        async () => {
+          const { shutdownProcessSupervisor } = await import("../process/supervisor/index.js");
+          await shutdownProcessSupervisor();
+        },
+      ],
+      // A failed required core join can stop before the admission sidecar runs.
+      ["database-admission", () => stopDatabaseAdmission?.()],
+      [
+        "broker-read-only-workers",
+        async () => {
+          const { closeSqliteReadOnlyWorkersForBroker } =
+            await import("../infra/sqlite-readonly-worker.js");
+          await closeSqliteReadOnlyWorkersForBroker(broker);
+        },
+      ],
       // Readers that did not close remain attached children for broker termination.
-      await measureGatewayCloseStep("shutdown.spawn-broker", () => broker.close());
+      ["spawn-broker", () => broker.close()],
+    ] as const;
+    for (const [name, close] of steps) {
+      try {
+        await measureGatewayCloseStep(`shutdown.${name}`, close);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, errors.map(formatErrorMessage).join("; "));
     }
   };
   try {
@@ -232,6 +274,10 @@ async function startGatewayServerWithRuntime(
         ),
     };
   } catch (error) {
-    return await rethrowGatewayStartupError(error, closeBroker);
+    return await rethrowGatewayStartupError(error, () =>
+      closeWithRuntimeCleanup("spawn-broker-runtime", undefined, closeBroker, {
+        exitAfterClose: opts.exitAfterStartupFailure?.(error),
+      }),
+    );
   }
 }

@@ -20,6 +20,7 @@ import { pathToFileURL } from "node:url";
 import type { prepareWorkspaceReconciliation } from "../../src/gateway/worker-environments/workspace-manifest-comparison.js";
 import type { applyWorkspaceSourceOverlay } from "../../src/gateway/worker-environments/workspace-manifest-overlay.js";
 import type { WorkerWorkspaceManifest } from "../../src/gateway/worker-environments/workspace-manifest.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const modulePath = path.resolve(process.argv[2]!);
 const count = Number(process.argv[3] ?? 10_000);
@@ -92,12 +93,7 @@ const observer = new PerformanceObserver((list) => {
 observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 32_768);
 }
 const hostLoad = os.loadavg();
 const startCpu = process.cpuUsage();

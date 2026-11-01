@@ -47,8 +47,8 @@ describe("resolveCodexProviderWebSearchSupport", () => {
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.each(["success", "RPC failure", "timeout"] as const)(
-    "awaits isolated capability probe exit after %s",
+  it.each(["success", "RPC failure", "timeout", "borrowed success"] as const)(
+    "preserves capability client ownership after %s",
     async (result) => {
       vi.useFakeTimers();
       const agentDir = tempDirs.make("codex-capability-probe-");
@@ -77,8 +77,11 @@ describe("resolveCodexProviderWebSearchSupport", () => {
       });
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
       const stdinClosed = once(harness.process.stdin, "close");
+      const borrowed = result === "borrowed success";
       const pending = resolveSupport({
-        clientFactory: createIsolatedCodexAppServerClient,
+        clientFactory: borrowed
+          ? (options) => createIsolatedCodexAppServerClient(options)
+          : createIsolatedCodexAppServerClient,
         appServer: {
           ...appServer,
           start: { transport: "stdio", command: process.execPath, args: [], headers: {} },
@@ -94,6 +97,15 @@ describe("resolveCodexProviderWebSearchSupport", () => {
         await awaitGateBeforeSettlement(capabilityRead.promise, outcome, "probe skipped its read");
         if (result === "timeout") {
           await vi.advanceTimersByTimeAsync(appServer.requestTimeoutMs);
+        }
+        if (borrowed) {
+          await expect(outcome).resolves.toBe("supported");
+          await expect(
+            harness.client.request("modelProvider/capabilities/read", {}),
+          ).resolves.toEqual({
+            webSearch: true,
+          });
+          return;
         }
         await awaitGateBeforeSettlement(stdinClosed, outcome, "probe returned without closing");
         expect(settled).toBe(false);

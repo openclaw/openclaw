@@ -10,12 +10,12 @@
  * Compare counterbalanced base/candidate processes with identical options on the benchmark host.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import * as currentSchema from "../../packages/ai/src/providers/tool-schema-json-projection.js";
 import * as current from "../../src/agents/tool-schema-projection.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -95,9 +95,6 @@ function run() {
   }
   assert.equal(accepted, toolCount * iterations);
 }
-function bytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + bytes(child), 0);
-}
 run();
 const rows = [];
 const inspector = new Session();
@@ -123,7 +120,7 @@ try {
       sample,
       cpuUsPerAttempt: (cpu.user + cpu.system) / iterations,
       wallUsPerAttempt: (wallMs * 1000) / iterations,
-      sampledBytesPerAttempt: bytes(profile.head) / iterations,
+      sampledBytesPerAttempt: sumSampledHeapBytes(profile.head) / iterations,
       hostLoad,
     });
   }

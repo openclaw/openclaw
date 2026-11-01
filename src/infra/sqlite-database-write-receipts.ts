@@ -11,6 +11,7 @@ import {
   advanceSqliteDatabaseGeneration,
   retainSqliteDatabaseWriteScope,
   pruneSqliteDatabaseWriteScopes,
+  SqliteDatabaseGenerationSlot,
   type Admission,
   type ScopedWriteRevision,
 } from "./sqlite-database-admission-record.js";
@@ -269,6 +270,80 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     }
   }
 
+  /** Pin the owner's cells once; unchanged effect guards need no discovery or serialization. */
+  function prepareSqliteDatabaseScopedWriteRevisionForPath(
+    location: string,
+    scope: readonly SqliteDatabaseWriteScope[],
+  ) {
+    const releaseScopes = retainSqliteDatabaseWriteScopesForPath(location, scope);
+    if (!releaseScopes) {
+      return undefined;
+    }
+    const record = owner.pathAdmission(location);
+    if (!record) {
+      releaseScopes();
+      return undefined;
+    }
+    const keys = normalizedWriteScopes(scope);
+    const revisions = keys.map((key) => record.writeScopes.get(key)!);
+    const observed = revisions.map((revision) => Atomics.load(revision.state, 0));
+    const references = new WeakMap<SharedArrayBuffer, Int32Array<SharedArrayBuffer>>();
+    const generation = new Int32Array(record.generation);
+    let pending = false;
+    const inspectReference = (buffer: SharedArrayBuffer) => {
+      let cells = references.get(buffer);
+      if (!cells) {
+        cells = new Int32Array(buffer);
+        references.set(buffer, cells);
+      }
+      pending ||= Atomics.load(cells, 1) > 0;
+    };
+    let schema = Atomics.load(generation, SqliteDatabaseGenerationSlot.schemaRevision);
+    let unscoped = Atomics.load(generation, SqliteDatabaseGenerationSlot.unscopedWriteRevision);
+    let epoch = 0;
+    let released = false;
+    return {
+      read(): number | undefined {
+        if (released || Atomics.load(generation, SqliteDatabaseGenerationSlot.retired) !== 0) {
+          return undefined;
+        }
+        pending = false;
+        // New workers publish their reference cells before entering native writes.
+        record.references.forEach(inspectReference);
+        if (pending) {
+          return undefined;
+        }
+        const nextSchema = Atomics.load(generation, SqliteDatabaseGenerationSlot.schemaRevision);
+        const nextUnscoped = Atomics.load(
+          generation,
+          SqliteDatabaseGenerationSlot.unscopedWriteRevision,
+        );
+        let changed = schema !== nextSchema || unscoped !== nextUnscoped;
+        schema = nextSchema;
+        unscoped = nextUnscoped;
+        for (let index = 0; index < revisions.length; index++) {
+          const revision = revisions[index]!;
+          if (Atomics.load(revision.state, 1) !== 0) {
+            return undefined;
+          }
+          const value = Atomics.load(revision.state, 0);
+          changed ||= observed[index] !== value;
+          observed[index] = value;
+        }
+        if (changed) {
+          epoch++;
+        }
+        return epoch;
+      },
+      release() {
+        if (!released) {
+          released = true;
+          releaseScopes();
+        }
+      },
+    };
+  }
+
   function scopedWriteToken(
     record: Admission,
     keys: readonly string[],
@@ -512,6 +587,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     onSqliteDatabaseWriteSettled,
     retireSqliteDatabaseWriteScopes,
     retainSqliteDatabaseWriteScopesForPath,
+    prepareSqliteDatabaseScopedWriteRevisionForPath,
     withSqliteDatabaseWriteScope,
     withoutSqliteDatabaseWriteScope,
     readSqliteDatabaseScopedWriteToken,

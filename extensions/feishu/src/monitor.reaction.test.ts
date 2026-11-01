@@ -27,12 +27,20 @@ const handleFeishuMessageMock = vi.hoisted(() =>
   vi.fn(async (_params: Parameters<typeof import("./bot.js").handleFeishuMessage>[0]) => {}),
 );
 const createEventDispatcherMock = vi.hoisted(() => vi.fn());
+const messageGetMock = vi.hoisted(() => vi.fn());
+const chatGetMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 let stopDebounceMonitor: (() => Promise<void>) | undefined;
 
-vi.mock("./client.js", () => ({ createEventDispatcher: createEventDispatcherMock }));
+vi.mock("./client.js", async () => ({
+  ...(await vi.importActual<typeof import("./client.js")>("./client.js")),
+  createEventDispatcher: createEventDispatcherMock,
+  createFeishuClient: () => ({
+    im: { message: { get: messageGetMock }, chat: { get: chatGetMock } },
+  }),
+}));
 vi.mock("./bot.js", async () => ({
   ...(await vi.importActual<typeof import("./bot.js")>("./bot.js")),
   handleFeishuMessage: handleFeishuMessageMock,
@@ -113,7 +121,13 @@ function monitorParams(): Parameters<typeof monitorSingleAccount>[0] {
   return {
     cfg: {
       messages: { inbound: { debounceMs: 0, byChannel: { feishu: 20 } } },
-      channels: { feishu: FeishuConfigSchema.parse({ enabled: true }) },
+      channels: {
+        feishu: FeishuConfigSchema.parse({
+          enabled: true,
+          appId: "cli_test",
+          appSecret: "secret_test", // pragma: allowlist secret
+        }),
+      },
     } as ClawdbotConfig,
     account: {
       accountId: "default",
@@ -151,6 +165,7 @@ async function setupDebounceMonitor() {
   });
   const monitor = monitorSingleAccount({
     ...monitorParams(),
+    fireAndForget: false,
     // A partial injected runtime must fall back to the installed channel runtime.
     channelRuntime: { runtimeContexts: {} } as unknown as PluginRuntime["channel"],
   });
@@ -291,11 +306,26 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(result?.message).toMatchObject({ chat_id: "p2p:ou_user1", chat_type: "p2p" });
   });
 
-  it("drops reactions without chat context when lookup does not provide chat_type", async () => {
-    expect(
-      await resolveReaction({ fetchMessage: async () => fetchedMessage({ chatType: undefined }) }),
-    ).toBeNull();
-  });
+  it.each(["ambiguous", "failed", "timeout"])(
+    "drops reactions with %s chat metadata",
+    async (kind) => {
+      vi.useFakeTimers();
+      chatGetMock.mockImplementation(async () => {
+        if (kind === "failed") {
+          throw new Error("chat lookup failed");
+        }
+        if (kind === "timeout") {
+          return new Promise<never>(() => {});
+        }
+        return { code: 0, data: { chat_type: "private" } };
+      });
+      const pending = resolveReaction({
+        fetchMessage: async () => fetchedMessage({ chatType: undefined }),
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(await pending).toBeNull();
+    },
+  );
 
   it("logs and drops reactions when lookup throws", async () => {
     const log = vi.fn();
@@ -319,6 +349,43 @@ describe("Feishu inbound debounce regressions", () => {
     handleFeishuMessageMock.mockClear();
     installRuntime();
   });
+
+  it.each(["p2p", "group"] as const)(
+    "dispatches a %s reaction without payload chat types",
+    async (chatMode) => {
+      messageGetMock.mockResolvedValue({
+        code: 0,
+        data: {
+          items: [
+            {
+              message_id: "om_msg1",
+              chat_id: "oc_reacted",
+              sender: { id: "ou_bot", id_type: "open_id", sender_type: "app" },
+              body: { content: "hello" },
+              msg_type: "text",
+            },
+          ],
+        },
+      });
+      chatGetMock.mockResolvedValue({
+        code: 0,
+        data: { chat_mode: chatMode, chat_type: "private" },
+      });
+      const dispatcher = await setupDebounceMonitor();
+      await dispatcher.invoke({
+        schema: "2.0",
+        header: { event_type: "im.message.reaction.created_v1" },
+        event: makeReactionEvent(),
+      });
+      expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+      expect(dispatchedMessage().event.message).toMatchObject({
+        chat_id: "oc_reacted",
+        chat_type: chatMode,
+        content: JSON.stringify({ text: "[reacted with THUMBSUP to message om_msg1]" }),
+      });
+      expect(chatGetMock).toHaveBeenLastCalledWith({ path: { chat_id: "oc_reacted" } });
+    },
+  );
 
   it("keeps root-less topic threads in separate debounce buckets", async () => {
     setDedupPassThroughMocks();

@@ -1,6 +1,34 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
+.profile-discord-availability {
+  display: block;
+}
+
+.profile-refresh {
+  display: inline-grid;
+  grid-template-areas: "label";
+}
+
+.profile-refresh > span,
+.profile-refresh::before,
+.profile-refresh::after {
+  grid-area: label;
+}
+
+.profile-refresh::before,
+.profile-refresh::after {
+  visibility: hidden;
+}
+
+.profile-refresh::before {
+  content: attr(data-refresh-label);
+}
+
+.profile-refresh::after {
+  content: attr(data-refreshing-label);
+}
+
 .profile-hero {
   display: flex;
   flex-direction: column;

@@ -21,6 +21,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SessionActorHotState } from "../../src/config/sessions/session-actor-state.types.js";
 import type { PreparedSessionTranscriptHydration } from "../../src/config/sessions/session-history-read.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -166,12 +167,7 @@ for (const operation of ["seed", "read"] as const) {
   observer.observe({ entryTypes: ["gc"] });
   const inspector = new Session();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoad = loadavg();
   const cpu = process.cpuUsage();

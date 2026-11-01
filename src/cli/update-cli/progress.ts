@@ -291,6 +291,7 @@ export async function prepareResult(
     nextAction?: string;
     record?: UpdateRunRecord;
     readHistory?: boolean;
+    writeArtifacts?: boolean;
   } = {},
   assertCurrent?: () => void,
 ): Promise<(additionalSteps?: readonly UpdateStepResult[]) => void> {
@@ -324,19 +325,22 @@ export async function prepareResult(
     });
     return report;
   };
-  const reportPath = await writeUpdateRunReportArtifact({
-    result,
-    report: renderReport,
-    record: reportHints.record,
-    readRun,
-    env: opts.run?.env,
-    detached: reportHints.readHistory === false,
-    assertCurrent,
-  }).catch((error: unknown) => {
-    assertCurrent?.();
-    defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
-    return undefined;
-  });
+  const reportPath =
+    reportHints.writeArtifacts === false
+      ? undefined
+      : await writeUpdateRunReportArtifact({
+          result,
+          report: renderReport,
+          record: reportHints.record,
+          readRun,
+          env: opts.run?.env,
+          detached: reportHints.readHistory === false,
+          assertCurrent,
+        }).catch((error: unknown) => {
+          assertCurrent?.();
+          defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
+          return undefined;
+        });
   assertCurrent?.();
   report ??= renderReport(readRun?.());
   const preparedReport = report;

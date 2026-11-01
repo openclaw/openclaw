@@ -20,7 +20,11 @@ import type { ChatProps } from "./chat-view.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
-import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
+import {
+  chatPullRequestId,
+  publicationPullRequest,
+  retainedPublication,
+} from "./components/chat-pull-requests.ts";
 import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
@@ -122,9 +126,11 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         openDetailsPage({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
       publication: chatProps.githubPublication
         ? {
+            // One PR keeps one pill: once its PR is listed, the PR pill continues the lifecycle.
             eligible: Boolean(
-              (!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
-              retainedPublication(chatProps.githubPublication),
+              ((!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
+                retainedPublication(chatProps.githubPublication)) &&
+              !publicationPullRequest(chatProps.githubPublication, chatProps.pullRequests ?? []),
             ),
             onOpen: (source) =>
               openDetailsPage(

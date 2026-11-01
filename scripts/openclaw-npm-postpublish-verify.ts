@@ -15,7 +15,6 @@ import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, posix as pathPosix, relative, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { collectPackageRootImports } from "../src/infra/package-root-imports.js";
 import { packageActivationRuntimeEntrypoint } from "../src/infra/package-update-activation-runtime-assets.js";
 import {
@@ -23,15 +22,13 @@ import {
   RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
   type RuntimeDependencyOwnership,
 } from "../src/infra/runtime-dependency-ownership.js";
-import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
   WORKER_BUNDLE_SQLITE_STORE_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
-import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { verifyNpmRegistrySignatures } from "./lib/npm-registry-signatures.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
@@ -74,16 +71,6 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
-// Package verification always covers the complete published inventory, even
-// when the invoking build inherited a plugin-selection filter.
-const PACKAGED_BUNDLED_PLUGIN_ARTIFACTS = new Set(
-  listBundledPluginPackArtifacts({
-    env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined },
-  }),
-);
-const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
-  (relativePath) => PACKAGED_BUNDLED_PLUGIN_ARTIFACTS.has(relativePath),
-);
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
@@ -93,6 +80,7 @@ const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
 // 2026.10.10-beta.1 (9,473 in 2026.10.5-beta.4); keep roughly 2x headroom.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 20_000;
 const MAX_INSTALLED_WORKER_DIST_JS_FILES = 10_000;
+const MAX_INSTALLED_BUNDLED_PLUGIN_FILES = 20_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 // Self-contained bundles (the ~69 MB worker, the ~66 MB sealed package-update recovery helper)
 // need extra headroom, but synchronous read/parse stays bounded.
@@ -535,43 +523,13 @@ export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: st
       `installed package is missing required facade activation runtime: ${activationRuntimePath}`,
     );
   }
-  for (const dirName of ALWAYS_ALLOWED_RUNTIME_DIR_NAMES) {
-    const relativePath = `dist/extensions/${dirName}/runtime-api.js`;
-    if (!existsSync(join(packageRoot, relativePath))) {
-      errors.push(
-        `installed package allows bundled runtime facade ${dirName}/runtime-api.js but is missing required runtime sidecar: ${relativePath}.`,
-      );
-    }
-  }
   return errors;
 }
 
-function collectInstalledBundledExtensionIds(packageRoot: string): Set<string> {
-  const extensionsDir = join(packageRoot, "dist", "extensions");
-  if (!existsSync(extensionsDir)) {
-    return new Set();
-  }
-  const ids = new Set<string>();
-  for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    if (existsSync(join(extensionsDir, entry.name, "package.json"))) {
-      ids.add(entry.name);
-    }
-  }
-  return ids;
-}
-
 export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string): string[] {
-  const installedExtensionIds = collectInstalledBundledExtensionIds(packageRoot);
-  return PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) => {
-    const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-    return (
-      match !== null &&
-      installedExtensionIds.has(expectDefined(match[1], "bundled runtime extension id"))
-    );
-  });
+  return readInstalledPackageDistInventory(packageRoot).bundledPluginArtifacts.filter(
+    (relativePath) => /\/runtime(?:-setter)?-api\.js$/u.test(relativePath),
+  );
 }
 
 export function collectInstalledBundledExtensionManifestErrors(packageRoot: string): string[] {
@@ -741,7 +699,7 @@ function extractJavaScriptImportSpecifiers(
 ): ParsedImportSpecifiersResult {
   try {
     const regions: Array<{ start: number; end: number; extensionId?: string }> = [];
-    const stack: Array<{ start: number; extensionId?: string }> = [];
+    const stack: Array<{ start: number; extensionId?: string; flat: boolean }> = [];
     // Published modules need stricter validation than the CommonJS-aware dependency scanner.
     acorn.parse(source, {
       allowHashBang: true,
@@ -752,9 +710,16 @@ function extractJavaScriptImportSpecifiers(
             if (block) {
               return;
             }
-            if (text.startsWith("#region ")) {
-              const extensionId = /^#region extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(text)?.[1];
-              stack.push({ start: end, extensionId });
+            const marker = bundledModuleRegions(source.slice(start, end)).next().value;
+            if (marker) {
+              // Simple labels close at the next module; historical regions can nest.
+              const previous = stack.at(-1);
+              if (previous?.flat) {
+                stack.pop();
+                regions.push({ ...previous, end: start });
+              }
+              const extensionId = /^extensions\/([a-z0-9][a-z0-9-]*)\//u.exec(marker[1] ?? "")?.[1];
+              stack.push({ start: end, extensionId, flat: marker[0].startsWith("// ") });
             } else if (text.trim() === "#endregion") {
               const region = stack.pop();
               if (region) {
@@ -764,6 +729,11 @@ function extractJavaScriptImportSpecifiers(
           }
         : undefined,
     });
+    for (const region of stack) {
+      if (region.flat) {
+        regions.push({ ...region, end: source.length });
+      }
+    }
     const imports: RuntimeImport[] = [];
     collectPackageRootImports(source, (specifier, start, kind) => {
       // Inner regions close first. Inspect real comments and full-source bindings;
@@ -1058,39 +1028,106 @@ export function resolveInstalledBinaryCommandInvocation(
   };
 }
 
-function readBundledExtensionPackageJsons(packageRoot: string) {
-  const extensionsDir = join(packageRoot, "dist", "extensions");
-  const manifests: InstalledBundledExtensionManifestRecord[] = [];
-  const errors: string[] = [];
+function readInstalledPackageDistInventory(packageRoot: string): {
+  bundledPluginArtifacts: string[];
+  error?: string;
+} {
   const inventoryPath = join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-
   try {
     const inventory: unknown = JSON.parse(readFileSync(inventoryPath, "utf8"));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       throw new Error("inventory must be an array of file paths");
     }
-    const inventoryParity = comparePackageDistInventory({
-      files: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
-      inventory: inventory as string[],
-    });
-    errors.push(
-      ...inventoryParity.packagedFilesMissingFromInventory.map(
-        (relativePath) =>
-          `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
-      ),
-    );
+    const seen = new Set<string>();
+    for (const entry of inventory as string[]) {
+      const parts = entry.split("/");
+      if (
+        !entry.startsWith("dist/") ||
+        entry.includes("\\") ||
+        entry.includes("\0") ||
+        parts.some((part) => !part || part === "." || part === "..") ||
+        seen.has(entry)
+      ) {
+        throw new Error("inventory contains a duplicate or unsafe file path");
+      }
+      seen.add(entry);
+    }
+    return {
+      bundledPluginArtifacts: [...seen]
+        .filter((entry) => entry.startsWith("dist/extensions/"))
+        .toSorted((left, right) => left.localeCompare(right)),
+    };
   } catch (error) {
+    return {
+      bundledPluginArtifacts: [],
+      error: `installed package dist inventory is missing or invalid: ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    };
+  }
+}
+
+function listInstalledBundledPluginArtifacts(packageRoot: string): {
+  files: string[];
+  limitExceeded: boolean;
+} {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  if (!existsSync(extensionsDir)) {
+    return { files: [], limitExceeded: false };
+  }
+  const pending = [extensionsDir];
+  const files: string[] = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    const dir = opendirSync(currentDir);
+    try {
+      while (true) {
+        const entry = dir.readSync();
+        if (!entry) {
+          break;
+        }
+        const entryPath = join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          pending.push(entryPath);
+        } else if (entry.isFile()) {
+          files.push(relative(packageRoot, entryPath).replaceAll("\\", "/"));
+          if (files.length > MAX_INSTALLED_BUNDLED_PLUGIN_FILES) {
+            return { files, limitExceeded: true };
+          }
+        }
+      }
+    } finally {
+      dir.closeSync();
+    }
+  }
+  return { files, limitExceeded: false };
+}
+
+function readBundledExtensionPackageJsons(packageRoot: string) {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  const manifests: InstalledBundledExtensionManifestRecord[] = [];
+  const errors: string[] = [];
+  const publishedInventory = readInstalledPackageDistInventory(packageRoot);
+  if (publishedInventory.error) {
+    errors.push(publishedInventory.error);
+  }
+  const installedArtifacts = listInstalledBundledPluginArtifacts(packageRoot);
+  if (installedArtifacts.limitExceeded) {
     errors.push(
-      `installed package dist inventory is missing or invalid: ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+      `installed package contains more than ${MAX_INSTALLED_BUNDLED_PLUGIN_FILES} bundled plugin files; refusing to scan unbounded package contents.`,
     );
   }
-
   const installedArtifactParity = comparePackageDistInventory({
-    files: [...PACKAGED_BUNDLED_PLUGIN_ARTIFACTS].filter((relativePath) =>
-      existsSync(join(packageRoot, relativePath)),
-    ),
-    inventory: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
+    files: installedArtifacts.files,
+    inventory: publishedInventory.bundledPluginArtifacts,
   });
+  errors.push(
+    ...installedArtifactParity.packagedFilesMissingFromInventory.map(
+      (relativePath) =>
+        `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+    ),
+  );
   for (const relativePath of installedArtifactParity.inventoryEntriesMissingFromPackage) {
     errors.push(
       relativePath.endsWith("/package.json")
@@ -1212,11 +1249,17 @@ export async function fetchRegistryJson(
 
 function isRetryableRegistryProvenanceError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes("npm provenance attestation") ||
+    message.includes("npm registry signature") ||
+    message.includes("registry integrity")
+  ) {
+    return false;
+  }
   return (
     /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
     message.includes("npm registry metadata is incomplete") ||
     message.includes("npm registry provenance metadata is incomplete") ||
-    message.includes("npm provenance attestation does not bind") ||
     /aborted|fetch failed|network|timeout|timed out/u.test(message)
   );
 }

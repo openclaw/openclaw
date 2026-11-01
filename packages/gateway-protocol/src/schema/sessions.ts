@@ -1,7 +1,11 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES } from "../canvas-limits.js";
 import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
-import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
+import {
+  SESSIONS_FILES_ASSETS_MAX_REFS,
+  SESSIONS_FILES_ASSET_REF_MAX_CHARS,
+} from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./error-shape.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -293,7 +297,10 @@ export { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
 export const SESSIONS_FILES_ASSET_MAX_BYTES = 1024 * 1024;
 export const SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
-const sessionFileAssetRefSchema = Type.String({ minLength: 1, maxLength: 4096 });
+const sessionFileAssetRefSchema = Type.String({
+  minLength: 1,
+  maxLength: SESSIONS_FILES_ASSET_REF_MAX_CHARS,
+});
 
 /** Reads relative HTML resources under the session's current file-read authority. */
 export const SessionsFilesAssetsParamsSchema = closedObject({
@@ -321,6 +328,27 @@ export const SessionsFilesAssetsResultSchema = closedObject({
     ]),
     { maxItems: SESSIONS_FILES_ASSETS_MAX_REFS },
   ),
+});
+
+/** A bounded authored-CSP preview; resources retain the issuing reader's authority. */
+export const SessionsFilesPreviewParamsSchema = closedObject({
+  ...SessionsFilesGetParamsSchema.properties,
+  html: Type.String({ maxLength: CANVAS_DOCUMENT_PREVIEW_MAX_BYTES }),
+  allowScripts: Type.Optional(Type.Boolean()),
+});
+export const SessionsFilesPreviewResultSchema = closedObject({
+  status: stringLiteralUnion(["ready", "unsupported"]),
+  html: Type.String(),
+  omitted: Type.Integer({ minimum: 0 }),
+  previewId: Type.Optional(NonEmptyString),
+  sandboxPath: Type.Optional(NonEmptyString),
+});
+export const SessionsFilesPreviewReleaseParamsSchema = closedObject({
+  ...SessionsFilesGetParamsSchema.properties,
+  previewId: Type.String({ minLength: 1, maxLength: 256 }),
+});
+export const SessionsFilesPreviewReleaseResultSchema = closedObject({
+  released: Type.Boolean(),
 });
 
 /** Overwrites an existing file with content and optional managed-source preconditions. */
@@ -808,6 +836,14 @@ export type SessionsFilesDownloadResult = Static<typeof SessionsFilesDownloadRes
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
 export type SessionsFilesAssetsParams = Static<typeof SessionsFilesAssetsParamsSchema>;
 export type SessionsFilesAssetsResult = Static<typeof SessionsFilesAssetsResultSchema>;
+export type SessionsFilesPreviewParams = Static<typeof SessionsFilesPreviewParamsSchema>;
+export type SessionsFilesPreviewResult = Static<typeof SessionsFilesPreviewResultSchema>;
+export type SessionsFilesPreviewReleaseParams = Static<
+  typeof SessionsFilesPreviewReleaseParamsSchema
+>;
+export type SessionsFilesPreviewReleaseResult = Static<
+  typeof SessionsFilesPreviewReleaseResultSchema
+>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
 export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;

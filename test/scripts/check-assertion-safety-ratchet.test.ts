@@ -13,6 +13,7 @@ import {
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const parser = createNativeTypeScriptParser();
 const baselineFile = "config/assertion-safety-baseline.txt";
@@ -54,16 +55,10 @@ function git(cwd: string, args: string[], input?: string) {
   );
 }
 
-function write(root: string, file: string, source: string) {
-  const target = path.join(root, file);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, source);
-}
-
 function fileFixture(files: Record<string, string>, committed = false) {
   const root = tempDirs.make("openclaw-assertion-safety-");
   for (const [file, source] of Object.entries(files)) {
-    write(root, file, source);
+    fixtureFiles(root).write(file, source);
   }
   git(root, ["init"]);
   if (committed) {
@@ -122,11 +117,11 @@ describe("check-assertion-safety-ratchet", () => {
     );
     const malformed = [entries[5]!, entries[17]!, entries[35]!];
     for (const [file] of malformed) {
-      write(root, file, "const broken = ;\n");
+      fixtureFiles(root).write(file, "const broken = ;\n");
     }
     for (const [file, source] of malformed) {
       expect(() => currentCounts(root)).toThrow(`${file}:1: Expression expected.`);
-      write(root, file, source);
+      fixtureFiles(root).write(file, source);
     }
   });
 
@@ -253,7 +248,7 @@ describe("check-assertion-safety-ratchet", () => {
     const root = fileFixture(files, true);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     // A report ref selects source bytes, unlike the ratchet's comparison-only --base.
-    write(root, "src/a.ts", "const broken = ;");
+    fixtureFiles(root).write("src/a.ts", "const broken = ;");
     fs.rmSync(path.join(root, "src/b.ts"));
     const report = assertionReport(root, "HEAD");
     expect(report).toMatchObject({ complete: true, matching: "not-performed" });

@@ -9,12 +9,50 @@ const { fixture, describePosix, outcomeRef } = createMergeOutcomeFixtureHarness(
 const { artifactBuildCandidate } = createPriorCiCandidateFactory(fixture);
 
 describePosix("artifact-build failure with successful primary CI", () => {
+  it.each(["success", "failure", "cancelled", "skipped", null])(
+    "requires the other event gate to pass alongside successful primary CI (%s)",
+    (conclusion) => {
+      const f = artifactBuildCandidate();
+      const state = f.state();
+      state.priorCi.currentGateChecks = [
+        { id: 1, suiteId: 30, event: "pull_request", conclusion: "success" },
+        {
+          id: 3,
+          suiteId: 20,
+          event: "workflow_dispatch",
+          conclusion,
+          status: conclusion === null ? "in_progress" : "completed",
+        },
+      ];
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      if (conclusion === "success") {
+        expectExit(result, 0);
+        expect(f.record().priorCiAdmin).toMatchObject({
+          primaryCi: { runId: 502, runAttempt: 2 },
+          gateCheckRunId: 1,
+        });
+        expect(f.state().mutations).toBe(1);
+      } else {
+        expectExit(result, 1);
+        expect(result.output).toContain("other required checks");
+        expect(f.state().mutations).toBe(0);
+        expect(f.git(["for-each-ref", "--format=%(refname)", outcomeRef])).toBe("");
+      }
+    },
+  );
+
   it.each(["qualified", "revoked membership", "revoked bypass"])(
     "revalidates the %s delegated writer at the merge I/O boundary",
     (authority) => {
       const f = artifactBuildCandidate();
       const state = f.state();
       state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+      // Final authority must hold after selecting one gate from both event lanes.
+      state.priorCi.currentGateChecks = [
+        { id: 1, suiteId: 30, event: "pull_request", conclusion: "success" },
+        { id: 3, suiteId: 20, event: "workflow_dispatch", conclusion: "success" },
+      ];
       state.priorCi.membership = "member";
       state.priorCi.rulesetBypass = "always";
       // merge_verify reads authority twice; final merge_run qualification must start

@@ -14,7 +14,7 @@ import {
   resolveDelegationCapability,
 } from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
-import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -52,7 +52,7 @@ export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
     lifecycleGeneration: string;
-    onSessionWriter: (writer: CompactionAccountingTarget) => void;
+    onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
   if (
@@ -190,6 +190,7 @@ export async function runCliFallbackCandidate(
         readMode: "read-only",
         getSessionEntry: () => turn.getActiveSessionEntry(),
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({
         sessionEntry: initialSessionEntry,
@@ -405,38 +406,7 @@ export async function runCliFallbackCandidate(
             agentId: turn.followupRun.run.agentId,
             jobId: turn.followupRun.run.scheduledAutomation?.job.id,
             onExecutionStarted: turn.followupRun.run.scheduledAutomation
-              ? async () => {
-                  try {
-                    await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
-                      params.runId,
-                    );
-                    params.runAbortSignal?.throwIfAborted();
-                    turn.followupRun.run.internalEventExecution?.assertCurrent?.();
-                    const automation = turn.followupRun.run.scheduledAutomation;
-                    if (automation && sessionKey) {
-                      automation.onExecutionStarted?.({
-                        runId: params.runId,
-                        sessionId: turn.followupRun.run.sessionId,
-                        sessionKey,
-                        provider: params.provider,
-                        model: params.model,
-                        ...(params.isFallbackRetry ? { isFallback: true } : {}),
-                      });
-                    }
-                  } catch (error) {
-                    if (!params.hasAgentRunStarted()) {
-                      lifecycleBackstop.note({
-                        stream: "lifecycle",
-                        data: {
-                          phase: "finishing",
-                          executionStarted: false,
-                          providerStarted: false,
-                        },
-                      });
-                    }
-                    throw error;
-                  }
-                }
+              ? () => params.notifyScheduledExecutionStarted(lifecycleBackstop, () => sessionKey)
               : undefined,
             scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             config: params.runtimeConfig,
@@ -530,14 +500,6 @@ export async function runCliFallbackCandidate(
             onExecutionPhase: params.signalExecutionPhaseForTyping,
           },
         });
-        if (sessionTarget && sessionEntry) {
-          // History preparation publishes its committed writer into this candidate's detached row.
-          params.onSessionWriter({
-            ...sessionTarget,
-            lifecycleRevision: sessionEntry.lifecycleRevision,
-            activeWriterRunId: sessionEntry.activeWriterRunId,
-          });
-        }
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.

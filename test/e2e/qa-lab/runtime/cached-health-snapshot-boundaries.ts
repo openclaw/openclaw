@@ -8,6 +8,7 @@ import { healthHandlers } from "../../../../src/gateway/server-methods/health.js
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { withFixturePlugin } from "./fixture-plugin-config.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.ts";
 const SCENARIO_PATH = "qa/scenarios/observability/cached-health-snapshot-boundaries.yaml";
@@ -286,17 +287,8 @@ export async function runCachedHealthSnapshotBoundariesProof(
   };
 }
 
-function parseArtifactBase(argv: readonly string[]) {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
-
 export async function main(argv = process.argv.slice(2)) {
-  const artifactBase = parseArtifactBase(argv);
+  const artifactBase = parseQaArtifactBase(argv);
   const repoRoot = path.resolve(import.meta.dirname, "../../../..");
   const writer = createQaScriptEvidenceWriter({
     artifactBase,

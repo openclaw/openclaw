@@ -290,7 +290,7 @@ export async function loadCodexBundleMcpThreadConfigCore(
       "Native fork preparation cannot provision plugin data directories. Complete plugin setup before retrying.",
     );
   }
-  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
+  const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
     config: effectiveConfig,
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });

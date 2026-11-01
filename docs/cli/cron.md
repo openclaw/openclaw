@@ -28,6 +28,11 @@ authentication, calls to the configured local loopback Gateway do not open the
 shared state database for device authentication. Remote and explicit URL targets
 retain their device authentication and pairing requirements.
 
+Ctrl-C or SIGTERM cancels a pending `list` or `show` read without printing a late
+result or failure document. The CLI exits with status 130 or 143, respectively.
+An `add` or `edit` mutation already sent to the Gateway still waits for its
+receipt during cleanup and reports any failure; interrupting does not undo it.
+
 ## Create jobs quickly
 
 `openclaw automations create` is an alias for `openclaw automations add`. For new jobs, put the schedule first and the prompt second:
@@ -572,7 +577,7 @@ openclaw automations edit <job-id> --session current
 openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 
-`openclaw automations add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
+`openclaw automations add` warns when `--agent` is omitted on agent-turn or script jobs. Ownership resolves from an explicit `--agent`, then an agent-qualified `--session-key`, then the configured default agent. The default follows `agents.defaults.systemAgent.agentId` or the applicable legacy/sole-agent fallback; omitting `--agent` does not pin the job to `main`. Pass `--agent <id>` at create time to pin a specific agent. If no owner can be resolved, creation fails with an error asking you to select an agent or configure the system agent.
 
 Delivery tweaks:
 

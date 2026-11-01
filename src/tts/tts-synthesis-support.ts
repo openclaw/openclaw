@@ -71,10 +71,11 @@ export async function throwTtsProjectionError(
   error: unknown,
   cleanup: () => void | Promise<void>,
 ): Promise<never> {
-  const [result] = await Promise.allSettled([Promise.resolve().then(cleanup)]);
-  if (result.status === "rejected") {
-    throw new AggregateError([error, result.reason], formatErrorMessage(error), { cause: error });
-  }
+  await Promise.resolve()
+    .then(cleanup)
+    .catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], formatErrorMessage(error), { cause: error });
+    });
   throw error;
 }
 
@@ -311,7 +312,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         }
         const providerConfig = getResolvedSpeechProviderConfigForVoiceModel({
           config,
-          providerId: candidateProvider.id,
+          provider: candidateProvider,
           cfg,
           voiceModel,
           registry: providerRegistry,

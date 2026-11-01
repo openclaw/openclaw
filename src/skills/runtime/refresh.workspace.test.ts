@@ -166,7 +166,7 @@ async function remoteFixture(options: { finishOnAbort?: boolean } = {}) {
     ),
   };
   const release = registerAgentWorkspaceAccess(gateway, access);
-  const config = { plugins: { enabled: false } };
+  const config = { plugins: { allow: ["skill-workshop"] } };
   releases.push(release);
   const params = { workspaceDir: gateway, config };
   const remoteParams = {
@@ -224,7 +224,10 @@ it.each(["replacement", "watch disablement", "shutdown"] as const)(
           ? refresh.ensureSkillsWatcher({
               ...params,
               sourcePlan: remoteParams.sourcePlan,
-              config: { plugins: { enabled: false }, skills: { load: { watch: false } } },
+              config: {
+                plugins: { allow: ["skill-workshop"] },
+                skills: { load: { watch: false } },
+              },
             })
           : remoteRefresh.closeRemoteSkillsWatchers();
     try {

@@ -117,10 +117,10 @@ function DraftAgentSelect(props: {
           agentIdentity: props.page().context?.agentIdentity,
           disabled: submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
           onSelect: (agentId) => place().selectAgentId(agentId),
-          onOpenChange: (open) => {
-            props.page().agentPickerOpen = open;
-            props.page().changed();
+          identityTargetsRef: (read) => {
+            props.page().readAgentIdentityTargets = read;
           },
+          onIdentityTargetsChange: () => props.page().changed(),
         }}
       />
     </Show>
@@ -486,6 +486,11 @@ function renderPageContent(host: PageHost) {
   return (
     <Show when={initialConnectionReady()}>
       {(_ready) => {
+        const assistantNameControl = children(() => (
+          <Show when={!catalog.isTarget(page().data) && page().place.agents().length > 1}>
+            <DraftAgentSelect page={page} />
+          </Show>
+        ));
         onSettled(() => {
           renderedPages.add(host);
         });
@@ -499,6 +504,7 @@ function renderPageContent(host: PageHost) {
                   "new-session-page--incognito": page().submission.visibility === "incognito",
                 },
               ]}
+              style={{ "--chat-thread-max-width": options().chatMessageMaxWidth ?? "48rem" }}
             >
               <SessionBackgroundView context={page().context} surface="new-session" />
               <Show when={!catalog.isTarget(page().data)}>
@@ -526,11 +532,7 @@ function renderPageContent(host: PageHost) {
                       <DraftWelcome
                         sessions={page().context?.sessions}
                         options={page().welcomeOptions()}
-                        assistantNameControl={
-                          !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
-                            <DraftAgentSelect page={page} />
-                          ) : undefined
-                        }
+                        assistantNameControl={assistantNameControl()}
                         composer={<Draft />}
                       />
                     }

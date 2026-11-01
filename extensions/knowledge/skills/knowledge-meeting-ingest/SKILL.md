@@ -1,6 +1,6 @@
 ---
 name: knowledge-meeting-ingest
-description: Ingest meeting transcripts from any recorder into Knowledge with attendee enrichment, timeline merge, supported decisions and commitments, and verification of substance and sequence. Summary-only input is not a verified meeting ingestion.
+description: Ingest meeting transcripts from any recorder into Knowledge with attendee enrichment, source notes, supported decisions and commitments, and verification of substance and sequence. Summary-only input is not a verified meeting ingestion.
 ---
 
 # Meeting ingestion
@@ -10,6 +10,7 @@ structured claims, then verify them. Read a reference only when its step needs i
 
 - [setup](references/setup.md): always, first (status, ontology, search)
 - [source acquisition](references/source-acquisition.md): fetching from an API, including Granola
+  through its plugin
 - [sources](references/sources.md): retaining originals; citation format
 - [speakers](references/speakers.md): possible split, duplicate or unclear speaker
 - [identity](references/identity.md): resolving a person, company or project
@@ -28,11 +29,12 @@ structured claims, then verify them. Read a reference only when its step needs i
 - Speakers are resolved on evidence with a confidence, never guessed. Use every
   real signal; leave a speaker unresolved only when there is none.
 - Every participant (spoke, was addressed, or otherwise took part) gets a
-  profile with a Timeline line and an attendance edge. Invite-list-only names
-  get neither.
+  profile and an `attended` edge whose body is their source note.
+  Invite-list-only names get neither.
 - Every company, project or concept the meeting says something substantive
-  about gets a page (found or created), a Timeline line and links in both
-  directions. Passing mentions don't.
+  about gets a page (found or created), a link from the meeting, and a
+  `discusses` edge (meeting → entity) whose body is its source note. Passing
+  mentions don't. Entity pages get no Timeline line; their Timeline is derived.
 - Pages read like good human notes: names first, few caveats, no process
   commentary.
 - Decisions, commitments and events become claims. Unverified claims don't
@@ -112,7 +114,7 @@ Batch related records ([publish](references/publish.md)).
 - Meeting page per [meeting page](references/meeting-page.md).
 - For each participant and substantive entity, follow the steps in
   `knowledge-entities`' SKILL.md: it resolves the entity, decides whether it gets
-  a page, and writes the profile and Timeline line. Its references with the same
+  a page, and writes the profile and source note. Its references with the same
   names as this skill's are identical copies; use the ones you already read and
   don't reread them. Its only extra reference is enrichment (read its
   "During ingestion" section).
@@ -120,9 +122,11 @@ Batch related records ([publish](references/publish.md)).
   facts and one `source_event: true` event for the meeting itself, with all
   relevant `entities`. Other events keep their own dates.
 - An evidenced `attended` relationship per participant. In the shipped ontology it
-  runs participant → meeting; confirm in the definition. Set `source_page`.
-- Mentioned people with pages get links too. Don't create pages for unknown
-  speakers.
+  runs participant → meeting; confirm in the definition. Set `source_page`. Its
+  body is one sentence on what this person did or said in the meeting.
+- An evidenced `discusses` relationship (meeting → entity) for each substantive
+  non-participant, including mentioned people with pages, with the same kind of
+  one-sentence body. Don't create pages for unknown speakers.
 - For legal or personal content, keep the meeting page factual and limit spread
   to profiles; ask if scope is unclear.
 
@@ -133,10 +137,10 @@ Batch related records ([publish](references/publish.md)).
 Run [verify](references/verify.md) first. Then check:
 
 - **Substance:** required sections have content or a source-grounded reason.
-- **Links:** `knowledge_verify` `expectedLinks` for meeting ↔ each entity, plus
+- **Links:** `knowledge_verify` `expectedLinks` for meeting → each entity, plus
   claim `entities`/`dependencies`, commitment `owner`, and edge
-  `from`/`to`/`label`/`source_page`. Every linked profile has a Timeline line
-  for this meeting.
+  `from`/`to`/`label`/`source_page`. Every linked entity has an `attended` or
+  `discusses` edge with a body for this meeting.
 - **State:** no updated profile has a State topic named for a date or meeting.
 - **Style:** check the drafts in your work files against
   [writing](references/writing.md) before publishing: names first, no stacked
@@ -153,8 +157,9 @@ Run [verify](references/verify.md) first. Then check:
   for related entities. An inversion or impossible place/time is a contradiction;
   never invent transit. Fix and recheck, or record an explicit user waiver as
   WAIVED, not resolved. A waiver covers sequence only. A participant missing from
-  the day's chronicle usually means a missing Timeline line: investigate, don't
-  block. Genuinely ambiguous order is flagged in the report, not blocked.
+  the day's chronicle usually means the meeting's `source_event` claim lacks
+  them in `entities` (an attendance edge alone does not date anyone):
+  investigate, don't block. Genuinely ambiguous order is flagged in the report, not blocked.
 
 **Done when:** all checks pass, or failures are fixed and rechecked.
 
@@ -168,3 +173,52 @@ unresolved identities and remaining work here, in the report, not on the pages;
 the user resolves them. If a check can't pass, report the meeting as not
 ingested and name the check. A partial report is honest progress, not
 completion.
+
+## Scribe runs
+
+The **Learn from Granola** scribe runs this skill unattended. Its prompt checks
+access, sets up any automation and lists its settings; this section is only the
+work. Do not ask questions. Acquire with the Granola plugin's tools
+([source acquisition](references/source-acquisition.md)).
+
+### Learn from Granola
+
+The prompt names which meetings (the owner's, or every meeting the account can
+read) and how far back to start (today, or the last 7 or 30 days, in the owner's
+time zone).
+
+1. **Plugin.** Tool search for `granola list_meetings`. If the Granola tools
+   are missing or say the account is not connected, stop with
+   `Scribe status: failed — the Granola plugin is not installed or connected`.
+2. **Checkpoint.** `knowledge_lookup` the note page
+   `Knowledge scribe checkpoint · Learn from Granola`. Its first line is
+   `Start: YYYY-MM-DD`, the start date the prompt set when the page was
+   created. Then one line per Granola meeting: meeting date, UUID,
+   `updated_at` and a state: `done` (with the meeting page title), `no
+   transcript`, or `pending` (with why: still recording, transcript pending,
+   or verification failed). Create the page with `knowledge_save_page` (type
+   `note`) on the first run, writing the prompt's start date.
+3. **List.** `list_meetings` from the later of `Start` and 7 days before the
+   newest `done` meeting date, through today; never earlier than `Start`. For
+   the owner's meetings pass
+   `involvement: {captured_by_me: true, listed_as_participant: true}`. Follow
+   `next_cursor`. Add every `pending` meeting by UUID (read with
+   `get_meetings`), whatever its date, so it is retried until it is `done` or
+   `no transcript`. Skip `done` and `no transcript` meetings unless a later
+   `updated_at` shows the note changed.
+4. **Dedup.** Before acquiring, `knowledge_grep` the UUID, then the meeting
+   title, and read candidate meeting pages with the same date (±1 day). A
+   page is not proof of a complete ingestion: an earlier run may have stopped
+   after publishing it. Run the verification in step 5 against the existing
+   page. If it passes, record the meeting `done` and skip it. Otherwise
+   reconcile into that page ([speakers](references/speakers.md)) and finish
+   steps 3–5 for it; never create a second page.
+5. **Ingest.** Oldest first, one meeting at a time, run steps 1–5 of this skill
+   in full. Record a meeting still being recorded, with a pending transcript,
+   or failing verification as `pending`; record `no transcript` for one that
+   has none. Record `done` only after verification passes. Write each line
+   with `knowledge_edit_body` as soon as the meeting's outcome is known, so an
+   interrupted run resumes instead of redoing or losing it. If context runs
+   short, stop after the current meeting and leave the rest.
+6. Count meetings ingested, already in Knowledge, left pending and without a
+   transcript, and pages and claims written.

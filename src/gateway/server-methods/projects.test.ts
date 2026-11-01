@@ -39,7 +39,7 @@ import * as rowInputs from "../session-utils-row.js";
 import {
   clonedProject,
   expectCheckoutInUse,
-  expectProjectAccessChanged,
+  expectProjectListingChanged,
   projectConfig,
 } from "./projects-shard.test-support.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
@@ -385,7 +385,7 @@ test("projects.list refuses a default repository from a replaced config during r
       current = { gateway: { github: { host: "github.com" } } };
       return [];
     });
-  expectProjectAccessChanged(await listProjects(original, { getConfig: () => current }));
+  expectProjectListingChanged(await listProjects(original, { getConfig: () => current }));
 });
 
 test("projects.list replies before cold or stale observed Git discovery settles", async () => {
@@ -425,8 +425,8 @@ test("projects.list replies before cold or stale observed Git discovery settles"
           observedProjects: [{ name: "registered", originUrl: "https://example.test/repo.git" }],
         },
       });
-      using clock = vi.spyOn(Date, "now");
-      clock.mockReturnValue(Date.now() + 60_001);
+      using clock = vi.spyOn(performance, "now");
+      clock.mockReturnValue(performance.now() + 60_001);
       const refresh = Promise.withResolvers<Awaited<typeof held.promise>>();
       discovery.mockImplementation((operation, options) =>
         operation.type === "repository.identities" ? refresh.promise : run(operation, options),
@@ -647,10 +647,10 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
         return discoverRepository(checkoutPath);
       });
       const result = await listProjects(cfg, { observed: true, profileId: profile.id });
-      if (change !== "unrelated creation" && change !== "activity") {
-        expectProjectAccessChanged(result);
-        return;
-      }
+      // Disclosure-relevant changes restart the read against the current session facts.
+      expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(
+        change === "visibility" || change === "replacement" ? 2 : 1,
+      );
       expect(result).toMatchObject({
         ok: true,
         payload: {

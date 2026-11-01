@@ -146,6 +146,10 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
       prediction.sync(predictions);
+      if (current.queuedSubmitDue) {
+        // Submission reads live composer state; run it after this commit.
+        queueMicrotask(current.flushQueuedSubmit);
+      }
     },
   );
   onSettled(() => {
@@ -189,6 +193,7 @@ export function ChatComposer(props: ChatComposerProps & { questions: ComposerQue
       canCompose: current.canCompose,
       showAbortableUi: current.showAbortableUi,
       visibleDraft: current.visibleDraft,
+      submitQueued: current.submitQueued,
       predictionText: current.predictionText,
       runStatusAnnouncement: current.runStatusAnnouncement,
       cancellationCaveat: current.cancellationCaveat,

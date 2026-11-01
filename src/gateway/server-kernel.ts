@@ -214,6 +214,7 @@ async function createGatewayKernelWithSdkHost(
         log,
         logCron,
         shutdownRuntime,
+        exitAfterStartupFailure: opts.exitAfterStartupFailure,
       }),
     );
     lifecycleRuntime = preparedLifecycleRuntime;
@@ -269,7 +270,7 @@ async function createGatewayKernelWithSdkHost(
     await prelude;
     if (lifecycleRuntime) {
       // The lifecycle releases metadata only after its required joins succeed.
-      await lifecycleRuntime.closeOnStartupFailure();
+      await lifecycleRuntime.closeOnStartupFailure(startupError);
     } else {
       closeStartupTrace?.();
       await kernelState?.mentionInbox.dispose();

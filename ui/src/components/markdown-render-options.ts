@@ -10,7 +10,8 @@ export type MarkdownRenderOptions = {
   codeBlockChrome?: "copy" | "none";
   codeBlockInteraction?: "interactive" | "static";
   fileLinks?: boolean;
-  documentFileLinks?: boolean;
+  /** Selection cues accept query-bearing references without resolving or reading them. */
+  documentFileLinks?: boolean | "select";
   humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
