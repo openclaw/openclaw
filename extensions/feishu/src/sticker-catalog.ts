@@ -40,9 +40,7 @@ export function searchFeishuStickerSet(
   const needle = query.toLowerCase().normalize("NFC");
   const stickers: StickerMatch[] = [];
   for (const [fileId, keywords] of entries) {
-    const keyword = keywords.find((label) =>
-      label.toLowerCase().normalize("NFC").includes(needle),
-    );
+    const keyword = keywords.find((label) => label.toLowerCase().normalize("NFC").includes(needle));
     if (keyword === undefined) {
       continue;
     }
