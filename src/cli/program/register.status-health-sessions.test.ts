@@ -124,11 +124,9 @@ it.each([
   expectOptions(owner, options);
 });
 it("rejects an invalid probe timeout without dispatch", async () => {
-  await run("status --timeout nope");
-  expect(mocks.runtime.error).toHaveBeenCalledWith(
+  await expect(run("status --timeout nope")).rejects.toThrow(
     "--timeout must be a positive integer (milliseconds)",
   );
-  expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   expect(mocks.status).not.toHaveBeenCalled();
 });
 
