@@ -233,13 +233,10 @@ function ChatPaneHeaderChrome(
           </Show>
           <Show when={!props.mergedChrome}>
             <div
-              class={[
-                "chat-pane__identity-actions",
-                {
-                  "chat-pane__identity-actions--versions":
-                    props.hasVersions ?? props.branches.length > 1,
-                },
-              ]}
+              class="chat-pane__identity-actions"
+              style={{
+                "--chat-pane-menu-count": (props.hasVersions ?? props.branches.length > 1) ? 2 : 1,
+              }}
             >
               {props.sessionMenu}
               <Show when={presented()}>
