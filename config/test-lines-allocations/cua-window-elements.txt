@@ -1,2 +1,0 @@
-# Preserve actionable window refs when CUA defaults to a Markdown tree without elements.
-11

@@ -60,12 +60,14 @@ function actionResult(name: "confirmedBackgroundAction" | "suspectedNoopAction")
 
 function windowDriver(handle: (name: string) => CuaToolResult = () => cuaToolResult({})) {
   const native = driver();
-  native.callTool.mockImplementation(async (name) => {
+  native.callTool.mockImplementation(async (name, args) => {
     if (name === "list_windows") {
       return cuaToolResult(fixtures.listWindows);
     }
     if (name === "get_window_state") {
-      return cuaToolResult(fixtures.windowState, { image: true });
+      const elements = args.tree_format === "elements" ? fixtures.windowState.elements : undefined;
+      const image = args.include_screenshot !== false;
+      return cuaToolResult({ ...fixtures.windowState, elements }, { image });
     }
     return handle(name);
   });
@@ -232,20 +234,6 @@ describe("cua-computer provider", () => {
     const { session, callTool } = windowDriver((name) =>
       name === "click" ? actionResult("confirmedBackgroundAction") : cuaToolResult({}),
     );
-    callTool.mockImplementationOnce(async () => cuaToolResult(fixtures.listWindows));
-    callTool.mockImplementationOnce(async (_name, args) => {
-      // CUA 0.37 omits the elements array unless its structured tree is requested.
-      const structured = args.tree_format === "elements";
-      return cuaToolResult(
-        {
-          ...fixtures.windowState,
-          elements: structured ? fixtures.windowState.elements : undefined,
-          tree_format: structured ? "elements" : "markdown",
-          tree_markdown: structured ? undefined : '- [7] text field "Body" value="old"',
-        },
-        { image: args.include_screenshot !== false },
-      );
-    });
     const computer = await execution(session);
     const listed = await computer.read<{
       details: { windows: Array<{ windowRef: string; appName: string; title: string }> };
