@@ -990,17 +990,19 @@ migrate_baseline_cron_authority() {
   local bridge_prefix="$ARTIFACT_ROOT/cron-migration-bridge"
   local bridge_install_log="$ARTIFACT_ROOT/cron-migration-bridge-install.log"
   local bridge_cli="openclaw"
-  local bridge_version_expected="$baseline_version"
-  if [ "$baseline_version" != "2026.9.7" ]; then
+  local bridge_version_expected="2026.9.7"
+  if [ "$(printf '%s\n' "2026.10.1" "$baseline_version" | sort -V | head -n 1)" = "2026.10.1" ]; then
+    bridge_version_expected="2026.10.1"
+  fi
+  if [ "$baseline_version" != "$bridge_version_expected" ]; then
     rm_rf_retry "$bridge_prefix"
     mkdir -p "$bridge_prefix"
-    if ! openclaw_prepublish_plugin_registry_run_published openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$bridge_prefix" openclaw@2026.9.7 --no-fund --no-audit >"$bridge_install_log" 2>&1; then
+    if ! openclaw_prepublish_plugin_registry_run_published openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$bridge_prefix" "openclaw@$bridge_version_expected" --no-fund --no-audit >"$bridge_install_log" 2>&1; then
       echo "cron migration bridge npm install failed" >&2
       openclaw_e2e_print_log "$bridge_install_log" >&2
       return 1
     fi
     bridge_cli="$bridge_prefix/bin/openclaw"
-    bridge_version_expected="2026.9.7"
   fi
   local bridge_version
   if ! bridge_version="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" --version 2>&1)"; then
