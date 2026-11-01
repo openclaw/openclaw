@@ -8,6 +8,7 @@ import {
   MODEL_CATALOG_THINKING_LEVELS,
 } from "./model-catalog-types.js";
 import type { ModelCatalogModel, ModelCatalogProvider } from "./model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities.js";
 
 export const REMOTE_CATALOG_MAX_FUTURE_SKEW_MS = 24 * 60 * 60_000;
 
@@ -319,6 +320,64 @@ export type RemoteModelCatalogBundleV2 = Omit<
   "models"
 > & { models: RemoteModelCatalogModelV2[] };
 
+const modelV3Schema = modelFieldsSchema
+  .omit({ cost: true, baseUrl: true, headers: true })
+  .extend({
+    provider: z.string().trim().min(1),
+    pricing: pricingV2Schema,
+    inference: ModelInferenceCapabilitiesSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateContextWindowDefault);
+
+const bundleV3FieldsSchema = bundleV2FieldsSchema.extend({
+  schemaVersion: z.literal(3),
+  models: z.array(modelV3Schema).min(1),
+});
+
+export const remoteModelCatalogBundleV3Schema = bundleV3FieldsSchema.superRefine(
+  (bundle, context) => {
+    validateBundleModelRefs(bundle, context);
+    for (const [provider, entry] of Object.entries(bundle.providers)) {
+      const chatIds = new Set(
+        bundle.models
+          .filter((model) => model.provider === provider && model.inference?.chat !== false)
+          .map((model) => model.id),
+      );
+      for (const field of ["defaultModel", "defaultUtilityModel"] as const) {
+        if (entry[field] !== undefined && !chatIds.has(entry[field])) {
+          context.addIssue({
+            code: "custom",
+            message: `${field} must reference a chat model of provider ${provider}`,
+            path: ["providers", provider, field],
+          });
+        }
+      }
+      for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
+        if (!chatIds.has(id)) {
+          context.addIssue({
+            code: "custom",
+            message: "recommended model must support chat",
+            path: ["providers", provider, "recommendedModels", index],
+          });
+        }
+      }
+    }
+  },
+);
+
+export type RemoteModelCatalogModelV3 = RemoteModelCatalogModelV2 &
+  Pick<ModelCatalogModel, "inference">;
+export type RemoteModelCatalogBundleV3 = Omit<
+  z.infer<typeof remoteModelCatalogBundleV3Schema>,
+  "models"
+> & { models: RemoteModelCatalogModelV3[] };
+
+export function parseRemoteModelCatalogBundleV3(value: unknown): RemoteModelCatalogBundleV3 {
+  // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
+  return remoteModelCatalogBundleV3Schema.parse(value) as RemoteModelCatalogBundleV3;
+}
+
 export function parseRemoteModelCatalogBundleV2(value: unknown): RemoteModelCatalogBundleV2 {
   // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
   return remoteModelCatalogBundleV2Schema.parse(value) as RemoteModelCatalogBundleV2;
@@ -349,7 +408,7 @@ function stripRemoteTransportOverrides(value: unknown): unknown {
 
 /** Removes every transport endpoint/header override before remote data reaches persistence. */
 export function sanitizeRemoteModelCatalogBundle<
-  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2,
+  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
 >(bundle: T): T {
   // Provider dictionary keys are identities, even when named "headers" or "baseUrl".
   return (
@@ -427,5 +486,42 @@ export function validateAndSanitizeRemoteModelCatalogBundleV2(
     throw new Error("remote model catalog contains no valid models");
   }
   const providers = pruneRemoteCatalogRecommendations(bundle.providers, models);
+  return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
+}
+
+export function validateAndSanitizeRemoteModelCatalogBundleV3(
+  value: unknown,
+  warn: CatalogWarning = console.warn,
+): RemoteModelCatalogBundleV3 {
+  const bundle = bundleV3FieldsSchema.extend({ models: z.array(z.unknown()) }).parse(value);
+  const models = parseCatalogRows(
+    bundle.models,
+    modelV3Schema.refine((model) => Object.hasOwn(bundle.providers, model.provider)),
+    "models",
+    warn,
+    (model) => JSON.stringify([model.provider, model.id]),
+  );
+  if (models.length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
+  // Row salvage also removes chat references to dropped or native-only rows.
+  const chatModels = models.filter((model) => model.inference?.chat !== false);
+  const providers = Object.fromEntries(
+    Object.entries(pruneRemoteCatalogRecommendations(bundle.providers, chatModels)).map(
+      ([id, { defaultModel, defaultUtilityModel, ...provider }]) => {
+        const hasChatModel = (modelId: string | undefined) =>
+          modelId !== undefined &&
+          chatModels.some((model) => model.provider === id && model.id === modelId);
+        return [
+          id,
+          {
+            ...provider,
+            ...(hasChatModel(defaultModel) ? { defaultModel } : {}),
+            ...(hasChatModel(defaultUtilityModel) ? { defaultUtilityModel } : {}),
+          },
+        ];
+      },
+    ),
+  );
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
 }

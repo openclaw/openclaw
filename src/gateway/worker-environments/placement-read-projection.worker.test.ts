@@ -568,7 +568,7 @@ it.each([false, true])(
       "journal-stale",
       "result-reclaimed",
     ].map((sessionId) => {
-      const pending: WorkerWorkspacePendingResult = {
+      const pending: Omit<WorkerWorkspacePendingResult, "repositoryDiskAuthority"> = {
         sessionId,
         environmentId: `env-${sessionId}`,
         ownerEpoch: sessionId === "journal-stale" ? 8 : 7,

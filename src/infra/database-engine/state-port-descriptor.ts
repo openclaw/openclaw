@@ -24,6 +24,7 @@ import {
   legacyTemplateStateIdentifier,
 } from "../../state/openclaw-state-db-schema-v36-template-names.js";
 import { withLegacyWorkerResourceReceipts } from "../../state/openclaw-state-db-schema-v37-resource-receipts.js";
+import { withLegacyRepositoryDiskAuthority } from "../../state/openclaw-state-db-schema-v38-repository-disk.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -74,8 +75,8 @@ export async function loadStatePortDescriptor(
     // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 37 ||
-      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 38 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -92,11 +93,20 @@ export async function loadStatePortDescriptor(
   const legacyCas = sourceVersion < 35;
   const legacyTemplates = sourceVersion < 36;
   const legacyResourceReceipts = sourceVersion < 37;
+  const legacyRepositoryDisk = sourceVersion < 38;
   const currentCatalog: PostgresCatalogFact[] = [
     ...statePostgresRuntime.expectedCatalog,
     ...(source?.expectedCatalog ?? []),
   ].filter(
     (fact) =>
+      (!legacyRepositoryDisk ||
+        !isColumn(fact) ||
+        !(
+          (fact.table === "session_repository_workspaces" &&
+            fact.value.name === "disk_authority_json") ||
+          (fact.table === "worker_workspace_pending_results" &&
+            fact.value.name === "repository_disk_authority_json")
+        )) &&
       (!legacyResourceReceipts ||
         fact.table !== "worker_environments" ||
         !isColumn(fact) ||
@@ -132,7 +142,8 @@ export async function loadStatePortDescriptor(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
   const sourceSql = (sql: string, schemaSql = sql) => {
-    const receipts = legacyResourceReceipts ? withLegacyWorkerResourceReceipts(sql) : sql;
+    const disk = legacyRepositoryDisk ? withLegacyRepositoryDiskAuthority(sql) : sql;
+    const receipts = legacyResourceReceipts ? withLegacyWorkerResourceReceipts(disk) : disk;
     const template = legacyTemplates ? withLegacyTemplateStateSchema(receipts) : receipts;
     const cas = legacyCas ? withLegacyLocalWorkspaceCas(template) : template;
     const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(cas) : cas;

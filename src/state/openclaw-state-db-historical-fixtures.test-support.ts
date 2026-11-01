@@ -102,5 +102,6 @@ export function expectedStateMigrationsFromV27(pathname: string) {
     "local-workspace-cas-v35",
     "template-names-v36",
     "worker-resource-receipts-v37",
+    "repository-disk-authority-v38",
   ].map((kind) => ({ kind, path: pathname }));
 }

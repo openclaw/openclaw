@@ -419,6 +419,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-reclaim-acceptance.test.ts",
   "src/gateway/worker-environments/placement-reclaim-history.test.ts",
   "src/gateway/worker-environments/placement-reclaim-lifecycle.test.ts",
+  "src/gateway/worker-environments/placement-repository-disk-recovery.test.ts",
   "src/gateway/worker-environments/placement-session-read.test.ts",
   "src/gateway/worker-environments/placement-session-retirement.test.ts",
   "src/gateway/worker-environments/placement-session-runtime-preparation.test.ts",

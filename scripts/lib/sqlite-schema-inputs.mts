@@ -28,12 +28,6 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-storage-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
-import { withLegacyStateHeadLayout } from "../../src/state/openclaw-state-db-schema-v26-layout.js";
-import { withLegacyStateWriteIndexes } from "../../src/state/openclaw-state-db-schema-v27-indexes.js";
-import { withLegacyLocalWorkspaceManifests } from "../../src/state/openclaw-state-db-schema-v31-workspace-manifests.js";
-import { withLegacyLocalWorkspaceCas } from "../../src/state/openclaw-state-db-schema-v35-workspace-cas.js";
-import { withLegacyTemplateStateSchema } from "../../src/state/openclaw-state-db-schema-v36-template-names.js";
-import { withLegacyWorkerResourceReceipts } from "../../src/state/openclaw-state-db-schema-v37-resource-receipts.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -42,7 +36,10 @@ import {
   RETIRED_COMMITMENTS_SCHEMA_SQL,
   SHIPPED_RETIRED_COMMITMENTS_SCHEMA_SQL,
 } from "../../src/state/openclaw-state-schema-retired.js";
-import { getOpenClawStateRuntimeSchema } from "../../src/state/openclaw-state-schema-runtime.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  getOpenClawStatePredecessorSchema,
+} from "../../src/state/openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 
 export type SqliteSchemaInput = {
@@ -60,17 +57,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  const stateBeforeV37 = withLegacyWorkerResourceReceipts(OPENCLAW_STATE_SCHEMA_SQL);
-  add("state-before-v37", "state", stateBeforeV37);
-  const stateBeforeV36 = withLegacyTemplateStateSchema(stateBeforeV37);
-  add("state-before-v36", "state", stateBeforeV36);
-  const stateBeforeV35 = withLegacyLocalWorkspaceCas(stateBeforeV36);
-  add("state-before-v35", "state", stateBeforeV35);
-  const stateBeforeV31 = withLegacyLocalWorkspaceManifests(stateBeforeV35);
-  add("state-before-v31", "state", stateBeforeV31);
-  const stateBeforeV27 = withLegacyStateWriteIndexes(stateBeforeV31);
-  add("state-before-v27", "state", stateBeforeV27);
-  add("state-before-v26", "state", withLegacyStateHeadLayout(stateBeforeV27));
+  for (const version of [38, 37, 36, 35, 31, 27, 26]) {
+    add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
+  }
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);
   add("daemon-runtime-pins-v1", "daemon", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
   add("client-credentials-v1", "client", CLIENT_CREDENTIAL_SCHEMA_SQL);

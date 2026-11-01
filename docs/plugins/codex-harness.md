@@ -28,6 +28,11 @@ current owned proxy. Context-only projection refreshes use that same logical
 inference identity when background work retains its predecessor, rather than
 comparing the private relay URL with the logical route fingerprint.
 
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
+
 If active work still claims a native thread, OpenClaw rejects configuration
 changes that would release it without trying fallback models. Wait for that work
 to finish or stop it before retrying. The original thread and its configuration

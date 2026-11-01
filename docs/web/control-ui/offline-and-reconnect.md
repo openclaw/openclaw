@@ -219,6 +219,7 @@ older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history
 window before continuing to older pages. Automatic viewport filling does not
 trigger this refill. Overlapping cached rows are deduplicated.
+Deleting a session removes its transcript and prunes its rows from the saved sidebar without clearing unrelated conversations or sidebar content. An unchanged live handoff reuses the saved sidebar; roster read receipts alone do not trigger another write. Tabs sharing the same saved sidebar write each changed presentation once. A malformed individual transcript snapshot discards only that conversation.
 Clearing site data removes local recovery data.
 If browser storage is unavailable or no usable record exists, the connection
 screen appears as usual.

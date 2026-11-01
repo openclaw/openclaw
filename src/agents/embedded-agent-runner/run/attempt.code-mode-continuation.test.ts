@@ -93,7 +93,6 @@ it("keeps the normal Code Mode surface through failure, inspection, and multiple
     sessionKey: "agent:main:main",
     tempPaths,
     attemptOverrides: {
-      contextTokenBudget: 8192,
       config: { tools: { codeMode: true } },
       sessionManager,
       disableMessageTool: false,

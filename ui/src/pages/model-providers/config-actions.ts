@@ -2,6 +2,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import type { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
 import {
   modelProviderErrorMessage,
@@ -57,6 +58,22 @@ export function createModelProviderConfigActions(deps: {
       : null;
   }
 
+  // The Gateway policy owner marks each model; a saved key whose models are all
+  // hidden would otherwise succeed with nothing new in the picker.
+  async function providerPolicyWarning(
+    client: NonNullable<GatewayPageBinding["client"]>,
+    provider: string,
+  ): Promise<string | null> {
+    const { models } = await loadModelCatalog(client, {
+      agentId: state.selectedAgentId,
+      view: "all",
+      provider,
+    });
+    return models.length > 0 && models.every((model) => model.manualSelectionAllowed === false)
+      ? t("modelProviders.add.policyHidden", { provider, agent: state.selectedAgentId })
+      : null;
+  }
+
   async function mutateApiKey(
     provider: string,
     configKey: string,
@@ -90,7 +107,11 @@ export function createModelProviderConfigActions(deps: {
                 state.data = previous;
                 return warning;
               }
-              return state.data?.error ?? providerCatalogWarning(provider) ?? null;
+              return (
+                state.data?.error ??
+                providerCatalogWarning(provider) ??
+                (await providerPolicyWarning(client, provider))
+              );
             },
             setBusy: (busy) => setBusy(key, busy),
             setMessage: (message) => {
