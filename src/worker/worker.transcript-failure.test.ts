@@ -11,6 +11,7 @@ import {
   AgentDatabaseSchemaAdmissionInvalidError,
 } from "../state/agent-database-admission-error.js";
 import * as admission from "../state/agent-database-admission.js";
+import { adoptAgentValidationSchema } from "../state/openclaw-agent-db-validation-schema.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { ComposedGatewayHarness } from "./worker-fault-injection.test-support.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
@@ -88,12 +89,23 @@ it.each(["storage", "malformed schema receipt"])(
   },
 );
 
+function schemaAdmissionRefusal(): unknown {
+  try {
+    adoptAgentValidationSchema({ db: {} } as never, undefined, false, true);
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected agent schema admission refusal");
+}
+
 it("replays transient transcript failures and completes the run without duplicate messages", async () => {
   await withWorker(async (harness, start) => {
     const pendingInspection = { agentId: "main", paths: [], reason: "pending", pending: true };
     const storePath = harness.sessionTarget.storePath;
+    const admissionRefusal = schemaAdmissionRefusal();
+    expect(admissionRefusal).toBeInstanceOf(AgentDatabaseSchemaAdmissionChangedError);
     const failures = [
-      new AgentDatabaseSchemaAdmissionChangedError(),
+      admissionRefusal,
       Object.assign(new Error("synthetic busy"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
       Object.assign(new Error("synthetic locked"), { code: "SQLITE_LOCKED" }),
       new AgentDatabaseExecutionAdmissionClosedError("synthetic retiring owner"),
