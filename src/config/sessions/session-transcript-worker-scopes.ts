@@ -38,7 +38,7 @@ export async function withHistoryDatabase<T>(
     const value = await withSqliteReaderOwner(
       { operation: `sessions.${operationLabel}`, ownerKind: "worker" },
       () => scope.run({ ...database, validation }, operation),
-      holdContext,
+      { agentId: database.agentId, ...holdContext },
     );
     historyDatabaseScopes.delete(key);
     // Tasks without retained connections must not evict useful connections or retain empty scopes.
