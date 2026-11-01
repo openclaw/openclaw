@@ -194,6 +194,9 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
   options.recordToolPrepStage?.("abort-wrappers");
   const finalized = applyToolAvailabilityDescriptions(withAbort);
   options.recordToolPrepStage?.("deferred-followup-descriptions");
+  if (finalized.length === 0) {
+    return finalized;
+  }
   // Settlement retains metadata only, never executable closures or the plugin snapshot.
   const pending = finalized.map(({ name, parameters, outputSchema }, index) => ({
     name,
