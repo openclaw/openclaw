@@ -11,6 +11,7 @@ import {
   scheduleDailyWorkshopMaintenance,
 } from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
+import { projectSessionForkRequester } from "../session-fork-requester.js";
 import {
   completedTurnMessageAnchor,
   type CompletedTurnMessageAnchor,
@@ -99,10 +100,16 @@ function runCoreAgentEndSideEffects(
     if (!anchor) {
       return;
     }
-    const ctx = { ...params.ctx, foregroundPromptContext };
+    // The review reads only the turn's requester identity, never its live capabilities.
+    const { foregroundPromptContext: _turn, ...hookCtx } = params.ctx;
     scheduleSkillExperienceReview({
       event: params.event,
-      ctx,
+      ctx: {
+        ...hookCtx,
+        agentId: foregroundPromptContext.agentId,
+        trigger: params.ctx.trigger ?? foregroundPromptContext.trigger,
+        requester: projectSessionForkRequester(foregroundPromptContext),
+      },
       config,
       source: anchor,
     });

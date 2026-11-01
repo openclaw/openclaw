@@ -2092,22 +2092,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* Reserve the desktop disclosure slot at rest so Archive and titles never jump. */
-@media (hover: hover) and (pointer: fine) {
-  .shell:not(.shell--mobile-nav)
-    .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team):has(
-      [data-sidebar-session-archive]
-    ) {
-    > .sidebar-recent-session__aside {
-      right: calc(var(--sidebar-child-session-toggle-width) + 4px);
-    }
-
-    &:not(:has(> .sidebar-child-session-toggle)) {
-      padding-right: calc(2px + var(--sidebar-child-session-toggle-width));
-    }
-  }
-}
-
 .sidebar-recent-session--child:is(:hover, :focus-within) .sidebar-recent-session__text,
 .sidebar-recent-session:not(
     .sidebar-recent-session--child,

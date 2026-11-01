@@ -9,6 +9,7 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { agentCommandFromIngress } from "../agents/agent-command.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundPayloadContext,
@@ -105,6 +106,37 @@ const originalSkill =
 const createdSkill =
   "---\nname: contract-created\ndescription: Reuse a verified release receipt before publishing.\n---\n# Receipt\nCheck the receipt.\n";
 
+/** Changes config through the operator API, exactly as a user would. */
+async function patchConfig(
+  client: GatewayClient,
+  patch: Record<string, unknown>,
+  replacePaths?: string[],
+) {
+  const before = await client.request<{ hash: string }>("config.get", {});
+  await client.request("config.patch", {
+    baseHash: before.hash,
+    raw: JSON.stringify(patch),
+    ...(replacePaths ? { replacePaths } : {}),
+  });
+}
+
+/** The idle timer (30 s) and admission pass with no review model call and no skill change. */
+async function expectNoReview(fixture: {
+  reviewRequests: ProviderRequest[];
+  changes: () => Promise<Change[]>;
+  skillFile: string;
+}) {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 40_000);
+  });
+  await expect
+    .poll(() => getActiveGatewayRootWorkCount(), { timeout: 30_000, interval: 100 })
+    .toBe(0);
+  expect(fixture.reviewRequests).toEqual([]);
+  expect(await fixture.changes()).toEqual([]);
+  expect(await fs.readFile(fixture.skillFile, "utf8")).toBe(originalSkill);
+}
+
 async function withReview(
   actions: Action[],
   run: (fixture: {
@@ -119,6 +151,8 @@ async function withReview(
     changes: () => Promise<Change[]>;
     history: () => Promise<HistoryMessage[]>;
     foreground: (iterations?: number, key?: string) => Promise<void>;
+    /** A channel ingress turn from one sender, as a channel plugin delivers it. */
+    ingressForeground: (senderId: string) => Promise<void>;
     replay: () => Promise<void>;
     failure: { findText: (needle: string) => Promise<string | undefined> };
     sends: ChannelOutboundPayloadContext[];
@@ -130,6 +164,8 @@ async function withReview(
     failAt?: number;
     channel?: "telegram" | "slack";
     deliveryFailure?: boolean;
+    /** Holds the channel notice send open until released. */
+    holdDelivery?: { started: Deferred; release: Deferred };
     mode?: "auto" | "propose";
   } = {},
 ) {
@@ -295,6 +331,10 @@ async function withReview(
                     sendPayload: async (context: ChannelOutboundPayloadContext) => {
                       sends.push(context);
                       eventsAtSend.push(peekSystemEvents(sessionKey));
+                      if (options.holdDelivery) {
+                        options.holdDelivery.started.resolve();
+                        await options.holdDelivery.release.promise;
+                      }
                       if (options.deliveryFailure) {
                         throw new Error("CONTRACT_CHANNEL_FAILURE");
                       }
@@ -369,6 +409,31 @@ async function withReview(
           sends,
           eventsAtSend,
           replyHooks,
+          ingressForeground: async (senderId) => {
+            mode = "foreground";
+            remaining = 10;
+            await agentCommandFromIngress({
+              agentId: "main",
+              sessionKey,
+              runId: randomUUID(),
+              message: "Check release receipts individually and remember the verified procedure.",
+              allowModelOverride: false,
+              deliver: false,
+              channel: "telegram",
+              messageChannel: "telegram",
+              messageProvider: "telegram",
+              accountId: "default",
+              to: "4321",
+              runContext: {
+                senderId,
+                messageChannel: "telegram",
+                accountId: "default",
+                chatId: "4321",
+              },
+            });
+            expect(remaining).toBe(0);
+            mode = "review";
+          },
           replay: async () => {
             mode = "replay";
             const accepted = await active.client.request<{ runId: string }>("agent", {
@@ -768,6 +833,81 @@ describe("Workshop review through the real Gateway", () => {
       );
     },
   );
+  it.each(["turn", "fork"] as const)(
+    "applies tool policy at the %s gate: no review model call, no change",
+    { timeout: 150_000 },
+    async (gate) => {
+      await withReview(editActions, async (fixture) => {
+        fixture.release.resolve();
+        if (gate === "turn") {
+          // The turn cannot call skill_workshop; the deny is lifted before the review would
+          // run, so only the turn's post-policy toolNames can stop it.
+          await patchConfig(fixture.gateway.client, { tools: { deny: ["skill_workshop"] } });
+          await fixture.foreground();
+          await patchConfig(fixture.gateway.client, { tools: { deny: [] } }, ["tools.deny"]);
+        } else {
+          // The turn could call skill_workshop; it is denied before the queued review runs.
+          await fixture.foreground();
+          await patchConfig(fixture.gateway.client, { tools: { deny: ["skill_workshop"] } });
+        }
+        await expectNoReview(fixture);
+      });
+    },
+  );
+
+  it.each(["allowed", "revoked"] as const)(
+    "re-checks the requester's current policy before a queued review runs (%s)",
+    { timeout: 150_000 },
+    async (outcome) => {
+      await withReview(
+        editActions.slice(0, 2),
+        async (fixture) => {
+          fixture.release.resolve();
+          // Sender 42 queues the review; the stored session never records who sent a turn.
+          await fixture.ingressForeground("42");
+          if (outcome === "revoked") {
+            await patchConfig(fixture.gateway.client, {
+              tools: { toolsBySender: { "id:42": { deny: ["skill_workshop"] } } },
+            });
+            await expectNoReview(fixture);
+            return;
+          }
+          await expect
+            .poll(async () => (await fixture.changes()).length, { timeout: 80_000, interval: 100 })
+            .toBeGreaterThan(0);
+          expect(fixture.reviewRequests.length).toBeGreaterThan(0);
+        },
+        { channel: "telegram" },
+      );
+    },
+  );
+
+  it(
+    "keeps a graceful restart waiting until the review's channel notice settles",
+    { timeout: 150_000 },
+    async () => {
+      const holdDelivery = { started: createDeferred(), release: createDeferred() };
+      await withReview(
+        editActions.slice(0, 2),
+        async (fixture) => {
+          fixture.release.resolve();
+          await fixture.foreground();
+          // The skill change is committed and the review model run has ended; only the
+          // Learned notice is still being delivered.
+          await holdDelivery.started.promise;
+          expect((await fixture.changes()).length).toBeGreaterThan(0);
+          expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+          holdDelivery.release.resolve();
+          await expect
+            .poll(() => getActiveGatewayRootWorkCount(), { timeout: 30_000, interval: 100 })
+            .toBe(0);
+          expect(fixture.sends).toHaveLength(1);
+        },
+        { channel: "telegram", holdDelivery },
+      );
+    },
+  );
+
   it(
     "V5: a propose-mode review saves a draft, changes no skill, and announces nothing",
     { timeout: 150_000 },

@@ -21,12 +21,13 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import { performance, PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
+import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.js";
 import type { syncWorkspaceSkills } from "../../src/skills/loading/workspace-skill-sync.runtime.js";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const { values } = parseArgs({
   options: {
@@ -189,17 +190,9 @@ try {
     const collections: { kind: number; ms: number }[] = [];
     let started = Infinity;
     let ended = Infinity;
-    const recordGc = (entries: PerformanceEntry[]) => {
-      for (const entry of entries) {
-        if (entry.startTime >= started && entry.startTime < ended) {
-          collections.push({
-            kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-            ms: entry.duration,
-          });
-        }
-      }
-    };
-    const observer = new PerformanceObserver((batch) => recordGc(batch.getEntries()));
+    const observer = new PerformanceObserver((batch) =>
+      recordGcCollections(batch.getEntries(), collections, started, ended),
+    );
     observer.observe({ entryTypes: ["gc"] });
     try {
       if (inspector) {
@@ -252,7 +245,7 @@ try {
         ? (await inspector.post("HeapProfiler.stopSampling")).profile
         : undefined;
       await nextTurn();
-      recordGc(observer.takeRecords());
+      recordGcCollections(observer.takeRecords(), collections, started, ended);
       const sampledBytes = profile?.samples.reduce((sum, sample) => sum + sample.size, 0);
       if (profile) {
         await writeFile(`${output}.${mode}.heapprofile`, JSON.stringify(profile));

@@ -1127,6 +1127,17 @@
   }
 }
 
+/* The live headline keeps its entrance alongside the shared running sweep. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    .chat-activity-group__label--live.text-shimmer {
+      animation:
+        chat-activity-headline-enter 160ms ease-out,
+        text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
+    }
+  }
+}
+
 .chat-work-group__separator {
   width: 100%;
   height: 1px;

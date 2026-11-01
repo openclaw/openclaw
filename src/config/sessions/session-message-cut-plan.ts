@@ -26,9 +26,7 @@ import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 type MessageCut = {
   status: "cut";
-  editorText?: string;
-  editorAttachments?: Array<{ mimeType: string; data: string }>;
-  editorMediaRefs?: Array<{ path: string; contentType: string }>;
+  message: Record<string, unknown>;
   parentId: string | null;
   prefix: TranscriptEvent[];
 };
@@ -42,13 +40,19 @@ export type SessionMessageCutPlan =
       result: Extract<SessionMessageCutResult, { status: "created" }>;
     };
 
-/** Shared history selection and identity policy; the backend owns the atomic install. */
-export function planSessionMessageCut(
+/** Semantic preflight before workspace retirement; the committing planner checks it again. */
+export function selectSessionMessageCut(
   currentEntry: SessionEntry | undefined,
   events: readonly TranscriptEvent[],
   params: SessionMessageCutIntent,
   sourceRepositoryWorkspaceId?: string,
-): SessionMessageCutPlan {
+):
+  | Exclude<SessionMessageCutResult, { status: "created" }>
+  | {
+      status: "selected";
+      entry: SessionEntry;
+      cut?: MessageCut;
+    } {
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
@@ -71,7 +75,10 @@ export function planSessionMessageCut(
     currentEntry,
     "Session history changes are unavailable while model selection is locked.",
   );
-  const cut = params.mode === "switch" ? undefined : resolveMessageCut(events, params.entryId);
+  const cut =
+    params.mode === "switch"
+      ? undefined
+      : resolveMessageCut(events, params.entryId, params.mode === "fork");
   if (cut && cut.status !== "cut") {
     return cut;
   }
@@ -89,8 +96,21 @@ export function planSessionMessageCut(
   ) {
     throw new Error("Repository session fork requires its own prepared workspace");
   }
+  return { status: "selected", entry: currentEntry, cut };
+}
 
-  const nextSessionId = randomUUID();
+/** Shared history selection and identity policy; the backend owns the atomic install. */
+export function planSessionMessageCut(
+  entry: SessionEntry | undefined,
+  events: readonly TranscriptEvent[],
+  params: SessionMessageCutIntent,
+  sourceRepositoryWorkspaceId?: string,
+): SessionMessageCutPlan {
+  const selected = selectSessionMessageCut(entry, events, params, sourceRepositoryWorkspaceId);
+  if (selected.status !== "selected") {
+    return selected;
+  }
+  const { entry: currentEntry, cut } = selected;
   const workspace = params.settledLocalWorkspace;
   if (
     workspace &&
@@ -101,6 +121,7 @@ export function planSessionMessageCut(
   ) {
     return { status: "conflict" };
   }
+  const nextSessionId = randomUUID();
   const header = createSessionTranscriptHeader({
     cwd: readTranscriptHeaderCwd(events),
     sessionId: nextSessionId,
@@ -215,6 +236,10 @@ export function planSessionMessageCut(
         previous: currentEntry,
         sessionKey: params.targetKey,
       });
+  const editorText =
+    cut && (readMessageWorkContext(cut.message)?.text ?? extractEditorText(cut.message.content));
+  const editorAttachments = cut && extractEditorAttachments(cut.message.content);
+  const editorMediaRefs = cut && extractEditorMediaRefs(cut.message);
   return {
     status: "prepared",
     header,
@@ -223,9 +248,9 @@ export function planSessionMessageCut(
       status: "created",
       key: params.targetKey,
       entry: nextEntry,
-      ...(cut?.editorText ? { editorText: cut.editorText } : {}),
-      ...(cut?.editorAttachments ? { editorAttachments: cut.editorAttachments } : {}),
-      ...(cut?.editorMediaRefs ? { editorMediaRefs: cut.editorMediaRefs } : {}),
+      ...(editorText ? { editorText } : {}),
+      ...(editorAttachments ? { editorAttachments } : {}),
+      ...(editorMediaRefs ? { editorMediaRefs } : {}),
     },
   };
 }
@@ -251,6 +276,7 @@ function validateBranchTip(
 function resolveMessageCut(
   events: readonly TranscriptEvent[],
   entryId: string,
+  copyPrefix: boolean,
 ): MessageCut | Exclude<SessionMessageCutMutationResult, { status: "created" }> {
   const tree = scanSessionTranscriptTree(events);
   const target = tree.byId.get(entryId);
@@ -268,7 +294,7 @@ function resolveMessageCut(
     return { status: "off-active-path" };
   }
   const prefix: TranscriptEvent[] = [];
-  for (const node of activePath.slice(0, targetIndex)) {
+  for (const node of copyPrefix ? activePath.slice(0, targetIndex) : []) {
     const entry = asRecord(node.entry);
     // Spread (not Object.assign) so a parsed own `__proto__` key stays an inert
     // data property instead of rebinding the copy's prototype.
@@ -278,13 +304,9 @@ function resolveMessageCut(
         : node.entry,
     );
   }
-  const editorAttachments = extractEditorAttachments(message.content);
-  const editorMediaRefs = extractEditorMediaRefs(message);
   return {
     status: "cut",
-    editorText: readMessageWorkContext(message)?.text ?? extractEditorText(message.content),
-    ...(editorAttachments ? { editorAttachments } : {}),
-    ...(editorMediaRefs ? { editorMediaRefs } : {}),
+    message,
     parentId: target.parentId,
     prefix,
   };

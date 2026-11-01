@@ -637,7 +637,7 @@ export async function compact(
  */
 export function compactWithoutSummary(
   preparation: CompactionPreparation,
-): Result<CompactionResult, CompactionError> {
+): Result<CompactionResult<CompactionDetails>, CompactionError> {
   const droppedCount =
     preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
   const sourceAsk = preparation.isSplitTurn
@@ -674,7 +674,7 @@ function finalizeCompaction(
   historySummary: string,
   latestContext: string,
   requiredContext = "",
-): Result<CompactionResult, CompactionError> {
+): Result<CompactionResult<CompactionDetails>, CompactionError> {
   const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
   const fileOperations = formatFileOperations(readFiles, modifiedFiles);
   // Required prefix content survives fitting; only the history and split-turn context shrink.
@@ -728,6 +728,6 @@ function finalizeCompaction(
       ...(preparation.latestUnresolvedUserRequest
         ? { latestUnresolvedUserRequest: preparation.latestUnresolvedUserRequest }
         : {}),
-    } as CompactionDetails,
+    },
   });
 }

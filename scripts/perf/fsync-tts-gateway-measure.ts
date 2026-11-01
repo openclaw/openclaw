@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import workerThreads from "node:worker_threads";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { BASE_GATEWAY_BENCH_CONFIG, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -197,15 +198,9 @@ const loop = monitorEventLoopDelay({ resolution: 10 });
 const collections: Array<{ kind: number; ms: number }> = [];
 let begin = Infinity;
 let end = Infinity;
-const observer = new PerformanceObserver((entries) => {
-  for (const entry of entries.getEntries()) {
-    if (entry.startTime < begin || entry.startTime >= end) {
-      continue;
-    }
-    const detail = entry.toJSON().detail as { kind: number };
-    collections.push({ kind: detail.kind, ms: entry.duration });
-  }
-});
+const observer = new PerformanceObserver((entries) =>
+  recordGcCollections(entries.getEntries(), collections, begin, end),
+);
 observer.observe({ entryTypes: ["gc"] });
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
