@@ -35,7 +35,6 @@ import {
   type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
-import { fingerprintCodexPluginThreadConfig } from "./plugin-thread-binding.js";
 import { buildCodexPluginThreadConfigInputFingerprint } from "./plugin-thread-config-input.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
@@ -113,6 +112,18 @@ type BuildCodexPluginThreadConfigParams = {
 // bypass updated app approval checks after the gateway has been upgraded.
 export { buildCodexPluginThreadConfigInputFingerprint };
 export { shouldBuildCodexPluginThreadConfig } from "./plugin-thread-config-input.js";
+
+/** Persist the complete effective app policy together with its admission inputs. */
+export function fingerprintCodexPluginThreadConfig(
+  config: Pick<CodexPluginThreadConfig, "inputFingerprint" | "configPatch" | "policyContext">,
+): string {
+  return fingerprintCodexPolicy({
+    version: 2,
+    inputFingerprint: config.inputFingerprint,
+    configPatch: config.configPatch ?? null,
+    policyContext: config.policyContext,
+  });
+}
 
 /** Builds the deny-all app patch used when plugin discovery exceeds its turn budget. */
 export function buildCodexPluginThreadConfigTimeoutFallback(params: {

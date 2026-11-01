@@ -1,17 +1,7 @@
-import { fingerprintCodexPolicy } from "./config-policy-json.js";
-import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
-
-/** Persist the complete effective app policy together with its admission inputs. */
-export function fingerprintCodexPluginThreadConfig(
-  config: Pick<CodexPluginThreadConfig, "inputFingerprint" | "configPatch" | "policyContext">,
-): string {
-  return fingerprintCodexPolicy({
-    version: 2,
-    inputFingerprint: config.inputFingerprint,
-    configPatch: config.configPatch ?? null,
-    policyContext: config.policyContext,
-  });
-}
+import {
+  fingerprintCodexPluginThreadConfig,
+  type CodexPluginThreadConfig,
+} from "./plugin-thread-config.js";
 
 export function isCodexPluginThreadBindingStale(params: {
   codexPluginsEnabled: boolean;
