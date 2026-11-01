@@ -1,6 +1,5 @@
 // Ways to keep the recovery kit (OCF-286): a text file, the browser's print
-// dialog, or the browser's password manager. Everything stays on this
-// machine: nothing here logs the kit or sends it to a server.
+// dialog. Nothing here logs the kit or sends it to a server.
 import type { OpenClawIdKit } from "./link.ts";
 
 /** What the kit page names besides the secret. */
@@ -61,35 +60,5 @@ export function printRecoveryKit(details: RecoveryKitDetails): boolean {
   doc.body.replaceChildren(main);
   view.focus();
   view.print();
-  return true;
-}
-
-/** True when this browser can offer to save the kit in its password manager. */
-export function canStoreRecoveryKit(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    "PasswordCredential" in window &&
-    Boolean(navigator.credentials)
-  );
-}
-
-/**
- * Asks the browser to save the kit in its password manager (Credential
- * Management API). Resolves false when this browser can't; rejects when the
- * browser refuses.
- */
-export async function storeRecoveryKit(details: RecoveryKitDetails): Promise<boolean> {
-  if (!canStoreRecoveryKit()) {
-    return false;
-  }
-  const Credential = (window as unknown as { PasswordCredential: new (data: object) => Credential })
-    .PasswordCredential;
-  await navigator.credentials.store(
-    new Credential({
-      id: `openclaw-recovery-kit ${details.kit.rootFingerprint}`,
-      name: "OpenClaw recovery kit",
-      password: details.kit.text,
-    }),
-  );
   return true;
 }

@@ -1,18 +1,17 @@
 // The recovery kit as Make reachable and Regenerate owner key show it once: the kit
-// text and its facts, save options (download, print/PDF, password manager, copy) and
+// code and its facts, save options (download, print/PDF, copy) and
 // the "saved" toggle. A save action that succeeds counts as saved.
 import { createSignal, Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
-  canStoreRecoveryKit,
   downloadRecoveryKit,
   printRecoveryKit,
-  storeRecoveryKit,
   type RecoveryKitDetails,
 } from "../../lib/openclaw-id/kit-export.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { CopyButton } from "../solid/copy-button.tsx";
 import { SettingsToggleRow } from "../solid/settings-ui.tsx";
+import { RecoveryCodeField } from "./recovery-kit-form.tsx";
 
 /** The kit, its save options and the "I've saved it" toggle. */
 export function RecoveryKitPanel(props: {
@@ -36,9 +35,9 @@ export function RecoveryKitPanel(props: {
   };
   return (
     <>
-      <div class="stack openclaw-id-kit" aria-label={t("openclawId.kitTitle")}>
+      <div class="stack openclaw-id-kit">
         <strong>{t("openclawId.kitHeading")}</strong>
-        <code class="secret-reveal__code openclaw-id-kit__secret">{props.details.kit.text}</code>
+        <RecoveryCodeField code={props.details.kit.text} />
         <div class="list openclaw-id-facts">
           <div>
             <span class="muted">{t("openclawId.kitOwnerFingerprint")}</span>{" "}
@@ -81,15 +80,6 @@ export function RecoveryKitPanel(props: {
         >
           {t("openclawId.printKit")}
         </button>
-        <Show when={canStoreRecoveryKit()}>
-          <button
-            type="button"
-            class="btn btn--sm"
-            onClick={() => void save(() => storeRecoveryKit(props.details))}
-          >
-            {t("openclawId.storeKit")}
-          </button>
-        </Show>
         <CopyButton text={props.details.kit.text} idleLabel={t("common.copy")} />
       </div>
       <Show when={note()}>

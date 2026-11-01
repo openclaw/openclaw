@@ -11,6 +11,7 @@ import type { OpenClawIdSignedIn } from "../../lib/openclaw-id/types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { Icon } from "../solid/icon.tsx";
+import { RecoveryKitForm } from "./recovery-kit-form.tsx";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 
 registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
@@ -165,7 +166,12 @@ export function showRegenerateOwnerKeyDialog(params: {
               </Match>
               <Match when={step().kind === "kit" && (step() as Extract<Step, { kind: "kit" }>)}>
                 {(kitStep) => (
-                  <>
+                  <RecoveryKitForm
+                    details={kitStep().details}
+                    accountEmail={params.signedIn?.email}
+                    saved={saved()}
+                    onContinue={() => void regenerate(kitStep().preparation)}
+                  >
                     <div class="secret-reveal__body">
                       <p>
                         <strong>{t("openclawId.kitTitle")}</strong>
@@ -181,16 +187,11 @@ export function showRegenerateOwnerKeyDialog(params: {
                       <button type="button" class="btn" onClick={() => finish(false)}>
                         {t("common.cancel")}
                       </button>
-                      <button
-                        type="button"
-                        class="btn primary"
-                        disabled={!saved()}
-                        onClick={() => void regenerate(kitStep().preparation)}
-                      >
+                      <button type="submit" class="btn primary" disabled={!saved()}>
                         {t("openclawId.regenReplace")}
                       </button>
                     </openclaw-modal-actions>
-                  </>
+                  </RecoveryKitForm>
                 )}
               </Match>
               <Match when={step().kind === "working"}>
