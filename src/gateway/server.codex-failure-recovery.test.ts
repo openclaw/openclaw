@@ -509,11 +509,22 @@ it.each(cases)(
         expect(exitGate.child.signalCode).toBeNull();
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
       } else if (shutdown === "unconfirmed") {
-        await vi.advanceTimersByTimeAsync(2_000);
-        expect(await wait(continued.runId)).toMatchObject({
-          status: "error",
-          error: RECOVERY_FAILURE_TEXT,
-        });
+        const hasShutdownFailure = () =>
+          lifecycleErrors
+            .get(continued.runId)
+            ?.some((message) => message.includes(SHUTDOWN_FAILURE_DETAIL)) === true;
+        // Graceful shutdown and physical-exit confirmation have separate budgets,
+        // with real process inspection between them. Run each pending deadline only
+        // after the intervening I/O has had a chance to schedule it.
+        for (let turn = 0; turn < 1_000 && !hasShutdownFailure(); turn += 1) {
+          if (vi.getTimerCount() > 0) {
+            await vi.advanceTimersToNextTimerAsync();
+          } else {
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+          }
+        }
         expect(lifecycleErrors.get(continued.runId)).toEqual(
           expect.arrayContaining([expect.stringContaining(SHUTDOWN_FAILURE_DETAIL)]),
         );
@@ -521,7 +532,10 @@ it.each(cases)(
       exitGate.release();
       await withTestTimeout(exitGate.exited, 10_000, "old native process did not exit");
       if (shutdown !== "delayed") {
-        await wait(continued.runId);
+        const terminal = await wait(continued.runId);
+        if (shutdown === "unconfirmed") {
+          expect(terminal).toMatchObject({ status: "error", error: RECOVERY_FAILURE_TEXT });
+        }
         expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
         expect(readyThreads.has(continued.runId)).toBe(false);
         expect(primaryRequests).toHaveLength(1);
