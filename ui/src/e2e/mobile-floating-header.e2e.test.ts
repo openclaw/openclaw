@@ -50,14 +50,24 @@ suite.define(() => {
       const notice = page.locator(".topbar .mobile-header__notices");
       await notice.waitFor();
       expect(await page.locator(".topbar .gateway-status-dot").count()).toBe(0);
+      // It takes the title's slot: inside the header row, clear of its controls, moving nothing.
+      const noticeBox = (await notice.boundingBox())!;
+      expect(noticeBox.y).toBeGreaterThanOrEqual(8);
+      expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(53);
+      expect(noticeBox.x).toBeGreaterThan(toggle.x + toggle.width);
+      expect(noticeBox.x + noticeBox.width).toBeLessThan(pill.x);
+      expect(await content.evaluate((main) => getComputedStyle(main).paddingTop)).toBe("64px");
+      expect(await title.textContent()).toBe("Sessions");
+      expect((await title.boundingBox())?.width).toBe(1);
       await gateway.setOnline(true);
       await expect.poll(() => notice.count()).toBe(0);
+      await expect.poll(async () => (await title.boundingBox())?.width).toBeGreaterThan(1);
     });
   });
 
   it("truncates a long title before it reaches the pill", async () => {
     await suite.withPage({ viewport: { width: 320, height: 700 } }, async ({ page }) => {
-      await installMockGateway(page, { sessionKey });
+      const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(suite.server.baseUrl + "settings/cloud-workers");
       const title = page.locator(".topbar-page-title");
       await title.waitFor();
@@ -67,6 +77,18 @@ suite.define(() => {
       expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
         true,
       );
+
+      // The notice fits the same slot, and the long title comes back as it was.
+      const toggle = (await page.locator(".topbar-nav-toggle").boundingBox())!;
+      await gateway.setOnline(false);
+      const notice = page.locator(".topbar .mobile-header__notices");
+      await notice.waitFor();
+      const noticeBox = (await notice.boundingBox())!;
+      expect(noticeBox.x).toBeGreaterThan(toggle.x + toggle.width);
+      expect(noticeBox.x + noticeBox.width).toBeLessThan(pill.x);
+      await gateway.setOnline(true);
+      await expect.poll(() => notice.count()).toBe(0);
+      await expect.poll(() => title.boundingBox()).toEqual(box);
     });
   });
 

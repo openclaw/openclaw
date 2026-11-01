@@ -34,6 +34,10 @@ defineSolidBridge<Props>(
   "openclaw-app-topbar",
   (props, host) => {
     host.style.display = "contents";
+    const floatingNotice = () =>
+      props.floating && props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
+        ? props.gatewayStatus
+        : undefined;
     return (
       <header class={["topbar", { "topbar--floating": props.floating }]}>
         <div class="topnav-shell">
@@ -51,10 +55,33 @@ defineSolidBridge<Props>(
             <Show
               when={!props.floating}
               fallback={
-                // A new title is a new element, so route changes never register as a layout shift.
-                <Show when={props.pageTitle} keyed>
-                  {(title) => <span class="topbar-page-title">{title}</span>}
-                </Show>
+                <>
+                  {/* A new title is a new element, so route changes never register as a layout shift. */}
+                  <Show when={props.pageTitle} keyed>
+                    {(title) => (
+                      <span
+                        class={[
+                          "topbar-page-title",
+                          { "topbar-page-title--replaced": Boolean(floatingNotice()) },
+                        ]}
+                      >
+                        {title}
+                      </span>
+                    )}
+                  </Show>
+                  {/* The notice takes the title's slot, so it never covers the page below. */}
+                  <Show when={floatingNotice()}>
+                    {(status) => (
+                      <MobileHeaderNotice
+                        notice={{
+                          kind: "gateway",
+                          status: status().kind as GatewayStatusKind,
+                          onRetry: status().onRetry,
+                        }}
+                      />
+                    )}
+                  </Show>
+                </>
               }
             >
               <Show when={props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"}>
@@ -105,23 +132,6 @@ defineSolidBridge<Props>(
             </openclaw-tooltip>
           </div>
         </div>
-        <Show
-          when={
-            props.floating && props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
-              ? props.gatewayStatus
-              : undefined
-          }
-        >
-          {(status) => (
-            <MobileHeaderNotice
-              notice={{
-                kind: "gateway",
-                status: status().kind as GatewayStatusKind,
-                onRetry: status().onRetry,
-              }}
-            />
-          )}
-        </Show>
       </header>
     );
   },
