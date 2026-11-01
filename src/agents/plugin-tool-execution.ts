@@ -182,7 +182,7 @@ export function preparePluginToolExecutionCapabilities(params: {
                 selection,
                 signal,
                 assertCurrent,
-                consume: capture.consume,
+                consume: () => capture.consume(),
               });
               // A terminal broker result may describe a bind accepted before cancellation.
               return { status: "submitted" as const, result };

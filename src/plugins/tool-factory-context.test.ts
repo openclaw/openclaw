@@ -747,12 +747,14 @@ it.each(["run", "plugin"] as const)(
       settled = true;
     });
     await entered.promise;
-    if (closure === "plugin") retire!();
+    if (closure === "plugin") {
+      retire!();
+    }
     finishRun.resolve();
     // The owning source is revoked before the host's pending write has settled.
-    await new Promise<void>((resolve) =>
-      capability.signal.addEventListener("abort", () => resolve(), { once: true }),
-    );
+    await new Promise<void>((resolve) => {
+      capability.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
     expect(brokerInput!.signal.aborted).toBe(true);
     expect(settled).toBe(false);
     const later = createCronCreatorAuthorityCapability("approval-later", { kind: "local" })!;

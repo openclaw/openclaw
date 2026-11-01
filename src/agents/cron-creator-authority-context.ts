@@ -388,7 +388,16 @@ export function runWithCronCreatorAuthorityCapability<T>(
   try {
     const result = activeCronCreatorAuthority.run(scope, run);
     if (isPromiseLike(result)) {
-      return Promise.resolve(result).finally(settle) as T;
+      return Promise.resolve(result).then(
+        async (value) => {
+          await settle();
+          return value;
+        },
+        async (error: unknown) => {
+          await settle();
+          throw error;
+        },
+      ) as T;
     }
     const pending = settle();
     return pending ? (pending.then(() => result) as T) : result;
