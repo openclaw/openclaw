@@ -6,18 +6,13 @@ export function isUnknownRequestIdError(
   error: unknown,
   field: "requestId" | "deviceId" = "requestId",
 ): boolean {
-  const maybeGatewayError =
-    typeof error === "object" && error !== null
-      ? // SAFETY: non-null object; both fields are re-checked with typeof/!== before use.
-        (error as { gatewayCode?: unknown; message?: unknown })
-      : undefined;
-  const gatewayCode = maybeGatewayError?.gatewayCode;
+  const gatewayError = typeof error === "object" && error !== null ? error : undefined;
+  const gatewayCode =
+    gatewayError && "gatewayCode" in gatewayError ? gatewayError.gatewayCode : undefined;
   if (gatewayCode !== undefined && gatewayCode !== "INVALID_REQUEST") {
     return false;
   }
-  const message =
-    typeof maybeGatewayError?.message === "string"
-      ? maybeGatewayError.message
-      : normalizeErrorMessage(error);
+  const rawMessage = gatewayError && "message" in gatewayError ? gatewayError.message : undefined;
+  const message = typeof rawMessage === "string" ? rawMessage : normalizeErrorMessage(error);
   return normalizeLowercaseStringOrEmpty(message).includes(`unknown ${field.toLowerCase()}`);
 }
