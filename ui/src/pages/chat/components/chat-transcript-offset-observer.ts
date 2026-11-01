@@ -154,6 +154,8 @@ export function observeTranscriptOffset(
 ): () => void {
   const element = owner.getScrollElement();
   let nativeOffset = element?.scrollTop ?? 0;
+  // Late native echoes must not become reader intent after the event receipt retires.
+  let maintenanceTarget: number | null = null;
   let maintenanceRevision = 0;
   let maintenanceFrame: number | null = null;
   let touchY: number | undefined;
@@ -181,7 +183,7 @@ export function observeTranscriptOffset(
     // Commands can move upward as rows retire. Keep the actual write's
     // provenance until its native event arrives, even after command retirement.
     if (before !== after) {
-      owner.state.maintenanceScrollOffset = after;
+      maintenanceTarget = owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
     }
   };
@@ -215,13 +217,12 @@ export function observeTranscriptOffset(
     }
     const delta = offset - nativeOffset;
     nativeOffset = offset;
-    if (owner.state.maintenanceScrollOffset !== null) {
-      const target = Math.min(
-        owner.state.maintenanceScrollOffset,
-        maxTranscriptScrollOffset(element) ?? 0,
-      );
+    if (maintenanceTarget !== null) {
+      const target = Math.min(maintenanceTarget, maxTranscriptScrollOffset(element) ?? 0);
       const actualOffset = element?.scrollTop;
-      owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
+      maintenanceTarget = owner.state.maintenanceScrollOffset =
+        actualOffset === target ? actualOffset : null;
+      maintenanceRevision += 1;
     }
     const programmatic = owner.isProgrammaticScroll();
     if (scrolling && delta !== 0 && !programmatic) {
@@ -246,6 +247,20 @@ export function observeTranscriptOffset(
     // The rail observes offsets directly; only touch-held history needs a geometry commit.
     if (owner.state.touchActive !== owner.state.renderedTouchActive) {
       owner.invalidate();
+    }
+    if (owner.state.maintenanceScrollOffset !== null) {
+      const revision = maintenanceRevision;
+      if (maintenanceFrame !== null) {
+        cancelAnimationFrame(maintenanceFrame);
+      }
+      // Later native listeners can run after microtasks from this observer.
+      // Retire every delivered receipt, including idle and explicit synchronization.
+      maintenanceFrame = requestAnimationFrame(() => {
+        maintenanceFrame = null;
+        if (revision === maintenanceRevision) {
+          owner.state.maintenanceScrollOffset = null;
+        }
+      });
     }
   };
   const syncOffset = () => {
@@ -318,7 +333,7 @@ export function observeTranscriptOffset(
     }
     owner.endAnchor.cancelComposerResize();
     owner.state.pendingInteractionAnchor = null;
-    owner.state.maintenanceScrollOffset = null;
+    maintenanceTarget = owner.state.maintenanceScrollOffset = null;
     // Native scrolling may precede input delivery. Attribute the gesture before
     // cancellation or offset synchronization publishes that consumed movement.
     publishInput(event);
@@ -369,20 +384,6 @@ export function observeTranscriptOffset(
       return;
     }
     publishOffset(offset, scrolling);
-    if (scrolling && owner.state.maintenanceScrollOffset !== null) {
-      const revision = maintenanceRevision;
-      if (maintenanceFrame !== null) {
-        cancelAnimationFrame(maintenanceFrame);
-      }
-      // Later native listeners can run after microtasks from this observer.
-      // Retire this delivered receipt only after the entire event has finished.
-      maintenanceFrame = requestAnimationFrame(() => {
-        maintenanceFrame = null;
-        if (revision === maintenanceRevision) {
-          owner.state.maintenanceScrollOffset = null;
-        }
-      });
-    }
     // The offset observer already owns idle detection on browsers without
     // scrollend. Release touch-held history through that same lifecycle.
     if (!scrolling) {
@@ -414,6 +415,7 @@ export function observeTranscriptOffset(
     }
   });
   return () => {
+    maintenanceTarget = null;
     if (maintenanceFrame !== null) {
       cancelAnimationFrame(maintenanceFrame);
     }
