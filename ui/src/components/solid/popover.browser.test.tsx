@@ -47,6 +47,49 @@ describe("Solid native popover", () => {
     expect((view.getByRole("textbox") as HTMLInputElement).value).toBe("Third");
   });
 
+  it("dismisses on an outside tap without activating the page beneath", async () => {
+    let handle!: PopoverHandle;
+    let clicks = 0;
+    const view = render(() => (
+      <>
+        <Popover id="tap-popover" label="Tap details" ref={(value) => (handle = value)}>
+          <p>Details</p>
+        </Popover>
+        <button type="button" onClick={() => (clicks += 1)}>
+          Beneath
+        </button>
+      </>
+    ));
+    flush();
+    const beneath = view.getByRole("button", { name: "Beneath" });
+    const tap = (pointerType: string) => {
+      const init = { bubbles: true, composed: true, pointerId: 7, pointerType };
+      beneath.dispatchEvent(new PointerEvent("pointerdown", init));
+      beneath.dispatchEvent(new PointerEvent("pointerup", init));
+      beneath.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, composed: true, cancelable: true, detail: 1 }),
+      );
+    };
+
+    handle.show();
+    await phase(handle.overlay.surface, "open");
+    tap("touch");
+    expect(handle.overlay.open).toBe(false);
+    expect(clicks).toBe(0);
+
+    // Only the dismissing tap is absorbed.
+    await phase(handle.overlay.surface, "hidden");
+    tap("touch");
+    expect(clicks).toBe(1);
+
+    // A mouse keeps its click-through.
+    handle.show();
+    await phase(handle.overlay.surface, "open");
+    tap("mouse");
+    expect(handle.overlay.open).toBe(false);
+    expect(clicks).toBe(2);
+  });
+
   it("keeps a pinned popover open outside and closes once with Escape", async () => {
     let handle!: PopoverHandle;
     const changes: boolean[] = [];
