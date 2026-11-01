@@ -9,6 +9,7 @@ import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import {
   auditGatewayNodeVersionChange,
   GATEWAY_NODE_PREFIX_SKEW,
+  GATEWAY_NODE_VERSION_INSPECT_FAILED,
   GATEWAY_NODE_VERSION_MISSING,
 } from "./node-version-prefix.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
@@ -58,6 +59,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
   gatewayNodePrefixSkew: GATEWAY_NODE_PREFIX_SKEW,
   gatewayNodeVersionMissing: GATEWAY_NODE_VERSION_MISSING,
+  gatewayNodeVersionInspectFailed: GATEWAY_NODE_VERSION_INSPECT_FAILED,
   gatewayPathMissing: "gateway-path-missing",
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",

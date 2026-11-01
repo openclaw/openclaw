@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   auditGatewayNodeVersionChange,
   describeGatewayNodePrefixSkew,
+  describeGatewayNodeVersionRepair,
+  formatGatewayNodePrefixStartupWarning,
   GATEWAY_NODE_PREFIX_SKEW,
+  GATEWAY_NODE_VERSION_INSPECT_FAILED,
   GATEWAY_NODE_VERSION_MISSING,
 } from "./node-version-prefix.js";
 
@@ -126,5 +129,99 @@ describe("gateway node version prefix", () => {
     });
     expect(message).toContain("v24.22.1");
     expect(message).toContain("v22.22.0");
+  });
+
+  it.each([".fnm", "fnm"])(
+    "reports a live %s split and a missing package under that root",
+    async (directory) => {
+      const root = await makeRoot();
+      const nodePath = path.join(root, directory, "node-versions/v24.22.1/installation/bin/node");
+      const entrypointPath = path.join(
+        root,
+        directory,
+        "node-versions/v24.16.0/installation/lib/node_modules/openclaw/dist/index.js",
+      );
+      await writeFile(nodePath);
+      await writeFile(entrypointPath);
+      const live = await auditGatewayNodeVersionChange({ nodePath, entrypointPath });
+      expect(live?.code).toBe(GATEWAY_NODE_PREFIX_SKEW);
+      expect(live?.message).toContain(`${directory}/node-versions/v24.16.0`);
+      const repair = describeGatewayNodeVersionRepair({
+        code: GATEWAY_NODE_PREFIX_SKEW,
+        entrypointPath,
+        plannedNodePath: nodePath,
+      });
+      expect(repair.resolvesSplit).toBe(false);
+      expect(repair.action).toContain(`${directory}/node-versions/v24.16.0/installation/bin/node`);
+      await fs.rm(path.dirname(entrypointPath), { recursive: true, force: true });
+      const missing = await auditGatewayNodeVersionChange({ nodePath, entrypointPath });
+      expect(missing?.code).toBe(GATEWAY_NODE_VERSION_MISSING);
+      expect(missing?.message).toContain(entrypointPath);
+    },
+  );
+
+  it("reports an unreadable version directory instead of failing the audit", async () => {
+    const root = await makeRoot();
+    const nodePath = nvmNode(root, "v24.22.1");
+    const versionDir = path.join(root, ".nvm/versions/node/v24.16.0");
+    const entrypointPath = path.join(versionDir, "lib/node_modules/openclaw/dist/index.js");
+    await writeFile(nodePath);
+    await fs.mkdir(versionDir, { recursive: true });
+    await fs.chmod(versionDir, 0);
+    try {
+      const issue = await auditGatewayNodeVersionChange({ nodePath, entrypointPath });
+      expect(issue).toMatchObject({
+        code: GATEWAY_NODE_VERSION_INSPECT_FAILED,
+        repair: "host",
+      });
+      expect(issue?.message).toContain("EACCES");
+    } finally {
+      await fs.chmod(versionDir, 0o755);
+    }
+  });
+
+  it("tells a startup warning to select the install Node explicitly", () => {
+    const warning = formatGatewayNodePrefixStartupWarning({
+      nodePath: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+      packageRoot: "/home/example/.nvm/versions/node/v24.16.0/lib/node_modules/openclaw",
+    });
+    expect(warning).toContain("does not own this install");
+    expect(warning).toContain("Doctor keeps this supported Node");
+    expect(warning).toContain(
+      "openclaw gateway install --runtime-path /home/example/.nvm/versions/node/v24.16.0/bin/node --force",
+    );
+    expect(warning).not.toContain("doctor --fix` to point");
+  });
+
+  it("recommends doctor --fix only when the plan selects the install Node", () => {
+    const entrypointPath =
+      "/home/example/.nvm/versions/node/v24.16.0/lib/node_modules/openclaw/dist/index.js";
+    const retained = describeGatewayNodeVersionRepair({
+      code: GATEWAY_NODE_PREFIX_SKEW,
+      entrypointPath,
+      plannedNodePath: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+      recordedNodePath: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+    });
+    expect(retained.resolvesSplit).toBe(false);
+    expect(retained.action).toContain("reinstalls that Node");
+    expect(retained.action).toContain("v24.16.0/bin/node");
+
+    const pinned = describeGatewayNodeVersionRepair({
+      code: GATEWAY_NODE_PREFIX_SKEW,
+      entrypointPath,
+      plannedNodePath: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+      pinnedRuntimePath: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+    });
+    expect(pinned.remains).toContain("explicit runtime pin");
+    expect(pinned.action).toContain("reinstalls that pin");
+
+    const resolved = describeGatewayNodeVersionRepair({
+      code: GATEWAY_NODE_PREFIX_SKEW,
+      entrypointPath,
+      plannedNodePath: "/home/example/.nvm/versions/node/v24.16.0/bin/node",
+    });
+    expect(resolved.resolvesSplit).toBe(true);
+    expect(resolved.action).toContain("openclaw doctor --fix");
+    expect(resolved.action).toContain("v24.16.0/bin/node");
   });
 });
