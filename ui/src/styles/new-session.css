@@ -30,6 +30,19 @@ openclaw-new-session-page,
   }
 }
 
+/* Below chat's phone header, where it stood below the top bar. */
+.shell .new-session-page--chat-header .new-session-page__incognito-rail {
+  top: 64px;
+  right: 12px;
+}
+
+/* The connection notice takes that row while it shows. */
+.shell
+  .new-session-page--chat-header:has(.mobile-header__notices)
+  .new-session-page__incognito-rail {
+  top: 96px;
+}
+
 .new-session-page__draft-toggle {
   display: none;
 }

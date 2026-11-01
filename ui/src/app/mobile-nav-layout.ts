@@ -1,6 +1,6 @@
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { RouteId } from "../app-routes.ts";
-import { isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 
 const MOBILE_NAV_MAX_WIDTH = 900;
 const NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH = 600;
@@ -25,6 +25,16 @@ export function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false;
 }
 
+function usesChatHeader(routeId: RouteId): boolean {
+  return (
+    isSessionRouteId(routeId) ||
+    // The draft wears chat's header on phones, so opening a session moves nothing.
+    (routeId === "new-session" &&
+      !isNativeEmbedHost() &&
+      (globalThis.matchMedia?.(FLOATING_HEADER_MEDIA_QUERY).matches ?? false))
+  );
+}
+
 export function shouldMergeChatChrome(params: {
   mobileNavLayout: boolean;
   routeId: RouteId;
@@ -32,7 +42,7 @@ export function shouldMergeChatChrome(params: {
 }): boolean {
   return (
     params.mobileNavLayout &&
-    isSessionRouteId(params.routeId) &&
+    usesChatHeader(params.routeId) &&
     !params.onboarding &&
     !hasNativeShellClass()
   );
@@ -50,7 +60,7 @@ export function shouldFloatShellHeader(params: {
   return (
     params.mobileNavLayout &&
     !isSessionRouteId(params.routeId) &&
-    // The draft shares chat's drawer button, so opening a session never moves it.
+    // The draft wears chat's header instead.
     params.routeId !== "new-session" &&
     !params.onboarding &&
     !hasNativeShellClass("openclaw-native-desktop") &&
@@ -60,4 +70,12 @@ export function shouldFloatShellHeader(params: {
 
 export function mergeChatPageChrome(mobileNavLayout: boolean, onboarding: boolean): boolean {
   return shouldMergeChatChrome({ mobileNavLayout, routeId: "chat", onboarding });
+}
+
+export function mergeNewSessionPageChrome(onboarding: boolean): boolean {
+  return shouldMergeChatChrome({
+    mobileNavLayout: isMobileNavLayout(),
+    routeId: "new-session",
+    onboarding,
+  });
 }

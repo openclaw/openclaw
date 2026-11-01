@@ -2,6 +2,7 @@ import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { patchSettings } from "../../app/settings.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
@@ -34,8 +35,15 @@ import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
 
+export type NewSessionPageProps = {
+  data: NewSessionRouteData | undefined;
+  /** Shell facts for the phone header, which the draft owns as chat does. */
+  navDrawerOpen: boolean;
+  gatewayStatus: GatewayStatusProps | null;
+};
+
 export type PageHost = SolidBridgeElement<
-  { data: NewSessionRouteData | undefined },
+  NewSessionPageProps,
   {
     focusComposer(): void;
   }

@@ -551,6 +551,11 @@ export class ShellOwner
       chatPage.navDrawerOpen = state.navDrawerOpen;
       chatPage.gatewayStatus = this.mobileGatewayStatus;
     }
+    const newSessionPage = this.routeOutlet?.renderedElement?.("openclaw-new-session-page");
+    if (newSessionPage) {
+      newSessionPage.navDrawerOpen = state.navDrawerOpen;
+      newSessionPage.gatewayStatus = this.mobileGatewayStatus;
+    }
   }
 
   ensureAgentsList(

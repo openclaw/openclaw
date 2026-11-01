@@ -42,6 +42,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
+/* A phone draft starts at the same edges as the session it opens. */
+.shell--mobile-nav.shell--merged-chat-chrome main.content--new-session {
+  --content-inline-padding: 0px;
+  padding: 0;
+}
+
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;

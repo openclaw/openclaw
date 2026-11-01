@@ -37,6 +37,8 @@ export function ChatPaneMobileHeader(props: {
   people?: Element;
   /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
   actions?: Element;
+  /** A draft has no session controls; these take their place in the capsule. */
+  draftControls?: Element;
   /** Supply only for an available session Dashboard; opens/reuses its destination. */
   onOpenDashboard?: (source: HTMLElement) => void;
   /** One owner-selected notice: Gateway status takes priority over device offline. */
@@ -106,6 +108,7 @@ export function ChatPaneMobileHeader(props: {
         <div class="mobile-header__people">{people()}</div>
       </Show>
       <div class="mobile-header__capsule">
+        <Show when={props.draftControls}>{(controls) => controls()}</Show>
         <Show when={props.onOpenDashboard}>
           <button
             type="button"

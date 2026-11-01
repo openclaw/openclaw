@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { resolveNewSessionShortcut } from "../../lib/keyboard-shortcut-contract.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { newSessionSearch, type NewSessionTarget } from "../../pages/new-session/location.ts";
@@ -91,7 +92,12 @@ export function ContextNewSessionAction(props: {
       params: {},
       sessionScope: true,
     });
-  const access = createMemo(readAccess);
+  // A page's header has no shell revision to rerun it, so connection changes come from here.
+  const gateway = projectOwner(props.context.gateway, (owner) => owner.snapshot);
+  const access = createMemo(() => {
+    gateway.read();
+    return readAccess();
+  });
   const disabledReason = () => {
     const current = access();
     return current.allowed ? undefined : current.reason;
