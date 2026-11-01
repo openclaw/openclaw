@@ -476,6 +476,21 @@ describe("native conversation contract", () => {
     f.expectMessage(result(false, "second", "navigate-timeout"));
   });
 
+  it("does not prematurely expire a queued command when the wall clock moves forward", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const f = fixture();
+    const gate = createDeferred();
+    f.navigateAndWait.mockReturnValueOnce(gate.promise);
+    f.followNavigation();
+    await f.go("agent:main:first");
+    await vi.advanceTimersByTimeAsync(5_000);
+    f.navigate("agent:main:next", "second");
+    vi.setSystemTime(Date.now() + 60_000);
+    gate.resolve();
+    await flush();
+    f.expectMessage(result(true, "second"));
+  });
+
   it("settles navigation when the host never acknowledges ready", async () => {
     vi.useFakeTimers();
     const f = fixture();

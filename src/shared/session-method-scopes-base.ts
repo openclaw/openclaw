@@ -10,6 +10,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "artifacts.list",
   "artifacts.get",
   "artifacts.download",
+  "board.get",
   "canvas.document.preview",
   "canvas.document.view",
   "controlUi.sessionPullRequests.subscribe",
@@ -35,6 +36,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.branches.list",
   "sessions.get",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.resolve",
   "sessions.search",
@@ -42,6 +44,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.files.get",
   "sessions.files.download",
   "sessions.files.assets",
+  "sessions.files.preview",
+  "sessions.files.preview.release",
   "sessions.setInvolvement",
   "chat.history",
   "chat.startup",
@@ -51,7 +55,10 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "session.members.listEvidence",
   "themes.get",
   "themes.list",
+  "tools.effective",
   "users.mentionable",
+  "users.personalFile.get",
+  "users.personalFile.set",
   "users.prefs.get",
   "users.prefs.set",
   "users.self",
@@ -60,6 +67,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "board.update",
+  "board.widget.put",
   "question.request",
   "question.waitAnswer",
   "question.resolve",
@@ -71,7 +80,6 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "sessions.patch",
   "sessions.patchMany",
   "sessions.fork",
-  "sessions.recover",
   "sessions.send",
   "sessions.steer",
   "sessions.processes.stop",
@@ -117,6 +125,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "model",
   "agentRuntime",
   "thinkingLevel",
+  "cyberAccessProgram",
   "fastMode",
   "permissionMode",
   "communication",
@@ -148,9 +157,6 @@ export function resolveBaseSessionMutationRequiredScope(
   method: string,
   params?: unknown,
 ): SessionMutationOperatorScope | undefined {
-  if (method === "sessions.recover") {
-    return "operator.write";
-  }
   if (method === "sessions.create") {
     if (!isRecord(params)) {
       return "operator.write";

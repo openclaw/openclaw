@@ -1,10 +1,13 @@
 // Maintenance preserve providers protect runtime-owned sessions from pruning/capping.
 import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import {
   collectSessionControllerTargets,
   collectSessionMutationIdentities,
 } from "../../sessions/session-controller.lifecycle.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
+import { preparePersonalSessionPins } from "../../state/user-preferences-session-pins.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   addSessionMaintenancePreserveKeys,
@@ -26,7 +29,10 @@ type PrepareSessionMaintenancePreserveKeys = (options: {
 }) => Promise<PreparedSessionMaintenancePreserveKeys>;
 
 export type PreparedSessionMaintenancePreservation = {
-  capture(this: void): SessionMaintenancePreservationSnapshot;
+  capture(
+    this: void,
+    operation?: RetainedWorkerTransactionAdmission,
+  ): SessionMaintenancePreservationSnapshot;
   refreshCandidates(
     this: void,
     sessionKeys: readonly string[],
@@ -61,8 +67,10 @@ export function collectActiveSessionWorkAdmissionKeys(params: {
 /** Prepare storage-backed providers before workers acquire their transaction permit. */
 export async function prepareSessionMaintenancePreservation(
   storePath: string,
-  options: { native?: boolean } = {},
+  options: { native?: boolean; env?: NodeJS.ProcessEnv } = {},
 ): Promise<PreparedSessionMaintenancePreservation> {
+  const target = resolveExplicitIncognitoAgentSqliteTarget(storePath, { env: options.env });
+  const personalPins = await preparePersonalSessionPins({ env: target?.env ?? options.env });
   const registrations = [...preserveKeysProviders];
   const prepared: PreparedSessionMaintenancePreserveKeys[] = [];
   let disposed = false;
@@ -91,9 +99,18 @@ export async function prepareSessionMaintenancePreservation(
       prepared.push(await registration.prepare(options));
       assertProvidersCurrent();
     }
-    const capture = (sessionKeys?: readonly string[]): SessionMaintenancePreservationSnapshot => {
+    const capture = (
+      sessionKeys?: readonly string[],
+      operation?: RetainedWorkerTransactionAdmission,
+    ): SessionMaintenancePreservationSnapshot => {
       assertProvidersCurrent();
-      const keys = new Set<string>();
+      if (!personalPins.isCurrent()) {
+        throw new SqliteSessionMutationConflictError("personal session pins changed");
+      }
+      if (operation) {
+        personalPins.retainOperation(operation);
+      }
+      const keys = new Set<string>(personalPins.sessionKeys);
       addSessionMaintenancePreserveKeys(
         keys,
         iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
@@ -116,7 +133,7 @@ export async function prepareSessionMaintenancePreservation(
     };
     return {
       dispose,
-      capture: () => capture(),
+      capture: (operation) => capture(undefined, operation),
       refreshCandidates: capture,
     };
   } catch (error) {

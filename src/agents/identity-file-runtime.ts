@@ -35,6 +35,7 @@ export function prepareCachedIdentityRead<
   key: () => string;
   input: (key: string, knownRevision: string | undefined) => IdentityReadWorkers[Worker]["input"];
   revision: (entry: Loaded) => string;
+  isCurrent?: (entry: Loaded) => Promise<boolean>;
   sizeOf: (entry: Loaded) => number;
   prepare: (
     snapshot: IdentityReadWorkers[Worker]["snapshot"],
@@ -72,6 +73,16 @@ export function prepareCachedIdentityRead<
     key,
     async () => {
       const previous = runtime.cached.peek(key);
+      if (previous && params.isCurrent) {
+        const current = await params.isCurrent(previous);
+        if (runtime.closing) {
+          throw new WorkerTaskError(`${params.readerName} is closing`, "unavailable");
+        }
+        if (current) {
+          runtime.cached.set(key, previous);
+          return previous;
+        }
+      }
       const pool = (runtime.pool ??= new WorkerTaskPool<
         IdentityReadWorkers[Worker]["input"],
         IdentityReadWorkers[Worker]["snapshot"]

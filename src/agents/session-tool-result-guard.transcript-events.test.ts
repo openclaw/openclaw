@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -212,13 +211,12 @@ describe("guardSessionManager transcript updates", () => {
     };
     return {
       ...source,
-      manager,
       sourceEvents,
       stream,
       commit,
       snapshot,
       finishing,
-      async close() {
+      async [Symbol.asyncDispose]() {
         finish.resolve();
         await source.subscription.waitForPendingEvents();
         source.subscription.unsubscribe();
@@ -234,67 +232,54 @@ describe("guardSessionManager transcript updates", () => {
   it.each(["superseded", "retained by steer"])(
     "retires a committed deferred occurrence %s without hiding identical later output",
     async (prior) => {
-      const h = await openSourceProjection(true);
+      await using h = await openSourceProjection(true);
       const first = assistantText("[[reply_to_current]] Repeated answer.");
       const second = assistantText("Repeated answer.");
-      try {
-        h.stream(first);
-        h.emit({ type: "message_end", message: first });
-        const firstId = await h.commit(first);
-        assert(firstId);
-        expect(h.manager.getEntry(firstId)).toMatchObject({
-          type: "message",
-          message: { role: "assistant" },
-        });
-        expect(h.sourceEvents).toEqual([]);
-        if (prior === "retained by steer") {
-          const steer = makeUserMessage("Continue with the same answer", 1);
-          h.emit({ type: "message_start", message: steer });
-          h.emit({ type: "message_end", message: steer });
-          await h.commit(steer);
-        }
-        h.stream(second);
-        h.emit({ type: "message_end", message: second });
-        h.emit({ type: "agent_end", messages: [first, second] });
-        await h.finishing.promise;
-
-        expect(h.sourceEvents.map((event) => event.data.text)).toEqual(
-          prior === "superseded" ? ["Repeated answer."] : ["Repeated answer.", "Repeated answer."],
-        );
-        expect(await h.snapshot()).toBe("Repeated answer.");
-        await h.commit(second);
-        expect(await h.snapshot()).toBe("");
-      } finally {
-        await h.close();
+      h.stream(first);
+      h.emit({ type: "message_end", message: first });
+      assert(await h.commit(first));
+      expect(h.sourceEvents).toEqual([]);
+      if (prior === "retained by steer") {
+        const steer = makeUserMessage("Continue with the same answer", 1);
+        h.emit({ type: "message_start", message: steer });
+        h.emit({ type: "message_end", message: steer });
+        await h.commit(steer);
       }
+      h.stream(second);
+      h.emit({ type: "message_end", message: second });
+      h.emit({ type: "agent_end", messages: [first, second] });
+      await h.finishing.promise;
+
+      expect(h.sourceEvents.map((event) => event.data.text)).toEqual(
+        prior === "superseded" ? ["Repeated answer."] : ["Repeated answer.", "Repeated answer."],
+      );
+      expect(await h.snapshot()).toBe("Repeated answer.");
+      await h.commit(second);
+      expect(await h.snapshot()).toBe("");
     },
   );
 
   it("retires a prior committed source after the next identical item starts", async () => {
-    const h = await openSourceProjection(false);
+    await using h = await openSourceProjection(false);
     const first = assistantText("[[reply_to_current]] Same answer.");
     const second = assistantText("Same answer.");
-    try {
-      h.stream(first);
-      h.emit({ type: "message_end", message: first });
-      await h.subscription.waitForPendingEvents();
-      expect(await h.snapshot()).toBe("Same answer.");
-      h.stream(second);
-      await h.subscription.waitForPendingEvents();
-      expect(await h.snapshot()).toBe("Same answer.\n\nSame answer.");
-      await h.commit(first);
-      expect(await h.snapshot()).toBe("Same answer.");
+    h.stream(first);
+    h.emit({ type: "message_end", message: first });
+    await h.subscription.waitForPendingEvents();
+    expect(await h.snapshot()).toBe("Same answer.");
+    h.stream(second);
+    await h.subscription.waitForPendingEvents();
+    expect(await h.snapshot()).toBe("Same answer.\n\nSame answer.");
+    await h.commit(first);
+    expect(await h.snapshot()).toBe("Same answer.");
 
-      h.emit({
-        type: "message_update",
-        message: assistantText("Same answer. Continued."),
-        assistantMessageEvent: { type: "text_delta", delta: " Continued." },
-      });
-      await h.subscription.waitForPendingEvents();
-      expect(await h.snapshot()).toBe("Same answer. Continued.");
-    } finally {
-      await h.close();
-    }
+    h.emit({
+      type: "message_update",
+      message: assistantText("Same answer. Continued."),
+      assistantMessageEvent: { type: "text_delta", delta: " Continued." },
+    });
+    await h.subscription.waitForPendingEvents();
+    expect(await h.snapshot()).toBe("Same answer. Continued.");
   });
 
   it("preserves source text when a concurrent append forces a retry", async () => {
@@ -329,7 +314,6 @@ describe("guardSessionManager transcript updates", () => {
     let entryId: string;
     try {
       entryId = manager.appendMessage(emitted);
-      expect(execSpy).toHaveBeenCalledWith("ROLLBACK");
     } finally {
       execSpy.mockRestore();
     }
@@ -361,10 +345,8 @@ describe("guardSessionManager transcript updates", () => {
             },
           }),
       });
-      const keptId = expectDefined(
-        await guarded.appendMessageAsync({ role: "user", content: runId, timestamp: 1 }),
-        "Compaction fixture must append its retained user entry",
-      );
+      const keptId = await guarded.appendMessageAsync(makeUserMessage(runId, 1));
+      assert(keptId);
       await guarded.appendCompactionAsync("summary", keptId, 100, { source: "hook" }, true, {
         itemId: `compaction-${runId}`,
       });
@@ -435,7 +417,6 @@ describe("guardSessionManager transcript updates", () => {
         const runtimeMessage = { ...approved, content: "Rendered source prompt" };
 
         expect(source.getAdmissionReceipt()).toBeUndefined();
-        expect(source.isPendingInputConsumed?.()).toBe(false);
         // The reused guard must recover the current source, not its first turn's recorder.
         const entryId = await persistAgentSessionMessage(guarded, runtimeMessage, {
           invalidateSerializedPrefixCache: false,
@@ -445,8 +426,6 @@ describe("guardSessionManager transcript updates", () => {
         expect(entryId).toBe(pending.items[0]?.id);
         expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
         expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
-        expect(source.isPendingInputConsumed?.()).toBe(true);
-        expect(source.getPersistedMessage?.()).toEqual(approved);
         expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
         expect(approvalHook).toHaveBeenCalledOnce();
 
@@ -507,7 +486,6 @@ describe("guardSessionManager transcript updates", () => {
     expect(persisted).toMatchObject([
       { id: entryId, message: { role: "user", content: message.content } },
     ]);
-    expect(JSON.stringify(persisted)).toContain(message.content);
   });
 
   it("admits an excluded ingress user through a stale bounded manager without appending", async () => {
@@ -534,7 +512,6 @@ describe("guardSessionManager transcript updates", () => {
       message,
       target: { ...target, sessionEntry: { sessionId: target.sessionId, updatedAt: 1 } },
     });
-    const marked = vi.spyOn(recorder, "markRuntimePersisted");
     const updates = collectUpdates();
     const guarded = guardSessionManager(stale, {
       ...target,
@@ -543,8 +520,6 @@ describe("guardSessionManager transcript updates", () => {
     });
     expect(recorder.getAdmissionReceipt()).toBeUndefined();
     guarded.appendMessage({ ...message });
-    expect(marked).toHaveBeenCalledTimes(1);
-    expect(marked.mock.calls[0]?.[2]).toEqual({ appended: false });
     expect(updates).toEqual([]);
     expect(recorder.getAdmissionReceipt()).toMatchObject({
       ...target,

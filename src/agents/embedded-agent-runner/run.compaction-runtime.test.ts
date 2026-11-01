@@ -124,7 +124,8 @@ describe("embedded compaction recovery authority", () => {
   it.for(["success", "failure", "abort", "hook notices"] as const)(
     "publishes %s compaction without waiting for optional progress callbacks",
     async (outcome, { signal }) => {
-      await withRecoveryFixture({ oversized: false }, async (fixture) => {
+      await withRecoveryFixture({ oversized: outcome === "abort" }, async (fixture) => {
+        const before = outcome === "abort" ? await fixture.snapshot() : undefined;
         const entered = createDeferred(),
           release = createDeferred();
         const callbackRelease = createDeferred(),
@@ -178,6 +179,11 @@ describe("embedded compaction recovery authority", () => {
           const result = await withinTest(settled, signal);
           if (outcome === "abort") {
             expect(result).toEqual({ error: fixture.callerError });
+            expect(await fixture.snapshot()).toEqual(before);
+            expect(fixture.beforeHook).toHaveBeenCalledOnce();
+            expect(fixture.maintain).not.toHaveBeenCalled();
+            expect(fixture.recoveryState.autoCompactionCount).toBe(0);
+            expectStoppedBeforePublication(fixture);
           } else if (outcome === "failure") {
             expect(result).toMatchObject({ value: { action: "surface" } });
           } else {
@@ -231,8 +237,7 @@ describe("embedded compaction recovery authority", () => {
       await fixture.recover("overflow");
 
       expect(fixture.beforeHook).toHaveBeenCalledTimes(1);
-      expect(fixture.afterHook).toHaveBeenCalledTimes(1);
-      expect(fixture.afterHook).toHaveBeenCalledWith(
+      expect(fixture.afterHook).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ compactedCount: 0 }),
         expect.objectContaining({ sessionKey: fixture.getSessionTarget()?.sessionKey }),
       );
@@ -244,14 +249,29 @@ describe("embedded compaction recovery authority", () => {
     });
   });
 
-  it.each(["overflow", "timeout"] as const)(
+  it.each(["overflow", "checkpoint-failed", "timeout"] as const)(
     "accepts a healthy declared successor through the host writer (%s)",
     async (kind) => {
       await withRecoveryFixture({ oversized: false, replyAdmission: true }, async (fixture) => {
         const before = fixture.loadEntry();
-        expect(before).toHaveProperty("activeWriterRunId", fixture.runId);
+        const checkpoint = vi.fn(async (context: unknown) => {
+          expect(context).toEqual({
+            sessionId: before?.sessionId,
+            provider: "fixture-provider",
+            model: "fixture-model",
+            authProfileIdSource: "auto",
+            contextTokenBudget: 4_096,
+          });
+          expect(fixture.loadEntry()).toEqual(before);
+          if (kind === "checkpoint-failed") {
+            throw new Error("Memory checkpoint unavailable");
+          }
+          return "completed";
+        });
+        fixture.runParams.beforeRecoveryCompaction = checkpoint;
         const successorId = randomUUID();
         fixture.compact.mockImplementationOnce(async ({ sessionTarget }) => {
+          expect(checkpoint).toHaveBeenCalledTimes(kind === "timeout" ? 0 : 1);
           // Only the host transfers the durable row and its private writer facts.
           expect(sessionTarget).not.toHaveProperty("expectedWriterRunId");
           expect(fixture.loadEntry()?.sessionId).toBe(before?.sessionId);
@@ -262,20 +282,11 @@ describe("embedded compaction recovery authority", () => {
           });
         });
 
-        await expect(fixture.recover(kind)).resolves.toEqual(
-          kind === "overflow" ? { action: "retry" } : true,
+        await expect(fixture.recover(kind === "timeout" ? "timeout" : "overflow")).resolves.toEqual(
+          kind === "timeout" ? true : { action: "retry" },
         );
 
         const after = fixture.loadEntry();
-        expect(after).toMatchObject({
-          sessionId: successorId,
-          activeWriterRunId: fixture.runId,
-        });
-        expect(after?.lifecycleRevision).toBe(before?.lifecycleRevision);
-        expect(fixture.getSessionTarget()).toMatchObject({
-          sessionId: successorId,
-          threadId: "thread-hint",
-        });
         expect(fixture.getCommittedSuccessor()?.entry).toEqual(after);
         expectCompactionAccounting(fixture);
         expect(fixture.afterHook).toHaveBeenCalledWith(
@@ -405,24 +416,6 @@ describe("embedded compaction recovery authority", () => {
     },
   );
 
-  it("preserves the exact caller error without post-abort overflow work", async () => {
-    await withRecoveryFixture({ oversized: true }, async (fixture) => {
-      const before = await fixture.snapshot();
-      fixture.updates.mockClear();
-      fixture.compact.mockImplementationOnce(({ abortSignal }) =>
-        waitForCompactionAbort(abortSignal, () => queueMicrotask(fixture.stop)),
-      );
-
-      await expect.soft(fixture.recover("overflow")).rejects.toBe(fixture.callerError);
-      expect.soft(await fixture.snapshot()).toEqual(before);
-      expect(fixture.compact).toHaveBeenCalledOnce();
-      expect(fixture.beforeHook).toHaveBeenCalledOnce();
-      expect(fixture.maintain).not.toHaveBeenCalled();
-      expect(fixture.recoveryState.autoCompactionCount).toBe(0);
-      expectStoppedBeforePublication(fixture);
-    });
-  });
-
   it.each([
     { kind: "overflow", loss: "closed" },
     { kind: "overflow", loss: "replaced" },
@@ -445,53 +438,26 @@ describe("embedded compaction recovery authority", () => {
     },
   );
 
-  it.each(["maintenance", "after-hook"] as const)(
-    "retains committed accounting but stops publication after an abort in %s",
-    async (phase) => {
-      await withRecoveryFixture({}, async (fixture) => {
-        const before = await fixture.snapshot();
-        let committed: Snapshot | undefined;
-        const abort = async () => {
-          if (phase === "maintenance") {
-            committed = await fixture.snapshot();
-          }
-          fixture.updates.mockClear();
-          fixture.stop();
-        };
-        if (phase === "maintenance") {
-          fixture.maintain.mockImplementationOnce(async () => {
-            await abort();
-            return unchangedMaintenance();
-          });
-        } else {
-          fixture.afterHook.mockImplementationOnce(abort);
-        }
-        await expect
-          .soft(
-            fixture.recover(
-              phase === "maintenance" ? "overflow" : "timeout",
-              phase === "maintenance",
-            ),
-          )
-          .rejects.toBe(fixture.callerError);
-        if (phase === "maintenance") {
-          expect(committed?.eventDigests).toHaveLength(before.eventDigests.length + 1);
-          expect(committed?.eventDigests.slice(0, before.eventDigests.length)).toEqual(
-            before.eventDigests,
-          );
-          expect(committed?.compactionIds).toHaveLength(1);
-          expect.soft(await fixture.snapshot()).toEqual(committed);
-        } else {
-          expect((await fixture.snapshot()).compactionIds).toHaveLength(1);
-          expect(fixture.afterHook).toHaveBeenCalledOnce();
-        }
-        expectCompactionAccounting(fixture);
-        expect(fixture.updates).not.toHaveBeenCalled();
-        fixture.expectNoContinuation();
-        if (phase === "maintenance") {
-          expect(fixture.afterHook).not.toHaveBeenCalled();
-        }
+  recoveryTest(
+    "retains committed accounting but stops publication after maintenance aborts",
+    {},
+    async (fixture) => {
+      const before = await fixture.snapshot();
+      let committed: Snapshot | undefined;
+      fixture.maintain.mockImplementationOnce(async () => {
+        committed = await fixture.snapshot();
+        fixture.updates.mockClear();
+        fixture.stop();
+        return unchangedMaintenance();
       });
+      await expect.soft(fixture.recover("overflow", true)).rejects.toBe(fixture.callerError);
+      const after = expectDefined(committed, "maintenance must observe the committed compaction");
+      expect(after.eventDigests).toHaveLength(before.eventDigests.length + 1);
+      expectArchivedEvents(before, after);
+      expect(after.compactionIds).toHaveLength(1);
+      expect.soft(await fixture.snapshot()).toEqual(after);
+      expectCompactionAccounting(fixture);
+      expectStoppedBeforePublication(fixture);
     },
   );
 

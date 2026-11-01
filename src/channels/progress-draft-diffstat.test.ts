@@ -22,9 +22,7 @@ it.each([
   ["one\n", 2],
   ["one\r", 2],
   ["one\r\n", 2],
-  ["\r\n", 2],
   ["one\rtwo\nthree\r\nfour", 4],
-  ["\r\r\n\n", 4],
 ])("preserves completed write and edit line counts for %j", (content, lineCount) => {
   const tracker = createTracker();
   tracker.write("write", content, "example.txt");

@@ -1,4 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import { createSkillsData } from "./skills-page-state.ts";
 import type { SkillsProps } from "./view-types.ts";
 
 export function normalizeText(node: Element | DocumentFragment): string {
@@ -15,7 +16,6 @@ export function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillSta
     skillKey: "repo-skill",
     bundled: false,
     primaryEnv: "OPENAI_API_KEY",
-    emoji: undefined,
     homepage: "https://example.com",
     always: false,
     disabled: false,
@@ -43,7 +43,20 @@ export function createReport(skills = [createSkill()]): SkillStatusReport {
 export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
   const value = <T>(key: string, fallback: T): T =>
     key in overrides ? (overrides[key] as T) : fallback;
+  const data = createSkillsData();
+  for (const key of Object.keys(data)) {
+    if (key in overrides) {
+      Reflect.set(data, key, overrides[key]);
+    }
+  }
+  const read = <T>(result: T, error: string | null): T => {
+    if (error) {
+      throw new Error(error);
+    }
+    return result;
+  };
   const state: SkillsProps["state"] = {
+    ...data,
     client: null,
     connected: value("connected", true),
     runtimeConfig: {} as SkillsProps["state"]["runtimeConfig"],
@@ -51,7 +64,6 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     skillsAgentRevision: 0,
     skillsLoading: value("loading", false),
     skillsReport: value("report", createReport()),
-    skillsRead: value("skillsRead", null),
     skillsError: value("error", null),
     skillsFilter: value("filter", ""),
     skillsStatusFilter: value("statusFilter", "all"),
@@ -62,18 +74,7 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     skillMessages: value("messages", {}),
     clawhubSearchQuery: value("clawhubQuery", ""),
     clawhubSearchResults: value("clawhubResults", null),
-    clawhubIconUrls: value("clawhubIconUrls", {}),
-    clawhubDetail: value("clawhubDetail", null),
-    clawhubDetailRef: value("clawhubDetailRef", null),
-    clawhubDetailError: value("clawhubDetailError", null),
-    clawhubInstallMessage: value("clawhubInstallMessage", null),
-    clawhubVerdicts: value("clawhubVerdicts", {}),
-    clawhubVerdictsRead: value("clawhubVerdictsRead", null),
-    clawhubVerdictsError: value("clawhubVerdictsError", null),
-    skillCardContents: value("skillCardContents", {}),
     skillCardContentKeys: {},
-    skillCardReads: value("skillCardReads", {}),
-    skillCardErrors: value("skillCardErrors", {}),
   };
   return {
     readClawHubVerdicts: () => state.clawhubVerdicts,
@@ -81,20 +82,9 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
       return state.skillsReport?.skills ?? [];
     },
     saving: false,
-    readClawHubDetail: () => {
-      if (state.clawhubDetailError) {
-        throw new Error(state.clawhubDetailError);
-      }
-      return state.clawhubDetail;
-    },
+    readClawHubDetail: () => read(state.clawhubDetail, state.clawhubDetailError),
     clawhubSearchEpoch: 0,
-    readClawHubSearch: () => {
-      const error = value<string | null>("clawhubSearchError", null);
-      if (error) {
-        throw new Error(error);
-      }
-      return true;
-    },
+    readClawHubSearch: () => read(true, value<string | null>("clawhubSearchError", null)),
     canUpdate: true,
     canInstall: true,
     loading: state.skillsLoading,
@@ -127,12 +117,8 @@ export function createDialogMethodInstaller(restores: Array<() => void>) {
     const proto = HTMLDialogElement.prototype;
     const original = Object.getOwnPropertyDescriptor(proto, name);
     Object.defineProperty(proto, name, { configurable: true, writable: true, value });
-    restores.push(() => {
-      if (original) {
-        Object.defineProperty(proto, name, original);
-      } else {
-        Reflect.deleteProperty(proto, name);
-      }
-    });
+    restores.push(() =>
+      original ? Object.defineProperty(proto, name, original) : Reflect.deleteProperty(proto, name),
+    );
   };
 }

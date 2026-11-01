@@ -1,9 +1,12 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   buildAgentRunProjectionIndex,
   iterateProjectedAgentRunSessionKeys,
 } from "./agent-run-projection.js";
-import { resolveProjectedAgentRunProgressState } from "./agent-run-registry.js";
+import {
+  prepareProjectedAgentRunProgressState,
+  resolveProjectedAgentRunProgressState,
+} from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 function projection(contexts: AgentRunContext[]) {
@@ -69,4 +72,28 @@ it("resolves progress across aliases and session IDs within the selected agent",
   }
   expect(state({ sessionKeys: [waiting], sessionId: "running-id" })).toBe("running");
   expect(state({ sessionKeys: [], sessionId: "running-id", agentId: "other" })).toBeUndefined();
+});
+
+it("retains prepared progress separately for each query and run-index snapshot", () => {
+  const read = prepareProjectedAgentRunProgressState({
+    sessionKeys: ["agent:main:child"],
+    sessionId: "child",
+    agentId: "main",
+  });
+  const other = prepareProjectedAgentRunProgressState({
+    sessionKeys: ["agent:main:child"],
+    sessionId: "child",
+    agentId: "other",
+  });
+  const inactive = projection([]);
+  const running = projection([{ ...active, sessionId: "child" }]);
+  using inactiveIds = vi.spyOn(inactive.sessionIds, "get");
+  using runningIds = vi.spyOn(running.sessionIds, "get");
+  for (let i = 0; i < 3; i++) {
+    expect(read(inactive)).toBeUndefined();
+    expect(read(running)).toBe("running");
+    expect(other(running)).toBeUndefined();
+  }
+  expect(inactiveIds).toHaveBeenCalledTimes(1);
+  expect(runningIds).toHaveBeenCalledTimes(2);
 });

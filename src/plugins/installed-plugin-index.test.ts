@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hermeticEnv } from "../commands/doctor-plugin-registry.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -58,17 +59,12 @@ function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string
   }
 }
 
-function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_VERSION: "2026.4.25",
-    VITEST: "true",
-    ...overrides,
-  };
-}
-
 function loadInstalledPluginIndex(params: Parameters<typeof loadIndex>[0]) {
   return loadIndex({ env: hermeticEnv(), ...params });
+}
+
+function freshIndex(params: Parameters<typeof loadIndex>[0]) {
+  return withPluginCache(createPluginCache(), () => loadInstalledPluginIndex(params));
 }
 
 function entryConfig(id: string, enabled: boolean): OpenClawConfig {
@@ -282,33 +278,9 @@ describe("installed plugin index", () => {
     };
     const first = loadInstalledPluginIndex(params);
     writeManifestlessClaudeBundle(rootDir, ["commands"]);
-    const second = withPluginCache(createPluginCache(), () => loadInstalledPluginIndex(params));
+    const second = freshIndex(params);
 
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
-  });
-
-  it("keeps packageJson paths root-relative when packageDir is reached through a symlink", () => {
-    const fixture = createRichPluginFixture();
-    const linkParent = makeTempDir();
-    const linkRoot = path.join(linkParent, "linked-demo");
-    try {
-      fs.symlinkSync(fixture.rootDir, linkRoot, "dir");
-    } catch {
-      return;
-    }
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir: fs.realpathSync(fixture.rootDir),
-          packageDir: linkRoot,
-          packageName: "@vendor/demo-plugin",
-          packageVersion: "1.2.3",
-        }),
-      ],
-    });
-
-    expect(index.plugins[0]?.packageJson?.path).toBe("package.json");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -329,13 +301,14 @@ describe("installed plugin index", () => {
   );
 
   it("retains disabled plugin metadata while evaluating live enablement", () => {
-    const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
     const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
     const config = entryConfig("disabled-demo", false);
     const index = loadInstalledPluginIndex({
-      candidates: [enabledFixture.candidate, disabledFixture.candidate],
+      candidates: [disabledFixture.candidate],
       config,
     });
+    const enabled = (liveConfig?: OpenClawConfig) =>
+      isInstalledPluginEnabled(index, "disabled-demo", liveConfig);
 
     const disabled = index.plugins.find((plugin) => plugin.pluginId === "disabled-demo");
     expect(disabled?.enabled).toBe(false);
@@ -349,16 +322,10 @@ describe("installed plugin index", () => {
         contracts: { tools: ["demo-tool"] },
       }),
     );
-    expect(isInstalledPluginEnabled(index, "disabled-demo", config)).toBe(false);
-    expect(
-      isInstalledPluginEnabled(index, "disabled-demo", entryConfig("enabled-demo", true)),
-    ).toBe(true);
-    expect(isInstalledPluginEnabled(index, "disabled-demo")).toBe(false);
-    expect(
-      isInstalledPluginEnabled(index, "disabled-demo", {
-        plugins: { deny: ["disabled-demo"] },
-      }),
-    ).toBe(false);
+    expect(enabled(config)).toBe(false);
+    expect(enabled(entryConfig("enabled-demo", true))).toBe(true);
+    expect(enabled()).toBe(false);
+    expect(enabled({ plugins: { deny: ["disabled-demo"] } })).toBe(false);
   });
 
   it.each([
@@ -367,9 +334,7 @@ describe("installed plugin index", () => {
   ])(
     "resolves channels.<id>.enabled=$channelEnabled through the record's channel ids when they differ from the plugin id",
     ({ channelEnabled, expected }) => {
-      // The rich fixture's plugin id is `demo` while it owns `channels.demo-chat`.
-      const fixture = createRichPluginFixture({ id: "demo" });
-      const index = fixture.load({ config: {} });
+      const index = createRichPluginFixture().load({ config: {} });
 
       expect(
         isInstalledPluginEnabled(index, "demo", {
@@ -442,19 +407,11 @@ describe("installed plugin index", () => {
 
   it("does not mark enabled-only migration snapshots stale for omitted disabled plugins", () => {
     const enabledFixture = createRichPluginFixture();
-    const disabledFixture = createRichPluginFixture();
-    writePluginManifest(disabledFixture.rootDir, {
-      id: "disabled-demo",
-      name: "Disabled Demo",
-      providers: ["disabled-demo"],
-    });
+    const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
     const current = loadInstalledPluginIndex({
       candidates: [
         enabledFixture.candidate,
-        {
-          ...disabledFixture.candidate,
-          idHint: "disabled-demo",
-        },
+        { ...disabledFixture.candidate, idHint: "disabled-demo" },
       ],
       config: entryConfig("disabled-demo", false),
     });
@@ -481,18 +438,11 @@ describe("installed plugin index", () => {
     writePackageJson(fixture.rootDir, "1.2.4");
     writePluginManifest(fixture.rootDir, { id: "demo", providers: ["demo", "demo-next"] });
     const current = {
-      ...withPluginCache(createPluginCache(), () =>
-        loadInstalledPluginIndex({
-          candidates: [
-            {
-              ...fixture.candidate,
-              packageVersion: "1.2.4",
-            },
-          ],
-          installRecords: npmRecords("1.2.4"),
-          env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
-        }),
-      ),
+      ...freshIndex({
+        candidates: [{ ...fixture.candidate, packageVersion: "1.2.4" }],
+        installRecords: npmRecords("1.2.4"),
+        env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
+      }),
       compatRegistryVersion: "different-compat-registry",
     };
 

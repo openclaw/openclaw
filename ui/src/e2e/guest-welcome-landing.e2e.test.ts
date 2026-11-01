@@ -8,6 +8,7 @@ import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { ownerRoster, sessionPerson } from "./session-ownership-fixtures.test-support.ts";
 
@@ -44,22 +45,10 @@ function guestScenario(
     featureMethods: [...defaultControlUiFeatureMethods, GUEST_WELCOME_ENSURE_METHOD],
     sessionTranscripts: {
       [welcome.key]: {
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Welcome to OpenClaw Team, Sam." }],
-            timestamp: 1,
-          },
-        ],
+        messages: [chatMessage("assistant", "Welcome to OpenClaw Team, Sam.", { timestamp: 1 })],
       },
       [shared.key]: {
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Onboarding notes." }],
-            timestamp: 1,
-          },
-        ],
+        messages: [chatMessage("assistant", "Onboarding notes.", { timestamp: 1 })],
       },
     },
     methodResponses: {

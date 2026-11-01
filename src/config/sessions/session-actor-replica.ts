@@ -43,9 +43,11 @@ import {
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
+import { internSessionSkillSnapshot } from "./session-skill-snapshot-intern.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
+import type { SessionEntry } from "./types.js";
 
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
@@ -74,10 +76,11 @@ function estimateReplicaBytes(
   const childSizes = memoizeDescendants ? sizes : undefined;
   let bytes = 32;
   if (Array.isArray(value)) {
-    bytes = value.reduce<number>(
-      (total, child) => total + 16 + estimateReplicaBytes(child, childSizes, false),
-      bytes,
-    );
+    for (let index = 0; index < value.length; index++) {
+      if (index in value) {
+        bytes += 16 + estimateReplicaBytes(value[index], childSizes, false);
+      }
+    }
   } else {
     for (const key in value) {
       bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), childSizes);
@@ -295,8 +298,25 @@ function discard(cell: ReplicaCell): void {
   cell.bytes = 0;
 }
 
+function shareEntrySkills(entry: SessionEntry | undefined): SessionEntry | undefined {
+  if (!entry?.skillsSnapshot) {
+    return entry;
+  }
+  const snapshot = entry.skillsSnapshot;
+  const shared = internSessionSkillSnapshot(snapshot);
+  if (shared !== snapshot) {
+    // Prepared publications can be frozen; worker-decoded entries remain owned here.
+    if (Object.isFrozen(entry)) {
+      return { ...entry, skillsSnapshot: shared };
+    }
+    entry.skillsSnapshot = shared;
+  }
+  return entry;
+}
+
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
+  entry.entry = shareEntrySkills(entry.entry);
   cell.entry = freezeTrustedJsonSnapshot(entry);
   cell.bytes = estimateReplicaBytes(entry);
   pool.snapshots += 1;
@@ -317,6 +337,7 @@ function retainSnapshot(
   // Worker-decoded facts are plain data. Protect borrowed reads without inspecting
   // their shape again; unchanged frozen subtrees retain their identity.
   freezeTrustedJsonSnapshot(state.target);
+  state.entry = shareEntrySkills(state.entry);
   freezeTrustedJsonSnapshot(state.entry);
   freezeTrustedJsonSnapshot(state.members);
   freezeTrustedJsonSnapshot(state.participants);
@@ -503,16 +524,25 @@ export function hasSessionActorEmptyPendingInputHistory(
   );
 }
 
+/** Borrow current physical facts; the admitted reader retains disclosure authority. */
+export function readSessionActorTranscriptStateFromReplica(params: {
+  path: string;
+  sessionKey: string;
+  sessionId: string;
+}) {
+  const snapshot = readCurrentEntryCellForPath(params)?.cell.snapshot;
+  return snapshot?.entry?.sessionId === params.sessionId ? snapshot : undefined;
+}
+
 /** Complete transcript bodies share the actor's receipt token and bounded residency. */
 export function readSessionActorCompleteTranscriptFromReplica(params: {
   path: string;
   sessionKey: string;
   sessionId: string;
 }) {
-  const current = readCurrentEntryCellForPath(params);
-  const snapshot = current?.cell.snapshot;
-  const context = current?.cell.transcript?.context;
-  return snapshot?.entry?.sessionId === params.sessionId && context?.rows
+  const snapshot = readSessionActorTranscriptStateFromReplica(params);
+  const context = snapshot && readSessionActorTranscriptReplica(snapshot)?.context;
+  return snapshot && context?.rows
     ? {
         snapshot,
         rows: context.rows,
@@ -627,14 +657,10 @@ export function createSessionActorReplica(params: {
       return undefined;
     }
   };
-  const currentToken = (state: SessionActorHotState): string | undefined => {
-    const { database, sessionKey } = target;
-    return scopedWriteToken({ database, sessionKey }, state.dependencySessionIds);
-  };
   const accepts = (
     state: SessionActorHotState,
     expectedGeneration: string | undefined,
-    writeToken = currentToken(state),
+    writeToken = scopedWriteToken(target, state.dependencySessionIds),
   ): boolean =>
     expectedGeneration !== undefined &&
     expectedGeneration === generation() &&
@@ -662,12 +688,12 @@ export function createSessionActorReplica(params: {
 
   return {
     /** Borrow the immutable revision only after validating its current physical generation. */
-    read(): SessionActorHotState | undefined {
+    read(this: void): SessionActorHotState | undefined {
       params.lifetime.assertReadable();
       if (closed || !owned.snapshot) {
         return undefined;
       }
-      const token = currentToken(owned.snapshot);
+      const token = scopedWriteToken(target, owned.snapshot.dependencySessionIds);
       if (token === undefined) {
         // An unrelated unsettled writer can temporarily fence disclosure without
         // discarding this session's still-valid postimage.
@@ -681,6 +707,8 @@ export function createSessionActorReplica(params: {
       touch(owned);
       return owned.snapshot;
     },
+    // Entry receipts belong to the physical database, not one worker connection.
+    readEntry: () => (!closed ? readCurrentEntryCell(target)?.state : undefined),
     beginRead() {
       const expectedGeneration = begin();
       return (state: SessionActorHotState) => install(state, expectedGeneration);
@@ -691,6 +719,8 @@ export function createSessionActorReplica(params: {
       const previousGeneration = owned.generation;
       const expectedGeneration = begin();
       return {
+        // Compression only: the worker must confirm this exact revision before using it.
+        preimage: previousGeneration === expectedGeneration ? previous : undefined,
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           if (outcome.kind === "rolled-back") {
             const restored = previous !== undefined && install(previous, previousGeneration);

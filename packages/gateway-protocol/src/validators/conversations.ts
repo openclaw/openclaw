@@ -46,6 +46,10 @@ export const validateMentionsChangedEvent = createProtocolValidator(
   S.MentionsChangedEventSchema,
   Checks.isMentionsChangedEvent,
 );
+export const validateMentionsFailedEvent = createProtocolValidator(
+  S.MentionsFailedEventSchema,
+  Checks.isMentionsFailedEvent,
+);
 export const validateUsersBackgroundGetParams = createProtocolValidator(
   S.UsersBackgroundGetParamsSchema,
   Checks.isUsersBackgroundGetParams,
@@ -225,6 +229,10 @@ export const validateChatMessageGetParams = createProtocolValidator(
 export const validateChatToolTitlesParams = createProtocolValidator(
   S.ChatToolTitlesParamsSchema,
   Checks.isChatToolTitlesParams,
+);
+export const validateChatPendingInputsDismissParams = createProtocolValidator(
+  S.ChatPendingInputsDismissParamsSchema,
+  Checks.isChatPendingInputsDismissParams,
 );
 export const validateChatPredictParams = createProtocolValidator(
   S.ChatPredictParamsSchema,

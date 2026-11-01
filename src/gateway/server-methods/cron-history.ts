@@ -39,7 +39,6 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       ErrorCodes.UNAVAILABLE,
       "The recorded cron transcript is unavailable. Refresh the run and try again.",
     );
-  const storeKey = cronStoreKey(context.cronStorePath);
   const sessionVisibility = createCronSessionVisibility(client, context);
   const assertAllowed = (sessionKey?: string, agentId?: string) => {
     assertCronReadCurrent(opts);
@@ -66,6 +65,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
   };
   try {
     await context.cron.readJob(params.id);
+    const storeKey = context.cron.getStoreKey?.() ?? cronStoreKey(context.cronStorePath);
     await sessionVisibility.prepare();
     const select = () =>
       readCronRunHistoryBinding(storeKey, params.id, {
@@ -102,7 +102,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     };
     const assertCurrent = (transcriptSessionKey?: string) => {
       if (
-        cronStoreKey(context.cronStorePath) !== storeKey ||
+        (context.cron.getStoreKey?.() ?? cronStoreKey(context.cronStorePath)) !== storeKey ||
         resolveSessionStorePathCore(context.getRuntimeConfig().session?.store, { agentId }) !==
           scope.storePath
       ) {

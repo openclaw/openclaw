@@ -4,7 +4,7 @@ import type {
   ProjectsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
@@ -435,7 +435,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       let branches = discovery.promise;
       const { context, flow, place } = withMessage({
         scopes:
-          result === "forbidden" || result === "write-denied"
+          result === "write-denied"
             ? ["operator.sessions.read", "operator.sessions.write"]
             : ["operator.read", "operator.write"],
         agents: [agent({ workspaceGit: true, model: { primary: "openai/gpt-5.6-luna" } })],

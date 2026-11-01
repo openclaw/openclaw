@@ -188,22 +188,19 @@ describe("ensureSandboxWorkspace", () => {
     const linkType = process.platform === "win32" ? "junction" : "dir";
     await fs.symlink(original, alias, linkType);
     const copy = workspaceCopy.copyWorkspaceBootstrapFiles;
-    const handoff = vi
+    using _ = vi
       .spyOn(workspaceCopy, "copyWorkspaceBootstrapFiles")
       .mockImplementationOnce(async (...args) => {
         await copy(...args);
         await fs.unlink(alias);
         await fs.symlink(replacement, alias, linkType);
       });
-    try {
-      await expect(ensureSandboxWorkspace(alias, seed, true)).rejects.toBeInstanceOf(
-        WorkspaceAliasRepointedError,
-      );
-      expect(await fs.readFile(path.join(original, DEFAULT_AGENTS_FILENAME), "utf8")).toBe(content);
-      expect(await fs.readdir(replacement)).toEqual([]);
-    } finally {
-      handoff.mockRestore();
-    }
+
+    await expect(ensureSandboxWorkspace(alias, seed, true)).rejects.toBeInstanceOf(
+      WorkspaceAliasRepointedError,
+    );
+    expect(await fs.readFile(path.join(original, DEFAULT_AGENTS_FILENAME), "utf8")).toBe(content);
+    expect(await fs.readdir(replacement)).toEqual([]);
   });
 
   it.runIf(process.platform !== "win32")("skips symlinked bootstrap seed files", async () => {

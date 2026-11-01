@@ -99,43 +99,6 @@ export type EmbeddedRunFastModeParam =
   | Exclude<FastMode, "auto">
   | (() => Exclude<FastMode, "auto"> | undefined);
 
-type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
-
-type EmbeddedRunAttemptToolTerminalObservation = {
-  toolCallId?: string;
-  toolName: string;
-  arguments?: unknown;
-  /** Original host result or error; public fields cannot supply effect provenance. */
-  result?: unknown;
-  meta?: string;
-  executionStarted?: boolean;
-  /** Exact-instance replay classification resolved by the host tool catalog. */
-  replaySafe?: boolean;
-  outcome: "success" | "failure";
-  failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
-  /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
-  nativeMutation?: {
-    mutatingAction: boolean;
-    replaySafe: boolean;
-  };
-  /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
-  ownerMutation?: {
-    ownerKey: string;
-  };
-};
-
-type EmbeddedRunAttemptToolTerminalResolution = {
-  lastToolError?: ToolErrorSummary;
-  executionStarted: boolean;
-  executedArguments?: Record<string, unknown>;
-  sideEffectEvidence: boolean;
-  effectReceipt: ToolEffectReceipt;
-};
-
-type EmbeddedRunAttemptToolTerminalObserver = (
-  observation: EmbeddedRunAttemptToolTerminalObservation,
-) => EmbeddedRunAttemptToolTerminalResolution;
-
 /** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
 export type EmbeddedRunAttemptTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
@@ -143,12 +106,16 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Set only by prompt admission after validating an already-delivered input. */
+  inputAlreadyDelivered?: true;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
   transportConfig?: RunEmbeddedAgentParams["config"];
   modelCallSequence?: { value: number };
   /** Recomputed by the host for this attempt; never inherited from the requesting turn. */
   githubPublicationAvailable?: boolean;
   disableToolSearch?: true;
+  /** Recovery checkpoints preserve their input until memory extraction finishes. */
+  compactionForbidden?: boolean;
   sessionReadScopeKey?: string;
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
   /**
@@ -164,7 +131,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Host-created authority available only after harness selection. */
   hostCapabilities?: import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities;
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
-  operation?: EmbeddedRunAttemptOperation;
+  operation?: "attempt" | "settled-tool-finalization";
   /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
   pluginHarnessToolPolicyRestricted?: boolean;
   /** Requester policy prepared by core; turn-specific tool restrictions still apply. */
@@ -227,7 +194,34 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
   /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
-  observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
+  observeToolTerminal?: (observation: {
+    toolCallId?: string;
+    toolName: string;
+    arguments?: unknown;
+    /** Original host result or error; public fields cannot supply effect provenance. */
+    result?: unknown;
+    meta?: string;
+    executionStarted?: boolean;
+    /** Exact-instance replay classification resolved by the host tool catalog. */
+    replaySafe?: boolean;
+    outcome: "success" | "failure";
+    failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
+    /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
+    nativeMutation?: {
+      mutatingAction: boolean;
+      replaySafe: boolean;
+    };
+    /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
+    ownerMutation?: {
+      ownerKey: string;
+    };
+  }) => {
+    lastToolError?: ToolErrorSummary;
+    executionStarted: boolean;
+    executedArguments?: Record<string, unknown>;
+    sideEffectEvidence: boolean;
+    effectReceipt: ToolEffectReceipt;
+  };
   /** Host-issued scope for harness-owned child completion. */
   agentHarnessCompletionScope?: AgentHarnessCompletionScope;
   /** Host-only originals retained across native image projection. */
@@ -259,6 +253,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
   /** Completed native attempt results excluded by the original admission read fence. */
   pluginRuntimeRefreshMessages?: AgentMessage[];
+  /**
+   * Set on a plugin-runtime refresh continuation: the logical turn's user prompt.
+   * Prompt hooks see it instead of the synthetic continuation prompt, and turn-start
+   * work (next-turn injections, agent_turn_prepare) is not repeated.
+   */
+  pluginRuntimeRefreshUserPrompt?: string;
   /** Host-owned same-turn recovery context; never a new user turn or execution authority. */
   continuation?: {
     /** Original current request, retained outside bounded historical projections. */
@@ -280,7 +280,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   };
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
-  model: Model;
+  model: Model & { requestTimeoutMs?: number };
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
   authProfileStore: AuthProfileStore;
@@ -299,6 +299,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  /** Exact historical input acknowledged without another model turn. */
+  inputAlreadyDelivered?: true;
+  cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   terminal: AgentRunAttemptTerminal;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Prepared policy that explains unavailable tools without another session read. */
@@ -378,6 +381,8 @@ export type EmbeddedRunAttemptResult = {
   modelIterations?: number;
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
+  /** Explicit provider/session request timeouts retain their configured retry policy. */
+  providerRequestTimeoutExplicit?: boolean;
   /** Saved retry.provider.maxRetryDelayMs from the same owner; 0 disables the cap. */
   providerRetryMaxDelayMs?: number;
   messagesSnapshot: AgentMessage[];

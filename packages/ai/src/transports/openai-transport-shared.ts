@@ -32,6 +32,12 @@ const OPENAI_DATED_MODEL_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 export const log = {
+  isEnabled(level: "debug" | "info" | "warn") {
+    return getAiTransportHost().isLogEnabled?.("openai-transport", level) !== false;
+  },
+  debugLazy(build: () => string) {
+    getAiTransportHost().logDebug("openai-transport", () => ({ message: build() }));
+  },
   debug(message: string, data?: Record<string, unknown>) {
     getAiTransportHost().logDebug("openai-transport", () => ({ message, data }));
   },

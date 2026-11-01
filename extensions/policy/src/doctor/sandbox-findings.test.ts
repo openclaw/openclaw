@@ -45,20 +45,14 @@ const evidence: PolicyEvidence = {
 };
 function receipt(kind: "mode" | "backend", value: string, agentId?: string, scoped = false) {
   const target = `oc://openclaw.config/agents/${agentId ? `entries/${agentId}` : "defaults"}/sandbox/${kind}`;
-  return {
+  return expect.objectContaining({
     checkId: `policy/sandbox-${kind}-unapproved`,
     severity: "error",
-    source: "policy",
-    path: "openclaw config",
     ocPath: target,
     target,
     message: `${agentId ? `agent '${agentId}'` : "default sandbox config"} uses unapproved sandbox ${kind} '${value}'.`,
     requirement: `oc://policy.jsonc/${scoped ? "scopes/release/" : ""}sandbox/${kind === "mode" ? "requireMode" : "allowBackends"}`,
-    fixHint:
-      kind === "mode"
-        ? "Set agents.defaults.sandbox.mode or agents.entries.<id>.sandbox.mode to an approved value."
-        : "Use an approved sandbox backend or update policy after review.",
-  };
+  });
 }
 const defaultMode = receipt("mode", "OFF");
 const alphaMode = receipt("mode", "off", "alpha");
@@ -108,7 +102,6 @@ describe("sandbox allowlists in policy evaluation", () => {
   afterEach(teardownPolicyDoctorTest);
 
   it("preserves the complete ordered attested findings for keyed agents and scopes", async () => {
-    const configPath = await writePolicyFixture(policy);
     const rejected = { sandbox: { mode: "off", backend: "ssh" } } as const;
     const cfg = cfgWithPolicyOverrides({
       agents: {
@@ -119,7 +112,7 @@ describe("sandbox allowlists in policy evaluation", () => {
         },
       },
     });
-    const result = await evaluatePolicy(ctx(configPath, cfg));
+    const result = await evaluatePolicy(ctx(await writePolicyFixture(policy), cfg));
     expect(result.attestedFindings).toEqual([
       receipt("mode", "off"),
       alphaMode,

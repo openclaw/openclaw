@@ -29,14 +29,6 @@ type TranscriptArchivePublicationDatabase = Pick<
   "schema_meta" | "session_transcript_archives"
 >;
 
-export type TranscriptArchivePublicationPlan = {
-  archiveName: string;
-  nextBytes: Buffer;
-  nextSha256: string;
-  encoding?: "identity" | "zstd";
-  fingerprint?: string;
-};
-
 export type TranscriptArchiveRecoveryRow = {
   generation: string;
   nextSha256: string;
@@ -171,7 +163,13 @@ export function clearTranscriptArchiveRecoveryJournal(database: DatabaseSync): v
 
 export function repairPublishedTranscriptArchive(params: {
   archiveDirectory: string;
-  planned: TranscriptArchivePublicationPlan;
+  planned: {
+    archiveName: string;
+    nextBytes: Buffer;
+    nextSha256: string;
+    encoding?: "identity" | "zstd";
+    fingerprint?: string;
+  };
   signal?: AbortSignal;
   verifyOnly?: boolean;
 }): boolean {

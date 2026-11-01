@@ -1,5 +1,6 @@
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import type {
+  DurableComposerDraft,
   DurableComposerDraftScope,
   DurableDraftModelSelection,
 } from "../../lib/chat/composer-draft-store.runtime.ts";
@@ -20,6 +21,7 @@ type NewSessionDraftState = {
   mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
   incognito: boolean;
+  permissionMode?: DurableComposerDraft["permissionMode"];
 };
 
 type DraftRetirement = { revision: number; writeId?: string };
@@ -64,7 +66,7 @@ export class NewSessionDraftPersistence {
     | undefined;
   private restorePromise: Promise<boolean> | undefined;
   private contentReconciled = false;
-  private pendingModelSelectionMutation = false;
+  private readonly pendingSelectionMutations = new Set<"model" | "permission">();
   private gatewayOwner = "";
   private recoveryScope = "";
   private routeKey = "";
@@ -92,10 +94,8 @@ export class NewSessionDraftPersistence {
   constructor(
     private readonly read: () => NewSessionDraftState,
     private readonly apply: (
-      message: string,
-      attachments: ChatAttachment[],
+      state: Omit<NewSessionDraftState, "incognito">,
       resetVisibility?: boolean,
-      mentions?: readonly HumanMention[],
     ) => void,
     private readonly onStorageError: () => void,
   ) {}
@@ -118,8 +118,8 @@ export class NewSessionDraftPersistence {
     this.gatewayOwner = gatewayOwner;
     this.recoveryScope = recoveryScope;
     if (currentOwner && !preserveCurrent) {
-      this.pendingModelSelectionMutation = false;
-      this.apply("", [], true);
+      this.pendingSelectionMutations.clear();
+      this.apply({ message: "", attachments: [], permissionMode: undefined }, true);
     }
     // The route may win the startup race; activate it as soon as its owner exists.
     if (!preserveCurrent) {
@@ -155,7 +155,7 @@ export class NewSessionDraftPersistence {
     if (this.routeKey !== routeKey) {
       this.persistNow();
       if (this.routeKey) {
-        this.pendingModelSelectionMutation = false;
+        this.pendingSelectionMutations.clear();
       }
       this.routeKey = routeKey;
       this.contentReconciled = false;
@@ -210,7 +210,7 @@ export class NewSessionDraftPersistence {
         if (this.restorePromise === restoring) {
           this.restorePromise = undefined;
           this.contentReconciled = reconciled;
-          this.flushModelSelectionMutation();
+          this.flushSelectionMutations();
         }
       },
       () => {
@@ -233,26 +233,26 @@ export class NewSessionDraftPersistence {
     this.pristineMutationBaseline = this.mutationGeneration;
   }
 
-  noteModelSelectionMutation() {
+  noteSelectionMutation(field: "model" | "permission") {
     // A pristine submission cancels content hydration; a rejected create must not
-    // let the next model-only edit CAS-write the still-empty composer over that content.
+    // let the next selection-only edit CAS-write the still-empty composer over that content.
     const rehydrate =
       !this.contentReconciled &&
       this.mutationGeneration === this.pristineMutationBaseline &&
       (this.submittedMutation === this.mutation || !this.restorePromise);
     this.submittedMutation = null;
-    this.pendingModelSelectionMutation = true;
+    this.pendingSelectionMutations.add(field);
     if (rehydrate) {
       this.restoredIdentity = "";
       this.activateRoute(this.routeKey);
     } else {
-      this.flushModelSelectionMutation();
+      this.flushSelectionMutations();
     }
   }
 
-  private flushModelSelectionMutation() {
+  private flushSelectionMutations() {
     if (
-      this.pendingModelSelectionMutation &&
+      this.pendingSelectionMutations.size > 0 &&
       !this.restorePromise &&
       this.restoredIdentity &&
       (this.contentReconciled || this.mutationGeneration > this.pristineMutationBaseline) &&
@@ -260,11 +260,13 @@ export class NewSessionDraftPersistence {
       this.submittedMutation !== this.mutation
     ) {
       this.noteUserMutation();
+      // Discrete choices can be followed immediately by reload; do not debounce them.
+      this.persistNow();
     }
   }
 
   noteUserMutation() {
-    this.pendingModelSelectionMutation = false;
+    this.pendingSelectionMutations.clear();
     this.mutationGeneration += 1;
     this.mutation = createMutation();
     this.pendingHandoffMutation = null;
@@ -312,7 +314,7 @@ export class NewSessionDraftPersistence {
   }
 
   captureSubmission() {
-    this.pendingModelSelectionMutation = false;
+    this.pendingSelectionMutations.clear();
     this.reconcileHandoffCommit();
     this.submittedMutation = this.mutation;
     // Freeze pristine restoration; a dirty draft must still finish its CAS
@@ -543,6 +545,7 @@ export class NewSessionDraftPersistence {
         ? { mentions: state.mentions.map((mention) => ({ ...mention })) }
         : {}),
       modelSelection: this.modelSelection?.read(),
+      permissionMode: state.permissionMode,
       storedAttachments: captureDurableChatAttachments(state.attachments),
       writeId,
     };
@@ -605,11 +608,17 @@ export class NewSessionDraftPersistence {
       return false;
     }
     this.revision = storedRevision;
-    if (result.status === "found" && result.draft.mentions) {
-      this.apply(result.draft.text, attachments, undefined, result.draft.mentions);
-    } else {
-      this.apply(result.status === "found" ? result.draft.text : "", attachments);
-    }
+    const draft = result.status === "found" ? result.draft : undefined;
+    // A choice made while content hydrates belongs to this draft's current edit.
+    const permissionMode = this.pendingSelectionMutations.has("permission")
+      ? this.read().permissionMode
+      : draft?.permissionMode;
+    this.apply({
+      message: draft?.text ?? "",
+      attachments,
+      mentions: draft?.mentions,
+      permissionMode,
+    });
     this.modelSelection?.restore(
       result.status === "found" ? result.draft.modelSelection : undefined,
     );

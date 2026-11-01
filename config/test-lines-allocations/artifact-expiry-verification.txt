@@ -1,0 +1,2 @@
+# Exercises silent/JSON verification and real workflow command-substitution failure propagation.
+46

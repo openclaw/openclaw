@@ -12,6 +12,7 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -475,7 +476,7 @@ function usage(input: number, output: number, cacheRead: number, totalTokens: nu
   return { input, output, cacheRead, cacheWrite: 0, totalTokens };
 }
 function freshUsage(totalTokens: number) {
-  return { totalTokens, totalTokensFresh: true, totalTokensVersion: 1 as const };
+  return { totalTokens, totalTokensFresh: true, totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION };
 }
 function withStatusHome(run: () => Promise<void>) {
   return withTempHome(
@@ -589,7 +590,7 @@ describe("status transcript usage and model context", () => {
         cacheWrite: 11_000,
         totalTokens: 2_300_000,
       },
-      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 36k/1.0m (4%)"],
+      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 37k/1.0m (4%)"],
       absent: ["Context: 2.3m/1.0m"],
     },
   ])("$name", async ({ transcript, entry, present, absent }) => {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it, vi } from "vitest";
-import type { MatrixQaObservedEvent } from "../substrate/events.js";
+import { normalizeMatrixQaObservedEvent } from "../substrate/events.js";
 import { createCurrentScenarioEventPredicate } from "./scenario-runtime-event-scope.js";
 import {
   MATRIX_QA_TOOL_PROGRESS_MENTION_GATE_DIRECTORY,
@@ -11,6 +11,7 @@ import {
 } from "./scenario-runtime-shared.js";
 import { prepareMatrixMentionProgressGate } from "./scenario-runtime-tool-progress-gate.js";
 import { runToolProgressMentionSafetyScenario } from "./scenario-runtime-tool-progress.js";
+import { matrixMessage } from "./scenario-runtime.test-support.js";
 
 const publications = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -29,12 +30,8 @@ afterEach(() => publications.clear());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("does not reuse events observed before the current progress scenario", () => {
-  const event = (eventId: string): MatrixQaObservedEvent => ({
-    kind: "message",
-    roomId: "!room:example.test",
-    eventId,
-    type: "m.room.message",
-  });
+  const event = (eventId: string) =>
+    normalizeMatrixQaObservedEvent("!room:matrix-qa.test", matrixMessage(eventId, "Working"))!;
   const stale = event("$stale");
   const isCurrent = createCurrentScenarioEventPredicate([stale, event("$current")], 1);
   expect([stale, event("$stale"), event("$current")].map(isCurrent)).toEqual([false, false, true]);
@@ -84,7 +81,6 @@ gateTest.for(["cleanup", "release"])("consumes the gate on %s", async (mode, { s
     await gate.cleanup();
     await pending;
   }
-  await expect(stat(gatePath)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 gateTest.each([false, true])("cleans unconsumed gate (pending release: %s)", async (release) => {

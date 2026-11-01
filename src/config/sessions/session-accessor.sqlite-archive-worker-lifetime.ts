@@ -10,7 +10,7 @@ export const SQLITE_WORKER_RETIREMENT_GRACE_MS = 5_000;
 export function watchSqliteWorkerSettlement(settlement: Promise<unknown>, taskTimeoutMs = 0): void {
   let pending = true;
   const deadline = setTimeout(() => {
-    void import("../../infra/process-respawn.js")
+    void import("../../infra/gateway-native-worker-recovery.js")
       .then(({ requestGatewayNativeWorkerRecovery }) =>
         requestGatewayNativeWorkerRecovery({ isCurrent: () => pending }),
       )

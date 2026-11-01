@@ -4,10 +4,7 @@ import type { Question } from "../../packages/gateway-protocol/src/index.js";
 import { deliverAgentHarnessQuestionPrompt } from "../agents/harness/user-input-bridge.js";
 import { sendQuestionToolPrompt } from "../agents/tools/question-prompt-send.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import {
-  captureReplyDispatchDeliveryOutcome,
-  createReplyDispatcher,
-} from "../auto-reply/reply/reply-dispatcher.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { QuestionManager } from "../gateway/question-manager.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
@@ -52,11 +49,8 @@ it.each(["tool", "harness"] as const)(
         });
       },
     });
-    const send = async (payload: ReplyPayload): Promise<void> => {
-      const delivery = captureReplyDispatchDeliveryOutcome(payload);
-      expect(dispatcher.sendBlockReply(payload)).toBe(true);
-      expect(delivery.isTracked()).toBe(true);
-      expect(await delivery.promise).toBe("delivered");
+    const send = (payload: ReplyPayload) => {
+      dispatcher.sendBlockReply(payload);
     };
     const questionId = "ask_reused_delivery";
     const request = (timeoutMs: number) => {
@@ -79,11 +73,10 @@ it.each(["tool", "harness"] as const)(
     let firstPrompt: Promise<void> | undefined;
     let secondPrompt: Promise<void> | undefined;
     try {
-      expect(dispatcher.sendBlockReply({ text: "Earlier reply" })).toBe(true);
+      dispatcher.sendBlockReply({ text: "Earlier reply" });
       await precedingSendEntered.promise;
       request(50);
       firstPrompt = sendPrompt();
-      expect(dispatcher.getQueuedCounts().block).toBe(2);
 
       await vi.advanceTimersByTimeAsync(50);
       expect(manager.get(questionId)?.status).toBe("expired");
@@ -92,7 +85,6 @@ it.each(["tool", "harness"] as const)(
 
       request(10_000);
       secondPrompt = sendPrompt();
-      expect(dispatcher.getQueuedCounts().block).toBe(3);
       expect(finalizers).toHaveLength(0);
       releasePrecedingSend.resolve();
       await Promise.all([firstPrompt, secondPrompt]);

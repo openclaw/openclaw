@@ -238,6 +238,8 @@ describe("CI check failure collection", () => {
   it.each([
     ["native-i18n", "Check native app generated locale parity", "node_setup"],
     ["control-ui-i18n", "Check Control UI locale parity", "node_setup"],
+    ["build-artifacts", "Verify Control UI i18n source", "node_setup"],
+    ["build-artifacts", "Check Control UI locale parity", "node_setup"],
     ["checks-ui", "Test Control UI", "ui_chromium"],
     ["checks-ui", "Install Playwright WebKit", "node_setup"],
     ["checks-ui", "Test Control UI WebKit overlays and focus", "ui_webkit"],

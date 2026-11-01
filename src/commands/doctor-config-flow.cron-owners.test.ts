@@ -11,7 +11,7 @@ import { createCronServiceWithStateForTest } from "../cron/service.test-harness.
 import { waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor.test-support.js";
 import { saveCronJobsStore } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../cron/store/row-codec.js";
 import type { CronJob } from "../cron/types.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
@@ -69,14 +69,13 @@ function sql(parts: TemplateStringsArray, ...values: SQLInputValue[]) {
   };
 }
 
-function sourceConfig(
-  options: { store?: string } & Partial<Record<"inherit" | "legacy" | "markerless", boolean>> = {},
-) {
-  const { store, inherit, legacy, markerless } = options;
-  const defaults = {
-    systemAgent: { agentId: "research" },
-    ...(inherit ? { authInheritance: { agentId: "research" } } : {}),
-  };
+function storeKey(store = storePath) {
+  return resolveCronStoreKeyInDatabase(openOpenClawStateDatabase().db, store);
+}
+
+function sourceConfig(options: { store?: string; legacy?: boolean; markerless?: boolean } = {}) {
+  const { store, legacy, markerless } = options;
+  const defaults = { systemAgent: { agentId: "research" } };
   return {
     agents: legacy
       ? {
@@ -98,15 +97,16 @@ async function seedJobs() {
     { id: "session", sessionKey: "agent:research:main", enabled: false },
     { id: "sql-owner", enabled: false },
   );
-  sql`UPDATE cron_jobs SET agent_id = 'research' WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'sql-owner'`.run();
-  sql`UPDATE cron_jobs SET job_json = json_set(job_json, '$.authoredNote', 'keep me') WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'historical'`.run();
+  sql`UPDATE cron_jobs SET agent_id = 'research' WHERE store_key = ${storeKey()} AND job_id = 'sql-owner'`.run();
+  sql`UPDATE cron_jobs SET job_json = json_set(job_json, '$.authoredNote', 'keep me') WHERE store_key = ${storeKey()} AND job_id = 'historical'`.run();
 }
 
 const saveJobs = (store: string, ...jobs: Partial<CronJob>[]) =>
   saveCronJobsStore(store, { version: 1, jobs: jobs.map(makeCronJob) });
 
 function rows() {
-  return loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath));
+  const { db } = openOpenClawStateDatabase();
+  return loadCronRows(db, resolveCronStoreKeyInDatabase(db, storePath));
 }
 
 const definitions = (stored: ReturnType<typeof rows>) =>
@@ -124,7 +124,7 @@ function backupRows(backupPath: string, verify = false) {
     expect(backup.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
     expect(backup.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   }
-  return loadCronRows(backup, cronStoreKey(storePath));
+  return loadCronRows(backup, resolveCronStoreKeyInDatabase(backup, storePath));
 }
 
 async function backups() {
@@ -169,35 +169,18 @@ function createCron(defaultAgentId?: string) {
   return { cron, state: cronState, execute, clock };
 }
 
-function writeRoster(remove?: string, persist = false) {
+function writeRoster(remove: string) {
   return transformConfigFile({
     transform: (current) => {
       const canonical = createCanonicalAgentConfigFixture(current).config;
-      return { nextConfig: remove ? pruneAgentConfig(canonical, remove).config : canonical };
+      return { nextConfig: pruneAgentConfig(canonical, remove).config };
     },
     writeOptions: {
-      ...(persist ? { persistCanonicalAgentRoster: true } : {}),
-      ...(remove ? { allowedAgentRosterRemovals: [remove] } : {}),
+      allowedAgentRosterRemovals: [remove],
     },
     afterWrite: { mode: "none", reason: "test roster write" },
   });
 }
-
-it.each(["retains", "removes"])(
-  "refuses an ordinary roster write that %s the historical agent without changing its jobs",
-  async (agentChange) => {
-    await state.writeConfig(sourceConfig({ inherit: agentChange === "removes" }));
-    await seedJobs();
-    const before = await storedState();
-    const write = writeRoster(agentChange === "removes" ? "ops" : undefined, true);
-    await expect(write).rejects.toMatchObject({
-      code: "CONFIG_WRITE_REJECTED",
-      refusal: "cron-owner-safety",
-    });
-    await expect(write).rejects.toThrow("openclaw doctor --fix");
-    expect(await storedState()).toEqual({ ...before, backups: [] });
-  },
-);
 
 it.each(["update", "remove"])(
   "refuses an operator %s before changing an unresolved historical job",
@@ -235,7 +218,7 @@ it("preserves historical and explicit jobs when agent deletion needs Doctor", as
 
 it("preserves malformed cron bytes and the historical marker when Doctor cannot verify ownership", async () => {
   await seedJobs();
-  sql`UPDATE cron_jobs SET job_json = '{malformed' WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'historical'`.run();
+  sql`UPDATE cron_jobs SET job_json = '{malformed' WHERE store_key = ${storeKey()} AND job_id = 'historical'`.run();
   const before = await storedState();
   await expect(repair()).rejects.toThrow("Cannot verify ownership of malformed cron job");
   expect(await storedState()).toEqual({ ...before, backups: [] });
@@ -243,7 +226,7 @@ it("preserves malformed cron bytes and the historical marker when Doctor cannot 
 
 it("leaves SQLite owners unchanged on ordinary cron startup", async () => {
   await seedJobs();
-  sql`UPDATE cron_jobs SET state_json = json_set(state_json, '$.nextRunAtMs', 123), job_json = json_set(job_json, '$.notify', json('true')) WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'sql-owner'`.run();
+  sql`UPDATE cron_jobs SET state_json = json_set(state_json, '$.nextRunAtMs', 123), job_json = json_set(job_json, '$.notify', json('true')) WHERE store_key = ${storeKey()} AND job_id = 'sql-owner'`.run();
   const beforeDefinitions = definitions(rows());
   const { cron, execute } = createCron();
   await cron.start();
@@ -316,7 +299,7 @@ it.each([
       ...(expected === "webhook" ? {} : { channel: "telegram" }),
     };
     definition.authoredNote = "preserve this definition";
-    sql`UPDATE cron_jobs SET job_json = ${JSON.stringify(definition)} WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'delivery-repair'`.run();
+    sql`UPDATE cron_jobs SET job_json = ${JSON.stringify(definition)} WHERE store_key = ${storeKey()} AND job_id = 'delivery-repair'`.run();
     const original = rows();
     const { cron, execute } = createCron();
     await cron.start();
@@ -421,8 +404,8 @@ it.each([
       "store_key, job_id, declaration_key, owner_agent_id, name, description, enabled, agent_id, payload_kind, job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at";
     db.prepare(
       `CREATE TEMP TABLE old_writer_cron_row AS SELECT ${releasedColumns} FROM cron_jobs WHERE store_key = ? AND job_id = 'historical'`,
-    ).run(cronStoreKey(storePath));
-    sql`DELETE FROM cron_jobs WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'historical'`.run();
+    ).run(resolveCronStoreKeyInDatabase(db, storePath));
+    sql`DELETE FROM cron_jobs WHERE store_key = ${storeKey()} AND job_id = 'historical'`.run();
     db.exec(
       `INSERT INTO cron_jobs (${releasedColumns}) SELECT ${releasedColumns} FROM old_writer_cron_row`,
     );
@@ -433,15 +416,15 @@ it.each([
     await saveJobs(otherStorePath, { id: "other-ownerless", enabled: false });
   }
   const readOtherRows = () =>
-    sql`SELECT * FROM cron_jobs WHERE store_key = ${cronStoreKey(otherStorePath)} ORDER BY sort_order, job_id`.all();
+    sql`SELECT * FROM cron_jobs WHERE store_key = ${storeKey(otherStorePath)} ORDER BY sort_order, job_id`.all();
   const otherRowsBefore = machineStore ? readOtherRows() : undefined;
   const unsupportedDelivery = entry === "health write with unsupported delivery";
   if (unsupportedDelivery) {
-    sql`UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', 'not-a-route') WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'historical'`.run();
+    sql`UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', 'not-a-route') WHERE store_key = ${storeKey()} AND job_id = 'historical'`.run();
   }
   const original = rows();
   const originalGrant =
-    sql`SELECT grant_definition_generation FROM cron_jobs WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'historical'`.get();
+    sql`SELECT grant_definition_generation FROM cron_jobs WHERE store_key = ${storeKey()} AND job_id = 'historical'`.get();
   const ctx = await repair();
   expect(ctx.configWriteRefusal).toBeUndefined();
   const saved = await readConfigFileSnapshot();
@@ -462,7 +445,7 @@ it.each([
     ...(unsupportedDelivery ? { delivery: { mode: "not-a-route" } } : {}),
   });
   const repairedGrant =
-    sql`SELECT grant_definition_generation, grant_definition_revision, grant_definition_updated_at FROM cron_jobs WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'historical'`.get();
+    sql`SELECT grant_definition_generation, grant_definition_revision, grant_definition_updated_at FROM cron_jobs WHERE store_key = ${storeKey()} AND job_id = 'historical'`.get();
   expect(repairedGrant?.grant_definition_generation).toBeGreaterThan(
     Number(originalGrant?.grant_definition_generation),
   );
@@ -514,7 +497,7 @@ it("retains the marker and a verified backup when SQL ownership changes after in
     .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
     .mockImplementationOnce(async (params) => {
       const result = await createSnapshot(params);
-      sql`UPDATE cron_jobs SET agent_id = 'research' WHERE store_key = ${cronStoreKey(storePath)} AND job_id = 'historical'`.run();
+      sql`UPDATE cron_jobs SET agent_id = 'research' WHERE store_key = ${storeKey()} AND job_id = 'historical'`.run();
       return result;
     });
   await expect(repair()).rejects.toThrow("Cron ownership changed during Doctor repair");

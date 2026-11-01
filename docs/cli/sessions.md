@@ -64,6 +64,8 @@ SQLite target, verifies the target exists and is usable, and reports the physica
 path it actually read. Combine it with `--agent <id>` when you must select the
 configured agent that owns the store.
 
+Human-readable store headers escape terminal controls in paths. JSON output keeps the original path.
+
 `--agent` and `--store` require non-blank values. Selection errors exit non-zero
 and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
 is set.

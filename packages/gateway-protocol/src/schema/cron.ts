@@ -481,6 +481,7 @@ export const CronJobSchema = closedObject({
   id: NonEmptyString,
   declarationKey: Type.Optional(CronDeclarationKeySchema),
   displayName: Type.Optional(CronDisplayNameSchema),
+  ownerProfileId: Type.Optional(NonEmptyString),
   owner: Type.Optional(CronOwnerSchema),
   scheduledToolPolicy: Type.Optional(CronScheduledToolPolicySchema),
   streamExecutionHost: Type.Optional(
@@ -635,6 +636,7 @@ export const CronAddResultSchema = Type.Union([
 
 /** Mutable cron job fields accepted by update APIs. */
 const CronJobPatchSchema = closedObject({
+  ownerProfileId: Type.Optional(NonEmptyString),
   name: Type.Optional(NonEmptyString),
   displayName: Type.Optional(Type.Union([CronDisplayNameSchema, Type.Null()])),
   ...CronCommonOptionalFields,
@@ -665,6 +667,12 @@ export const CronRemoveParamsSchema = cronIdOrJobIdParams({
   /** Rejects removal when the current definition differs from the caller's token. */
   expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
 });
+
+/**
+ * Records the current incarnation of a key-only automation's parent conversation.
+ * The conversation is the caller's signed agent-runtime session, never a parameter.
+ */
+export const CronBindParamsSchema = cronIdOrJobIdParams({});
 
 /** Runs a cron job immediately, immediately if enabled, or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({

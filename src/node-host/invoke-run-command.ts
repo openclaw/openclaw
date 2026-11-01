@@ -86,6 +86,7 @@ export async function runCommand(
       launch.argv = [argv[0], argv[1], prependShellPath(argv[2] ?? "", childEnv, servicePath)];
     }
     const result = await runCommandWithTimeout(launch.argv, {
+      executionIntent: "agent-tool",
       ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
       baseEnv: childEnv,
       cwd,

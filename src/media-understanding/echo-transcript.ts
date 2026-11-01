@@ -20,29 +20,6 @@ const TELEGRAM_TRANSCRIPT_ECHO_COMPLETION_RETENTION = {
   maxEntries: 2_000,
 } as const;
 
-function buildTelegramTranscriptEchoIntentId(params: {
-  accountId?: string;
-  to: string;
-  messageSid?: string;
-}): string | undefined {
-  const accountId = params.accountId?.trim();
-  const chatId = params.to
-    .trim()
-    .replace(/^telegram:/iu, "")
-    .replace(/^(?:group|user):/iu, "")
-    .replace(/:(?:direct-)?topic:[^:]+$/iu, "")
-    .trim()
-    .toLowerCase();
-  const messageSid = params.messageSid?.trim();
-  if (!accountId || !chatId || /\s/u.test(chatId) || !messageSid) {
-    return undefined;
-  }
-
-  const identity = JSON.stringify([accountId, chatId, messageSid]);
-  const digest = createHash("sha256").update(identity).digest("hex");
-  return `${TELEGRAM_TRANSCRIPT_ECHO_INTENT_PREFIX}${digest}`;
-}
-
 /** Sends a transcript echo back to the originating deliverable chat. */
 export async function sendTranscriptEcho(params: {
   ctx: MsgContext;
@@ -79,14 +56,25 @@ export async function sendTranscriptEcho(params: {
     "{transcript}",
     () => transcript,
   );
-  const deliveryIntentId =
-    normalizedChannel === "telegram"
-      ? buildTelegramTranscriptEchoIntentId({
-          accountId: ctx.AccountId,
-          to,
-          messageSid: ctx.MessageSid,
-        })
-      : undefined;
+  let deliveryIntentId: string | undefined;
+  if (normalizedChannel === "telegram") {
+    const echoAccountId = ctx.AccountId;
+    const echoMessageSid = ctx.MessageSid;
+    const accountId = echoAccountId?.trim();
+    const chatId = to
+      .trim()
+      .replace(/^telegram:/iu, "")
+      .replace(/^(?:group|user):/iu, "")
+      .replace(/:(?:direct-)?topic:[^:]+$/iu, "")
+      .trim()
+      .toLowerCase();
+    const messageSid = echoMessageSid?.trim();
+    if (accountId && chatId && !/\s/u.test(chatId) && messageSid) {
+      const identity = JSON.stringify([accountId, chatId, messageSid]);
+      const digest = createHash("sha256").update(identity).digest("hex");
+      deliveryIntentId = `${TELEGRAM_TRANSCRIPT_ECHO_INTENT_PREFIX}${digest}`;
+    }
+  }
 
   try {
     const { sendDurableMessageBatchCore } = await loadMessageRuntime();

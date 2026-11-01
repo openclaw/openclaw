@@ -1,4 +1,4 @@
-import { createInitializationContext } from "./chat-pane.test-support.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 

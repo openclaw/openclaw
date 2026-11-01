@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
@@ -16,13 +15,9 @@ function buildLoopParams(commandBodyNormalized: string): HandleCommandsParams {
       BodyForAgent: commandBodyNormalized,
     },
   );
-  Object.assign(params.command, {
-    isAuthorizedSender: true,
-    senderIsOwner: true,
-  });
-  return Object.assign(params, {
-    sessionKey: "agent:main:webchat:test",
-  });
+  Object.assign(params.command, { isAuthorizedSender: true, senderIsOwner: true });
+  params.sessionKey = "agent:main:webchat:test";
+  return params;
 }
 
 async function rewrite(body: string): Promise<string> {
@@ -31,26 +26,27 @@ async function rewrite(body: string): Promise<string> {
   return params.ctx.BodyForAgent ?? "";
 }
 
-const LOOP_PREFIX = `loop[${createHash("sha256").update("agent:main:webchat:test").digest("hex").slice(0, 12)}]`;
+const LOOP_PREFIX = "loop[88ddaa69d4c0]";
 
 it("ignores non-loop text", async () => {
   expect(await handleLoopCommand(buildLoopParams("check ci"), true)).toBeNull();
 });
 
 it("returns usage for bare /loop without continuing", async () => {
-  const result = await handleLoopCommand(buildLoopParams("/loop"), true);
-
-  expect(result?.shouldContinue).toBe(false);
-  expect(result?.reply?.text).toBe(
-    "Usage: /loop [interval] <prompt> — repeat a prompt in this chat (e.g. /loop 5m check deploy status). Without interval the loop self-paces between 1m and 1h. /loop status lists loops; /loop stop [name] stops.",
-  );
+  expect(await handleLoopCommand(buildLoopParams("/loop"), true)).toMatchObject({
+    shouldContinue: false,
+    reply: { text: expect.stringContaining("Usage: /loop [interval] <prompt>") },
+  });
 });
 
-it("rewrites a fixed interval loop as a current-session cron job", async () => {
-  const body = await rewrite("/loop 5m check ci");
+it("keeps multiline prompts in a current-session fixed-interval loop", async () => {
+  const body = await rewrite(normalizeCommandBody("/loop 5m check these:\n- CI\n- deploy"));
   expect(body).toContain('schedule:{kind:"every",everyMs:300000}');
   expect(body).toContain('sessionTarget:"current"');
-  expect(body).toContain(`"${LOOP_PREFIX} check ci"`);
+  expect(body).toContain(`name:"${LOOP_PREFIX} check these: - CI - deploy"`);
+  expect(body).toContain(
+    'message:"[loop check these: - CI - deploy] check these:\\n- CI\\n- deploy\\nDo the task',
+  );
   expect(body).toContain("do not use the message tool");
   expect(body).toContain("with the automations tool");
   expect(body).not.toMatch(/\bcron tool\b/);
@@ -63,28 +59,17 @@ it("rewrites an interval-free loop with pacing and next_check guidance", async (
   expect(body).toContain('in:\\"<duration>\\"');
 });
 
-it("keeps every line of a multi-line loop prompt and a single-line job name", async () => {
-  const body = await rewrite(normalizeCommandBody("/loop 10m check these:\n- CI\n- deploy"));
-  expect(body).toContain(`name:"${LOOP_PREFIX} check these: - CI - deploy"`);
-  expect(body).toContain(
-    'message:"[loop check these: - CI - deploy] check these:\\n- CI\\n- deploy\\nDo the task',
-  );
-});
-
-it("rewrites /loop status as a conversation-scoped list work order", async () => {
-  const body = await rewrite("/loop status");
+it.each(["status", "stop"])("rewrites /loop %s as a scoped work order", async (command) => {
+  const body = await rewrite(`/loop ${command}`);
   expect(body).toContain('action:"list", includeDisabled:true');
   expect(body).toContain(`name starts with "${LOOP_PREFIX}"`);
-  expect(body).toContain("Use the automations tool");
-  expect(body).not.toMatch(/\bcron\b/i);
-});
-
-it("rewrites /loop stop as a scoped cron removal work order", async () => {
-  const body = await rewrite("/loop stop");
-  expect(body).toContain('action:"list", includeDisabled:true');
-  expect(body).toContain(`name starts with "${LOOP_PREFIX}"`);
-  expect(body).toContain('action:"remove"');
-  expect(body).toContain(`Never remove a job whose name does not start with "${LOOP_PREFIX}"`);
+  if (command === "stop") {
+    expect(body).toContain('action:"remove"');
+    expect(body).toContain(`Never remove a job whose name does not start with "${LOOP_PREFIX}"`);
+  } else {
+    expect(body).toContain("Use the automations tool");
+    expect(body).not.toMatch(/\bcron\b/i);
+  }
 });
 
 it.each([

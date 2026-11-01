@@ -27,14 +27,12 @@ export function resetDiagnosticActivityForTest(): void {
   lastActivityAt = 0;
 }
 
-type DiagnosticMessageQueueParams = SessionRef & {
-  channel?: string;
-  source: string;
-};
-
 /** Records queue activity while letting internal run owners distinguish steering from backlog. */
 export function logMessageQueuedWithBacklogPolicy(
-  params: DiagnosticMessageQueueParams,
+  params: SessionRef & {
+    channel?: string;
+    source: string;
+  },
   countsTowardBacklog: boolean,
 ): void {
   if (!areDiagnosticsEnabledForProcess()) {

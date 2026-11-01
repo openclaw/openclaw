@@ -5,10 +5,6 @@ const loadI18n = useLazyEnglishTest();
 
 it.each([
   { surface: "composer", load: () => import("../pages/chat/composer-library-session.ts") },
-  {
-    surface: "menu",
-    load: () => import("../pages/chat/components/chat-composer-library-menu.tsx"),
-  },
   { surface: "pin reader", load: () => import("../pages/skills/library-detail.tsx") },
 ])(
   "loads session copy without skill editor copy at the cold $surface boundary",
@@ -38,3 +34,14 @@ it.each([
     expect(manager.t("skillLibrary.session.selected")).toBe("Ausgewählt");
   },
 );
+
+it("loads composer menu copy without the skill editor at its cold boundary", async () => {
+  const { en, manager } = await loadI18n({
+    chat: { composer: { menu: { readSkill: "Lesen" } } },
+  });
+  await manager.setLocale("de");
+  await import("../pages/chat/components/chat-composer-library-menu.tsx");
+  expect(manager.t("chat.composer.menu.readSkill")).toBe("Lesen");
+  expect(manager.t("chat.composer.menu.addFromLibraries")).toBe("Add from libraries");
+  expect(en.skillLibrary).toBeUndefined();
+});

@@ -1,4 +1,4 @@
-import { For, Loading, Show } from "solid-js";
+import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -102,6 +102,7 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
     >
       <Menu
         id={`secret-actions-${props.entry.name}`}
+        lazy
         class="secrets-store__menu"
         placement="bottom-end"
         label={`${t("secretsStore.actions")}: ${props.entry.name}`}
@@ -131,6 +132,14 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
 }
 
 function SecretsTable(props: SecretsStoreViewProps) {
+  const timestamp = createMemo(
+    () => {
+      // Refresh the system timezone with the inventory.
+      props.read();
+      return new Intl.DateTimeFormat(getLocale(), { dateStyle: "medium", timeStyle: "short" });
+    },
+    { lazy: true },
+  );
   return (
     <Show
       when={props.state.canCall("secrets.store.list")}
@@ -209,10 +218,7 @@ function SecretsTable(props: SecretsStoreViewProps) {
                           <time
                             class="secrets-store__updated"
                             datetime={new Date(entry().updatedAtMs).toISOString()}
-                            title={new Intl.DateTimeFormat(getLocale(), {
-                              dateStyle: "medium",
-                              timeStyle: "short",
-                            }).format(new Date(entry().updatedAtMs))}
+                            title={timestamp().format(entry().updatedAtMs)}
                           >
                             {updatedLabel(entry())}
                           </time>

@@ -159,17 +159,20 @@ export function cloneSessionModelContextEntries(branch: readonly SessionEntry[])
   });
 }
 
-/** Build initial history using the reader's private messages and equal resident strings. */
-export function buildInitialContext(
-  branch: SessionEntry[],
+/** Reuse immutable text without sharing the freshly hydrated message containers. */
+export function reuseResidentSessionEntryStrings(
+  entries: readonly FileEntry[],
   residentEntries: ReadonlyMap<string, SessionEntry>,
-): SessionContext {
+): void {
   const reuse = (target: object, source: unknown): void => {
     if (source === null || typeof source !== "object" || isProxy(source)) {
       return;
     }
     for (const key of Object.keys(target)) {
       const value: unknown = Reflect.get(target, key);
+      if (typeof value !== "string" && (value === null || typeof value !== "object")) {
+        continue;
+      }
       const resident: unknown = Object.getOwnPropertyDescriptor(source, key)?.value;
       if (typeof value === "string" && value === resident) {
         Reflect.set(target, key, resident);
@@ -178,12 +181,20 @@ export function buildInitialContext(
       }
     }
   };
-  for (const entry of branch) {
+  for (const entry of entries) {
     // Custom system-prompt metadata can be pooled and frozen; messages stay private.
     if (entry.type === "message") {
       reuse(entry, residentEntries.get(entry.id));
     }
   }
+}
+
+/** Build initial history using the reader's private messages and equal resident strings. */
+export function buildInitialContext(
+  branch: SessionEntry[],
+  residentEntries: ReadonlyMap<string, SessionEntry>,
+): SessionContext {
+  reuseResidentSessionEntryStrings(branch, residentEntries);
   return buildCoreSessionContext(branch);
 }
 

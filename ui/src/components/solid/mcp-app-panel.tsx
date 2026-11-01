@@ -6,7 +6,6 @@ import {
   createOptimistic,
   Errored,
   latest,
-  lazy,
   Loading,
   onSettled,
   Show,
@@ -24,14 +23,11 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { McpAppOpenDetail, McpAppPanelRetirement } from "../mcp-app-launch.ts";
 import { McpAppRetirement } from "../mcp-app-retirement.tsx";
+import { McpAppView } from "../mcp-app-view-lazy.ts";
 import { McpAppSettingsForm } from "./mcp-app-settings.tsx";
 import "../../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
-
-const McpAppView = lazy(() => import("../mcp-app-view.tsx"), {
-  export: "McpAppView",
-});
 
 type McpAppPanelProps = { launch?: McpAppOpenDetail; observeRetirement: McpAppPanelRetirement };
 

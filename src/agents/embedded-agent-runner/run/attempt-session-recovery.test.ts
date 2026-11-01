@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.js";
 import {
@@ -27,19 +27,63 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 
+async function invalidateProjection(target: Parameters<typeof resolveSqliteTranscriptScope>[0]) {
+  assert(target.sessionId, "projection recovery requires a session ID");
+  const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
+  await waitForSessionTranscriptIndexReconcile(options);
+  const database = openOpenClawAgentDatabase(options);
+  expect(
+    database.db
+      .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+      .run(target.sessionId).changes,
+  ).toBe(1);
+  return options;
+}
+
+function pauseProjection(sessionId: string) {
+  const claimed = createDeferred();
+  let release: (() => void) | undefined;
+  observer.onTask = ({ port, observeMessage }) => {
+    const postMessage = port.postMessage.bind(port);
+    let claiming = false;
+    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+      claiming = message.type === "plan-start" && message.plan.sessionId === sessionId;
+    });
+    port.postMessage = (message: unknown, transferList) => {
+      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+      if (claiming && !release) {
+        release = () => postMessage(message, options);
+        claimed.resolve();
+        return;
+      }
+      postMessage(message, options);
+    };
+  };
+  return { claimed: claimed.promise, release: () => release?.() };
+}
+
+function expectSingleUser(target: Parameters<typeof loadTranscriptEventsSync>[0]) {
+  expect(
+    loadTranscriptEventsSync(target).filter(
+      (event) =>
+        isSessionFileEntry(event) && event.type === "message" && event.message.role === "user",
+    ),
+  ).toHaveLength(1);
+}
+
+const freshOwnedTurn = { interruptedTurn: false, selectedOwner: true, admittedReceipt: true };
+
+const cleanupManager = (sessionManager: SessionManager | undefined) =>
+  cleanupEmbeddedAttemptResources({
+    sessionManager,
+    flushPendingToolResultsAfterIdle: async () => {},
+  });
+
 it("recovers a fresh admitted turn when its active projection is rebuilding", async () => {
   await withInterruptedTurn(
     false,
     async ({ target, prepare }) => {
-      await waitForSessionTranscriptIndexReconcile({ agentId: target.agentId });
-      const database = openOpenClawAgentDatabase({ agentId: target.agentId });
-      expect(
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(target.sessionId).changes,
-      ).toBe(1);
+      await invalidateProjection(target);
       const prepared = await prepare();
       try {
         expect(
@@ -48,10 +92,7 @@ it("recovers a fresh admitted turn when its active projection is rebuilding", as
             .filter((entry) => entry.type === "message" && entry.message.role === "user"),
         ).toHaveLength(1);
       } finally {
-        await cleanupEmbeddedAttemptResources({
-          sessionManager: prepared.sessionManager,
-          flushPendingToolResultsAfterIdle: async () => {},
-        });
+        await cleanupManager(prepared.sessionManager);
       }
     },
     { interruptedTurn: false },
@@ -92,34 +133,8 @@ it("waits for the owning shared-store projection before retrying a fresh turn", 
     false,
     async ({ attempt, target, prepare }) => {
       attempt.sessionTarget = { sessionId: target.sessionId };
-      const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptScope(target));
-      await waitForSessionTranscriptIndexReconcile(databaseOptions);
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      expect(
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(target.sessionId).changes,
-      ).toBe(1);
-      const claimed = createDeferred();
-      let releaseWorker: (() => void) | undefined;
-      observer.onTask = ({ port, observeMessage }) => {
-        const postMessage = port.postMessage.bind(port);
-        let claiming = false;
-        observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
-          claiming = message.type === "plan-start" && message.plan.sessionId === target.sessionId;
-        });
-        port.postMessage = (message: unknown, transferList) => {
-          const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-          if (claiming && !releaseWorker) {
-            releaseWorker = () => postMessage(message, options);
-            claimed.resolve();
-            return;
-          }
-          postMessage(message, options);
-        };
-      };
+      const databaseOptions = await invalidateProjection(target);
+      const worker = pauseProjection(target.sessionId);
       const open = vi.spyOn(SessionManager, sessionManagerOpenTranscriptCohort);
       let created: SessionManager | undefined;
       const lane = "shared-projection-recovery";
@@ -136,7 +151,7 @@ it("waits for the owning shared-store projection before retrying a fresh turn", 
       );
       try {
         await Promise.race([
-          claimed.promise,
+          worker.claimed,
           outcome.then(() => {
             throw new Error("preparation settled before the owning projection was claimed");
           }),
@@ -146,28 +161,18 @@ it("waits for the owning shared-store projection before retrying a fresh turn", 
         await expect(enqueueCommandInLane(lane, async () => "sibling finished")).resolves.toBe(
           "sibling finished",
         );
-        releaseWorker?.();
+        worker.release();
         await expect(preparing).resolves.toBeDefined();
         expect(open).toHaveBeenCalledTimes(2);
-        expect(
-          loadTranscriptEventsSync(target).filter(
-            (event) =>
-              isSessionFileEntry(event) &&
-              event.type === "message" &&
-              event.message.role === "user",
-          ),
-        ).toHaveLength(1);
+        expectSingleUser(target);
       } finally {
         open.mockRestore();
-        releaseWorker?.();
+        worker.release();
         await Promise.all([outcome, waitForSessionTranscriptIndexReconcile(databaseOptions)]);
-        await cleanupEmbeddedAttemptResources({
-          sessionManager: created,
-          flushPendingToolResultsAfterIdle: async () => {},
-        });
+        await cleanupManager(created);
       }
     },
-    { interruptedTurn: false, sharedStore: true, selectedOwner: true, admittedReceipt: true },
+    { ...freshOwnedTurn, sharedStore: true },
   );
 });
 
@@ -189,7 +194,7 @@ it("stops after one retry if the same projection remains unavailable", async () 
         open.mockRestore();
       }
     },
-    { interruptedTurn: false, selectedOwner: true, admittedReceipt: true },
+    freshOwnedTurn,
   );
 });
 
@@ -216,13 +221,10 @@ it("publishes a cohort manager for cleanup when its writer is revoked during con
         expect(created).toBeDefined();
       } finally {
         open.mockRestore();
-        await cleanupEmbeddedAttemptResources({
-          sessionManager: created,
-          flushPendingToolResultsAfterIdle: async () => {},
-        });
+        await cleanupManager(created);
       }
     },
-    { interruptedTurn: false, selectedOwner: true, admittedReceipt: true },
+    freshOwnedTurn,
   );
 });
 
@@ -232,32 +234,8 @@ it.each(["cancelled", "deadline"])(
     await withInterruptedTurn(
       false,
       async ({ attempt, target, prepare }) => {
-        const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptScope(target));
-        await waitForSessionTranscriptIndexReconcile(databaseOptions);
-        const database = openOpenClawAgentDatabase(databaseOptions);
-        database.db
-          .prepare(
-            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-          )
-          .run(target.sessionId);
-        const claimed = createDeferred();
-        let releaseWorker: (() => void) | undefined;
-        observer.onTask = ({ port, observeMessage }) => {
-          const postMessage = port.postMessage.bind(port);
-          let claiming = false;
-          observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
-            claiming = message.type === "plan-start" && message.plan.sessionId === target.sessionId;
-          });
-          port.postMessage = (message: unknown, transferList) => {
-            const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-            if (claiming && !releaseWorker) {
-              releaseWorker = () => postMessage(message, options);
-              claimed.resolve();
-              return;
-            }
-            postMessage(message, options);
-          };
-        };
+        const databaseOptions = await invalidateProjection(target);
+        const worker = pauseProjection(target.sessionId);
         const controller = new AbortController();
         if (exit === "deadline") {
           attempt.timeoutMs = 1_000;
@@ -271,7 +249,7 @@ it.each(["cancelled", "deadline"])(
         );
         try {
           await Promise.race([
-            claimed.promise,
+            worker.claimed,
             outcome.then(() => {
               throw new Error("preparation settled before its projection was claimed");
             }),
@@ -288,22 +266,15 @@ it.each(["cancelled", "deadline"])(
             await expect(outcome).resolves.toMatchObject({ kind: "rejected", error: reason });
           }
           expect(open).toHaveBeenCalledTimes(1);
-          expect(
-            loadTranscriptEventsSync(target).filter(
-              (event) =>
-                isSessionFileEntry(event) &&
-                event.type === "message" &&
-                event.message.role === "user",
-            ),
-          ).toHaveLength(1);
+          expectSingleUser(target);
         } finally {
           vi.useRealTimers();
           open.mockRestore();
-          releaseWorker?.();
+          worker.release();
           await Promise.all([outcome, waitForSessionTranscriptIndexReconcile(databaseOptions)]);
         }
       },
-      { interruptedTurn: false, selectedOwner: true, admittedReceipt: true },
+      freshOwnedTurn,
     );
   },
 );

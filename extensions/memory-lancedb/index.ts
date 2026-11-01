@@ -49,6 +49,10 @@ import {
   projectMemorySearchResult,
   shouldCapture,
 } from "./memory-policy.js";
+import {
+  createEmbeddingHealthTracker,
+  createLanceDbMemoryProviderRuntime,
+} from "./provider-runtime.js";
 import { startMemoryRecall } from "./recall-service.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
@@ -178,7 +182,8 @@ export default definePluginEntry({
       // changing provider/model/dimensions without re-embedding corrupts search compatibility.
       return { ...currentCfg, embedding: { ...cfg.embedding, apiKey, baseUrl } };
     };
-    const embeddings = createEmbeddings(api);
+    const embeddingHealth = createEmbeddingHealthTracker(createEmbeddings(api));
+    const embeddings = embeddingHealth.embeddings;
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
       const memoryRecallCooldown = memoryRecallCooldowns.get(agentId);
       if (!memoryRecallCooldown) {
@@ -205,6 +210,25 @@ export default definePluginEntry({
           return await listMemoryHostPublicArtifacts(params);
         },
       },
+      providerRuntime: createLanceDbMemoryProviderRuntime({
+        providerId: "memory-lancedb",
+        db,
+        embeddings,
+        resolveCurrentConfig: resolveCurrentHookConfig,
+        resolveEnabledAgentId,
+        countMemories: async (agentId) => {
+          const { readMemoryStats } = await import("./memory-stats.js");
+          return await readMemoryStats(
+            { dbPath: resolvedDbPath, storageOptions: cfg.storageOptions },
+            agentId,
+          );
+        },
+        lastEmbeddingFailure: embeddingHealth.lastFailure,
+        readRecallCooldown: readMemoryRecallCooldown,
+        recordRecallCooldown: recordMemoryRecallCooldown,
+        isRecallTimeoutError: isMemoryRecallTimeoutError,
+        logger: api.logger,
+      }),
     });
 
     const registerMemoryTool = (

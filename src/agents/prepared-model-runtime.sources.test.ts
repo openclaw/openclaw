@@ -17,7 +17,9 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import * as ambientAuth from "./agent-auth-discovery.js";
+import * as modelDiscovery from "./agent-model-discovery.js";
 import { resolveAuthProfileDatabaseOwnerId } from "./auth-profiles/sqlite.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
@@ -32,7 +34,6 @@ import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
 } from "./plugin-model-catalog.js";
-import * as agentFacts from "./prepared-model-runtime.agent-facts.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import {
@@ -180,11 +181,16 @@ describe("prepared catalog source composition", () => {
       bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
       facts.input = { ...facts.input, config: {} };
       facts.providerIds = [];
-      facts.credentials = authenticated
+      const credentials: AgentCredentialMap = authenticated
         ? { [providerId]: { type: "api_key", key: "synthetic-key" } }
         : {};
-      facts.templateAuthStorage = AuthStorage.inMemory(facts.credentials);
-      vi.spyOn(agentFacts, "prepareAgentFacts").mockResolvedValue(facts);
+      facts.credentials = credentials;
+      facts.templateAuthStorage = AuthStorage.inMemory(credentials);
+      vi.spyOn(modelDiscovery, "discoverAuthStorageFacts").mockResolvedValue({
+        store: facts.authStore,
+        credentials,
+        authStorage: facts.templateAuthStorage,
+      });
       vi.spyOn(ambientAuth, "prepareAmbientAgentCredentialsForDiscovery").mockResolvedValue({});
       vi.spyOn(inboundRegistry, "prepareWorkspacePluginRegistries").mockResolvedValue({
         inboundPluginRegistry: undefined,
@@ -441,6 +447,7 @@ describe("prepared catalog source composition", () => {
         catalogFacts,
         {
           initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+          readUsage: (store) => store,
           isCurrent: () => true,
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,

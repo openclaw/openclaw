@@ -5,6 +5,7 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import {
   createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
@@ -136,12 +137,6 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
     contextEngine,
     contextEngineTurnPrompt: "transcript visible ask",
   };
-}
-
-function expectNoCalls(...mocks: Array<ReturnType<typeof vi.fn>>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 describe("runPreparedCliAgent context engine lifecycle", () => {

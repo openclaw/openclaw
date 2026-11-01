@@ -13,24 +13,12 @@ import {
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
+import { listArchiveEntries } from "./backup-create.test-support.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 // Regression home for alternative SQLite filename discovery (#148796): these
 // cases live in a focused sibling module because backup-create.test.ts has
 // exceeded its line cap and must not grow further.
-
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onentry: (entry) => {
-      entries.push(entry.path);
-      entry.resume();
-    },
-  });
-  return entries;
-}
 
 async function declarePluginSqliteResources(state: OpenClawTestState): Promise<void> {
   const rootDir = state.path("synthetic-backup-plugin");

@@ -32,16 +32,13 @@ export async function authenticateExtension(
     keyId: relayKeyIdFromHex(token),
     clientNonce: randomRelayNonce(),
   });
-  const ok = await exchange(
-    extension,
-    {
-      type: "auth.response",
-      v: 2,
-      sessionId: challenge.sessionId,
-      clientProof: createRelayProof(token, "client", challenge),
-    },
-    okTimeoutMs,
-  );
+  const response = {
+    type: "auth.response",
+    v: 2,
+    sessionId: challenge.sessionId,
+    clientProof: createRelayProof(token, "client", challenge),
+  };
+  const ok = await exchange(extension, response, okTimeoutMs);
   expect(ok).toMatchObject({ type: "auth.ok", v: 2, sessionId: challenge.sessionId });
 }
 
@@ -96,11 +93,7 @@ export function maskedFrame(
     header.writeUInt16BE(payload.length, 2);
   }
   mask.copy(header, 2 + lengthBytes);
-  const masked = Buffer.from(payload);
-  for (let index = 0; index < masked.length; index += 1) {
-    masked[index] = masked[index]! ^ mask[index % 4]!;
-  }
-  return Buffer.concat([header, masked]);
+  return Buffer.concat([header, payload.map((byte, index) => byte ^ mask[index % 4]!)]);
 }
 
 export class RawHttpConnection {
@@ -156,13 +149,6 @@ export class RawHttpConnection {
     );
   }
 
-  private exchange(request: string, headers: string[], body = "", headersOnly = false) {
-    this.socket.write(
-      [`${request} HTTP/1.1`, "Host: 127.0.0.1", ...headers, "", body].join("\r\n"),
-    );
-    return this.readResponse(headersOnly);
-  }
-
   private async waitUntil(ready: () => boolean) {
     while (!ready()) {
       if (this.socket.destroyed) {
@@ -172,7 +158,8 @@ export class RawHttpConnection {
     }
   }
 
-  private async readResponse(headersOnly: boolean) {
+  private async exchange(request: string, fields: string[], body = "", headersOnly = false) {
+    this.socket.write([`${request} HTTP/1.1`, "Host: 127.0.0.1", ...fields, "", body].join("\r\n"));
     await this.waitUntil(() => this.buffer.includes("\r\n\r\n"));
     const headerEnd = this.buffer.indexOf("\r\n\r\n");
     const headerText = this.buffer.subarray(0, headerEnd).toString("utf8");
@@ -186,12 +173,12 @@ export class RawHttpConnection {
     const contentLength = headersOnly ? 0 : Number(headers["content-length"] ?? 0);
     const responseLength = headerEnd + 4 + contentLength;
     await this.waitUntil(() => !(this.buffer.length < responseLength));
-    const body = this.buffer.subarray(headerEnd + 4, responseLength).toString("utf8");
+    const responseBody = this.buffer.subarray(headerEnd + 4, responseLength).toString("utf8");
     this.buffer = this.buffer.subarray(responseLength);
     return {
       status: Number(/^HTTP\/1\.1 (\d+)/u.exec(statusLine ?? "")?.[1] ?? 0),
       headers,
-      body,
+      body: responseBody,
     };
   }
 

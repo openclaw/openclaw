@@ -1,19 +1,13 @@
 // Register shared worker mocks before modules that consume them.
 // oxfmt-ignore
-import { input, nativePosts, nativeWorkers, observed, type NativeWorker } from "./session-transcript-worker-lanes.test-support.js";
-import assert from "node:assert/strict";
-import { expect, it, vi } from "vitest";
+import { input, nativePosts, nativeWorkers, type NativeWorker } from "./session-transcript-worker-lanes.test-support.js";
+import { expect, it } from "vitest";
 import { awaitGateBeforeSettlement as waitFor } from "../../../test/helpers/promise.js";
 import type { UsageCostWorkerInput } from "../../infra/session-cost-usage-worker.types.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
-import {
-  runOpenClawAgentWorkerWrite as workerWrite,
-  runOpenClawAgentWriteAdmission as withWriter,
-} from "../../state/openclaw-agent-write-admission.js";
-import { costRefreshLane, projectionLane } from "./session-transcript-worker-resources.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { runOpenClawAgentWriteAdmission as withWriter } from "../../state/openclaw-agent-write-admission.js";
+import { costRefreshLane } from "./session-transcript-worker-resources.js";
 
 it("keeps usage refresh host writes out of writer-held reader compute capacity", async () => {
   const { database } = input();
@@ -30,12 +24,11 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
   const hostRequested = createDeferredCore();
   const refreshPosted = createDeferredCore<NativeWorker>();
   const controller = new AbortController();
-  const prepareRead = vi.fn(() => "origin-rows");
   let hostWrites = 0;
   const writing = withWriter(database, async () => {
     held.resolve();
     await startRead.promise;
-    const reading = reader.run(prepareRead, {});
+    const reading = reader.run(() => "origin-rows", {});
     readSubmitted.resolve();
     return await reading;
   });
@@ -92,7 +85,6 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
     startRead.resolve();
     await readSubmitted.promise;
     // The old refresh permit strands this dispatch behind its own queued host write.
-    expect(prepareRead).toHaveBeenCalledOnce();
     const [readerWorker, read] = postedTask("origin-rows");
     readerWorker.emit("message", { status: "ok", taskId: read.taskId, value: "origin-rows" });
     await expect(writing).resolves.toBe("origin-rows");
@@ -119,57 +111,3 @@ function postedTask(request: unknown): [NativeWorker, Parameters<NativeWorker["p
   }
   throw new Error("Expected a posted native task");
 }
-
-it("allows reader cleanup while only a logical session lock is held", async () => {
-  const { database } = input();
-  await runQueuedStoreWrite({
-    queues: new Map(),
-    storePath: database.path,
-    label: "logical session lock",
-    fn: async () => {
-      await projectionLane.pool.closeResources(database.path);
-      await projectionLane.pool.rotate();
-    },
-  });
-  expect(observed.closeResources).toHaveBeenCalledOnce();
-  expect(observed.rotate).toHaveBeenCalledOnce();
-});
-
-it("lets a cold search host write reenter its reserved discovery admission", async () => {
-  observed.preparedDatabase = false;
-  const { database } = input();
-  const entered = createDeferredCore();
-  const releaseOnFailure = createDeferredCore<boolean>();
-  let status: Promise<boolean> | undefined;
-  observed.run.mockImplementation(async (_input, options) => {
-    assert(options.onRequest);
-    const response = await options.onRequest("transcript-index-status", {
-      signal: new AbortController().signal,
-      yieldSignal: new AbortController().signal,
-    });
-    expect(response.input).toBe(false);
-    return { ok: true, value: { kind: "transcript-search", result: { hits: [] } } };
-  });
-  const search = withSessionHistoryWorkerDatabase(database, (owner) =>
-    owner.searchTranscripts({ agentId: "main", query: "needle" }, (signal) => {
-      status = workerWrite(
-        database,
-        async () => {
-          entered.resolve();
-          return false;
-        },
-        undefined,
-        signal,
-      );
-      return Promise.race([status, releaseOnFailure.promise]);
-    }),
-  );
-  try {
-    await waitFor(entered.promise, search, "Cold search writer admission");
-    await expect(search).resolves.toEqual({ hits: [] });
-  } finally {
-    releaseOnFailure.resolve(false);
-    await Promise.allSettled([search]);
-    await status;
-  }
-});

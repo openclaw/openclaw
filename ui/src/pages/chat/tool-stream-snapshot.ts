@@ -25,19 +25,17 @@ export function resolveChatProjectionRunId(params: {
   );
 }
 
-type WaitingApprovalSnapshotHost = Pick<
-  ToolStreamHost,
-  | "sessionKey"
-  | "assistantAgentId"
-  | "agentsList"
-  | "hello"
-  | "knownAgentRunIds"
-  | "waitingApprovalStatuses"
-  | "waitingApprovalResolvedIds"
->;
-
 export function reconcileWaitingApprovalsFromSnapshot(
-  host: WaitingApprovalSnapshotHost,
+  host: Pick<
+    ToolStreamHost,
+    | "sessionKey"
+    | "assistantAgentId"
+    | "agentsList"
+    | "hello"
+    | "knownAgentRunIds"
+    | "waitingApprovalStatuses"
+    | "waitingApprovalResolvedIds"
+  >,
   queue: readonly ExecApprovalRequest[],
 ): boolean {
   const waiting = (host.waitingApprovalStatuses ??= new Map());

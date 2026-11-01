@@ -16,6 +16,7 @@ import {
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { transformTransportMessages } from "../../transport-message-transform.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -64,6 +65,18 @@ describe("terminal resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGeneratedMediaTaskActivityForTests();
+  });
+
+  it("acknowledges an already-delivered input without empty-response recovery", async () => {
+    const resolved = await resolveTerminal({
+      assistant: undefined,
+      attemptOverrides: { inputAlreadyDelivered: true },
+      runParams: { terminalReplyExpectation: "result-required" },
+    });
+    expectComplete(resolved);
+    expect(resolved.result.payloads).toBeUndefined();
+    expect(resolved.result.meta.error).toBeUndefined();
+    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "silent" });
   });
 
   it("completes an empty post-tool turn after committed media delivery", async () => {
@@ -650,7 +663,17 @@ describe("terminal resolution", () => {
             isError: true,
           },
         ]);
-        expect(resolved.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
+        expect(resolved.result.meta.error).toMatchObject({
+          kind: "incomplete_turn",
+          fallbackSafe: true,
+        });
+        expect(
+          classifyEmbeddedAgentRunResultForModelFallback({
+            provider,
+            model: model.id,
+            result: resolved.result,
+          }),
+        ).toMatchObject({ code: "incomplete_result" });
       }
     },
   );
@@ -756,6 +779,13 @@ describe("terminal resolution", () => {
       expect(resolved.result.payloads).toEqual(
         truncated ? [{ text }, { text: TRUNCATED_REPLY_NOTICE_TEXT }] : [{ text }],
       );
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "partial-answer",
+          result: resolved.result,
+        }),
+      ).toBeNull();
       if (truncated) {
         expect(resolved.result.meta.error).toBeUndefined();
         expect(resolved.result.meta.livenessState).toBe("working");

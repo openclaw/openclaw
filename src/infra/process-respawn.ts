@@ -11,8 +11,6 @@ import {
   readWindowsTaskSupervisorRestartExitCode,
 } from "../daemon/windows-task-supervisor-contract.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
-import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   probeChildRuntimeExecutable,
   registerChildRuntimeRecovery,
@@ -21,6 +19,12 @@ import { isContainerEnvironment } from "./container-environment.js";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { readGatewayLastShutdownAsync } from "./gateway-boot-lifecycle.js";
+import {
+  registerGatewayNativeWorkerRecovery,
+  reportGatewayRuntimeRecoveryOnly,
+  type GatewayNativeWorkerRecoveryRequest,
+  type GatewayRuntimeRecoveryResult,
+} from "./gateway-native-worker-recovery.js";
 import { rewritePnpmVersionedOpenClawEntryPath } from "./openclaw-root.js";
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { requestGatewayRestartWithSignalAdmission, triggerOpenClawRestart } from "./restart.js";
@@ -69,42 +73,6 @@ export function resolveGatewayRestartDecision(): GatewayRestartDecision {
 const CHILD_RUNTIME_RESTART_REASON = "gateway.runtime-unavailable";
 const NATIVE_WORKER_RESTART_REASON = "gateway.native-worker-unsettled";
 
-type GatewayRuntimeRecoveryResult = {
-  status: "restart-requested" | "report-only";
-  reason: string;
-};
-type NativeWorkerRecoveryRequest = { isCurrent: () => boolean };
-const nativeWorkerRecovery = resolveGlobalSingleton(
-  Symbol.for("openclaw.gatewayNativeWorkerRecovery"),
-  (): {
-    request?: (params: NativeWorkerRecoveryRequest) => Promise<GatewayRuntimeRecoveryResult>;
-  } => ({}),
-);
-const reportRecoveryOnly = (reason: string): GatewayRuntimeRecoveryResult => ({
-  status: "report-only",
-  reason: `Automatic runtime recovery is report-only: ${reason}`,
-});
-
-/** Worker owners retain native custody; only the registered process owner may restart. */
-export function requestGatewayNativeWorkerRecovery(
-  params: NativeWorkerRecoveryRequest,
-): Promise<GatewayRuntimeRecoveryResult> {
-  const request = nativeWorkerRecovery.request;
-  if (!request) {
-    return Promise.resolve(reportRecoveryOnly("no Gateway process lifecycle owns recovery."));
-  }
-  // Native retirement can outlive the request's cancelled work scope.
-  return runInDetachedAsyncContext(() =>
-    Promise.resolve()
-      .then(() => request(params))
-      .catch(() =>
-        reportRecoveryOnly(
-          "service or restart preparation failed. Inspect the native worker and restart through the service owner.",
-        ),
-      ),
-  );
-}
-
 /** Bind automatic recovery to the existing process lifecycle, never a worker pool. */
 export function registerGatewayRuntimeRecovery(params: {
   decision: GatewayRestartDecision;
@@ -141,20 +109,22 @@ export function registerGatewayRuntimeRecovery(params: {
       decision.mode !== "supervised" ||
       decision.supervisor === "external"
     ) {
-      return reportRecoveryOnly("no verified native service restart target.");
+      return reportGatewayRuntimeRecoveryOnly("no verified native service restart target.");
     }
     if (!serviceCapabilityReady) {
-      return reportRecoveryOnly("native systemd inspection was unavailable at Gateway startup.");
+      return reportGatewayRuntimeRecoveryOnly(
+        "native systemd inspection was unavailable at Gateway startup.",
+      );
     }
     const prior = await history;
     if ("error" in prior) {
-      return reportRecoveryOnly("restart history could not be read.");
+      return reportGatewayRuntimeRecoveryOnly("restart history could not be read.");
     }
     if (
       prior.shutdown?.reason?.includes(reason) &&
       Date.now() - prior.shutdown.completedAtMs < 5 * 60_000
     ) {
-      return reportRecoveryOnly(
+      return reportGatewayRuntimeRecoveryOnly(
         "a runtime recovery restart happened within the last five minutes.",
       );
     }
@@ -180,27 +150,27 @@ export function registerGatewayRuntimeRecovery(params: {
     }
     const executable = service.command?.programArguments[0];
     if (!service.running || !executable || !isNodeRuntime(executable)) {
-      return reportRecoveryOnly("the service has no verified Node command.");
+      return reportGatewayRuntimeRecoveryOnly("the service has no verified Node command.");
     }
     const probe = probeChildRuntimeExecutable(executable, {
       env: service.env,
       cwd: service.command?.workingDirectory,
     });
     if (probe.error || probe.status !== 0 || !/^v\d+\.\d+\.\d+\s*$/.test(probe.stdout)) {
-      return reportRecoveryOnly(
+      return reportGatewayRuntimeRecoveryOnly(
         "the service Node cannot start. Repair the service runtime, then restart the Gateway.",
       );
     }
     // Do not wait for new admission after another lifecycle request has closed it.
     if (!active || !params.isCurrent()) {
-      return reportRecoveryOnly("the Gateway lifecycle is already stopping.");
+      return reportGatewayRuntimeRecoveryOnly("the Gateway lifecycle is already stopping.");
     }
     return runWithGatewayIndependentRootWorkAdmission(async () => {
       if (!active || !params.isCurrent()) {
-        return reportRecoveryOnly("the Gateway lifecycle is already stopping.");
+        return reportGatewayRuntimeRecoveryOnly("the Gateway lifecycle is already stopping.");
       }
       if (!isCurrent()) {
-        return reportRecoveryOnly("the native worker has already settled.");
+        return reportGatewayRuntimeRecoveryOnly("the native worker has already settled.");
       }
       const result = intent
         ? requestGatewayRestartWithSignalAdmission(reason, intent)
@@ -212,7 +182,7 @@ export function registerGatewayRuntimeRecovery(params: {
               ? "Service Node verified; requested a bounded fresh-process restart for the unsettled native worker."
               : "Service Node verified; requested a graceful fresh-process restart for the unavailable child runtime.",
           }
-        : reportRecoveryOnly(`restart request ${result.status}.`);
+        : reportGatewayRuntimeRecoveryOnly(`restart request ${result.status}.`);
     }, reason);
   };
   const releaseChildRecovery = registerChildRuntimeRecovery(() =>
@@ -221,7 +191,7 @@ export function registerGatewayRuntimeRecovery(params: {
   let pending: Promise<GatewayRuntimeRecoveryResult> | undefined;
   let requested: GatewayRuntimeRecoveryResult | undefined;
   const unsettledWorkers = new Set<() => boolean>();
-  const request = (worker: NativeWorkerRecoveryRequest) => {
+  const request = (worker: GatewayNativeWorkerRecoveryRequest) => {
     if (requested) {
       return Promise.resolve(requested);
     }
@@ -243,13 +213,11 @@ export function registerGatewayRuntimeRecovery(params: {
       });
     return pending;
   };
-  nativeWorkerRecovery.request = request;
+  const releaseNativeWorkerRecovery = registerGatewayNativeWorkerRecovery(request);
   return () => {
     active = false;
     releaseChildRecovery();
-    if (nativeWorkerRecovery.request === request) {
-      nativeWorkerRecovery.request = undefined;
-    }
+    releaseNativeWorkerRecovery();
   };
 }
 

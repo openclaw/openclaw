@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { root } from "../infra/fs-safe.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
@@ -140,11 +141,11 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   const packageManifest = readPackageManifest(rootDir);
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
   const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
-  const currentManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : undefined;
+  const authored = fs.existsSync(manifestPath) ? readJsonFile(manifestPath, true) : undefined;
   const manifest = buildToolPluginManifest({
     metadata,
     packageManifest,
-    existingManifest: currentManifest,
+    existingManifest: authored,
   });
   const browserSource = controlUiSource(packageManifest);
   if (browserSource) {
@@ -160,12 +161,11 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   });
 
   if (opts.check) {
-    const currentPackage = readJsonFile(packagePath);
     const currentControlUi = withPluginCache(createPluginCache(), () =>
       loadPluginControlUiDeclaration({
         rootDir,
-        controlUi: currentManifest?.controlUi,
-        channels: currentManifest?.channels,
+        controlUi: authored?.controlUi,
+        channels: authored?.channels,
         rejectHardlinks: false,
       }),
     );
@@ -173,8 +173,8 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
       (browserSource &&
         (!currentControlUi.ok ||
           !jsonSchemaValuesEqual(currentControlUi.value, manifest.controlUi))) ||
-      !jsonSchemaValuesEqual(currentManifest, manifest) ||
-      !jsonSchemaValuesEqual(currentPackage, nextPackageManifest)
+      !jsonSchemaValuesEqual(authored, manifest) ||
+      !jsonSchemaValuesEqual(packageManifest, nextPackageManifest)
     ) {
       defaultRuntime.error("Generated plugin metadata is out of date. Run openclaw plugins build.");
       return defaultRuntime.exit(1);
@@ -188,7 +188,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     filePath: path.join(realRootDir, "package.json"),
     content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
     preserveExistingMode: true,
-    dirMode: (await fs.promises.stat(realRootDir)).mode & 0o7777,
+    dirMode: "preserve",
     syncTempFile: true,
     syncParentDir: true,
   });
@@ -200,8 +200,10 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     ).remove(`dist/${PLUGIN_MANIFEST_FILENAME}`, { force: true });
   }
   await writePluginBuildManifest(realRootDir, manifest);
-  defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
-  defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
+  defaultRuntime.log(
+    terminalText`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`,
+  );
+  defaultRuntime.log(terminalText`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
 
 export async function collectPluginsValidationResult(
@@ -217,7 +219,7 @@ export async function collectPluginsValidationResult(
   if (!manifestResult.ok) {
     return { valid: false, errors: [manifestResult.error] };
   }
-  const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
+  const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), true);
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
   const errors = validateToolPluginProject({
     metadata,
@@ -256,7 +258,7 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
 
   if (!result.valid) {
     for (const error of result.errors) {
-      defaultRuntime.error(error);
+      defaultRuntime.error(terminalText`${error}`);
     }
     if (opts.json) {
       defaultRuntime.writeJson({
@@ -270,7 +272,7 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     defaultRuntime.writeJson(result);
     return;
   }
-  defaultRuntime.log(`Plugin ${result.pluginId} is valid.`);
+  defaultRuntime.log(terminalText`Plugin ${result.pluginId} is valid.`);
 }
 
 function normalizeRequiredPluginText(input: string, label: string): string {
@@ -308,6 +310,9 @@ export async function runPluginsInitCommand(
       )}.`,
     );
   }
+  const packageName = id.startsWith("@")
+    ? id.replace("/", "/openclaw-plugin-")
+    : `openclaw-plugin-${id}`;
   const rootDir = path.resolve(opts.directory ?? id);
   if (opts.force !== true && fs.existsSync(rootDir)) {
     throw new Error(`Refusing to overwrite existing path: ${rootDir}`);
@@ -317,7 +322,6 @@ export async function runPluginsInitCommand(
   if (type === "feature") {
     writeFeaturePluginScaffold({ rootDir, id, name });
   } else if (type === "provider") {
-    const packageName = `openclaw-plugin-${id}`;
     const envVar = `${id
       .replace(/[^a-z0-9]+/giu, "_")
       .replace(/^_+|_+$/gu, "")
@@ -612,7 +616,7 @@ jobs:
     });
   } else {
     const packageManifest = {
-      name: `openclaw-plugin-${id}`,
+      name: packageName,
       version: "0.1.0",
       type: "module",
       private: true,
@@ -722,5 +726,5 @@ export default defineConfig({
 `,
     );
   }
-  defaultRuntime.log(`Created ${formatOutputPath(rootDir, ".")}`);
+  defaultRuntime.log(terminalText`Created ${formatOutputPath(rootDir, ".")}`);
 }

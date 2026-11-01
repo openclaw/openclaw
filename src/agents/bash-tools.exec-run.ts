@@ -35,6 +35,7 @@ import {
 } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
+  assertDurableExecAvailable,
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
@@ -161,6 +162,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     resolveSubagentSession,
     notifyDeliveryContext,
   } = resolveExecNotificationDefaults(defaults);
+  const durableNotifications = { notifyOnExit, notifyOnExitEmptySuccess };
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -287,6 +289,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         );
       }
       const host = resolveExecHost(params, defaults);
+      assertDurableExecAvailable(params, host, allowBackground);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -415,18 +418,17 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         const storeEnv = await resolveStoreEnv();
         const subagentExecution = await resolveSubagentExecution();
         assertSourceActive();
-        // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
-        // cannot use its sentinels, so both sides of the contract stay absent.
-        const useSecretEgress = secretEgressEnabled && host === "gateway";
-        if (useSecretEgress) {
-          if (!defaults?.operationalRunInstance) {
-            throw new Error("Secret egress proxy requires an admitted agent run instance");
-          }
-          assertSourceActive();
+        const storeBindings = storeEnv.secretEgressBindings ?? [];
+        const useSecretEgress = secretEgressEnabled && host === "gateway" && !params.durable;
+        const secretEgressBindings = useSecretEgress ? storeBindings : undefined;
+        if (secretEgressEnabled && params.durable && storeBindings.length) {
+          warnings.push(
+            `Durable execution starts without ${storeBindings.length} secret-store credential${storeBindings.length === 1 ? "" : "s"}: secret-egress grants end when the Gateway restarts. Use the managed GitHub identity, the command's own configuration, or non-durable background execution for commands that need them.`,
+          );
         }
-        const secretEgressBindings = useSecretEgress
-          ? (storeEnv.secretEgressBindings ?? [])
-          : undefined;
+        if (useSecretEgress && !defaults?.operationalRunInstance) {
+          throw new Error("Secret egress proxy requires an admitted agent run instance");
+        }
         const { env, requestedEnv, executionContext } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -505,6 +507,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             ...hostApprovalParams(),
             workdir,
             secretEgressBindings,
+            durable: params.durable ? durableNotifications : undefined,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
             pty: params.pty === true && !sandbox,
@@ -561,6 +564,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           workdir,
           env,
           secretEgressBindings,
+          durable: params.durable ? durableNotifications : undefined,
+          sessionId: defaults?.sessionId,
           githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
@@ -673,16 +678,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        void Promise.resolve(run.session.exitNotificationPersistence).then(
-          () => backgrounded.resolve({ status: "backgrounded" }),
-          (error: unknown) =>
-            backgrounded.reject(
-              new Error(
-                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
-                { cause: error },
-              ),
-            ),
-        );
+        backgrounded.resolve({ status: "backgrounded" });
       };
 
       try {
@@ -728,6 +724,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
                   cwd: run.session.cwd,
                   tail: run.session.tail,
+                  ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
                   // Structured callers receive details without the visible content.
                   followUp,
                 },

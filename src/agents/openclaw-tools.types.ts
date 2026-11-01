@@ -33,8 +33,6 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
-  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
-  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -94,7 +92,7 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
-  /** Host-enabled Gateway publication request surface; the broker checks target and credentials. */
+  /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -115,6 +113,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Internal inventory projection; the resulting GitHub tool cannot execute. */
+  githubPublicationPreview?: true;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
   sandbox?: import("./sandbox/types.js").SandboxContext | null;
   abortSignal?: AbortSignal;

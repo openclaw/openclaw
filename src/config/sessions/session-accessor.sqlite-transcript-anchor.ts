@@ -6,20 +6,15 @@ import {
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   selectActiveTranscriptIdentityRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import {
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-  type ResolvedTranscriptReadScope,
-  type ResolvedTranscriptScope,
-} from "./session-accessor.sqlite-scope.js";
+import type {
+  ResolvedTranscriptReadScope,
+  ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
@@ -351,6 +346,40 @@ export function readTranscriptMessageAppendMetadataBatchInTransaction(
   return result;
 }
 
+/** Only the append owner can supply these identities and accepted projection positions. */
+export function createTranscriptMessageAppendMetadataFromWrites(
+  database: TranscriptEntryRead["database"],
+  resolved: ResolvedTranscriptScope,
+  messages: readonly {
+    messageId: string;
+    message: unknown;
+    parentId: string | null;
+    seq: number;
+    messagePosition: number;
+  }[],
+  version: { generation: string; rawSeq: number; updatedAt: number | null },
+) {
+  const revision = getSqliteReadScopeRevision(database.db);
+  return new Map(
+    messages.map((message) => [
+      message.messageId,
+      createTranscriptMessageAppendMetadata(
+        { database, resolved, entryId: message.messageId, message: message.message },
+        {
+          seq: message.seq,
+          parent_id: message.parentId,
+          message_idempotency_key: null,
+          message_position: message.messagePosition,
+          generation: version.generation,
+          latestSeq: version.rawSeq,
+          transcriptUpdatedAt: version.updatedAt,
+        },
+        revision,
+      ),
+    ]),
+  );
+}
+
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */
 export function createTranscriptEntryAnchor(params: {
   database: Pick<OpenClawAgentDatabase, "path">;
@@ -387,22 +416,5 @@ export function createTranscriptEntryAnchor(params: {
     effectiveParentId: row.parent_id,
     activeMessagePosition: row.message_position,
     ...(idempotencyKey ? { idempotencyKey } : {}),
-  });
-}
-
-/** Reads one active message identity from the authoritative SQLite projection. */
-export function readActiveTranscriptEntryAnchor(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath?: string;
-  entryId: string;
-}): TranscriptEntryAnchor | undefined {
-  const resolved = resolveSqliteTranscriptScope(params);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readActiveTranscriptEntryAnchorInTransaction({
-    database,
-    resolved,
-    entryId: params.entryId,
   });
 }

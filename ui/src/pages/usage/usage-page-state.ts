@@ -3,6 +3,7 @@ import { createStore, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -292,7 +293,7 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   const providerUsage = createProviderUsageLoader({
-    client: () => (gateway.connected ? gateway.client : null),
+    client: () => (gateway.connected && canReadUsage() ? gateway.client : null),
     epoch: () => connectionEpoch,
     isCurrent: (epoch) => epoch === connectionEpoch,
     onResult: (epoch) => markUsageLoaded(epoch),
@@ -311,7 +312,7 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function usageCacheIncomplete(): boolean {
-    return isUsageCacheIncomplete(usageResult()?.cacheStatus, usageCalendarSummary()?.cacheStatus);
+    return isUsageCacheIncomplete(usageResult()?.cacheStatus, usageResult("calendar")?.cacheStatus);
   }
 
   function currentQuery(): SessionUsageQuery {
@@ -335,7 +336,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function isCurrentQuery(
     query: SessionUsageQuery,
-    projection: "all" | "roster" | "calendar" = "all",
+    projection: "all" | "roster" | "calendar" | "filterOptions" = "all",
   ): boolean {
     const current = currentQuery();
     return (
@@ -345,7 +346,7 @@ export function createUsagePage(context: ApplicationContext) {
       query.timeZone === current.timeZone &&
       query.agentId === current.agentId &&
       query.creatorKey === current.creatorKey &&
-      query.query === current.query &&
+      (projection === "filterOptions" || query.query === current.query) &&
       (projection === "calendar" ||
         JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays)) &&
       JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
@@ -365,13 +366,10 @@ export function createUsagePage(context: ApplicationContext) {
       : null;
   }
 
-  function usageResult(): SessionsUsageResult | null {
-    return usageSnapshot && isCurrentQuery(usageSnapshot.query) ? usageSnapshot.result : null;
-  }
-
-  function usageCalendarSummary(): SessionsUsageResult | null {
-    // Day selection changes totals, but the same calendar remains available for Shift-click.
-    return usageSnapshot && isCurrentQuery(usageSnapshot.query, "calendar")
+  function usageResult(
+    projection: "all" | "calendar" | "filterOptions" = "all",
+  ): SessionsUsageResult | null {
+    return usageSnapshot && isCurrentQuery(usageSnapshot.query, projection)
       ? usageSnapshot.result
       : null;
   }
@@ -402,9 +400,11 @@ export function createUsagePage(context: ApplicationContext) {
     return Promise.all([loadUsage(refreshSessionKey), providerUsage.load()]).then(() => undefined);
   }
 
+  const canReadUsage = () => hasOperatorReadAccess(gateway.snapshot?.hello?.auth ?? null);
+
   function loadUsage(refreshSessionKey?: string): Promise<void> {
     const client = gateway.client;
-    if (!client || !gateway.connected) {
+    if (!client || !gateway.connected || !canReadUsage()) {
       refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
@@ -455,6 +455,11 @@ export function createUsagePage(context: ApplicationContext) {
 
   function handleGatewaySnapshot(change: GatewayPageChange) {
     if (!gateway.connected || !gateway.client) {
+      return;
+    }
+    if (!canReadUsage()) {
+      // Retire requests before Solid disposes the restricted page on reconnect.
+      resetForClientChange();
       return;
     }
     void context.agents.ensureList();
@@ -529,11 +534,18 @@ export function createUsagePage(context: ApplicationContext) {
         sessions: usageRosterResult()?.sessions ?? [],
         sessionPage: usageRosterResult()?.overview,
         creatorOptions: usageCreatorOptions(),
+        // The Gateway builds this inventory before applying the text query.
+        filterOptions:
+          usageSnapshot && isCurrentQuery(usageSnapshot.query, "filterOptions")
+            ? usageSnapshot.result?.overview?.filterOptions
+            : undefined,
         overview: usageResult()?.overview,
         selectedSession: details.session.data ?? selectedSession,
         totals: usageResult()?.totals ?? null,
         aggregates: usageResult()?.aggregates ?? null,
-        costDaily: usageCalendarSummary()?.aggregates.costDaily ?? [],
+        costDaily: usageResult("calendar")?.aggregates.costDaily ?? [],
+        // Keep raw chart data outside the view projection that clears current-query rows.
+        readChartSnapshot: (projection: "calendar" | "filterOptions") => usageResult(projection),
         cacheRefresh: usageCacheIncomplete()
           ? usageRefreshFailed()
             ? ("failed" as const)
@@ -641,12 +653,9 @@ export function createUsagePage(context: ApplicationContext) {
           },
         },
         display: {
-          onExportJson: () => {
-            void usageExportRequest.run("json");
-          },
-          onExportCsv: (format: "sessions-csv" | "daily-csv") => {
-            void usageExportRequest.run(format);
-          },
+          onExportJson: () => void usageExportRequest.run("json"),
+          onExportCsv: (format: "sessions-csv" | "daily-csv") =>
+            void usageExportRequest.run(format),
           onPageChange: (offset: number) => {
             usageOffset = offset;
             void loadUsage();

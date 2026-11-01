@@ -122,6 +122,7 @@ export function DeviceEntryMenu(props: {
     <Show when={props.entry.deviceId || props.entry.desktopEnvironment}>
       <Menu
         id={id}
+        lazy
         label={t("devices.inventory.actionsName", { name: props.entry.name })}
         placement="bottom-end"
         triggerClass="btn btn--sm btn--ghost device-entry__menu-trigger"

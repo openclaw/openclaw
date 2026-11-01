@@ -622,11 +622,15 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       const result = await withCaller(
         async () =>
-          await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
-            "plugin.approval.waitDecision",
-            { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-            { id: request.approvalId },
-            { signal: request.signal },
+          await withGatewayToolApprovalOwner(
+            params.pluginId,
+            async () =>
+              await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
+                "plugin.approval.waitDecision",
+                { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+                { id: request.approvalId },
+                { requireAgentRuntimeIdentity: true, signal: request.signal },
+              ),
           ),
         request.signal,
       );

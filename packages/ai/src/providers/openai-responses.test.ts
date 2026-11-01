@@ -209,42 +209,22 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it.each<{
-    options: Options;
-    model: Partial<ResponsesModel>;
-    expected: { ttl: "30m" | "12h" } | undefined;
-  }>([
-    {
-      options: { promptCacheTtl: "12h", cacheRetention: "long" },
-      model: { id: "gpt-5.6-sol" },
-      expected: { ttl: "12h" },
-    },
-    { options: { promptCacheTtl: "30m" }, model: { id: "gpt-6.1-sol" }, expected: { ttl: "30m" } },
-    {
-      options: { promptCacheTtl: "12h", cacheRetention: "none" },
-      model: { id: "gpt-6.1-sol" },
-      expected: undefined,
-    },
-    { options: { promptCacheTtl: "12h" }, model: { id: "gpt-5.5" }, expected: undefined },
-    {
-      options: { promptCacheTtl: "12h" },
-      model: { id: "gpt-6.1-sol", compat: { supportsLongCacheRetention: false } },
-      expected: undefined,
-    },
-    {
-      options: { promptCacheTtl: "12h" },
-      model: { id: "gpt-6.1-sol", baseUrl: "https://proxy.example/v1" },
-      expected: undefined,
-    },
+  it.each<[Options, Partial<ResponsesModel>, "30m" | "12h" | undefined]>([
+    [{ cacheRetention: "long" }, { id: "gpt-5.6-sol" }, "12h"],
+    [{ promptCacheTtl: "30m" }, {}, "30m"],
+    [{ cacheRetention: "none" }, {}, undefined],
+    [{}, { id: "gpt-5.5" }, undefined],
+    [{}, { compat: { supportsLongCacheRetention: false } }, undefined],
+    [{}, { baseUrl: "https://proxy.example/v1" }, undefined],
   ])(
     "honors the explicit Responses cache lifetime only on eligible routes: %j",
-    async ({ options, model: modelOverrides, expected }) => {
+    async (options, modelOverrides, ttl) => {
       const requests = await bothRequests(
-        { sessionId: "cache-session", ...options },
-        modelOverrides,
+        { sessionId: "cache-session", promptCacheTtl: "12h", ...options },
+        { id: "gpt-6.1-sol", ...modelOverrides },
       );
       for (const params of requests) {
-        expect(params.prompt_cache_options).toEqual(expected);
+        expect(params.prompt_cache_options).toEqual(ttl ? { ttl } : undefined);
         expect(params.prompt_cache_retention).toBeUndefined();
       }
     },

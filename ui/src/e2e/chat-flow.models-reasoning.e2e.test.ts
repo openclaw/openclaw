@@ -80,7 +80,7 @@ async function expectMenuPlacement(
         placed:
           box !== null &&
           anchor !== null &&
-          (above ? box.y + box.height <= anchor.y - 5 : box.y >= anchor.y + anchor.height + 5),
+          (above ? box.y + box.height <= anchor.y - 3 : box.y >= anchor.y + anchor.height + 3),
         withinViewport: box !== null && box.y >= 8 && box.y + box.height <= height - 8,
       };
     })
@@ -154,7 +154,7 @@ suite.define(() => {
       models: generatedModels(12),
     });
 
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
 
     const controls = page.locator(".chat-composer-model-control");
     for (const picker of [

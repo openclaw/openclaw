@@ -426,7 +426,9 @@ describe("detectAndLoadPromptImages", () => {
 
     expect(result.detectedRefs).toHaveLength(1);
     expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
-    expect(warn.mock.calls).toEqual([["Native image: sandbox validation failed"]]);
+    expect(warn.mock.calls).toEqual([
+      ["Native image: sandbox validation failed (reason=outside-workspace, pathClass=absolute)"],
+    ]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-image");
   });
 
@@ -460,17 +462,19 @@ describe("detectAndLoadPromptImages", () => {
       prompt: "describe it",
       media: [{ path: imagePath, contentType: "image/png" }],
       workspaceDir,
+      workspaceOnly: true,
       maxBytes: 1,
     });
 
     expect(result).toMatchObject({
-      loadedCount: 0,
+      loadedCount: 1,
       failedMediaCount: 1,
-      skippedCount: 1,
+      skippedCount: 0,
       images: [],
     });
-    expect(warn.mock.calls).toEqual([["Native image: failed to load"]]);
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-attachment");
+    expect(warn.mock.calls).toEqual([
+      ["Native image: dropped 1 image(s) after sanitization (prompt:images)."],
+    ]);
   });
 
   it("drops a header-valid truncated image and keeps a complete one", async () => {

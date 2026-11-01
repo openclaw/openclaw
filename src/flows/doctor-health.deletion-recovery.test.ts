@@ -52,7 +52,8 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
     await state.writeConfig(after);
     const bytes = [mainPath, latePath].map((file) => fs.readFileSync(file));
     mocks.config.mockReturnValue(after);
-    mocks.packageRoot.mockReturnValue(undefined);
+    fs.writeFileSync(state.path("package.json"), '{"name":"openclaw"}');
+    mocks.packageRoot.mockReturnValue(state.root);
     mocks.runContributions.mockReset();
     mocks.emulateNativeInstall = false;
     const configFlow = await import("../commands/doctor-config-flow.js");

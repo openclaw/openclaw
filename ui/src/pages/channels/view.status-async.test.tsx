@@ -1,172 +1,249 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { ChannelsStatusSnapshot } from "../../api/types.ts";
+import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
+import { hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createChannelsViewProps } from "./view.test-support.ts";
+import { pairingRequest, pairingSnapshot } from "./pairing.test-support.ts";
+import { channelSnapshot, createChannelsViewProps } from "./view.test-support.ts";
 import { ChannelsView } from "./view.tsx";
 
-const cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) {
-    cleanup();
+function mountChannels(reads: { promise: Promise<unknown> }[], pairing = false) {
+  const request = vi.fn();
+  for (const read of reads) {
+    request.mockReturnValueOnce(read.promise);
   }
-  document.body.replaceChildren();
-});
-
-function snapshot(label: string, partial = false): ChannelsStatusSnapshot {
-  return {
-    ts: 1,
-    channelOrder: ["slack"],
-    channelLabels: { slack: label },
-    channels: { slack: { configured: true, running: true, connected: true } },
-    channelAccounts: {},
-    channelDefaultAccountId: {},
-    partial,
-    warnings: partial ? ["Slack probe unavailable"] : [],
-  };
-}
-
-function mountHub(request: (method: string) => unknown) {
-  const client = createTestGatewayClient(request);
   const fixture = createApplicationGateway();
   fixture.publish({
     ...fixture.gateway.snapshot,
-    client,
+    client: createTestGatewayClient(request),
     phase: "connected",
-    hello: gatewayHelloForMethods(["channels.status"], ["operator.read"]),
+    hello: gatewayHelloForMethods(
+      [pairing ? "channels.pairing.list" : "channels.status"],
+      [pairing ? "operator.pairing" : "operator.read"],
+    ),
   });
   const channels = createChannelCapability(fixture.gateway);
+  const approve = vi.fn();
   const mounted = mountSolid(() => {
     const source = projectChannels(channels);
+    const connection = projectGateway(fixture.gateway);
     const [selected, setSelected] = createSignal<string | null>(null);
-    const props = createChannelsViewProps(null, null);
     return (
       <ChannelsView
-        {...props}
+        {...createChannelsViewProps(null, null)}
         channels={source.read()}
+        canManagePairing={hasOperatorPairingAccess(connection.read().snapshot.hello?.auth ?? null)}
         selectedChannel={selected()}
-        onShowDetail={(channel) => setSelected(channel)}
+        onShowDetail={setSelected}
         onCloseDetail={() => setSelected(null)}
         onRefresh={(probe) => void channels.refresh(probe)}
+        onPairingApprove={approve}
       />
     );
   });
-  cleanups.push(() => {
+  onTestFinished(() => {
     mounted.unmount();
     channels.dispose();
+    document.body.replaceChildren();
   });
-  return { channels, container: mounted.container };
+  const container = pairing
+    ? mounted.container.querySelector<HTMLElement>("#channels-pairing-requests")!
+    : mounted.container;
+  return { ...fixture, channels, approve, container };
 }
 
-it("retains status cards, old errors, partial diagnostics and the open detail through refresh", async () => {
-  const initialRead = createDeferred<ChannelsStatusSnapshot>();
-  const failedRead = createDeferred<ChannelsStatusSnapshot>();
-  const recoveredRead = createDeferred<ChannelsStatusSnapshot>();
-  const request = vi
-    .fn()
-    .mockReturnValueOnce(initialRead.promise)
-    .mockReturnValueOnce(failedRead.promise)
-    .mockReturnValueOnce(recoveredRead.promise);
-  const f = mountHub(request);
-  const initial = f.channels.refresh();
-  await waitForSolid(() => {
-    expect(f.container.querySelector(".channels-item__detail")).not.toBeNull();
-    expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
-  });
-  initialRead.resolve(snapshot("Slack", true));
-  await initial;
-  await waitForSolid(() => expect(f.container.textContent).toContain("Slack probe unavailable"));
-  const card = Array.from(
-    f.container.querySelectorAll<HTMLButtonElement>("button.channels-item"),
-  ).find((button) => button.textContent?.includes("Slack"))!;
-  expect(card).toBeDefined();
-  card.focus();
+function snapshot(label: string, partial = false): ChannelsStatusSnapshot {
+  return channelSnapshot(
+    { slack: { configured: true, running: true, connected: true } },
+    {
+      channelLabels: { slack: label },
+      partial,
+      warnings: partial ? ["Slack probe unavailable"] : [],
+    },
+  );
+}
 
-  const failed = f.channels.refresh(true);
-  await waitForSolid(() => {
-    expect(f.container.querySelector(".callout.info")).not.toBeNull();
-    expect(f.container.contains(card)).toBe(true);
-    expect(document.activeElement).toBe(card);
-  });
-  failedRead.reject(new Error("Status transport unavailable"));
-  await failed;
+it.each([false, true])(
+  "retains channels through failure and retry (cached: %s)",
+  async (cached) => {
+    const seed = createDeferred<ChannelsStatusSnapshot>();
+    const failure = createDeferred<ChannelsStatusSnapshot>();
+    const recovery = createDeferred<ChannelsStatusSnapshot>();
+    const f = mountChannels(cached ? [seed, failure, recovery] : [failure, recovery]);
+    let card: HTMLButtonElement | undefined;
+    let dialog: HTMLElement | null = null;
+    if (cached) {
+      const initial = f.channels.refresh();
+      seed.resolve(snapshot("Slack", true));
+      await initial;
+      await waitForSolid(() =>
+        expect(f.container.textContent).toContain("Slack probe unavailable"),
+      );
+      card = Array.from(
+        f.container.querySelectorAll<HTMLButtonElement>("button.channels-item"),
+      ).find((button) => button.textContent?.includes("Slack"))!;
+      expect(card).toBeDefined();
+      card.focus();
+    }
+    const failed = f.channels.refresh(cached);
+    await waitForSolid(() => {
+      expect(f.container.querySelector(".channels-item__detail")).not.toBeNull();
+      expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
+      if (cached) {
+        expect(f.container.querySelector(".callout.info")).not.toBeNull();
+        expect(document.activeElement).toBe(card);
+      }
+    });
+    const recommended = f.container.querySelector(".channels-item__detail");
+    failure.reject(new Error("Status unavailable"));
+    await failed;
+    await waitForSolid(() =>
+      expect(f.container.querySelector(".callout.danger")?.textContent).toBe("Status unavailable"),
+    );
+    if (card) {
+      expect(document.activeElement).toBe(card);
+      card.click();
+      await waitForSolid(() =>
+        expect(f.container.querySelector("openclaw-modal-dialog")).not.toBeNull(),
+      );
+      dialog = f.container.querySelector("openclaw-modal-dialog");
+    }
+    const recovered = f.channels.refresh();
+    await waitForSolid(() => {
+      expect(f.container.querySelector(".callout.danger")?.textContent).toBe("Status unavailable");
+      if (cached) {
+        expect(
+          Array.from(f.container.querySelectorAll(".callout"), (node) => node.className).slice(
+            0,
+            3,
+          ),
+        ).toEqual(["callout info", "callout warn", "callout danger"]);
+        expect(f.container.querySelector(".callout.warn")?.textContent).toContain(
+          "Slack probe unavailable",
+        );
+        expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
+      } else {
+        expect(f.container.querySelector(".callout.info")).toBeNull();
+        expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
+        expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
+      }
+    });
+    recovery.resolve(snapshot("Slack recovered"));
+    await recovered;
+    await waitForSolid(() => {
+      expect(f.container.querySelector(".callout.danger")).toBeNull();
+      expect(f.container.textContent).not.toContain("Slack probe unavailable");
+      if (card) {
+        expect(card.textContent).toContain("Slack recovered");
+      }
+    });
+    if (card) {
+      expect(f.container.contains(card)).toBe(true);
+      expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
+    } else {
+      expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
+    }
+  },
+);
+
+it("loads pairing feedback without replacing cached sender controls on failure or recovery", async () => {
+  const first = createDeferred<ChannelsPairingListResult>();
+  const failedRefresh = createDeferred<ChannelsPairingListResult>();
+  const recovery = createDeferred<ChannelsPairingListResult>();
+  const f = mountChannels([first, failedRefresh, recovery], true);
+  const initial = f.channels.refreshPairing();
   await waitForSolid(() =>
-    expect(f.container.querySelector(".callout.danger")?.textContent).toBe(
-      "Status transport unavailable",
+    expect(f.container.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+  );
+  expect(f.container.textContent).not.toContain("Alice");
+  first.resolve(pairingSnapshot());
+  await initial;
+  await waitForSolid(() => expect(f.container.textContent).toContain("Alice"));
+  const details = f.container.querySelector<HTMLDetailsElement>("details")!;
+  const approve = f.container.querySelector<HTMLButtonElement>('button[aria-label^="Approve "]')!;
+  details.open = true;
+  approve.focus();
+
+  const refresh = f.channels.refreshPairing();
+  await waitForSolid(() => {
+    expect(
+      f.container.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.disabled,
+    ).toBe(true);
+    expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
+    expect(f.container.querySelector("details")).toBe(details);
+  });
+  failedRefresh.reject(new Error("Pairing refresh unavailable"));
+  await refresh;
+  await waitForSolid(() =>
+    expect(f.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Pairing refresh unavailable",
     ),
   );
-  expect(f.container.contains(card)).toBe(true);
-  expect(document.activeElement).toBe(card);
+  const expectRetained = () => {
+    expect(f.container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(document.activeElement).toBe(approve);
+  };
+  expectRetained();
 
-  card.click();
-  await waitForSolid(() =>
-    expect(f.container.querySelector("openclaw-modal-dialog")).not.toBeNull(),
-  );
-  const dialog = f.container.querySelector("openclaw-modal-dialog");
-  const recovered = f.channels.refresh();
-  await waitForSolid(() => {
-    const notices = Array.from(f.container.querySelectorAll(".callout"));
-    expect(notices.slice(0, 3).map((node) => node.className)).toEqual([
-      "callout info",
-      "callout warn",
-      "callout danger",
-    ]);
-    expect(notices[1]?.textContent).toContain("Slack probe unavailable");
-    expect(notices[2]?.textContent).toBe("Status transport unavailable");
-    expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
-  });
-  recoveredRead.resolve(snapshot("Slack recovered"));
+  const recovered = f.channels.refreshPairing();
+  const updated = { ...pairingRequest, metadata: { name: "Alice Updated" } };
+  recovery.resolve(pairingSnapshot({ requests: [updated] }));
   await recovered;
   await waitForSolid(() => {
-    expect(card.textContent).toContain("Slack recovered");
-    expect(f.container.querySelector(".callout.danger")).toBeNull();
-    expect(f.container.textContent).not.toContain("Slack probe unavailable");
+    expect(details.textContent).toContain("Alice Updated");
+    expect(f.container.querySelector('[role="alert"]')).toBeNull();
   });
-  expect(f.container.contains(card)).toBe(true);
-  expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
-  expect(request).toHaveBeenCalledTimes(3);
+  expectRetained();
+  approve.click();
+  expect(f.approve).toHaveBeenLastCalledWith(updated);
 });
 
-it("keeps recommended channels available through an initial read failure and retry", async () => {
-  const failedRead = createDeferred<ChannelsStatusSnapshot>();
-  const recoveredRead = createDeferred<ChannelsStatusSnapshot>();
-  const request = vi
-    .fn()
-    .mockReturnValueOnce(failedRead.promise)
-    .mockReturnValueOnce(recoveredRead.promise);
-  const f = mountHub(request);
-  const failed = f.channels.refresh();
+it("recovers an initial read failure and hides a retired retry after pairing access changes", async () => {
+  const failure = createDeferred<ChannelsPairingListResult>();
+  const retired = createDeferred<ChannelsPairingListResult>();
+  const recovery = createDeferred<ChannelsPairingListResult>();
+  const f = mountChannels([failure, retired, recovery], true);
+  const initial = f.channels.refreshPairing();
+  failure.reject(new Error("First read failed"));
+  await initial;
   await waitForSolid(() =>
-    expect(f.container.querySelector(".channels-item__detail")).not.toBeNull(),
+    expect(f.container.querySelector('[role="alert"]')?.textContent).toContain("First read failed"),
   );
-  const recommended = f.container.querySelector(".channels-item__detail");
-  failedRead.reject(new Error("Initial status unavailable"));
-  await failed;
-  await waitForSolid(() =>
-    expect(f.container.querySelector(".callout.danger")?.textContent).toBe(
-      "Initial status unavailable",
-    ),
-  );
-  const recovered = f.channels.refresh();
+  const retry = f.channels.refreshPairing();
   await waitForSolid(() => {
-    expect(f.container.querySelector(".callout.danger")?.textContent).toBe(
-      "Initial status unavailable",
-    );
-    expect(f.container.querySelector(".callout.info")).toBeNull();
-    expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
-    expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
+    expect(f.container.querySelector(".settings-loading-skeleton")).not.toBeNull();
+    expect(f.container.querySelector('[role="alert"]')).toBeNull();
   });
-  recoveredRead.resolve(snapshot("Slack"));
-  await recovered;
-  await waitForSolid(() => expect(f.container.querySelector(".callout.danger")).toBeNull());
-  expect(f.container.querySelector(".channels-item__detail")).toBe(recommended);
-  expect(request).toHaveBeenCalledTimes(2);
+  f.publish({
+    ...f.gateway.snapshot,
+    hello: gatewayHelloForMethods(["channels.pairing.list"], []),
+  });
+  await waitForSolid(() => {
+    expect(f.container.textContent).toContain("operator.pairing access");
+    expect(f.container.querySelector(".settings-loading-skeleton")).toBeNull();
+  });
+  retired.resolve(pairingSnapshot());
+  await retry;
+  expect(f.container.textContent).not.toContain("Alice");
+  f.publish({
+    ...f.gateway.snapshot,
+    hello: gatewayHelloForMethods(["channels.pairing.list"], ["operator.pairing"]),
+  });
+  const refresh = f.channels.refreshPairing();
+  recovery.resolve(pairingSnapshot());
+  await refresh;
+  await waitForSolid(() => {
+    expect(f.container.textContent).toContain("Alice");
+    expect(f.container.querySelector('[role="alert"]')).toBeNull();
+  });
 });

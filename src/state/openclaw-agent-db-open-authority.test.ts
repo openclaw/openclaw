@@ -4,7 +4,6 @@ import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-lifecycle.js";
@@ -46,7 +45,7 @@ function fixture(repair = false) {
   }
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest(root);
-  revokeSqliteDatabaseAdmissionsForPath(pathname);
+  agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   const state = openOpenClawStateDatabase({ env: options.env });
   const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
   const run = <T>(
@@ -126,14 +125,11 @@ it("rejects already-retired authority without creating database state", async ()
   const options = { agentId: "refused", env: { OPENCLAW_STATE_DIR: root } };
   const refused = new Error("authority already retired");
   const operation = vi.fn();
-  let work: Promise<unknown> | undefined;
-  expect(() => {
-    work = own(
-      withOpenClawAgentDatabaseAsync(options, operation, () => {
-        throw refused;
-      }),
-    );
-  }).not.toThrow();
+  const work = own(
+    withOpenClawAgentDatabaseAsync(options, operation, () => {
+      throw refused;
+    }),
+  );
   await expect(work).rejects.toBe(refused);
   expect(operation).not.toHaveBeenCalled();
   expect(fs.existsSync(resolveOpenClawAgentSqlitePath(options))).toBe(false);

@@ -7,9 +7,10 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import * as diskSpace from "../infra/disk-space.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -58,36 +59,6 @@ function createAgentManifest(
     archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, asset.sourcePath),
   });
   return manifest;
-}
-
-function encodeTarEntry(params: {
-  path: string;
-  contents?: string | Uint8Array;
-  type?: "File" | "Link" | "SymbolicLink";
-  linkpath?: string;
-}): Buffer {
-  const body =
-    typeof params.contents === "string"
-      ? Buffer.from(params.contents, "utf8")
-      : Buffer.from(params.contents ?? []);
-  const type = params.type ?? "File";
-  const header = new tar.Header({
-    path: params.path,
-    type,
-    size: type === "File" ? body.length : 0,
-    mode: 0o600,
-    uid: 0,
-    gid: 0,
-    mtime: new Date(0),
-    ...(params.linkpath ? { linkpath: params.linkpath } : {}),
-  });
-  const headerBlock = Buffer.alloc(512);
-  header.encode(headerBlock);
-  if (type !== "File") {
-    return headerBlock;
-  }
-  const padding = Buffer.alloc((512 - (body.length % 512)) % 512);
-  return Buffer.concat([headerBlock, body, padding]);
 }
 
 async function createHardlinkArchive(linkpath: string) {
@@ -252,38 +223,148 @@ const agentPayload = (role: string, agentId: string) =>
   });
 
 describe("backupVerifyCommand", () => {
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in verification output while preserving JSON metadata",
+    async () => {
+      const archive = path.join(
+        tempDirs.make("openclaw-backup-terminal-"),
+        "café\u001b[31m\nforged\tend\rrow\u0007.tar.gz",
+      );
+      const payloadPath = `${STATE_ROOT}/note.txt`;
+      const manifest = {
+        ...createBackupManifest(payloadPath),
+        runtimeVersion: "café\u001b[31m\nforged\tend\rrow\u0007",
+      };
+      await fs.writeFile(
+        archive,
+        gzipSync(
+          Buffer.concat([
+            encodeTarEntry({
+              path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+              contents: JSON.stringify(manifest),
+            }),
+            encodeTarEntry({ path: payloadPath, contents: "payload\n" }),
+            Buffer.alloc(1024),
+          ]),
+        ),
+      );
+      const runtime = createTestRuntime();
+      const result = await backupVerifyCommand(runtime, { archive });
+      const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+      expect(report).toContain("café\\nforged\\tend\\rrow.tar.gz");
+      expect(report).toContain("Runtime version: café\\nforged\\tend\\rrow");
+      expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      expect(result.archivePath).toBe(archive);
+      vi.mocked(runtime.log).mockClear();
+      await backupVerifyCommand(runtime, { archive, json: true });
+      expect(JSON.parse(String(vi.mocked(runtime.log).mock.lastCall?.[0]))).toMatchObject({
+        archivePath: archive,
+        runtimeVersion: manifest.runtimeVersion,
+      });
+    },
+  );
+
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(tar.t).mockReset().mockImplementation(actualTar.t);
     vi.mocked(tar.x).mockReset().mockImplementation(actualTar.x);
   });
 
-  it.each(["first", "last"])("reads the archive once with its manifest %s", async (position) => {
-    const archive = path.join(tempDirs.make("openclaw-backup-single-pass-"), "backup.tar.gz");
-    const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
-    const manifest = encodeTarEntry({
-      // Repeated separators are accepted archive spelling, including for a final manifest.
-      path: `${TEST_ARCHIVE_ROOT}//manifest.json`,
-      contents: JSON.stringify(createBackupManifest(payloadPath)),
-    });
-    const payload = encodeTarEntry({ path: payloadPath, contents: "payload\n" });
-    await fs.writeFile(
-      archive,
-      gzipSync(
-        Buffer.concat([
-          ...(position === "first" ? [manifest, payload] : [payload, manifest]),
-          Buffer.alloc(1024),
-        ]),
-      ),
-    );
+  it.each(["first", "last"])(
+    "reads legacy databases once with its manifest %s",
+    async (position) => {
+      const archive = path.join(tempDirs.make("openclaw-backup-single-pass-"), "backup.tar.gz");
+      const agentDir = "/tmp/legacy-agent";
+      const agentPath = `${agentDir}/store-without-extension`;
+      const content = createBackupManifest(STATE_ROOT);
+      content.assets.push({
+        kind: "agent",
+        sourcePath: agentDir,
+        archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentDir),
+      });
+      const manifest = encodeTarEntry({
+        // Repeated separators are accepted archive spelling, including for a final manifest.
+        path: `${TEST_ARCHIVE_ROOT}//manifest.json`,
+        contents: JSON.stringify(content),
+      });
+      const global = await createRegisteredAgentPayload("main", agentPath);
+      const payload = Buffer.concat([
+        // Discover this owner from the later global database, after its bytes have passed.
+        encodeTarEntry({
+          path: buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentPath),
+          contents: await agentPayload("agent", "main"),
+        }),
+        encodeTarEntry({ path: global.archivePath, contents: global.contents }),
+      ]);
+      await fs.writeFile(
+        archive,
+        gzipSync(
+          Buffer.concat([
+            ...(position === "first" ? [manifest, payload] : [payload, manifest]),
+            Buffer.alloc(1024),
+          ]),
+        ),
+      );
+      await expect(verifyBackupArchive(archive)).resolves.toMatchObject({
+        ok: true,
+        assetCount: 2,
+        entryCount: 3,
+      });
+      expect(tar.t).toHaveBeenCalledTimes(1);
+      expect(tar.x).not.toHaveBeenCalled();
+    },
+  );
 
-    await expect(verifyBackupArchive(archive)).resolves.toMatchObject({
-      ok: true,
-      assetCount: 1,
-      entryCount: 2,
+  it("keeps opaque SQLite files verifiable when speculative scratch is unavailable", async () => {
+    const archive = await createArchiveFixture({
+      payloads: [archivePayload(`${STATE_ROOT}/opaque.sqlite`, "opaque")],
     });
-    // Each file-backed tar listing opens and decompresses the entire gzip stream.
+    vi.spyOn(fs, "mkdtemp").mockRejectedValue(
+      Object.assign(new Error("no scratch"), { code: "EACCES" }),
+    );
+    await expect(verifyBackupArchive(archive)).resolves.toMatchObject({ ok: true });
+    expect(tar.x).not.toHaveBeenCalled();
+  });
+
+  it("releases opaque candidates before budgeting a required extraction", async () => {
+    const sqlite = await createSqlitePayload((db) =>
+      db.exec(`
+      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT);
+      INSERT INTO schema_meta VALUES ('primary', 'global');
+      CREATE TABLE agent_databases (agent_id TEXT, path TEXT);
+    `),
+    );
+    const archive = await createArchiveFixture({
+      payloads: [
+        archivePayload(`${STATE_ROOT}/opaque.sqlite`, "opaque"),
+        archivePayload(`${STATE_ROOT}/state/openclaw.sqlite`, sqlite),
+      ],
+    });
+    let staged = false;
+    let released = false;
+    const mkdtemp = fs.mkdtemp.bind(fs);
+    vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+      const result = await mkdtemp(...args);
+      staged = true;
+      return result;
+    });
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (file, ...args) => {
+      if (String(file).includes("candidate-")) {
+        released = true;
+      }
+      return remove(file, ...args);
+    });
+    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+      targetPath,
+      checkedPath: targetPath,
+      availableBytes: staged && !released ? 128 * 1024 * 1024 : 1024 * 1024 * 1024,
+      totalBytes: 1024 * 1024 * 1024,
+    }));
+    await expect(verifyBackupArchive(archive)).resolves.toMatchObject({ ok: true });
+    expect(released).toBe(true);
     expect(tar.t).toHaveBeenCalledTimes(1);
+    expect(tar.x).toHaveBeenCalledTimes(1);
   });
 
   it.each([

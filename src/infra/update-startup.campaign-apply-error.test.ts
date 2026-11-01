@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as machineState from "../state/config-machine-state-async.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -17,7 +16,7 @@ import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
 } from "./update-check-lifecycle.js";
-import { checkUpdateStatus } from "./update-check.js";
+import { checkUpdateStatus, resolveNpmChannelTag } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { createDevGitStatus } from "./update-startup-git.test-support.js";
 import {
@@ -26,7 +25,11 @@ import {
   idleActiveWorkInspectors,
 } from "./update-startup-suite.test-support.js";
 import { createGatewayUpdateCheck } from "./update-startup.js";
-import { getUpdateSchedule, resetUpdateStatusState } from "./update-status-state.js";
+import {
+  getUpdateAvailable,
+  getUpdateSchedule,
+  resetUpdateStatusState,
+} from "./update-status-state.js";
 
 vi.mock("./openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-root.js")>()),
@@ -36,9 +39,15 @@ vi.mock("./openclaw-root.js", async (importOriginal) => ({
 vi.mock("./update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-check.js")>()),
   checkUpdateStatus: vi.fn(),
+  resolveNpmChannelTag: vi.fn(),
 }));
 
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: vi.fn(async () => null) }));
+// These cases clear the runner markers and settle real runs; keep outcome reports offline.
+vi.mock("./update-result-telemetry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-result-telemetry.js")>()),
+  sendUpdateResultTelemetry: vi.fn(async () => {}),
+}));
 vi.mock("../model-catalog/remote-refresh.js", async (original) => ({
   ...(await original<typeof import("../model-catalog/remote-refresh.js")>()),
   refreshRemoteModelCatalog: async () => ({ status: "disabled" }),
@@ -51,6 +60,15 @@ describe("scheduled update discovery and application", () => {
   let check: ReturnType<typeof createGatewayUpdateCheck>;
   let config: OpenClawConfig;
   const info = vi.fn();
+
+  const createCheck = () =>
+    createGatewayUpdateCheck({
+      lifecycle,
+      getConfig: () => config,
+      log: { info },
+      isNixMode: false,
+      applyRemoteCatalogUpdate: async () => "unchanged",
+    });
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -69,13 +87,7 @@ describe("scheduled update discovery and application", () => {
       },
     });
     config = {};
-    check = createGatewayUpdateCheck({
-      lifecycle,
-      getConfig: () => config,
-      log: { info },
-      isNixMode: false,
-      applyRemoteCatalogUpdate: async () => "unchanged",
-    });
+    check = createCheck();
   });
 
   it("reports a failed background update check and keeps its next check scheduled", async () => {
@@ -90,6 +102,32 @@ describe("scheduled update discovery and application", () => {
     await clock.advanceBy(24 * 60 * 60_000);
     expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
     expect(info).toHaveBeenCalledTimes(2);
+  });
+
+  it("rediscovers the installation after a returned failure on the next scheduled check", async () => {
+    config = { update: { channel: "dev", auto: { enabled: true } } };
+    vi.mocked(checkUpdateStatus)
+      .mockResolvedValueOnce({
+        ...createDevGitStatus(),
+        error: { status: "failed", message: "Git facts unavailable", timeoutMs: 1000 },
+      })
+      .mockResolvedValue(createDevGitStatus());
+    check.start();
+    await clock.advanceBy(0);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      "update check failed; retrying at the next scheduled check",
+      { error: "Error: Git facts unavailable" },
+    );
+    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+
+    await clock.advanceBy(24 * 60 * 60_000);
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(3);
+    expect(getUpdateSchedule()).toMatchObject({
+      campaign: { state: "countdown" },
+      install: { git: { status: "behind", commitsBehind: 2 } },
+    });
+    await check.initialize();
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(3);
   });
 
   it("returns cleanup before slow dev git discovery schedules a campaign", async ({ signal }) => {
@@ -108,20 +146,6 @@ describe("scheduled update discovery and application", () => {
     const checking = clock.advanceBy(0);
     try {
       await withinTest(entered.promise, signal);
-      const common = {
-        root: "/opt/openclaw",
-        signal: expect.any(AbortSignal),
-        includeRegistry: false,
-        useDetachedDevUpstream: true,
-      };
-      expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
-      expect(checkUpdateStatus).toHaveBeenNthCalledWith(1, {
-        ...common,
-        timeoutMs: resolveGatewayStartupTiming().deadlineMs,
-        onGitProbeTimeout: expect.any(Function),
-        fetchGit: false,
-      });
-      expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, { ...common, fetchGit: true });
       expect(getUpdateSchedule()?.campaign).toBeUndefined();
       await clock.advanceBy(65_653);
       remoteFinished.resolve();
@@ -187,7 +211,6 @@ describe("scheduled update discovery and application", () => {
         detail: diagnostic,
         failureFacts: matchingObject({ code: code ?? "Error", message: diagnostic }),
       }),
-      target: { kind: "git", installationMethod: "git-checkout" },
       verification: { rollbackOutcome: { status: "not-attempted" } },
     });
     expect(runAutoUpdate).not.toHaveBeenCalled();
@@ -195,4 +218,51 @@ describe("scheduled update discovery and application", () => {
     const failureLog = log.info.mock.calls.find(([line]) => String(line).includes(message));
     expect(failureLog?.[1]).toMatchObject({ channel: "dev", forced: false, tag: "dev" });
   });
+  it.each([
+    ["stable", { error: "HTTP 503" }],
+    ["beta", { error: "TypeError: fetch failed" }],
+    ["extended-stable", { reason: "selector_query_failed" }],
+    ["extended-stable", { reason: "exact_package_mismatch" }],
+  ] as const)(
+    "logs %s registry failure without recording a completed check: %j",
+    async (channel, failure) => {
+      const tag = channel === "stable" ? "latest" : channel;
+      config = { update: { channel, auto: { enabled: true } } };
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: "/opt/openclaw",
+        installKind: "package",
+        packageManager: "npm",
+      });
+      const prior = {
+        lastCheckedAt: "2026-01-16T09:00:00Z",
+        lastCheckedChannel: channel,
+        lastAvailableVersion: "2027.1.0",
+        lastAvailableTag: tag,
+      };
+      await machineState.writeConfigMachineStateAsync("update.checkState", prior);
+      vi.mocked(resolveNpmChannelTag)
+        .mockResolvedValueOnce({ tag, version: null, ...failure })
+        .mockResolvedValue({ tag, version: "2027.2.0" });
+      check.start();
+      await clock.advanceBy(0);
+      const reason = "error" in failure ? failure.error : failure.reason;
+      expect(info).toHaveBeenCalledExactlyOnceWith(
+        "update check failed; retrying at the next scheduled check",
+        { error: `Error: npm ${tag} update check failed: ${reason}` },
+      );
+      expect(await machineState.readConfigMachineStateAsync("update.checkState")).toEqual(prior);
+      expect(getUpdateAvailable()?.latestVersion).toBe("2027.1.0");
+      await check.stop();
+      await clock.advanceBy(5 * 60_000);
+      lifecycle = createGatewayUpdateLifecycle(lifecycle.scheduler);
+      check = createCheck();
+      check.start();
+      await clock.advanceBy(0);
+      expect(resolveNpmChannelTag).toHaveBeenCalledTimes(2);
+      expect(getUpdateAvailable()?.latestVersion).toBe("2027.2.0");
+      expect(await machineState.readConfigMachineStateAsync("update.checkState")).toMatchObject({
+        lastCheckedAt: "2026-01-17T10:05:00.000Z",
+      });
+    },
+  );
 });

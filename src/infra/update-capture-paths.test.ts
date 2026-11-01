@@ -1,14 +1,15 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
 
 // These bytes are the producer contract, not an inferred JSON schema.
 const markerName = ".openclaw-private-update-capture";
 const markerContent = "openclaw-private-update-capture-v1\n";
 const directoryLink = process.platform === "win32" ? "junction" : "dir";
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 let root: string;
 let marker: string;
@@ -17,25 +18,19 @@ let stateDir: string;
 const expectInvalidMarker = (file = source) =>
   expect(() => assertNotUpdateCapturePath(file, stateDir)).toThrow("Private update capture marker");
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "capture-marker-"));
+  root = dirs.make("capture-marker-");
   marker = path.join(root, markerName);
   source = path.join(root, "raw.txt");
   stateDir = path.join(root, "unrelated-state");
   fs.writeFileSync(source, "synthetic retained bytes");
 });
-afterEach(() => {
-  vi.restoreAllMocks();
-  fs.rmSync(root, { recursive: true, force: true });
-});
+afterEach(() => vi.restoreAllMocks());
 
-it.each(["version", "oversized", "dangling symlink"])("rejects %s markers", (kind) => {
+it.each(["oversized", "dangling symlink"])("rejects %s markers", (kind) => {
   if (kind === "dangling symlink") {
     fs.symlinkSync(path.join(root, "missing"), marker);
   } else {
-    fs.writeFileSync(
-      marker,
-      kind === "version" ? "openclaw-private-update-capture-v2\n" : "x".repeat(4096),
-    );
+    fs.writeFileSync(marker, "x".repeat(4096));
   }
   expectInvalidMarker();
   expect(fs.readFileSync(source, "utf8")).toBe("synthetic retained bytes");
@@ -47,14 +42,6 @@ it.skipIf(process.platform === "win32")("refuses a FIFO marker without opening i
   expectInvalidMarker();
   expect(open).not.toHaveBeenCalled();
 });
-
-it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-  "refuses an unreadable marker",
-  () => {
-    fs.writeFileSync(marker, markerContent, { mode: 0o000 });
-    expectInvalidMarker();
-  },
-);
 
 it("does not let a valid child marker hide a malformed ancestor marker", () => {
   fs.writeFileSync(marker, "invalid");

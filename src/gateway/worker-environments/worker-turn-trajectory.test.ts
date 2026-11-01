@@ -25,6 +25,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
   placements,
+  reconcileUnchangedLocalWorkspace,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -112,9 +113,8 @@ describe("worker turn trajectory authority", () => {
       );
       const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,

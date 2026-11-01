@@ -23,6 +23,7 @@ import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import {
   collectPostgresBridgeCounters,
   countPostgresBridges,
+  countPostgresPoolSelfRoots,
   readPostgresBridgeCounters,
   type PostgresBridgeCounter,
 } from "./worker-postgres-bridge-census.js";
@@ -39,6 +40,7 @@ type WorkerCpuHandle = {
 type WorkerSource = {
   script: string;
   internalMessages?: true;
+  requestClass?: () => string | undefined;
   lifecycleMessages?: boolean;
   poolId?: number;
   taskMetrics?: NonNullable<DiagnosticMemoryUsage["workerTaskMetrics"]>[number];
@@ -77,8 +79,11 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
       | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
       | undefined,
     postgresBridgeCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+    postgresPoolSelfRootCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
     postgresBridgeObservers: new Set<() => void>(),
     revision: 0,
+    // SAFETY: Starts empty; only registry-owned snapshots are assigned below.
+    cpuSources: undefined as ReturnType<typeof getTrackedWorkerCpuSources> | undefined,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
     workers: new Map<WorkerCpuHandle, WorkerSource>(),
@@ -87,13 +92,17 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
   };
 });
 
-export function createCpuTrackedWorker(...args: ConstructorParameters<typeof Worker>): Worker {
+export function createCpuTrackedWorker(
+  filename: ConstructorParameters<typeof Worker>[0],
+  options?: ConstructorParameters<typeof Worker>[1],
+  requestClass?: () => string | undefined,
+): Worker {
   const worker = runWithMainThreadTask(
-    `worker:${workerScriptName(args[0], args[1]?.eval)}`,
-    () => new Worker(...args),
+    `worker:${workerScriptName(filename, options?.eval)}`,
+    () => new Worker(filename, options),
   );
-  trackNativeWorkerForCpu(worker, args[0], args[1]?.eval);
-  trackedWorkers.workers.get(worker)!.internalMessages = true;
+  trackNativeWorkerForCpu(worker, filename, options?.eval);
+  Object.assign(trackedWorkers.workers.get(worker)!, { internalMessages: true, requestClass });
   return worker;
 }
 
@@ -136,7 +145,13 @@ export function getTrackedPostgresBridgeCounters(): PostgresBridgeCounter[] {
   return collectPostgresBridgeCounters(
     trackedWorkers.postgresBridgeCount,
     trackedWorkers.workers.values(),
+    trackedWorkers.postgresPoolSelfRootCount,
   );
+}
+
+/** Count once per thread, including a pool restarted after explicit cleanup. */
+export function recordPostgresPoolSelfRoot(): boolean {
+  return Atomics.compareExchange(trackedWorkers.postgresPoolSelfRootCount, 0, 0, 1) === 0;
 }
 
 export function observeTrackedPostgresBridgeCounters(observer: () => void): () => void {
@@ -164,8 +179,12 @@ function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): vo
   publishPostgresBridgeCounters();
 }
 
-function getTrackedPostgresBridgeCount(): number {
-  return countPostgresBridges(getTrackedPostgresBridgeCounters());
+function getTrackedPostgresPoolCounts() {
+  const counters = getTrackedPostgresBridgeCounters();
+  return {
+    postgresBridgeCount: countPostgresBridges(counters),
+    postgresPoolSelfRootCount: countPostgresPoolSelfRoots(counters),
+  };
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -225,7 +244,7 @@ export function getTrackedWorkerPoolSnapshot() {
   }
   return {
     workerCount: trackedWorkers.workers.size,
-    postgresBridgeCount: getTrackedPostgresBridgeCount(),
+    ...getTrackedPostgresPoolCounts(),
     workerPoolCount: pools.size,
     workerPools: [...pools.values()]
       .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
@@ -247,10 +266,11 @@ function forgetWorker(worker: WorkerCpuHandle): void {
   source.memoryFlush?.resolve();
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
+  trackedWorkers.revision++;
+  trackedWorkers.cpuSources = undefined;
   if (source.postgresBridgeCounters) {
     publishPostgresBridgeCounters();
   }
-  trackedWorkers.revision++;
 }
 
 function countWorkerStart(source: WorkerSource) {
@@ -340,7 +360,7 @@ function trackWorker(worker: WorkerCpuHandle): void {
       if (source.lifecycleMessages) {
         recordWorkerMessage("lifecycle", "to_worker", bytes);
       } else if (source.internalMessages) {
-        observeWorkerMessage(value, "to_worker", "other", bytes ?? null);
+        observeWorkerMessage(value, "to_worker", "other", bytes ?? null, source.requestClass?.());
       } else {
         // Dependency payloads can have getters/proxies. Only native cloning may inspect them.
         recordWorkerMessage("other", "to_worker");
@@ -359,7 +379,7 @@ function trackWorker(worker: WorkerCpuHandle): void {
         if (source.lifecycleMessages) {
           recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
         } else if (source.internalMessages) {
-          observeWorkerMessage(args[0], "from_worker");
+          observeWorkerMessage(args[0], "from_worker", "other", undefined, source.requestClass?.());
         } else {
           recordWorkerMessage("other", "from_worker");
         }
@@ -395,6 +415,7 @@ function trackWorker(worker: WorkerCpuHandle): void {
   // Node emits "worker" inside the constructor, before the wrapper assigns its script.
   queueMicrotask(() => countWorkerStart(source));
   trackedWorkers.revision++;
+  trackedWorkers.cpuSources = undefined;
   worker.once("exit", () => forgetWorker(worker));
 }
 
@@ -408,15 +429,17 @@ function pruneExitedWorkers(): void {
 }
 
 export function getTrackedWorkerCpuSources(): {
-  revision: number;
-  currentRevision: () => number;
-  workers: { cpuUsage: () => Promise<NodeJS.CpuUsage | undefined> }[];
+  readonly revision: number;
+  readonly currentRevision: () => number;
+  readonly workers: readonly { cpuUsage: () => Promise<NodeJS.CpuUsage | undefined> }[];
 } {
-  return {
-    revision: getTrackedWorkerCpuRevision(),
+  // Pruning may invalidate membership when a consumer removed its exit listener.
+  const revision = getTrackedWorkerCpuRevision();
+  return (trackedWorkers.cpuSources ??= {
+    revision,
     currentRevision: getTrackedWorkerCpuRevision,
     workers: [...trackedWorkers.workers.values()],
-  };
+  });
 }
 
 function getTrackedWorkerCpuRevision(): number {
@@ -651,7 +674,7 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
-    postgresBridgeCount: getTrackedPostgresBridgeCount(),
+    ...getTrackedPostgresPoolCounts(),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,
@@ -662,18 +685,13 @@ export function getTrackedWorkerLifecycleSnapshot() {
       script: entry.script,
       tasksCompleted: entry.tasksCompleted,
       heapUsedHighWaterBytes: entry.heapUsedHighWaterBytes,
-      gc: entry.gc.map(({ kind, count, durationMs, reclaimedBytes }) => ({
-        kind,
-        count,
-        durationMs,
-        reclaimedBytes,
-      })),
+      gc: entry.gc.map((totals) => Object.assign({}, totals)),
     })),
   };
 }
 
-/** Read completed samples without blocking the heartbeat on a busy native isolate. */
-export function sampleTrackedWorkerMemory() {
+/** Read completed samples; only the heartbeat requests the next native samples. */
+export function sampleTrackedWorkerMemory(options?: { refresh?: boolean }) {
   const workerHeaps: NonNullable<DiagnosticMemoryUsage["workerHeaps"]> = [];
   const workerMemoryMissing: NonNullable<DiagnosticMemoryUsage["workerMemoryMissing"]> = [];
   const memory = {
@@ -713,6 +731,9 @@ export function sampleTrackedWorkerMemory() {
         threadId: worker.threadId,
         reason: source.heap ? "stale" : source.memoryUnavailable ? "unavailable" : "pending",
       });
+    }
+    if (options?.refresh === false) {
+      continue;
     }
     // Native heap interrupts cannot be canceled. Never queue another behind a stall.
     if (source.memoryPort) {

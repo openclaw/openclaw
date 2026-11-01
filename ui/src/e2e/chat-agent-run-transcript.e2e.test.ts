@@ -1,4 +1,4 @@
-import type { BrowserContextOptions, Locator } from "playwright";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.js";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
@@ -51,7 +51,132 @@ async function openTranscript(
   return { page, gateway };
 }
 
+async function flushSnapshot(page: Page) {
+  await page.evaluate(async () => {
+    const pane = document.querySelector(".chat-pane-cache__pane--active");
+    await Reflect.get(pane!, "sessionSnapshotStore").flush();
+  });
+}
+
 suite.define(() => {
+  it("reconciles a cached failure resolved while away from the session", async () => {
+    const key = "agent:main:main";
+    const runId = "cached-failure";
+    const user = transcriptMessage("user", "Check the saved result.", runId, "request", 1);
+    const summary = "Synthetic check failed before a reply.";
+    const session = {
+      key,
+      sessionId: "cached-notice-session",
+      kind: "direct",
+      status: "failed",
+      lastRunId: runId,
+    };
+    const messages = [
+      user,
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: summary,
+        openclawRunError: { runId, summary },
+        __openclaw: { id: "failure", seq: 2, runId },
+        timestamp: user.timestamp + 1,
+      },
+    ];
+    const { page, gateway } = await openTranscript({
+      sessionKey: key,
+      sessions: [session],
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      subscriptionInitialHistory: false,
+      heldMethods: ["chat.startup"],
+      historyMessages: messages,
+      methodResponses: {
+        "chat.startup": { messages, sessionId: session.sessionId, sessionInfo: session },
+      },
+    });
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup");
+    const failure = page.locator(".chat-run-failure");
+    await failure.getByText(summary, { exact: true }).waitFor();
+    await flushSnapshot(page);
+    await page.reload();
+    await failure.getByText(summary, { exact: true }).waitFor();
+    await gateway.waitForRequest("chat.startup");
+    const answer = "The check completed while you were away.";
+    await gateway.resolveDeferred("chat.startup", {
+      sessionId: session.sessionId,
+      sessionInfo: { ...session, status: "done" },
+      messages: [user, transcriptMessage("assistant", answer, runId, "reply", 2)],
+    });
+    await page.locator(".chat-group.assistant").getByText(answer, { exact: true }).waitFor();
+    await failure.waitFor({ state: "detached" });
+    expect(await page.getByText("Check the saved result.", { exact: true }).count()).toBe(1);
+  });
+
+  it("retains cached commentary while a reloaded run continues streaming", async () => {
+    const key = "agent:main:main";
+    const runId = "streaming-after-reload";
+    const commentary = "Checking the saved workspace state.";
+    const messages = [
+      transcriptMessage("user", "Continue the check.", runId, "request", 1),
+      {
+        ...transcriptMessage("assistant", commentary, runId, "commentary", 2),
+        channel: "commentary",
+      },
+    ];
+    const session = {
+      key,
+      sessionId: "cached-stream-session",
+      kind: "direct",
+      status: "running",
+      activeRunIds: [runId],
+      hasActiveRun: true,
+    };
+    const history = {
+      messages,
+      sessionId: session.sessionId,
+      sessionInfo: session,
+      inFlightRun: { runId, text: "Draft before reload." },
+    };
+    const { page, gateway } = await openTranscript({
+      sessionKey: key,
+      sessions: [session],
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      subscriptionInitialHistory: false,
+      heldMethods: ["chat.startup"],
+      historyMessages: messages,
+      methodResponses: { "chat.startup": history },
+    });
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup");
+    const assistant = page.locator(".chat-group.assistant");
+    await assistant.getByText("Draft before reload.", { exact: true }).waitFor();
+    await flushSnapshot(page);
+    await page.reload();
+    await assistant.getByText(commentary, { exact: true }).waitFor();
+    await gateway.waitForRequest("chat.startup");
+    await gateway.resolveDeferred("chat.startup", {
+      ...history,
+      inFlightRun: { runId, text: "Draft after reload." },
+    });
+    await assistant.getByText("Draft after reload.", { exact: true }).waitFor();
+    const text = "Draft after reload. More detail.";
+    await gateway.emitGatewayEvent("chat", {
+      sessionKey: key,
+      runId,
+      state: "delta",
+      deltaText: text,
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+    await assistant.getByText(text, { exact: true }).waitFor();
+    expect(await assistant.getByText(commentary, { exact: true }).count()).toBe(1);
+    expect(await assistant.getByText("Draft before reload.", { exact: true }).count()).toBe(0);
+    expect(
+      await page.getByRole("button", { name: "Stop generating", exact: true }).isVisible(),
+    ).toBe(true);
+  });
+
   it("collapses nested tool activity after commentary across history reload", async () => {
     const runId = "nested-run";
     const commentary = "I’ll inspect the workspace first.";
@@ -99,6 +224,13 @@ suite.define(() => {
     await page.getByText(commentary, { exact: true }).waitFor();
     const activity = page.locator(".chat-activity-group:not(.chat-work-group)");
     await expect.poll(() => activity.count()).toBe(1);
+    await activity.waitFor({ state: "visible" });
+    expect(
+      await activity.evaluate((element) => {
+        const preceding = element.previousElementSibling!;
+        return element.getBoundingClientRect().top - preceding.getBoundingClientRect().bottom;
+      }),
+    ).toBeCloseTo(8, 1);
     const summary = activity.locator(".chat-activity-group__summary");
     expect(await summary.getAttribute("aria-expanded")).toBe("false");
     expect(await activity.locator(".chat-activity-group__body").isVisible()).toBe(false);

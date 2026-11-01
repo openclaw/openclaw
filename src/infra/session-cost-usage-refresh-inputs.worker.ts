@@ -1,10 +1,7 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../config/sessions/legacy-sqlite-marker.js";
+import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listTranscriptArchivesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -16,6 +13,7 @@ import {
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { LruCache } from "./lru-cache.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
@@ -34,7 +32,12 @@ import { readSqliteDatabaseScopedWriteTokenForPath } from "./sqlite-database-adm
 type TranscriptStats = SessionTranscriptStats & { generation?: string | null; cold?: boolean };
 type RollupInput = {
   row: SessionCostUsageRollupRow;
-  body?: { blob: Uint8Array | null; partitions: UsageCostPartition[] };
+  /** `quarterDates` lists partitions whose report quarter row is current. */
+  body?: {
+    blob: Uint8Array | null;
+    partitions: UsageCostPartition[];
+    quarterDates: ReadonlySet<string>;
+  };
 };
 
 // The refresh worker retains only its bounded working set. Retirement drops it;
@@ -81,18 +84,6 @@ export function createUsageCostCollectionAccess(params: {
     const database = target(marker.agentId, marker.storePath);
     return JSON.stringify([database.path, database.agentId, marker.sessionId]);
   };
-  if (operation.kind === "sessions") {
-    for (const session of operation.sessions) {
-      const file = session.transcriptFile;
-      const marker = file && parseSqliteSessionFileMarker(session.sessionFile);
-      if (marker && file) {
-        transcriptFacts.set(transcriptKey(marker), {
-          generation: file.generation ?? null,
-          cold: file.cold === true,
-        });
-      }
-    }
-  }
   const access: UsageCostCollectionAccess = {
     env,
     materializeArchive: (sourcePath) =>
@@ -190,6 +181,78 @@ export function createUsageCostCollectionAccess(params: {
     },
   };
 
+  /** Last mutation time and rewrite generation, without scanning transcript events. */
+  const readFreshness = async (markers: readonly SqliteSessionFileMarker[]) => {
+    const result: Array<{ mtimeMs: number; generation: string | null; cold: boolean } | undefined> =
+      Array(markers.length);
+    const groups = new Map<string, Array<{ marker: SqliteSessionFileMarker; index: number }>>();
+    for (const [index, marker] of markers.entries()) {
+      const key = JSON.stringify(target(marker.agentId, marker.storePath));
+      const group = groups.get(key) ?? [];
+      group.push({ marker, index });
+      groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      const { marker } = group[0]!;
+      const database = target(marker.agentId, marker.storePath);
+      const ids = [...new Set(group.map((item) => item.marker.sessionId))];
+      const rows = await readStore(marker.agentId, marker.storePath, () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (opened) => {
+            const query = getSessionKysely(opened.db)
+              .selectFrom("session_windows as window")
+              .leftJoin(
+                "transcript_rewrite_watermarks as rewrite",
+                "rewrite.session_id",
+                "window.session_id",
+              )
+              .leftJoin(
+                "session_transcript_cold_archives as cold",
+                "cold.session_id",
+                "window.session_id",
+              )
+              .select([
+                "window.session_id",
+                "window.transcript_updated_at",
+                "rewrite.generation",
+                "cold.session_id as coldSessionId",
+              ]);
+            const stored = executeSqliteQuerySync(
+              opened.db,
+              getSessionKysely(opened.db)
+                .selectFrom("session_windows")
+                .select((eb) => eb.fn.countAll<number>().as("count")),
+            ).rows[0]?.count;
+            // Overview reads ask for most sessions; one scan beats thousands of key probes.
+            // Both paths return every window, including those without a transcript update time.
+            return ids.length * 4 >= (stored ?? 0)
+              ? executeSqliteQuerySync(opened.db, query).rows
+              : chunkItems(ids, 2_000).flatMap(
+                  (chunk) =>
+                    executeSqliteQuerySync(opened.db, query.where("window.session_id", "in", chunk))
+                      .rows,
+                );
+          },
+          { ...database, env },
+        );
+        return read.found ? read.value : [];
+      });
+      const bySession = new Map(rows.map((row) => [row.session_id, row]));
+      for (const { marker: item, index } of group) {
+        const row = bySession.get(item.sessionId);
+        if (row) {
+          const facts = {
+            mtimeMs: row.transcript_updated_at ?? 0,
+            generation: row.generation ?? null,
+            cold: row.coldSessionId !== null,
+          };
+          result[index] = facts;
+          transcriptFacts.set(transcriptKey(item), facts);
+        }
+      }
+    }
+    return result;
+  };
   const inventory = async (sessionsDir?: string) =>
     listUsageCountedTranscriptStats(location.agentId, {
       ...access,
@@ -199,6 +262,7 @@ export function createUsageCostCollectionAccess(params: {
   return {
     access,
     inventory,
+    readFreshness,
     readFacts: (marker: SqliteSessionFileMarker) => transcriptFacts.get(transcriptKey(marker)),
   };
 }

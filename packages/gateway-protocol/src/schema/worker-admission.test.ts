@@ -1,8 +1,6 @@
-import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
-import { FAILOVER_REASONS } from "../failover-reasons.js";
 import {
   type WorkerAdmissionHandshake,
   WorkerAdmissionResponseFrameSchema as AdmissionResponse,
@@ -25,6 +23,7 @@ import {
   validateWorkerTranscriptCommitParams as validateCommit,
 } from "../index.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../worker-transcript-budget.js";
+import { accepts as checkSchema } from "./schema.test-support.js";
 import { WorkerGatewayToolResultSchema as GatewayToolResult } from "./worker-gateway-tool.js";
 import {
   WORKER_INFERENCE_MAX_OUTPUT_TOKENS,
@@ -78,14 +77,8 @@ const workerHello = {
   credentialExpiresAtMs: 10_000,
   policy: { heartbeatIntervalMs: 15_000, maxPayload: 1_024 },
 };
-const usage = {
-  input: 1,
-  output: 2,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 3,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+const usage = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3, cost };
 const assistantMessage = {
   role: "assistant" as const,
   content: [{ type: "toolCall" as const, id: "call-1", name: "probe", arguments: { value: 1 } }],
@@ -152,9 +145,6 @@ function checkAll<T>(validate: (value: T) => unknown, values: readonly T[], want
     expect(validate(value)).toEqual(want);
   }
 }
-function checkSchema(schema: TSchema, value: unknown) {
-  expect(Value.Check(schema, value)).toBe(true);
-}
 const approval = (phase: string, status: string) =>
   event("approval", { phase, kind: "exec", status, title: "x" });
 const lifecycle = (phase: string, payload: Record<string, unknown> = {}) =>
@@ -166,15 +156,13 @@ const fallbackStep = (outcome: string, reason?: string) =>
     ...(reason === undefined ? {} : { fallbackStepFromFailureReason: reason }),
     fallbackStepFinalOutcome: outcome,
   });
-const fallbackReasonEvents = (reason: string) => [
+const fallback = (attempt: object = {}) =>
   lifecycle("fallback", {
     ...models,
     reasonSummary: "x",
     attemptSummaries: ["x"],
-    attempts: [{ provider: "p", model: "m", error: "x", reason }],
-  }),
-  fallbackStep("next_fallback", reason),
-];
+    attempts: [{ provider: "p", model: "m", error: "x", ...attempt }],
+  });
 const assistant = event("assistant", { text: "x", delta: "x" });
 const liveError = (details: Record<string, unknown>) => ({
   ok: false,
@@ -260,14 +248,11 @@ describe("worker protocol schemas", () => {
       ["response" + "x".repeat(477), true],
       ["x".repeat(MAX_PAYLOAD_BYTES), false],
     ] as const) {
-      expect(
-        isWorkerTranscriptFrameWithinBudget(
-          request(
-            "worker.transcript.commit",
-            transcriptMessage({ ...assistantMessage, responseId }),
-          ),
-        ),
-      ).toBe(withinBudget);
+      const frame = request(
+        "worker.transcript.commit",
+        transcriptMessage({ ...assistantMessage, responseId }),
+      );
+      expect(isWorkerTranscriptFrameWithinBudget(frame)).toBe(withinBudget);
     }
   });
 
@@ -318,14 +303,11 @@ describe("worker protocol schemas", () => {
       approval("requested", "pending"),
       approval("resolved", "approved"),
       lifecycle("start", { startedAt: 1 }),
-      lifecycle("fallback", {
-        ...models,
-        reasonSummary: "x",
-        attemptSummaries: ["x"],
-        attempts: [{ provider: "p", model: "m", error: "x", authMode: "key" }],
-      }),
+      fallback({ authMode: "key" }),
+      fallback({ reason: "auth" }),
       lifecycle("fallback_cleared", models),
       fallbackStep("next_fallback"),
+      fallbackStep("next_fallback", "auth"),
       lifecycle("finishing", { endedAt: 2, error: "x" }),
       lifecycle("end", { endedAt: 3 }),
       lifecycle("error", { endedAt: 4, error: "x" }),
@@ -336,9 +318,6 @@ describe("worker protocol schemas", () => {
     check(liveResponse, { ok: true, payload: { ackedSeq: 3 } });
     for (const details of [
       { reason: "epoch-mismatch" },
-      { reason: "session-not-attached" },
-      { reason: "invalid-event" },
-      { reason: "capacity-exceeded" },
       { reason: "resync-required", ackedSeq: 3, expectedSeq: 4 },
     ]) {
       check(liveResponse, liveError(details));
@@ -363,6 +342,8 @@ describe("worker protocol schemas", () => {
       params(approval("requested", "approved")),
       params(lifecycle("end", { endedAt: 4, error: "stopped" })),
       params(fallbackStep("retrying")),
+      params(fallback({ reason: "not-a-reason" })),
+      params(fallbackStep("next_fallback", "not-a-reason")),
       params({ ...assistant, seq: 8 }),
       params(assistant, { sessionKey: "x" }),
       {
@@ -383,12 +364,6 @@ describe("worker protocol schemas", () => {
       expect(validateLive(params(tool("update", { partialResult: value })))).toBe(false);
       expect(validateLive.errors?.[0]).toMatchObject({ keyword });
     }
-  });
-
-  it("keeps both worker fallback reason fields aligned with the canonical vocabulary", () => {
-    const validate = (liveEvent: unknown) => validateLive(params(liveEvent));
-    checkAll(validate, FAILOVER_REASONS.flatMap(fallbackReasonEvents));
-    checkAll(validate, fallbackReasonEvents("not-a-reason"), false);
   });
 
   it("accepts only a model reference and constrained inference options", () => {

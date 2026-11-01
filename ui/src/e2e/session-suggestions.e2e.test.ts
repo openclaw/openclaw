@@ -1,5 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, type Locator } from "playwright/test";
 import { it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -131,6 +135,34 @@ function caretPrefix(preview: Locator) {
   });
 }
 
+function caretTextGeometry(preview: Locator) {
+  return preview.evaluate((element) => {
+    const caret = element.querySelector(".agent-chat__typing-caret")!;
+    const box = caret.getBoundingClientRect();
+    const style = getComputedStyle(caret, "::after");
+    const height = Number.parseFloat(style.height);
+    const bottom = box.bottom - Number.parseFloat(style.bottom);
+    // A text Range supplies the font's actual inline box, not the line-height
+    // or an em approximation. The first glyph stays on the first draft line.
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let text = walker.nextNode();
+    while (text && !text.textContent) {
+      text = walker.nextNode();
+    }
+    const range = document.createRange();
+    range.setStart(text!, 0);
+    range.setEnd(text!, 1);
+    const glyph = range.getBoundingClientRect();
+    return {
+      top: bottom - height,
+      height,
+      textTop: glyph.top,
+      textHeight: glyph.height,
+      lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+    };
+  });
+}
+
 function bubbleGeometry(locator: Locator) {
   return locator.evaluate((element) => {
     const text = getComputedStyle(element);
@@ -187,6 +219,17 @@ suite.define(() => {
     const caret = preview.locator(".agent-chat__typing-caret");
     await expect(caret).toHaveCount(1);
     expect(await caretPrefix(preview)).toBe(draft.slice(0, cursor));
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(page, row, [preview], {
+        animations: "disabled",
+        elements: [row],
+      });
+      await writeFile(path.join(suite.artifactDir, "typing-detail.png"), frame.elements[0]!.png);
+      await writeFile(
+        path.join(suite.artifactDir, "typing-geometry.json"),
+        JSON.stringify(await caretTextGeometry(preview), null, 2),
+      );
+    }
     const firstLine = await caret.boundingBox();
     const initialPreview = await preview.boundingBox();
     for (const position of [0, draft.length]) {
@@ -205,6 +248,40 @@ suite.define(() => {
         );
         expect(box!.y - firstLine!.y).toBeCloseTo(5 * lineHeight, 0);
       }
+    }
+  });
+
+  it("aligns the watched caret with text across text sizes and paragraph boundaries", async () => {
+    const { page, gateway } = await openSuggestions("owner");
+    await page.clock.install();
+    await pauseVirtualClock(page);
+    const preview = page.locator(".agent-chat__typing-preview-text");
+    const draft = "Text in progress.\n\nSecond paragraph.\n";
+    for (const scale of [0.9, 1, 1.1, 1.25, 1.4]) {
+      await page.evaluate((value) => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", String(value));
+      }, scale);
+      for (const cursor of [
+        0,
+        1,
+        draft.indexOf("\n"),
+        draft.indexOf("\n") + 1,
+        draft.indexOf("Second"),
+        draft.length,
+      ]) {
+        await typingEvent(gateway, { preview: draft, cursor });
+        await expect.poll(() => caretPrefix(preview)).toBe(draft.slice(0, cursor));
+        await preview.evaluate(() => document.fonts.ready);
+        const geometry = await caretTextGeometry(preview);
+        const line = draft.slice(0, cursor).split("\n").length - 1;
+        expect(geometry.height).toBeCloseTo(geometry.textHeight, 1);
+        expect(geometry.top).toBeCloseTo(geometry.textTop + line * geometry.lineHeight, 1);
+      }
+    }
+    for (const empty of ["", "\n\n"]) {
+      await typingEvent(gateway, { preview: empty, cursor: 0 });
+      await expect(preview).toHaveCount(0);
+      await expect(page.locator(".agent-chat__typing-bubble > span")).toHaveCount(3);
     }
   });
 
@@ -381,13 +458,7 @@ suite.define(() => {
       });
       await ownerTyping(draft);
       await expect(previewBubble).toHaveText(draft);
-      await expect
-        .poll(() =>
-          typingRow
-            .locator(".chat-group")
-            .evaluate((row) => Number.parseFloat(getComputedStyle(row).gridTemplateColumns)),
-        )
-        .toBeGreaterThan(0);
+      await waitForLayoutSettled(page, '[data-virtual-row-key="presence:typing"] .chat-group');
       const beforeSend = await bubbleGeometry(previewBubble);
       await gateway.emitGatewayEvent("session.message", {
         sessionKey: "main",
@@ -401,6 +472,7 @@ suite.define(() => {
       await expect(typingRow).toHaveCount(0);
       const sentText = page.locator(".chat-group--peer .chat-text").filter({ hasText: draft });
       await expect(sentText).toHaveCount(1);
+      await waitForLayoutSettled(page, ".chat-group--peer .chat-text");
       const afterSend = await bubbleGeometry(sentText);
       expect(afterSend).toMatchObject({
         padding: beforeSend.padding,

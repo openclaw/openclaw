@@ -18,7 +18,14 @@ it("retains display identity until reconnect resolves or the connection changes"
     }),
   );
   const original = gatewayPresentationScope(gateway);
-  for (const phase of ["reconnecting", "connected"] as const) {
+  for (const phase of [
+    "offline",
+    "connecting",
+    "starting",
+    "reconnecting",
+    "reload-required",
+    "connected",
+  ] as const) {
     gateway.snapshot.phase = phase;
     gateway.snapshot.selfUser = undefined;
     expect(gatewayPresentationScope(gateway)).toBe(original);
@@ -34,4 +41,10 @@ it("retains display identity until reconnect resolves or the connection changes"
   const replacement = gatewayPresentationScope(gateway);
   expect(replacement).not.toBe(original);
   expect(replacement.displayUser).toBeNull();
+
+  gateway.snapshot.selfUser = user;
+  gatewayPresentationScope(gateway);
+  gateway.snapshot.phase = "stopped";
+  gateway.snapshot.selfUser = undefined;
+  expect(gatewayPresentationScope(gateway).displayUser).toBeNull();
 });

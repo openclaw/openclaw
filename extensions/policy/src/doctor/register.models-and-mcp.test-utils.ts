@@ -7,6 +7,7 @@ import { collectPolicyEvidence } from "../policy-state.js";
 import {
   workspaceDir,
   cfgWithPolicy,
+  cfgWithWorkspaceRepairs,
   createDeniedTelegramPolicy,
   runToolMetadataFixture,
   cfgWithPolicyAgentDefaults,
@@ -57,8 +58,7 @@ describe("registerPolicyDoctorChecks", () => {
   afterEach(teardownPolicyDoctorTest);
 
   it("repairs required agent workspace deny tool findings", async () => {
-    const cfg: RawLegacyDoctorConfig = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg: RawLegacyDoctorConfig = cfgWithWorkspaceRepairs({
       agents: {
         list: [
           {
@@ -67,7 +67,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    };
+    });
     const configPath = await writePolicyFixture(
       policyForAgents("reviewer", ["reviewer"], {
         agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
@@ -93,15 +93,14 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs required keyed agent workspace deny tool findings", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       agents: {
         ownership: "explicit",
         entries: {
           reviewer: { tools: { deny: ["exec"] } },
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(
       policyForAgents("reviewer", ["reviewer"], {
         agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
@@ -125,13 +124,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("skips scoped required deny repairs that would mutate root tools deny", async () => {
-    const cfg = {
-      ...cfgWithPolicy({ workspaceRepairs: true }),
+    const cfg = cfgWithWorkspaceRepairs({
       tools: { deny: ["exec"] },
       agents: {
         entries: { reviewer: {} },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(
       policyForAgents("reviewer", ["reviewer"], { tools: { denyTools: ["exec", "write"] } }),
     );

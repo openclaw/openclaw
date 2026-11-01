@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
+import * as cryptoDigest from "../../infra/crypto-digest.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { serializeCacheTtlToolResultProjections as snapshot } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
@@ -11,6 +12,7 @@ import {
 } from "./session-prompt-state.js";
 import { replayToolResultPromptProjections } from "./tool-result-projection-replay.js";
 import {
+  projectToolResultMessages,
   pruneExpiredCacheTtlToolResults,
   reconcileToolResultPromptProjectionState as reconcile,
   resolveCacheTtlPruningSettings,
@@ -112,6 +114,122 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
+  it.each(["soft", "hard", "restored-hard", "restored-text"] as const)(
+    "freezes owned %s content without reinspecting its descriptors",
+    (mode) => {
+      const state = newState();
+      const key = "tool:old:42";
+      const messages = prunableHistory(
+        Array.from({ length: mode === "hard" ? 18 : 1 }, (_, index) =>
+          tool({ id: index === 0 ? "old" : `old-${index}`, text: "x".repeat(6_000) }),
+        ),
+      );
+      if (mode === "restored-hard") {
+        restore(
+          state,
+          checkpoint({
+            prunedToolResults: [{ key, mode: "hard", placeholder: "[restored]" }],
+          }),
+        );
+      }
+      using descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+      if (mode === "restored-text") {
+        restore(
+          state,
+          checkpoint({
+            prunedToolResults: [],
+            frozenToolResults: [{ key, sourceHash: "source", texts: ["first", "second"] }],
+          }),
+        );
+      } else {
+        project(messages, { projectionState: state });
+      }
+      const content = state.replacements.get(key)?.content;
+      expect(content).toBeDefined();
+      const inspected = new Set(descriptors.mock.calls.map(([value]) => value));
+      descriptors.mockRestore();
+      expect(Object.isFrozen(content)).toBe(true);
+      expect(inspected.has(content)).toBe(false);
+      for (const block of content!) {
+        expect(Object.isFrozen(block)).toBe(true);
+        expect(inspected.has(block)).toBe(false);
+        expect(Reflect.set(block, "text", "rewritten")).toBe(false);
+      }
+      expect(toolText(messages, "old")).toBe("x".repeat(6_000));
+      expect(content?.map((block) => (block.type === "text" ? block.text : ""))).toEqual(
+        mode === "restored-text"
+          ? ["first", "second"]
+          : [
+              expect.stringContaining(
+                mode === "restored-hard"
+                  ? "[restored]"
+                  : mode === "hard"
+                    ? "content cleared"
+                    : "Tool result trimmed",
+              ),
+            ],
+      );
+    },
+  );
+
+  it("hashes each frozen source once across interleaved sessions and recreated attempt state", () => {
+    using digest = vi.spyOn(cryptoDigest, "sha256Base64Url");
+    const sessions = ["first", "second"].map((text) => ({
+      messages: [freezeJsonSnapshot(tool({ id: "shared-id", text }))],
+      state: newState(),
+    }));
+    for (const session of sessions) {
+      projectToolResultMessages({ messages: session.messages, projectionState: session.state });
+    }
+    expect(digest).toHaveBeenCalledTimes(2);
+    const hashes = sessions.flatMap(({ state }) => [...state.sourceHashByKey.values()]);
+    expect(new Set(hashes).size).toBe(2);
+    for (let turn = 0; turn < 3; turn++) {
+      for (const session of sessions) {
+        reconcile(session.messages, session.state);
+        const recreated = newState();
+        expect(
+          projectToolResultMessages({ messages: session.messages, projectionState: recreated })
+            .messages,
+        ).toEqual(session.messages);
+        expect(recreated.sourceHashByKey).toEqual(session.state.sourceHashByKey);
+      }
+    }
+    expect(digest).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["mutable", "shallow", "deep"])(
+    "invalidates rewritten %s sources without losing another session's projection",
+    (mode) => {
+      const block = { type: "text" as const, text: "original".repeat(1_000) };
+      let source = { ...tool({ id: "same" }), content: [block] };
+      if (mode === "shallow") {
+        Object.freeze(source.content);
+        Object.freeze(source);
+      } else if (mode === "deep") {
+        freezeJsonSnapshot(source);
+      }
+      const state = newState();
+      const other = newState();
+      const otherMessages = [freezeJsonSnapshot(tool({ id: "same", text: "other".repeat(1_000) }))];
+      const sent = truncate([source], 128_000, 500, 1_000, state).messages;
+      const otherSent = truncate(otherMessages, 128_000, 500, 1_000, other).messages;
+      reconcile([source], state);
+      expect(replayToolResultPromptProjections([source], state)).toEqual(sent);
+      if (mode === "deep") {
+        source = freezeJsonSnapshot({ ...source, content: [{ type: "text", text: "rewritten" }] });
+      } else {
+        block.text = "rewritten";
+      }
+      reconcile([source], state);
+      reconcile(otherMessages, other);
+      expect(state.sourceHashByKey.size).toBe(0);
+      expect(state.replacements.size).toBe(0);
+      expect(replayToolResultPromptProjections([source], state)).toEqual([source]);
+      expect(replayToolResultPromptProjections(otherMessages, other)).toEqual(otherSent);
+    },
+  );
+
   it.each(["cache-TTL", "aggregate"])(
     "replays %s bytes for a fork without pruning new results or changing parent state",
     (kind) => {

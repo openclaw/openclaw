@@ -202,21 +202,21 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     );
   });
 
-  it("keeps standalone CLI backend provider refs visible", () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        claudeBinding,
-        { id: "acme-cli", pluginId: "acme", config: { command: "acme" } },
-      ],
-    });
-
-    const isVisibleProvider = createModelPickerVisibleProviderPredicate();
-
-    expect(isCliRuntimeProvider("claude-cli")).toBe(true);
-    expect(isVisibleProvider("claude-cli")).toBe(false);
-    expect(isCliRuntimeProvider("acme-cli")).toBe(false);
-    expect(isVisibleProvider("acme-cli")).toBe(true);
-  });
+  it.each([undefined, "acme-cli"])(
+    "keeps standalone CLI refs visible (binding %s)",
+    (modelProvider) => {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [
+          claudeBinding,
+          { id: "acme-cli", pluginId: "acme", modelProvider, config: { command: "acme" } },
+        ],
+      });
+      const isVisibleProvider = createModelPickerVisibleProviderPredicate();
+      expect(isCliRuntimeProvider("claude-cli")).toBe(true);
+      expect(isVisibleProvider("claude-cli")).toBe(false);
+      expect(isVisibleProvider("acme-cli")).toBe(true);
+    },
+  );
 
   it("recognizes runtime providers without loading unrelated setup backends", () => {
     cliBackendsTesting.setDepsForTest({

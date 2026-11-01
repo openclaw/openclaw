@@ -126,7 +126,10 @@ Rules:
   `--no-sync` for remote baseline: Blacksmith has no native bypass; released
   Crabbox versions can silently ignore flag. Unchanged intentional rerun ≠ exception.
 - `--reclaim` only for deliberate checkout-path ownership transfer.
-- Base/head change: stop; rewarm. No stale-lease override.
+- Follow the consumer's allocation receipt for reuse. Compatible source commits
+  may reuse a lease when task, physical checkout, base, dependencies, preparation,
+  and workflow/job/ref remain unchanged. Keep the original allocation provenance.
+  Incompatible receipt: stop; rewarm. No stale-lease override.
 - Raw SHA unreliable for `warmup --ref`; use branch/tag.
 - `blacksmith testbox list` hides states. Use `list --all` or `status --id <tbx_id>`.
 - Testbox status/stop: `--id`. No status `--json`.

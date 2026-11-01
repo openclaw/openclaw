@@ -190,7 +190,7 @@ export function isEmbeddedStandaloneModule(modulePath) {
   return globalThis.__openclawStandaloneIsEmbeddedModule?.(filename) === true;
 }
 
-function resolveStandaloneSidecarRoot(executable) {
+export function resolveStandaloneSidecarRoot(executable = process.execPath) {
   if (executable === process.execPath) {
     const embeddedRoot = getEmbeddedStandaloneRuntimeRoot();
     if (embeddedRoot !== undefined) {

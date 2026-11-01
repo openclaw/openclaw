@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   attachActiveEmbeddedRun,
@@ -5,12 +6,14 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { MessageInjectionWithdrawnError } from "../auto-reply/reply/message-injection-authority.js";
 import type { AgentHarnessAttemptParams } from "../plugin-sdk/agent-harness-runtime.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { controllerGate } from "./controller-core.test-support.js";
 import type {
   ReplyBackendHandle,
   ReplyMessageInjectionOptions,
@@ -18,6 +21,7 @@ import type {
 import {
   abortSessionControllerInput,
   clearSessionControllerMailbox,
+  releaseSessionControllerClaim,
   reserveSessionControllerSource,
   retireSessionControllerInput,
   tryClaimSessionControllerTask,
@@ -467,30 +471,26 @@ describe("submitSessionControllerSteer", () => {
   it.each(["cancelled", "revoked"] as const)(
     "does not inject a %s source after asynchronous policy preparation",
     async (disposition) => {
-      const preparing = createDeferredCore();
-      const resume = createDeferredCore();
+      const preparationGate = controllerGate();
       const authority = revocableAuthority("source revoked");
       const { input, operation, injected } = startTurn({
         adapter: { authority },
       });
       const result = steer(input, {
         toolAuthorityPreparation: preparation({
-          async prepareCurrent() {
-            preparing.resolve();
-            await resume.promise;
-          },
+          prepareCurrent: preparationGate.run,
         }),
       });
       const rejected = expect(result).rejects.toThrow(
         disposition === "cancelled" ? "source cancelled" : "source revoked",
       );
-      await preparing.promise;
+      await preparationGate.entered;
       if (disposition === "cancelled") {
         abortSessionControllerInput(input, new Error("source cancelled"));
       } else {
         authority.revoke();
       }
-      resume.resolve();
+      preparationGate.release();
 
       await rejected;
       await input.settlement.promise;
@@ -630,8 +630,7 @@ describe("steerSessionControllerOperation", () => {
   });
 
   it("fences an async injection when the same backend is attached again before its effect", async () => {
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
+    const gate = controllerGate();
     let injected = false;
     const { operation } = startTurn({ direct: true });
     const backend = makeBackend("reattached-steer", {
@@ -639,8 +638,7 @@ describe("steerSessionControllerOperation", () => {
         throw new Error("Expected asynchronous prepared injection");
       },
       async queueMessageAsync(_text, options, authority) {
-        entered.resolve();
-        await resume.promise;
+        await gate.run();
         authority.assertCurrent();
         injected = true;
         options?.onQueueAccepted?.(true);
@@ -656,10 +654,10 @@ describe("steerSessionControllerOperation", () => {
       "Message injection authority is no longer current",
     );
     try {
-      await entered.promise;
+      await gate.entered;
       operation.attachBackend(backend);
     } finally {
-      resume.resolve();
+      gate.release();
     }
     await rejected;
     expect(injected).toBe(false);
@@ -713,4 +711,21 @@ describe("steerSessionControllerOperation", () => {
     });
     expectNoInput(input);
   });
+});
+
+it("returns a proven withdrawn accepted steer to runnable followup custody", async () => {
+  const { operation, input } = startTurn({
+    queueMessage: async ({ onQueueAccepted }) => {
+      onQueueAccepted?.(true);
+      throw new MessageInjectionWithdrawnError("exact queued input removed at delivery deadline");
+    },
+  });
+  await expect(steer(input, { waitForTranscriptCommit: true })).resolves.toMatchObject({
+    status: "rejected",
+    reason: "injection_unavailable",
+  });
+  operation.complete();
+  const claim = expectDefined(tryClaimSessionControllerTask(input), "withdrawn followup claim");
+  releaseSessionControllerClaim(claim);
+  await claim.settlement.promise;
 });
