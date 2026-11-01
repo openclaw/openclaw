@@ -95,7 +95,7 @@ export function ListView(props: CronProps) {
               <button
                 class="btn btn--sm"
                 onClick={() => {
-                  props.onRefresh();
+                  void props.onRefresh();
                   reset();
                 }}
               >
