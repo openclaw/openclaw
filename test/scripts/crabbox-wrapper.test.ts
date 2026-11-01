@@ -7,6 +7,7 @@ import {
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  constants as fsConstants,
   copyFileSync,
   cpSync,
   existsSync,
@@ -41,6 +42,10 @@ import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-in
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { spawnTerminalPty } from "../../src/process/terminal-pty.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -443,6 +448,24 @@ function writeShellCommand(commandPath: string, script: string): void {
   chmodSync(commandPath, 0o755);
 }
 
+function resolvePinnedFixturePnpm(cwd: string, nodeExecPath: string, pnpmArgs: string[] = []) {
+  // Capture the actual pin before HOME isolation. An ambient launcher can wrap
+  // a different manager and own its signals, or bootstrap an unusable placeholder.
+  const bootstrap = resolvePnpmRunner({ nodeExecPath });
+  const result = spawnSync(bootstrap.command, [...bootstrap.args, "--silent", "run", "pnpm-path"], {
+    cwd,
+    encoding: "utf8",
+    timeout: 20_000,
+    env: { ...process.env, CI: "true", COREPACK_ENABLE_NETWORK: "0" },
+  });
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).not.toContain("ERR_PNPM_BAD_CONFIG_DEP");
+  const npmExecPath = result.stdout.trim();
+  expect(path.isAbsolute(npmExecPath), npmExecPath).toBe(true);
+  return resolvePnpmRunner({ cwd, nodeExecPath, npmExecPath, pnpmArgs });
+}
+
 function writeNodeCommand(commandPath: string, script: string): void {
   writeFileSync(commandPath, `#!/usr/bin/env node\n${script.trimStart()}\n`, "utf8");
   if (process.platform === "win32") {
@@ -829,7 +852,11 @@ async function runWrapperCleanupProof(
   const leaseId = blacksmith ? "tbx_fixture" : "cbx_999999999999";
   const hasDescendant =
     proof.kind === "signal" || proof.kind === "escaped" || proof.kind === "readiness";
-  await withShimFixture(
+  const receipts =
+    proof.kind === "signal" && proof.entrypoint === "pnpm" && proof.repeated
+      ? await openFixtureReceiptChannel()
+      : undefined;
+  const fixture = withShimFixture(
     "scripts/crabbox-wrapper.mjs",
     async ({ checkoutRoot: producer, fixtureRoot, implementationPath, wrapperPath }) => {
       // Keep the real TSX entrypoint without transforming the compiled dependency bundle again.
@@ -871,6 +898,23 @@ const phase = (name) => {
   fs.renameSync(temporary, phasesPath);
 };
 if (entry === ${JSON.stringify(wrapperPath)}) phase("entrypoint started");
+if (entry === ${JSON.stringify(wrapperPath)} && ${Boolean(receipts)}) {
+  ${receipts ? fixtureReceiptClientSource(receipts.endpoint).replace('import { createConnection as connectFixtureReceipts } from "node:net";', 'const { createConnection: connectFixtureReceipts } = require("node:net");') : ""}
+  // Keep pnpm's lifecycle child registered until the second interrupt arrives.
+  // The implementation still owns cancellation and publishes its genuine exit.
+  void awaitRelease(entry, "release").catch((error) => { console.error(error); process.exitCode = 1; });
+  process.on("SIGINT", () => sendReceipt(entry, "SIGINT"));
+  const childProcess = require("node:child_process");
+  const spawn = childProcess.spawn;
+  childProcess.spawn = (command, args, options) => {
+    const child = spawn(command, args, options);
+    if (args?.includes(${JSON.stringify(implementationPath)})) {
+      child.once("close", (code, signal) => sendReceipt(entry, JSON.stringify({ pid: child.pid, code, signal })));
+    }
+    return child;
+  };
+  require("node:module").syncBuiltinESMExports();
+}
 if (entry === ${JSON.stringify(implementationPath)}) {
   phase("loading wrapper");
   // Stall at phase publication; teardown must already own this PID.
@@ -982,7 +1026,10 @@ if (entry === ${JSON.stringify(implementationPath)}) {
         type: "module",
         packageManager: JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"))
           .packageManager,
-        scripts: { "crabbox:run": "node scripts/crabbox-wrapper.mjs run" },
+        scripts: {
+          "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
+          "pnpm-path": "node -p process.env.npm_execpath",
+        },
       });
       // Match the repository policy: pnpm run must not reconcile borrowed dependencies.
       writeFiles(producer, {
@@ -1060,11 +1107,11 @@ if (entry === ${JSON.stringify(implementationPath)}) {
       try {
         let exited: Promise<{ status: number | null; signal: NodeJS.Signals | null }>;
         if (entrypoint === "pnpm") {
-          const command = resolvePnpmRunner({
-            cwd: producer,
-            env,
-            pnpmArgs: ["crabbox:run", "--", ...args],
-          });
+          const command = resolvePinnedFixturePnpm(producer, nodeExecPath, [
+            "crabbox:run",
+            "--",
+            ...args,
+          ]);
           const terminalOwnerPath = path.join(fixtureRoot, "terminal.cjs");
           writeFileSync(
             terminalOwnerPath,
@@ -1206,14 +1253,35 @@ child.once("exit", (code, signal) => {
                 ownerPid = Number(parentPid);
               }
             }
+            if (!pnpmRetainsShell) {
+              receipts?.release(wrapperPath, "release");
+            }
             stop();
             if (proof.repeated) {
-              await delay(20);
+              if (receipts && pnpmRetainsShell) {
+                await withinTest(receipts.waitFor(wrapperPath, "SIGINT"), testSignal);
+                const phases: WrapperReadinessPhase[] = readJson(phasesPath);
+                const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
+                await withinTest(
+                  receipts.waitFor(
+                    wrapperPath,
+                    JSON.stringify({ pid: wrapperPid, code: 130, signal: null }),
+                  ),
+                  testSignal,
+                );
+                expect(readJson(wrapperExitPath), output).toEqual({ code: 130 });
+              } else {
+                await delay(20);
+              }
               stop();
             }
           }
         }
         const result = await exited;
+        receipts?.release(wrapperPath, "release");
+        if (receipts) {
+          await withinTest(receipts.waitForExit(wrapperPath), testSignal);
+        }
         if (cooperative) {
           expect(isProcessAlive(entrypointPid), "terminal session still owns cleanup output").toBe(
             true,
@@ -1337,6 +1405,16 @@ child.once("exit", (code, signal) => {
           error instanceof Error ? error : new Error("signal proof failed", { cause: error });
       }
       try {
+        try {
+          receipts?.release(wrapperPath, "release");
+        } catch (cause) {
+          // A failed observation channel must not prevent joining its live owner.
+          failure = new AggregateError(
+            failure === undefined ? [cause] : [failure, cause],
+            "fixture release failed",
+            { cause: failure ?? cause },
+          );
+        }
         // Release even a late-starting escaped leaf before any fixture disposal.
         if (proof.kind === "escaped") {
           writeFileSync(releasePath, "release");
@@ -1440,6 +1518,11 @@ child.once("exit", (code, signal) => {
       }
     },
   );
+  try {
+    await fixture;
+  } finally {
+    await receipts?.close();
+  }
 }
 
 function testCrabboxConfigDir(home: string): string {
@@ -4929,25 +5012,22 @@ require('node:module').syncBuiltinESMExports();`,
           preparedDependencyRoot ?? dependencyTempDirs.make("openclaw-capsule-dependencies-");
         const hydratedSource = path.join(dependencyRoot, "a");
         const selectedSource = path.join(dependencyRoot, "b");
+        const dependencyBin = path.join(dependencyRoot, "bin");
+        mkdirSync(dependencyBin, { recursive: true });
         const dependencyEnv = {
           ...env,
           CI: "true",
-          PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
+          PATH: [dependencyBin, path.dirname(nodeExecPath), env.PATH].join(path.delimiter),
           COREPACK_HOME: path.join(dependencyRoot, "corepack"),
           PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
           PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
         };
-        const runPnpm = (directory: string, args: string[]) => {
-          const runner = resolvePnpmRunner({ cwd: directory, env: dependencyEnv });
-          const result = runCommand(runner.command, [...runner.args, ...args], {
-            cwd: directory,
-            env: dependencyEnv,
-          });
-          expect(result.error, failureDetail(result)).toBeUndefined();
-          expect(result.status, failureDetail(result)).toBe(0);
-          return result;
+        const rootManifest = {
+          name: "capsule-dependency-fixture",
+          private: true,
+          packageManager,
+          scripts: { "pnpm-path": "node -p process.env.npm_execpath" },
         };
-        const rootManifest = { name: "capsule-dependency-fixture", private: true, packageManager };
         const consumerManifest = (graph: "a" | "b") => ({
           name: "capsule-dependency-consumer",
           private: true,
@@ -4988,8 +5068,33 @@ require('node:module').syncBuiltinESMExports();`,
           );
         };
         if (!preparedDependencyRoot) {
+          // The installer prepends dirname(process.execPath); a symlink resolves to the host.
+          // Keep a real Node copy beside pinned pnpm so both lookups stay fixture-owned.
+          copyFileSync(
+            nodeExecPath,
+            path.join(dependencyBin, "node"),
+            fsConstants.COPYFILE_FICLONE,
+          );
           writeDependencySource(hydratedSource, "a");
           writeDependencySource(selectedSource, "b");
+        }
+        const pnpm = resolvePinnedFixturePnpm(hydratedSource, nodeExecPath);
+        // The receiver's install owner must use the same pin as preparation.
+        writeShellCommand(
+          path.join(dependencyBin, "pnpm"),
+          `exec ${[pnpm.command, ...pnpm.args].map(shellQuote).join(" ")} "$@"`,
+        );
+        const runPnpm = (directory: string, args: string[]) => {
+          const result = runCommand(pnpm.command, [...pnpm.args, ...args], {
+            cwd: directory,
+            env: dependencyEnv,
+          });
+          expect(result.error, failureDetail(result)).toBeUndefined();
+          expect(result.status, failureDetail(result)).toBe(0);
+          expect(result.stderr).not.toContain("ERR_PNPM_BAD_CONFIG_DEP");
+          return result;
+        };
+        if (!preparedDependencyRoot) {
           const version = runPnpm(hydratedSource, ["--version"]);
           expect("pnpm@" + version.stdout.trim()).toBe(packageManager.split("+")[0]);
           runPnpm(hydratedSource, ["install", "--lockfile-only"]);
@@ -5093,6 +5198,9 @@ require('node:module').syncBuiltinESMExports();`,
           },
         });
         expect(preparedGraph).toBe("graph-a");
+        expect(imported.result.stderr).toContain(
+          path.join(realpathSync(dependencyBin), "node") + "\n",
+        );
         const payload = path.join(imported.receiver, ".capsule-proof/payload");
         if (scenario === "graph") {
           expect(imported.result.status, failureDetail(imported.result)).toBe(0);

@@ -10,7 +10,7 @@ import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import { canonicalizeSessionEntry } from "../../src/agents/sessions/session-manager-persistence-entry.js";
-import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-payload-ownership.js";
+import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
 import type { PluginHookBeforePromptBuildEvent } from "../../src/plugins/hook-before-agent-start.types.js";
 import { createHookRunner } from "../../src/plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";

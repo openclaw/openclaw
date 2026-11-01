@@ -11,7 +11,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-payload-ownership.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message } from "../../llm/types.js";

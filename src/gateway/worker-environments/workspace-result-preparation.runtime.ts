@@ -191,6 +191,7 @@ export async function buildWorkspaceTreeInput(
   const source = params.source;
   await writeWorkspaceGitInput({
     ...params,
+    result: "tree",
     assertBeforeMutation,
     readVerifiedContent: async (entry) =>
       source.tree === undefined

@@ -11,6 +11,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { findSelectableAgent } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
@@ -286,7 +287,7 @@ export class DraftRepositoryStateOwner {
     const revision = this.selectionRevision;
     const snapshot = this.read();
     const agentId = normalizeAgentId(submission.agentId);
-    const agent = snapshot.agents.find((candidate) => normalizeAgentId(candidate.id) === agentId);
+    const agent = findSelectableAgent(snapshot.agents, agentId);
     const owner = { agentId, workspace: normalizeOptionalString(agent?.workspace) ?? "" };
     const currentAgent = owner.agentId === snapshot.agentId;
     const persist = this.callbacks.capturePreferenceConsumption(owner, {

@@ -17,7 +17,7 @@ import {
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { SessionManager } from "../../src/agents/sessions/index.js";
 import { markInboundContextLabel } from "../../src/auto-reply/reply/inbound-context-marker.js";
-import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-payload-ownership.js";
+import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
 
 const { values } = parseArgs({
   options: {

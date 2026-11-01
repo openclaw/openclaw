@@ -1,5 +1,5 @@
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
-import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-payload-ownership.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";

@@ -13,7 +13,7 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
-import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-payload-ownership.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {

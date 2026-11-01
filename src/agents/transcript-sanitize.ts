@@ -7,7 +7,7 @@ import {
   sanitizeInlineImageDataUrlForStorage,
 } from "@openclaw/media-core/inline-image-data-url";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { cloneTranscriptEnvelope } from "../config/sessions/transcript-payload-ownership.js";
+import { cloneTranscriptEnvelope } from "../config/sessions/transcript-json.js";
 import type { AgentMessage } from "./runtime/index.js";
 
 const isImageMimeType = (value: unknown): value is string =>
