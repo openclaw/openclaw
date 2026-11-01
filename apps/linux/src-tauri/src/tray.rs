@@ -20,7 +20,6 @@ const CHROME_EXTENSION_ID: &str = "setup-chrome-extension";
 const QUICKCHAT_ID: &str = "quickchat";
 const CHECK_UPDATES_ID: &str = "check-for-updates";
 const UPDATE_ACTION_ID: &str = "update-action";
-const NO_UPDATE_ACTION_LABEL: &str = "No update action available";
 const START_AT_LOGIN_ID: &str = "start-at-login";
 const KEEP_AWAKE_ID: &str = "keep-computer-awake";
 const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
@@ -83,10 +82,30 @@ pub fn global_shortcuts_supported() -> bool {
 
 impl StatusLine {
     fn text(&self) -> String {
+        let gateway = match self.gateway.as_str() {
+            "Opening remote dashboard" => crate::shell_i18n::text("gateway.statusOpeningRemote"),
+            "Remote connection unavailable" => {
+                crate::shell_i18n::text("gateway.statusRemoteUnavailable")
+            }
+            "Setup required" => crate::shell_i18n::text("gateway.statusSetupRequired"),
+            "CLI required" => crate::shell_i18n::text("gateway.statusCliRequired"),
+            "Reconnecting" => crate::shell_i18n::text("gateway.statusReconnecting"),
+            "Connected" => crate::shell_i18n::text("gateway.statusConnected"),
+            "Not installed" => crate::shell_i18n::text("gateway.statusNotInstalled"),
+            "Unavailable" => crate::shell_i18n::text("gateway.statusUnavailable"),
+            "Stopped" => crate::shell_i18n::text("gateway.statusStopped"),
+            other => other.to_owned(),
+        };
         match self.pending_count {
-            0 => format!("Gateway: {}", self.gateway),
-            1 => format!("Gateway: {} · 1 approval pending", self.gateway),
-            count => format!("Gateway: {} · {count} approvals pending", self.gateway),
+            0 => crate::shell_i18n::format("tray.gatewayStatus", &[("status", &gateway)]),
+            1 => crate::shell_i18n::format("tray.pendingApprovalOne", &[("gateway", &gateway)]),
+            count => {
+                let count = count.to_string();
+                crate::shell_i18n::format(
+                    "tray.pendingApprovals",
+                    &[("gateway", &gateway), ("count", &count)],
+                )
+            }
         }
     }
 }
@@ -171,9 +190,15 @@ impl TrayHandles {
         // Read at dispatch time: queued refreshes must not replay stale action snapshots.
         if let Err(error) = app.run_on_main_thread(move || {
             let (text, enabled) = match crate::updater::current_action(&current_app) {
-                crate::updater::UpdateAction::Unavailable => (NO_UPDATE_ACTION_LABEL, false),
-                crate::updater::UpdateAction::OpenDownloadPage => ("Open download page", true),
-                crate::updater::UpdateAction::RestartToUpdate => ("Restart to update", true),
+                crate::updater::UpdateAction::Unavailable => {
+                    (crate::shell_i18n::text("tray.noUpdateAction"), false)
+                }
+                crate::updater::UpdateAction::OpenDownloadPage => {
+                    (crate::shell_i18n::text("tray.openDownloadPage"), true)
+                }
+                crate::updater::UpdateAction::RestartToUpdate => {
+                    (crate::shell_i18n::text("tray.restartToUpdate"), true)
+                }
             };
             let _ = item.set_text(text);
             let _ = item.set_enabled(enabled);
@@ -188,12 +213,19 @@ pub fn build(
     state: DesktopState,
     global_shortcuts_supported: bool,
 ) -> tauri::Result<TrayHandles> {
-    let disabled_item = |id, label| MenuItem::with_id(app, id, label, false, None::<&str>);
-    let check_item = |id, label, enabled, checked| {
+    let disabled_item =
+        |id: &str, label: &str| MenuItem::with_id(app, id, label, false, None::<&str>);
+    let check_item = |id, label: String, enabled, checked| {
         CheckMenuItem::with_id(app, id, label, enabled, checked, None::<&str>)
     };
-    let status = disabled_item("gateway-status", "Gateway: Checking…")?;
-    let update_action = disabled_item(UPDATE_ACTION_ID, NO_UPDATE_ACTION_LABEL)?;
+    let status = disabled_item(
+        "gateway-status",
+        &crate::shell_i18n::text("tray.gatewayChecking"),
+    )?;
+    let update_action = disabled_item(
+        UPDATE_ACTION_ID,
+        &crate::shell_i18n::text("tray.noUpdateAction"),
+    )?;
     let autostart_enabled = !crate::test_profile::enabled()
         && match app.autolaunch().is_enabled() {
             Ok(enabled) => enabled,
@@ -204,36 +236,55 @@ pub fn build(
         };
     let start_at_login = check_item(
         START_AT_LOGIN_ID,
-        "Start at Login",
+        crate::shell_i18n::text("tray.startAtLogin"),
         !crate::test_profile::enabled(),
         autostart_enabled,
     )?;
-    let keep_awake = check_item(KEEP_AWAKE_ID, "Keep computer awake", false, false)?;
+    let keep_awake = check_item(
+        KEEP_AWAKE_ID,
+        crate::shell_i18n::text("tray.keepAwake"),
+        false,
+        false,
+    )?;
     let quickchat_shortcut_enabled =
         global_shortcuts_supported.then(|| quickchat::quickchat_shortcut_enabled(app));
     let quickchat_shortcut = quickchat_shortcut_enabled
-        .map(|enabled| check_item(QUICKCHAT_SHORTCUT_ID, "Quick Chat shortcut", true, enabled))
+        .map(|enabled| {
+            check_item(
+                QUICKCHAT_SHORTCUT_ID,
+                crate::shell_i18n::text("quickChat.shortcutSettings"),
+                true,
+                enabled,
+            )
+        })
         .transpose()?;
-    let start = disabled_item(START_ID, "Start Gateway")?;
-    let stop = disabled_item(STOP_ID, "Stop Gateway")?;
-    let restart = disabled_item(RESTART_ID, "Restart Gateway")?;
-    let runtime_label = format!(
-        "Bundled runtime: {}",
-        crate::bundled_runtime::flavor_label()
-    );
-    let profile_label =
-        crate::test_profile::profile().map(|profile| format!("Isolated profile: {profile}"));
+    let start = disabled_item(START_ID, &crate::shell_i18n::text("tray.startGateway"))?;
+    let stop = disabled_item(STOP_ID, &crate::shell_i18n::text("tray.stopGateway"))?;
+    let restart = disabled_item(RESTART_ID, &crate::shell_i18n::text("tray.restartGateway"))?;
+    let flavor = crate::bundled_runtime::flavor_label();
+    let runtime_label = crate::shell_i18n::format("tray.bundledRuntime", &[("flavor", &flavor)]);
+    let profile_label = crate::test_profile::profile()
+        .map(|profile| crate::shell_i18n::format("tray.isolatedProfile", &[("profile", &profile)]));
     let runtime_info = disabled_item("bundled-runtime-info", &runtime_label)?;
     let menu_builder = MenuBuilder::new(app)
         .item(&status)
         .item(&runtime_info)
         .item(&crate::gateway_windows::menu(app.handle())?)
         .separator()
-        .text(QUICKCHAT_ID, "Quick Chat")
-        .text(OPEN_ID, "Open Dashboard")
-        .text(CONNECTION_SETTINGS_ID, "Connection Settings")
-        .text(CHROME_EXTENSION_ID, "Set Up Chrome Extension…")
-        .text(CHECK_UPDATES_ID, "Check for Updates")
+        .text(QUICKCHAT_ID, crate::shell_i18n::text("tray.quickChat"))
+        .text(OPEN_ID, crate::shell_i18n::text("tray.openDashboard"))
+        .text(
+            CONNECTION_SETTINGS_ID,
+            crate::shell_i18n::text("tray.connectionSettings"),
+        )
+        .text(
+            CHROME_EXTENSION_ID,
+            crate::shell_i18n::text("tray.setupChromeExtension"),
+        )
+        .text(
+            CHECK_UPDATES_ID,
+            crate::shell_i18n::text("tray.checkUpdates"),
+        )
         .item(&update_action)
         .item(&start_at_login)
         .item(&keep_awake);
@@ -249,12 +300,15 @@ pub fn build(
     };
     let menu_builder = menu_builder.separator().items(&[&start, &stop, &restart]);
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-    let runtime_action = disabled_item(ADOPT_RUNTIME_ID, "Use bundled runtime…")?;
+    let runtime_action = disabled_item(
+        ADOPT_RUNTIME_ID,
+        &crate::shell_i18n::text("tray.useBundledRuntime"),
+    )?;
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     let menu_builder = menu_builder.item(&runtime_action);
     let menu = menu_builder
         .separator()
-        .text(QUIT_ID, "Quit OpenClaw")
+        .text(QUIT_ID, crate::shell_i18n::text("tray.quitOpenClaw"))
         .build()?;
 
     // macOS draws menu bar icons from the alpha channel alone (see
@@ -468,7 +522,7 @@ pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
         current_app
             .dialog()
             .message(error)
-            .title("Use bundled runtime")
+            .title(crate::shell_i18n::text("tray.runtimeDialogTitle"))
             .kind(MessageDialogKind::Error)
             .show(|_| {});
     });
@@ -500,10 +554,14 @@ fn confirm_runtime_action(app: &AppHandle) {
                 return;
             }
         };
-        let message = format!(
-            "Current runtime: {}\n\nUse this app's bundled {} runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.",
-            action.observation.current_runtime(),
-            crate::bundled_runtime::flavor_label(),
+        let current_runtime = action
+            .observation
+            .current_runtime()
+            .unwrap_or_else(|| crate::shell_i18n::text("tray.runtimeNoInstalledService"));
+        let flavor = crate::bundled_runtime::flavor_label();
+        let message = crate::shell_i18n::format(
+            "tray.runtimeDialogMessage",
+            &[("currentRuntime", &current_runtime), ("flavor", &flavor)],
         );
         let dialog_app = current_app.clone();
         let _ = current_app.run_on_main_thread(move || {
@@ -511,10 +569,10 @@ fn confirm_runtime_action(app: &AppHandle) {
             dialog_app
                 .dialog()
                 .message(message)
-                .title("Use bundled runtime")
+                .title(crate::shell_i18n::text("tray.runtimeDialogTitle"))
                 .buttons(MessageDialogButtons::OkCancelCustom(
-                    "Use bundled runtime".into(),
-                    "Cancel".into(),
+                    crate::shell_i18n::text("tray.runtimeDialogAction"),
+                    crate::shell_i18n::text("common.cancel"),
                 ))
                 .show(move |accepted| {
                     if accepted && !accepted_app.state::<DesktopState>().is_quitting() {
@@ -543,9 +601,9 @@ pub fn publish_keep_awake(app: &AppHandle, status: KeepAwakeStatus) {
             let _ = tray
                 .keep_awake
                 .set_text(if status.enabled && !status.active {
-                    "Keep computer awake (inactive)"
+                    crate::shell_i18n::text("tray.keepAwakeInactive")
                 } else {
-                    "Keep computer awake"
+                    crate::shell_i18n::text("tray.keepAwake")
                 });
             let _ = tray.keep_awake.set_enabled(true);
         });
@@ -559,9 +617,13 @@ pub fn publish_keep_awake(app: &AppHandle, status: KeepAwakeStatus) {
 
 fn show_keep_awake_error(app: &AppHandle, error: KeepAwakeError) {
     eprintln!("{}: {}", error.title(), error.message());
+    let title = match &error {
+        KeepAwakeError::Preference(_) => crate::shell_i18n::text("tray.savedGateways"),
+        KeepAwakeError::Power(_) => crate::shell_i18n::text("tray.keepAwake"),
+    };
     app.dialog()
         .message(error.message())
-        .title(error.title())
+        .title(title)
         .kind(MessageDialogKind::Error)
         .show(|_| {});
 }

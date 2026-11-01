@@ -8,11 +8,13 @@
     <link rel="stylesheet" href="window-chrome.css" />
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="gateways.css" />
+    <script src="i18n/catalog.js" defer></script>
+    <script src="tauri-i18n.js" defer></script>
     <script src="gateway-notice.js"></script>
   </head>
   <body class="companion-page">
     <main class="shell gateways-shell">
-      <section class="gateways-panel" aria-label="Gateway connections">
+      <section class="gateways-panel" aria-label="Gateway connections" data-i18n-aria-label="gateways.connections">
         <header class="gateway-header">
           <div class="brand gateway-brand">
             <img src="mascot.svg" alt="" width="22" height="22" />
@@ -20,21 +22,22 @@
           </div>
           <button id="cancel-edit" class="button-back" type="button" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 5-7 7 7 7M5 12h14" /></svg>
-            Back to Gateways
+            <span data-i18n="gateways.backToGateways">Back to Gateways</span>
           </button>
         </header>
         <p id="gateway-error" class="gateway-feedback" role="alert" hidden></p>
-        <button id="retry-load" class="button-retry" type="button" hidden>Try again</button>
+        <button id="retry-load" class="button-retry" type="button" hidden data-i18n="common.tryAgain">Try again</button>
 
         <div id="gateway-list" class="gateway-view">
           <div class="gateway-heading">
-            <h1 id="title">Manage Gateways</h1>
-            <p>Open a saved connection, or add another Gateway.</p>
+            <h1 id="title" data-i18n="gateways.manage">Manage Gateways</h1>
+            <p data-i18n="gateways.savedHelp">Open a saved connection, or add another Gateway.</p>
           </div>
           <ul
             id="profiles"
             class="gateway-profiles"
             aria-label="Saved Gateways"
+            data-i18n-aria-label="gateways.savedGateways"
             aria-busy="true"
           ></ul>
           <div id="gateway-empty" class="gateway-empty" hidden>
@@ -43,23 +46,23 @@
               <rect x="3" y="14" width="18" height="7" rx="2" />
               <path d="M7 6.5h.01M7 17.5h.01" />
             </svg>
-            <h2>Your Gateways, in one place</h2>
-            <p>Add OpenClaw on another computer to switch between your connections.</p>
+            <h2 data-i18n="gateways.emptyTitle">Your Gateways, in one place</h2>
+            <p data-i18n="gateways.emptyHelp">Add OpenClaw on another computer to switch between your connections.</p>
           </div>
           <button id="add-gateway" class="primary full-width" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            Add Gateway
+            <span data-i18n="gateways.addGateway">Add Gateway</span>
           </button>
         </div>
 
         <form id="gateway-editor" class="gateway-view" aria-labelledby="editor-title" hidden>
           <div class="gateway-heading">
-            <h1 id="editor-title">Add Gateway</h1>
-            <p>Connect to OpenClaw on another computer.</p>
+            <h1 id="editor-title" data-i18n="gateways.addGateway">Add Gateway</h1>
+            <p data-i18n="gateways.addHelp">Connect to OpenClaw on another computer.</p>
           </div>
           <div class="gateway-form">
             <div class="field">
-              <label for="gateway-name">Name</label>
+              <label for="gateway-name" data-i18n="gateways.name">Name</label>
               <input
                 id="gateway-name"
                 name="name"
@@ -67,17 +70,18 @@
                 maxlength="120"
                 autocomplete="off"
                 placeholder="Home studio"
+                data-i18n-placeholder="gateways.namePlaceholder"
               />
             </div>
             <div class="field field-select">
-              <label for="gateway-transport">Connection type</label>
+              <label for="gateway-transport" data-i18n="gateways.connectionType">Connection type</label>
               <select id="gateway-transport" name="transport">
-                <option value="direct">Gateway URL</option>
-                <option value="ssh">SSH tunnel</option>
+                <option value="direct" data-i18n="setup.gatewayUrl">Gateway URL</option>
+                <option value="ssh" data-i18n="setup.sshTunnel">SSH tunnel</option>
               </select>
             </div>
             <div id="direct-fields" class="field">
-              <label for="gateway-url">Gateway URL</label>
+              <label for="gateway-url" data-i18n="setup.gatewayUrl">Gateway URL</label>
               <input
                 id="gateway-url"
                 name="url"
@@ -92,7 +96,7 @@
             <div id="ssh-fields" class="gateway-form" hidden>
               <div class="gateway-ssh-address">
                 <div class="field">
-                  <label for="gateway-ssh">SSH target</label>
+              <label for="gateway-ssh" data-i18n="setup.sshTarget">SSH target</label>
                   <input
                     id="gateway-ssh"
                     name="sshTarget"
@@ -103,7 +107,7 @@
                   />
                 </div>
                 <div class="field">
-                  <label for="gateway-port">Gateway port</label>
+                  <label for="gateway-port" data-i18n="setup.gatewayPort">Gateway port</label>
                   <input
                     id="gateway-port"
                     name="remotePort"
@@ -116,9 +120,9 @@
                 </div>
               </div>
               <details id="gateway-advanced" class="gateway-disclosure">
-                <summary>Advanced connection settings</summary>
+                <summary data-i18n="gateways.advancedSettings">Advanced connection settings</summary>
                 <div class="field">
-                  <label for="gateway-fingerprint">TLS fingerprint (optional)</label>
+                  <label for="gateway-fingerprint" data-i18n="gateways.tlsFingerprint">TLS fingerprint (optional)</label>
                   <input
                     id="gateway-fingerprint"
                     name="tlsFingerprint"
@@ -131,16 +135,16 @@
             </div>
             <div class="gateway-auth">
               <div class="field field-select">
-                <label for="gateway-auth-method">Authentication</label>
+                <label for="gateway-auth-method" data-i18n="setup.authentication">Authentication</label>
                 <select id="gateway-auth-method" name="authMethod">
-                  <option value="token">Token</option>
-                  <option value="password">Password</option>
+                  <option value="token" data-i18n="setup.token">Token</option>
+                  <option value="password" data-i18n="setup.password">Password</option>
                 </select>
               </div>
               <div class="field gateway-credential">
                 <div id="token-field" class="field">
                   <label for="gateway-token"
-                    >Gateway token <span class="optional">(optional)</span></label
+                    ><span data-i18n="gateways.gatewayToken">Gateway token</span> <span class="optional" data-i18n="common.optional">(optional)</span></label
                   >
                   <input
                     id="gateway-token"
@@ -150,11 +154,12 @@
                     spellcheck="false"
                     aria-describedby="credential-hint"
                     placeholder="Enter token"
+                    data-i18n-placeholder="setup.enterToken"
                   />
                 </div>
                 <div id="password-field" class="field" hidden>
                   <label for="gateway-password"
-                    >Gateway password <span class="optional">(optional)</span></label
+                    ><span data-i18n="gateways.gatewayPassword">Gateway password</span> <span class="optional" data-i18n="common.optional">(optional)</span></label
                   >
                   <input
                     id="gateway-password"
@@ -164,6 +169,7 @@
                     spellcheck="false"
                     aria-describedby="credential-hint"
                     placeholder="Enter password"
+                    data-i18n-placeholder="setup.enterPassword"
                   />
                 </div>
                 <button
@@ -171,6 +177,7 @@
                   class="secret-toggle"
                   type="button"
                   aria-label="Show credential"
+                  data-i18n-aria-label="setup.showCredential"
                   aria-pressed="false"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -182,21 +189,21 @@
               </div>
             </div>
             <p id="credential-hint" class="gateway-hint">
-              Only needed if your Gateway requires a token or password.
+              <span data-i18n="setup.credentialHint">Only needed if your Gateway requires a token or password.</span>
             </p>
-            <button id="save-gateway" class="primary full-width" type="submit">Save Gateway</button>
+            <button id="save-gateway" class="primary full-width" type="submit" data-i18n="gateways.save">Save Gateway</button>
           </div>
         </form>
-        <p id="gateway-status" class="gateway-status" role="status">Loading saved Gateways…</p>
-        <footer class="gateway-footer">Connections are saved on this computer.</footer>
+        <p id="gateway-status" class="gateway-status" role="status" data-i18n="gateways.loading">Loading saved Gateways…</p>
+        <footer class="gateway-footer" data-i18n="gateways.savedOnComputer">Connections are saved on this computer.</footer>
       </section>
     </main>
     <dialog id="remove-dialog" aria-labelledby="remove-title" aria-describedby="remove-description">
-      <h2 id="remove-title">Remove Gateway?</h2>
+      <h2 id="remove-title" data-i18n="gateways.removeQuestion">Remove Gateway?</h2>
       <p id="remove-description"></p>
       <div class="gateway-dialog-actions">
-        <button id="cancel-remove" type="button" autofocus>Cancel</button>
-        <button id="confirm-remove" class="primary" type="button">Remove Gateway</button>
+        <button id="cancel-remove" type="button" autofocus data-i18n="common.cancel">Cancel</button>
+        <button id="confirm-remove" class="primary" type="button" data-i18n="gateways.remove">Remove Gateway</button>
       </div>
     </dialog>
     <script type="module" src="gateways.js"></script>

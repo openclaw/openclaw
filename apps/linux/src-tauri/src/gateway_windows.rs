@@ -1608,12 +1608,17 @@ impl GatewayWindows {
                 _browser_data: browser_data.clone(),
             });
         }
-        let config = json!({ "origin":url.origin().ascii_serialization(), "base":url.path().trim_end_matches('/'), "snapshot":self.snapshot(label) });
+        let config = json!({
+            "origin": url.origin().ascii_serialization(),
+            "base": url.path().trim_end_matches('/'),
+            "snapshot": self.snapshot(label),
+            "chrome": crate::shell_i18n::chrome_copy(),
+        });
         Ok(DocumentRegistration {
             app: app.clone(),
             label: label.to_string(),
             script: format!(
-                "{}\n({})({config});",
+                "{}\ninstallGatewayNotice({config});\n({})({config});",
                 include_str!("../../ui/gateway-notice.js"),
                 include_str!("../../ui/gateway-switch.js")
             ),
@@ -2641,8 +2646,12 @@ async fn select_window(
 }
 
 fn create_gateway_window(app: &AppHandle, label: &str, name: &str) -> Result<(), String> {
+    let app_name = app.package_info().name.to_string();
     let window = WindowBuilder::new(app, label)
-        .title(format!("{name} — {}", app.package_info().name))
+        .title(crate::shell_i18n::format(
+            "gateways.windowTitle",
+            &[("name", name), ("appName", &app_name)],
+        ))
         .inner_size(1100.0, 780.0)
         .min_inner_size(720.0, 520.0)
         .visible(false)
@@ -2840,7 +2849,10 @@ pub(crate) fn open_settings(app: &AppHandle) -> Result<(), String> {
     }
     let window =
         tauri::WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("gateways.html".into()))
-            .title(format!("Gateways — {}", app.package_info().name))
+            .title(crate::shell_i18n::format(
+                "gateways.managerWindowTitle",
+                &[("appName", app.package_info().name.as_str())],
+            ))
             .inner_size(800.0, 680.0)
             .min_inner_size(560.0, 480.0)
             .initialization_script(crate::window_chrome::initialization_script(None, false))
@@ -3194,7 +3206,11 @@ fn fill_menu(app: &AppHandle, menu: &Submenu<tauri::Wry>, snapshot: &Value) -> t
             };
             for (action, name, modifier) in [
                 ("focus", name.to_string(), ""),
-                ("new", format!("Open {name} in New Window"), "Alt+"),
+                (
+                    "new",
+                    crate::shell_i18n::format("gateways.newWindow", &[("name", name)]),
+                    "Alt+",
+                ),
             ] {
                 let accelerator = (index < 9).then(|| format!("CmdOrCtrl+{modifier}{}", index + 1));
                 menu.append(&MenuItem::with_id(
@@ -3211,7 +3227,7 @@ fn fill_menu(app: &AppHandle, menu: &Submenu<tauri::Wry>, snapshot: &Value) -> t
     menu.append(&MenuItem::with_id(
         app,
         "gateway-manage",
-        "Manage Gateways…",
+        crate::shell_i18n::text("gateways.manageMenu"),
         true,
         None::<&str>,
     )?)?;
@@ -3222,7 +3238,7 @@ pub(crate) fn menu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
     let menu = Submenu::with_id(
         app,
         format!("gateway-menu-{}", uuid::Uuid::new_v4()),
-        "Gateways",
+        crate::shell_i18n::text("gateways.menuTitle"),
         true,
     )?;
     let owner = app.state::<GatewayWindows>();

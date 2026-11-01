@@ -8,6 +8,14 @@ with a local Windows Gateway through bundled Bun or a remote Gateway connection.
 
 On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated and requires macOS 26.2 or later.
 
+## Desktop language
+
+`apps/linux/i18n/en.json` declares shell messages. The native-app producer projects reviewed PT-PT entries into `apps/linux/ui/i18n/catalog.json`; check that projection with `node --import ./scripts/tsx.mjs scripts/tauri-app-i18n.ts check` and validate the native catalogs with `node --import ./scripts/tsx.mjs scripts/native-app-i18n.ts check`.
+
+The shell selects its language from the operating system at launch. Explicit `pt-PT` and `pt_PT.UTF-8` select Portuguese (Portugal); `pt-BR`, bare `pt`, and unsupported languages fall back to English. Changing the operating-system language takes effect on the next launch. The connected Control UI keeps its own language preference, separate from the shell. New native message IDs use explicit English fallbacks in other locale catalogs until those translations are reviewed.
+
+Ordinary Cargo builds use the checked-in declaration and generated shell catalog. They do not run Node or translation providers.
+
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
 
 Reading tabs share a private browser session, isolated from the dashboard's native commands and authentication scripts. Closing every reading tab, switching Gateways, or quitting the app ends that private session. Reloading the dashboard retains its tabs. Sign-in links and **Open in browser** continue to use your system browser.

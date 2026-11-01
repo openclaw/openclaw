@@ -65,12 +65,24 @@ pub fn grant(app: &AppHandle, label: &str, url: &Url) -> Result<(), String> {
 }
 
 pub fn initialization_script(url: Option<&Url>, main: bool) -> String {
+    initialization_script_mode(url, main, false)
+}
+
+pub(crate) fn locale_initialization_script() -> String {
+    initialization_script_mode(None, false, true)
+}
+
+fn initialization_script_mode(url: Option<&Url>, main: bool, locale_only: bool) -> String {
+    let local_page = url.is_none();
     let config = serde_json::json!({
         "platform": std::env::consts::OS,
         "origin": url.map(|url| url.origin().ascii_serialization()),
         "base": url.map(|url| url.path().trim_end_matches('/')),
         "waitForDashboard": main && url.is_some(),
+        "localeOnly": locale_only,
         "css": include_str!("../../ui/window-chrome.css"),
+        "chrome": crate::shell_i18n::chrome_copy(),
+        "shellLocale": local_page.then(crate::shell_i18n::locale),
     });
     format!("({})({config});", include_str!("../../ui/window-chrome.js"))
 }
@@ -160,6 +172,250 @@ fn authorize(app: &AppHandle, webview: &Webview) -> Result<(), String> {
         .is_ok_and(|url| authorized_source(app, webview.label(), &url))
         .then_some(())
         .ok_or_else(|| "Window controls are no longer available for this page.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{initialization_script, locale_initialization_script, Url};
+    use std::process::Command;
+
+    #[test]
+    fn local_shell_scripts_accept_only_packaged_top_level_documents() {
+        let runner = r#"
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const chromeScript = process.argv[1];
+const englishChromeScript = process.argv[2];
+const noticeScript = process.argv[3];
+const catalogScript = process.argv[4];
+const i18nScript = process.argv[5];
+const dashboardChromeScript = process.argv[6];
+const dashboardConfig = JSON.parse(process.argv[7]);
+const localeOnlyScript = process.argv[8];
+
+async function check(url, topFrame, allowed, noticeAllowed = allowed, expectedLocale = 'pt-PT', localChromeScript = chromeScript, includeCatalog = true) {
+  const parsed = new URL(url);
+  const location = {
+    href: parsed.href,
+    origin: parsed.origin,
+    protocol: parsed.protocol,
+    hostname: parsed.hostname,
+    port: parsed.port,
+    pathname: parsed.pathname,
+  };
+  const events = [];
+  const window = {
+    addEventListener(name) { events.push(name); },
+    __TAURI_INTERNALS__: { invoke() {} },
+  };
+  window.top = topFrame ? window : {};
+  const document = {
+    baseURI: location.href,
+    readyState: 'loading',
+    documentElement: {},
+    addEventListener(name) { events.push(name); },
+    querySelectorAll() { return []; },
+  };
+  let fetchCount = 0;
+  const context = {
+    window, location, document, Promise, URL,
+    fetch() {
+      fetchCount += 1;
+      throw new Error('unexpected network request');
+    },
+  };
+  vm.runInNewContext(localChromeScript, context);
+  if (includeCatalog) vm.runInNewContext(catalogScript, context);
+  vm.runInNewContext(noticeScript, context);
+  vm.runInNewContext(i18nScript, context);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_LOCALE__'), allowed);
+  assert.equal(Boolean(window.__OPENCLAW_GATEWAY_NOTICE_INSTALLED__), noticeAllowed);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_CATALOG__'), allowed && includeCatalog);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_I18N_READY__'), allowed);
+  if (allowed) {
+    const api = await window.__OPENCLAW_TAURI_I18N_READY__;
+    if (!includeCatalog) {
+      assert.equal(api.locale, 'en');
+      assert.equal(document.documentElement.lang, 'en');
+      assert.equal(api.text('quickChat.messageAgent', {name: 'Ada'}, 'Message {name}'), 'Message Ada');
+      assert.throws(() => api.text('quickChat.messageAgent', {name: 'Ada', extra: 'ignored'}, 'Message {name}'), /exactly match/);
+      assert.equal(fetchCount, 0);
+      return;
+    }
+    assert.equal(api.locale, expectedLocale);
+    assert.equal(api.text('quickChat.messageAgent', {name: '<b>{other}</b>'}), expectedLocale === 'pt-PT' ? 'Mensagem para <b>{other}</b>' : 'Message <b>{other}</b>');
+    assert.throws(() => api.text('quickChat.messageAgent', {}), /exactly match/);
+    assert.throws(() => api.text('quickChat.messageAgent', {name: 'Ada', extra: 'ignored'}), /exactly match/);
+    assert.equal(fetchCount, 0);
+  } else {
+    assert.equal(fetchCount, 0);
+  }
+}
+
+async function checkConfiguredDashboard(url, topFrame, allowed) {
+  const parsed = new URL(url);
+  const location = {
+    href: parsed.href,
+    origin: parsed.origin,
+    protocol: parsed.protocol,
+    hostname: parsed.hostname,
+    port: parsed.port,
+    pathname: parsed.pathname,
+  };
+  const events = [];
+  const window = {
+    addEventListener(name) { events.push(name); },
+    __TAURI_INTERNALS__: { invoke() {} },
+  };
+  window.top = topFrame ? window : {};
+  const document = {
+    baseURI: location.href,
+    readyState: 'loading',
+    documentElement: {},
+    addEventListener(name) { events.push(name); },
+    querySelectorAll() { return []; },
+  };
+  let fetchCount = 0;
+  const context = {
+    window, location, document, Promise, URL,
+    fetch() {
+      fetchCount += 1;
+      throw new Error('unexpected network request');
+    },
+  };
+  vm.runInNewContext(dashboardChromeScript, context);
+  vm.runInNewContext(catalogScript, context);
+  vm.runInNewContext(noticeScript, context);
+  vm.runInNewContext(`installGatewayNotice(${JSON.stringify(dashboardConfig)});`, context);
+  vm.runInNewContext(i18nScript, context);
+  assert.equal(events.includes('openclaw:native-window-chrome-available'), allowed);
+  assert.equal(Boolean(window.__OPENCLAW_GATEWAY_NOTICE_INSTALLED__), allowed);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_CHROME__'), false);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_CATALOG__'), false);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_LOCALE__'), false);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_I18N_READY__'), false);
+  assert.equal(fetchCount, 0);
+}
+
+async function checkLocaleOnly(url, topFrame, allowed) {
+  const parsed = new URL(url);
+  const location = {
+    href: parsed.href,
+    origin: parsed.origin,
+    protocol: parsed.protocol,
+    hostname: parsed.hostname,
+    port: parsed.port,
+    pathname: parsed.pathname,
+  };
+  const events = [];
+  const window = { addEventListener(name) { events.push(name); } };
+  window.top = topFrame ? window : {};
+  const document = {
+    documentElement: {},
+    addEventListener(name) { events.push(name); },
+    querySelectorAll() { return []; },
+  };
+  let fetchCount = 0;
+  const context = {
+    window, location, document, Promise, URL,
+    fetch() {
+      fetchCount += 1;
+      throw new Error('unexpected network request');
+    },
+  };
+  vm.runInNewContext(localeOnlyScript, context);
+  if (allowed) {
+    vm.runInNewContext(catalogScript, context);
+    vm.runInNewContext(i18nScript, context);
+  }
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_LOCALE__'), allowed);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_CATALOG__'), allowed);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_CHROME__'), false);
+  assert.equal(Object.hasOwn(window, '__OPENCLAW_TAURI_I18N_READY__'), allowed);
+  assert.deepEqual(events, []);
+  if (allowed) {
+    const api = await window.__OPENCLAW_TAURI_I18N_READY__;
+    assert.equal(api.locale, 'pt-PT');
+    assert.equal(api.text('quickChat.messageAgent', {name: 'Ada'}), 'Mensagem para Ada');
+  }
+  assert.equal(fetchCount, 0);
+}
+
+(async () => {
+  for (const url of [
+    'tauri://localhost/?mode=stopped',
+    'http://tauri.localhost/index.html',
+    'https://tauri.localhost/gateways.html',
+  ]) {
+    await check(url, true, true);
+  }
+  for (const url of [
+    'tauri://localhost:12345/index.html',
+    'http://tauri.localhost:12345/index.html',
+    'https://tauri.localhost:12345/index.html',
+    'https://tauri.localhost.example/index.html',
+    'https://example.com/index.html',
+    'tauri://localhost/settings',
+    'tauri://user@localhost/index.html',
+  ]) {
+    await check(url, true, false);
+  }
+  await check('tauri://localhost/index.html', false, false);
+  await check('tauri://localhost/quickchat.html', true, true, false);
+  await check('tauri://localhost/index.html', true, true, true, 'en', englishChromeScript);
+  await check('tauri://localhost/index.html', true, true, true, 'en', englishChromeScript, false);
+  await checkConfiguredDashboard('https://tauri.localhost:12345/openclaw/', true, true);
+  await checkConfiguredDashboard('https://tauri.localhost:12345/openclaw/subpage', true, true);
+  await checkConfiguredDashboard('https://tauri.localhost:12345/other', true, false);
+  await checkConfiguredDashboard('https://tauri.localhost:12346/openclaw/', true, false);
+  await checkConfiguredDashboard('https://user@tauri.localhost:12345/openclaw/', true, false);
+  await checkConfiguredDashboard('https://tauri.localhost:12345/openclaw/', false, false);
+  await checkLocaleOnly('tauri://localhost/quickchat.html', true, true);
+  await checkLocaleOnly('tauri://localhost/index.html', true, false);
+  await checkLocaleOnly('tauri://localhost/quickchat.html', false, false);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#;
+        let dashboard_url = Url::parse("https://tauri.localhost:12345/openclaw/").unwrap();
+        let dashboard_chrome = initialization_script(Some(&dashboard_url), false);
+        let dashboard_config = serde_json::json!({
+            "origin": dashboard_url.origin().ascii_serialization(),
+            "base": dashboard_url.path().trim_end_matches('/'),
+            "chrome": {},
+        });
+        let dashboard_config = serde_json::to_string(&dashboard_config).unwrap();
+        let local_chrome_script = initialization_script(None, true);
+        let host_locale = crate::shell_i18n::locale();
+        let locale_field = format!("\"shellLocale\":\"{host_locale}\"");
+        let portuguese_chrome_script =
+            local_chrome_script.replace(&locale_field, "\"shellLocale\":\"pt-PT\"");
+        let english_chrome_script =
+            local_chrome_script.replace(&locale_field, "\"shellLocale\":\"en\"");
+        assert!(portuguese_chrome_script.contains("\"shellLocale\":\"pt-PT\""));
+        assert!(english_chrome_script.contains("\"shellLocale\":\"en\""));
+        let locale_only_script =
+            locale_initialization_script().replace(&locale_field, "\"shellLocale\":\"pt-PT\"");
+        assert!(locale_only_script.contains("\"shellLocale\":\"pt-PT\""));
+        let output = Command::new("node")
+            .args([
+                "-e",
+                runner,
+                &portuguese_chrome_script,
+                &english_chrome_script,
+                include_str!("../../ui/gateway-notice.js"),
+                include_str!("../../ui/i18n/catalog.js"),
+                include_str!("../../ui/tauri-i18n.js"),
+                &dashboard_chrome,
+                &dashboard_config,
+                &locale_only_script,
+            ])
+            .output()
+            .expect("Node.js is required to exercise packaged shell boundaries");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

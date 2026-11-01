@@ -1,0 +1,1451 @@
+{
+  "version": 1,
+  "sourceInventorySha256": "6ad9bc8d64e8a9ea0e05936243a78a793378563d9bb1703e3bdfbd708defd986",
+  "messages": {
+    "chrome.closeWindow": {
+      "en": "Close window",
+      "ptPT": "Fechar janela",
+      "args": []
+    },
+    "chrome.dismissGatewayNotice": {
+      "en": "Dismiss Gateway notice",
+      "ptPT": "Fechar aviso do Gateway",
+      "args": []
+    },
+    "chrome.dismissUpdate": {
+      "en": "Dismiss update notice",
+      "ptPT": "Fechar aviso de atualização",
+      "args": []
+    },
+    "chrome.maximizeWindow": {
+      "en": "Maximize window",
+      "ptPT": "Maximizar janela",
+      "args": []
+    },
+    "chrome.minimizeWindow": {
+      "en": "Minimize window",
+      "ptPT": "Minimizar janela",
+      "args": []
+    },
+    "chrome.restoreWindow": {
+      "en": "Restore window",
+      "ptPT": "Restaurar janela",
+      "args": []
+    },
+    "chrome.windowActionFailed": {
+      "en": "Window action failed: {error}",
+      "ptPT": "Falha na ação da janela: {error}",
+      "args": [
+        "error"
+      ]
+    },
+    "chrome.windowControls": {
+      "en": "Window controls",
+      "ptPT": "Controlos da janela",
+      "args": []
+    },
+    "common.back": {
+      "en": "Back",
+      "ptPT": "Voltar",
+      "args": []
+    },
+    "common.cancel": {
+      "en": "Cancel",
+      "ptPT": "Cancelar",
+      "args": []
+    },
+    "common.continue": {
+      "en": "Continue",
+      "ptPT": "Continuar",
+      "args": []
+    },
+    "common.optional": {
+      "en": "(optional)",
+      "ptPT": "(opcional)",
+      "args": []
+    },
+    "common.reset": {
+      "en": "Reset",
+      "ptPT": "Repor",
+      "args": []
+    },
+    "common.retry": {
+      "en": "Retry",
+      "ptPT": "Tentar novamente",
+      "args": []
+    },
+    "common.tryAgain": {
+      "en": "Try again",
+      "ptPT": "Tentar novamente",
+      "args": []
+    },
+    "gateway.primaryConfirmAction": {
+      "en": "Set as Primary",
+      "ptPT": "Definir como principal",
+      "args": []
+    },
+    "gateway.primaryConfirmClosed": {
+      "en": "Primary Gateway confirmation was closed.",
+      "ptPT": "A confirmação do Gateway principal foi fechada.",
+      "args": []
+    },
+    "gateway.primaryConfirmMessage": {
+      "en": "Set {name} as Primary? Quick Chat and the desktop connection will use this Gateway. Other saved Gateway windows stay open.",
+      "ptPT": "Definir {name} como Gateway principal? A Conversa rápida e a ligação da aplicação de ambiente de trabalho passarão a utilizar este Gateway. As janelas dos outros Gateways guardados continuarão abertas.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateway.primaryConfirmTitle": {
+      "en": "Change Primary Gateway",
+      "ptPT": "Alterar Gateway principal",
+      "args": []
+    },
+    "gateway.statusCliRequired": {
+      "en": "CLI required",
+      "ptPT": "CLI necessária",
+      "args": []
+    },
+    "gateway.statusConnected": {
+      "en": "Connected",
+      "ptPT": "Ligado",
+      "args": []
+    },
+    "gateway.statusNotInstalled": {
+      "en": "Not installed",
+      "ptPT": "Não instalado",
+      "args": []
+    },
+    "gateway.statusOpeningRemote": {
+      "en": "Opening remote dashboard",
+      "ptPT": "A abrir o painel remoto",
+      "args": []
+    },
+    "gateway.statusReconnecting": {
+      "en": "Reconnecting",
+      "ptPT": "A restabelecer a ligação",
+      "args": []
+    },
+    "gateway.statusRemoteUnavailable": {
+      "en": "Remote connection unavailable",
+      "ptPT": "Ligação remota indisponível",
+      "args": []
+    },
+    "gateway.statusSetupRequired": {
+      "en": "Setup required",
+      "ptPT": "Configuração necessária",
+      "args": []
+    },
+    "gateway.statusStopped": {
+      "en": "Stopped",
+      "ptPT": "Parado",
+      "args": []
+    },
+    "gateway.statusUnavailable": {
+      "en": "Unavailable",
+      "ptPT": "Indisponível",
+      "args": []
+    },
+    "gatewaySwitch.actionFailed": {
+      "en": "Gateway action failed: {error}",
+      "ptPT": "Falha na ação do Gateway: {error}",
+      "args": [
+        "error"
+      ]
+    },
+    "gateways.actionProfile": {
+      "en": "{action} {name}",
+      "ptPT": "{action} {name}",
+      "args": [
+        "action",
+        "name"
+      ]
+    },
+    "gateways.addGateway": {
+      "en": "Add Gateway",
+      "ptPT": "Adicionar Gateway",
+      "args": []
+    },
+    "gateways.addHelp": {
+      "en": "Connect to OpenClaw on another computer.",
+      "ptPT": "Ligue-se ao OpenClaw noutro computador.",
+      "args": []
+    },
+    "gateways.advancedSettings": {
+      "en": "Advanced connection settings",
+      "ptPT": "Definições avançadas de ligação",
+      "args": []
+    },
+    "gateways.backToGateways": {
+      "en": "Back to Gateways",
+      "ptPT": "Voltar aos Gateways",
+      "args": []
+    },
+    "gateways.connectionType": {
+      "en": "Connection type",
+      "ptPT": "Tipo de ligação",
+      "args": []
+    },
+    "gateways.connections": {
+      "en": "Gateway connections",
+      "ptPT": "Ligações do Gateway",
+      "args": []
+    },
+    "gateways.editGateway": {
+      "en": "Edit Gateway",
+      "ptPT": "Editar Gateway",
+      "args": []
+    },
+    "gateways.emptyHelp": {
+      "en": "Add OpenClaw on another computer to switch between your connections.",
+      "ptPT": "Adicione o OpenClaw noutro computador para alternar entre as suas ligações.",
+      "args": []
+    },
+    "gateways.emptyTitle": {
+      "en": "Your Gateways, in one place",
+      "ptPT": "Os seus Gateways, num só lugar",
+      "args": []
+    },
+    "gateways.enterName": {
+      "en": "Enter a Gateway name.",
+      "ptPT": "Introduza um nome para o Gateway.",
+      "args": []
+    },
+    "gateways.gatewayPassword": {
+      "en": "Gateway password",
+      "ptPT": "Palavra-passe do Gateway",
+      "args": []
+    },
+    "gateways.gatewayToken": {
+      "en": "Gateway token",
+      "ptPT": "Token do Gateway",
+      "args": []
+    },
+    "gateways.loadFailed": {
+      "en": "Could not load saved Gateways.",
+      "ptPT": "Não foi possível carregar os Gateways guardados.",
+      "args": []
+    },
+    "gateways.loading": {
+      "en": "Loading saved Gateways…",
+      "ptPT": "A carregar Gateways guardados…",
+      "args": []
+    },
+    "gateways.manage": {
+      "en": "Manage Gateways",
+      "ptPT": "Gerir Gateways",
+      "args": []
+    },
+    "gateways.manageMenu": {
+      "en": "Manage Gateways…",
+      "ptPT": "Gerir Gateways…",
+      "args": []
+    },
+    "gateways.managerWindowTitle": {
+      "en": "Gateways — {appName}",
+      "ptPT": "Gateways — {appName}",
+      "args": [
+        "appName"
+      ]
+    },
+    "gateways.menuTitle": {
+      "en": "Gateways",
+      "ptPT": "Gateways",
+      "args": []
+    },
+    "gateways.name": {
+      "en": "Name",
+      "ptPT": "Nome",
+      "args": []
+    },
+    "gateways.namePlaceholder": {
+      "en": "Home studio",
+      "ptPT": "Estúdio em casa",
+      "args": []
+    },
+    "gateways.newWindow": {
+      "en": "Open {name} in New Window",
+      "ptPT": "Abrir {name} numa nova janela",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.openedProfile": {
+      "en": "Opened {name} in a separate window.",
+      "ptPT": "{name} foi aberto numa janela separada.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.profileRemovedElsewhere": {
+      "en": "This saved Gateway was removed elsewhere. Your draft is preserved; Save adds it again.",
+      "ptPT": "Este Gateway guardado foi removido noutro local. O rascunho foi preservado; ao guardar, volta a adicioná-lo.",
+      "args": []
+    },
+    "gateways.profileSaved": {
+      "en": "Saved {name}.",
+      "ptPT": "{name} guardado.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.profilesSaved": {
+      "en": "Saved Gateways: {count}",
+      "ptPT": "Número de Gateways guardados: {count}",
+      "args": [
+        "count"
+      ]
+    },
+    "gateways.remove": {
+      "en": "Remove Gateway",
+      "ptPT": "Remover Gateway",
+      "args": []
+    },
+    "gateways.removeDescription": {
+      "en": "Remove “{name}” from this computer? Its Gateway will keep running.",
+      "ptPT": "Remover “{name}” deste computador? O Gateway continuará em execução.",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.removeProfile": {
+      "en": "Remove {name}",
+      "ptPT": "Remover {name}",
+      "args": [
+        "name"
+      ]
+    },
+    "gateways.removeQuestion": {
+      "en": "Remove Gateway?",
+      "ptPT": "Remover Gateway?",
+      "args": []
+    },
+    "gateways.save": {
+      "en": "Save Gateway",
+      "ptPT": "Guardar Gateway",
+      "args": []
+    },
+    "gateways.savedCredentialsHint": {
+      "en": "Saved credentials stay hidden. Leave blank to keep them for the same connection.",
+      "ptPT": "As credenciais guardadas permanecem ocultas. Deixe em branco para as manter nesta mesma ligação.",
+      "args": []
+    },
+    "gateways.savedGateways": {
+      "en": "Saved Gateways",
+      "ptPT": "Gateways guardados",
+      "args": []
+    },
+    "gateways.savedHelp": {
+      "en": "Open a saved connection, or add another Gateway.",
+      "ptPT": "Abra uma ligação guardada ou adicione outro Gateway.",
+      "args": []
+    },
+    "gateways.savedOnComputer": {
+      "en": "Connections are saved on this computer.",
+      "ptPT": "As ligações são guardadas neste computador.",
+      "args": []
+    },
+    "gateways.selectedGateway": {
+      "en": "Selected Gateway",
+      "ptPT": "Gateway selecionado",
+      "args": []
+    },
+    "gateways.tlsFingerprint": {
+      "en": "TLS fingerprint (optional)",
+      "ptPT": "Impressão digital TLS (opcional)",
+      "args": []
+    },
+    "gateways.windowTitle": {
+      "en": "{name} — {appName}",
+      "ptPT": "{name} — {appName}",
+      "args": [
+        "name",
+        "appName"
+      ]
+    },
+    "install.cliBuild": {
+      "en": "CLI build",
+      "ptPT": "Versão da CLI",
+      "args": []
+    },
+    "install.controlUiBuild": {
+      "en": "Control UI build",
+      "ptPT": "Versão da Control UI",
+      "args": []
+    },
+    "install.done": {
+      "en": "✓ Installed{version}",
+      "ptPT": "✓ Instalado{version}",
+      "args": [
+        "version"
+      ]
+    },
+    "install.gatewayService": {
+      "en": "Gateway service",
+      "ptPT": "Serviço do Gateway",
+      "args": []
+    },
+    "install.gitCheckout": {
+      "en": "Git checkout",
+      "ptPT": "Cópia de trabalho Git",
+      "args": []
+    },
+    "install.nodeRuntime": {
+      "en": "Node runtime",
+      "ptPT": "Ambiente de execução Node",
+      "args": []
+    },
+    "install.openClawCli": {
+      "en": "OpenClaw CLI",
+      "ptPT": "CLI do OpenClaw",
+      "args": []
+    },
+    "install.stepDone": {
+      "en": "✓ {name}",
+      "ptPT": "✓ {name}",
+      "args": [
+        "name"
+      ]
+    },
+    "install.stepSkipped": {
+      "en": "– {name} skipped{reason}",
+      "ptPT": "– {name}: etapa ignorada{reason}",
+      "args": [
+        "name",
+        "reason"
+      ]
+    },
+    "install.stepStart": {
+      "en": "→ {name}{version}…",
+      "ptPT": "→ {name}{version}…",
+      "args": [
+        "name",
+        "version"
+      ]
+    },
+    "install.stepWarning": {
+      "en": "! {name}{reason}",
+      "ptPT": "! {name}{reason}",
+      "args": [
+        "name",
+        "reason"
+      ]
+    },
+    "quickChat.agentDefault": {
+      "en": "Agent",
+      "ptPT": "Agente",
+      "args": []
+    },
+    "quickChat.agentReply": {
+      "en": "Agent reply",
+      "ptPT": "Resposta do agente",
+      "args": []
+    },
+    "quickChat.agents": {
+      "en": "Agents",
+      "ptPT": "Agentes",
+      "args": []
+    },
+    "quickChat.chooseAgent": {
+      "en": "Choose agent",
+      "ptPT": "Escolher agente",
+      "args": []
+    },
+    "quickChat.collapseReply": {
+      "en": "Collapse reply",
+      "ptPT": "Recolher resposta",
+      "args": []
+    },
+    "quickChat.connectionLost": {
+      "en": "Connection lost before the reply completed.",
+      "ptPT": "A ligação foi interrompida antes de a resposta estar concluída.",
+      "args": []
+    },
+    "quickChat.credentialRequired": {
+      "en": "Gateway requires a credential — open the dashboard on the gateway host",
+      "ptPT": "O Gateway exige uma credencial. Abra o painel no computador anfitrião do Gateway.",
+      "args": []
+    },
+    "quickChat.error": {
+      "en": "Error",
+      "ptPT": "Erro",
+      "args": []
+    },
+    "quickChat.expandReply": {
+      "en": "Expand reply",
+      "ptPT": "Expandir resposta",
+      "args": []
+    },
+    "quickChat.gatewayUnreachable": {
+      "en": "Gateway unreachable — retrying",
+      "ptPT": "Gateway inacessível — a tentar novamente",
+      "args": []
+    },
+    "quickChat.incomplete": {
+      "en": "Incomplete",
+      "ptPT": "Incompleta",
+      "args": []
+    },
+    "quickChat.incompleteHelp": {
+      "en": "Reply text is incomplete. Open the dashboard to recover it.",
+      "ptPT": "O texto da resposta está incompleto. Abra o painel para a recuperar.",
+      "args": []
+    },
+    "quickChat.interrupted": {
+      "en": "Interrupted",
+      "ptPT": "Interrompido",
+      "args": []
+    },
+    "quickChat.messageAgent": {
+      "en": "Message {name}",
+      "ptPT": "Mensagem para {name}",
+      "args": [
+        "name"
+      ]
+    },
+    "quickChat.messageDefault": {
+      "en": "Message Agent",
+      "ptPT": "Enviar mensagem ao agente",
+      "args": []
+    },
+    "quickChat.messageLabel": {
+      "en": "Quick Chat message",
+      "ptPT": "Mensagem da Conversa rápida",
+      "args": []
+    },
+    "quickChat.openDashboard": {
+      "en": "Open dashboard",
+      "ptPT": "Abrir painel",
+      "args": []
+    },
+    "quickChat.openDashboardFailed": {
+      "en": "Could not open the dashboard.",
+      "ptPT": "Não foi possível abrir o painel.",
+      "args": []
+    },
+    "quickChat.openSettingsFailed": {
+      "en": "Could not open Quick Chat settings.",
+      "ptPT": "Não foi possível abrir as definições da Conversa rápida.",
+      "args": []
+    },
+    "quickChat.pairingRequired": {
+      "en": "Approve this device in the dashboard (Nodes)",
+      "ptPT": "Aprove este dispositivo no painel, em Dispositivos.",
+      "args": []
+    },
+    "quickChat.pressKeys": {
+      "en": "Press keys…",
+      "ptPT": "Prima as teclas…",
+      "args": []
+    },
+    "quickChat.pressNewShortcut": {
+      "en": "Press new shortcut",
+      "ptPT": "Prima o novo atalho",
+      "args": []
+    },
+    "quickChat.recoveryFailed": {
+      "en": "The completed reply could not be recovered.",
+      "ptPT": "Não foi possível recuperar a resposta concluída.",
+      "args": []
+    },
+    "quickChat.replyFailed": {
+      "en": "Gateway reply failed.",
+      "ptPT": "Falha na resposta do Gateway.",
+      "args": []
+    },
+    "quickChat.selectAgentFailed": {
+      "en": "Could not select that agent.",
+      "ptPT": "Não foi possível selecionar esse agente.",
+      "args": []
+    },
+    "quickChat.sendFailed": {
+      "en": "Could not send the message.",
+      "ptPT": "Não foi possível enviar a mensagem.",
+      "args": []
+    },
+    "quickChat.sendMessage": {
+      "en": "Send message",
+      "ptPT": "Enviar mensagem",
+      "args": []
+    },
+    "quickChat.shortcutSettings": {
+      "en": "Quick Chat shortcut",
+      "ptPT": "Atalho para conversa rápida",
+      "args": []
+    },
+    "quickChat.shortcutSettingsLabel": {
+      "en": "Quick Chat shortcut settings",
+      "ptPT": "Definições do atalho da Conversa rápida",
+      "args": []
+    },
+    "quickChat.stopped": {
+      "en": "Stopped",
+      "ptPT": "Parado",
+      "args": []
+    },
+    "quickChat.stoppedMarker": {
+      "en": "(stopped)",
+      "ptPT": "(parado)",
+      "args": []
+    },
+    "quickChat.thinking": {
+      "en": "Thinking…",
+      "ptPT": "A pensar…",
+      "args": []
+    },
+    "quickChat.tlsFailure": {
+      "en": "Gateway TLS trust failed — check the certificate fingerprint",
+      "ptPT": "Falha na validação da confiança TLS do Gateway — verifique a impressão digital do certificado",
+      "args": []
+    },
+    "quickChat.updateShortcutFailed": {
+      "en": "Could not update the Quick Chat shortcut.",
+      "ptPT": "Não foi possível atualizar o atalho da Conversa rápida.",
+      "args": []
+    },
+    "quickChat.widget": {
+      "en": "Widget",
+      "ptPT": "Widget",
+      "args": []
+    },
+    "quickChat.widgetRenderFailed": {
+      "en": "Could not render the widget.",
+      "ptPT": "Não foi possível apresentar o widget.",
+      "args": []
+    },
+    "quickChat.widgetUnavailable": {
+      "en": "Widget unavailable until the Gateway reconnects.",
+      "ptPT": "Widget indisponível até que o Gateway restabeleça a ligação.",
+      "args": []
+    },
+    "quickChat.windowTitle": {
+      "en": "Quick Chat",
+      "ptPT": "Conversa rápida",
+      "args": []
+    },
+    "setup.anotherComputer": {
+      "en": "On another computer",
+      "ptPT": "Noutro computador",
+      "args": []
+    },
+    "setup.authentication": {
+      "en": "Authentication",
+      "ptPT": "Autenticação",
+      "args": []
+    },
+    "setup.bundledAot": {
+      "en": "BUNDLED AOT · EXPERIMENTAL",
+      "ptPT": "AOT INCLUÍDO · EXPERIMENTAL",
+      "args": []
+    },
+    "setup.bundledJit": {
+      "en": "BUNDLED JIT",
+      "ptPT": "JIT INCLUÍDO",
+      "args": []
+    },
+    "setup.bundledLocalSubtitle": {
+      "en": "Bundled with app v{version} · {flavor}. Installs and starts automatically.",
+      "ptPT": "Incluído na aplicação v{version} · {flavor}. Instala e inicia automaticamente.",
+      "args": [
+        "version",
+        "flavor"
+      ]
+    },
+    "setup.bundledRuntimeLabel": {
+      "en": "Bundled with app v{version} · {flavor}",
+      "ptPT": "Incluído na aplicação v{version} · {flavor}",
+      "args": [
+        "version",
+        "flavor"
+      ]
+    },
+    "setup.channelBeta": {
+      "en": "Beta",
+      "ptPT": "Beta",
+      "args": []
+    },
+    "setup.channelDevelopment": {
+      "en": "Development",
+      "ptPT": "Desenvolvimento",
+      "args": []
+    },
+    "setup.channelStable": {
+      "en": "Stable",
+      "ptPT": "Estável",
+      "args": []
+    },
+    "setup.checkingLocalServices": {
+      "en": "Checking local services…",
+      "ptPT": "A verificar os serviços locais…",
+      "args": []
+    },
+    "setup.chooseGatewayEyebrow": {
+      "en": "CHOOSE YOUR GATEWAY",
+      "ptPT": "ESCOLHA O SEU GATEWAY",
+      "args": []
+    },
+    "setup.chooseGatewayTitle": {
+      "en": "Where should your assistant live?",
+      "ptPT": "Onde pretende alojar o seu assistente?",
+      "args": []
+    },
+    "setup.cliRequired": {
+      "en": "CLI REQUIRED",
+      "ptPT": "CLI NECESSÁRIA",
+      "args": []
+    },
+    "setup.closeToTray": {
+      "en": "CLOSE TO TRAY",
+      "ptPT": "FECHAR PARA A ÁREA DE NOTIFICAÇÃO",
+      "args": []
+    },
+    "setup.complete": {
+      "en": "COMPLETE",
+      "ptPT": "CONCLUÍDO",
+      "args": []
+    },
+    "setup.connectFailed": {
+      "en": "CONNECT FAILED",
+      "ptPT": "FALHA NA LIGAÇÃO",
+      "args": []
+    },
+    "setup.connectToGateway": {
+      "en": "Connect to Gateway",
+      "ptPT": "Ligar ao Gateway",
+      "args": []
+    },
+    "setup.connecting": {
+      "en": "Connecting to OpenClaw",
+      "ptPT": "A ligar ao OpenClaw",
+      "args": []
+    },
+    "setup.connectionIssue": {
+      "en": "CONNECTION ISSUE",
+      "ptPT": "PROBLEMA DE LIGAÇÃO",
+      "args": []
+    },
+    "setup.connectionNeedsAttention": {
+      "en": "Connection needs attention",
+      "ptPT": "A ligação requer atenção",
+      "args": []
+    },
+    "setup.connectionSettings": {
+      "en": "Connection Settings",
+      "ptPT": "Definições de ligação",
+      "args": []
+    },
+    "setup.credentialHint": {
+      "en": "Only needed if your Gateway requires a token or password.",
+      "ptPT": "Só é necessário se o Gateway exigir um token ou uma palavra-passe.",
+      "args": []
+    },
+    "setup.desktopCompanion": {
+      "en": "DESKTOP COMPANION",
+      "ptPT": "APLICAÇÃO DE AMBIENTE DE TRABALHO",
+      "args": []
+    },
+    "setup.editConnection": {
+      "en": "Edit connection",
+      "ptPT": "Editar ligação",
+      "args": []
+    },
+    "setup.enterGatewayPortRange": {
+      "en": "Enter a Gateway port between 1 and 65535.",
+      "ptPT": "Introduza uma porta do Gateway entre 1 e 65535.",
+      "args": []
+    },
+    "setup.enterGatewayUrl": {
+      "en": "Enter a Gateway URL to continue.",
+      "ptPT": "Introduza um URL do Gateway para continuar.",
+      "args": []
+    },
+    "setup.enterPassword": {
+      "en": "Enter password",
+      "ptPT": "Introduza a palavra-passe",
+      "args": []
+    },
+    "setup.enterSshTarget": {
+      "en": "Enter an SSH target to continue.",
+      "ptPT": "Introduza um destino SSH para continuar.",
+      "args": []
+    },
+    "setup.enterToken": {
+      "en": "Enter token",
+      "ptPT": "Introduza o token",
+      "args": []
+    },
+    "setup.failed": {
+      "en": "FAILED",
+      "ptPT": "FALHOU",
+      "args": []
+    },
+    "setup.featureChatBody": {
+      "en": "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+      "ptPT": "Esta aplicação, WhatsApp, Telegram, Discord, Slack: a escolha é sua.",
+      "args": []
+    },
+    "setup.featureChatTitle": {
+      "en": "Chat wherever you like",
+      "ptPT": "Converse onde preferir",
+      "args": []
+    },
+    "setup.featureControlBody": {
+      "en": "Everything runs where you decide, with permissions you grant.",
+      "ptPT": "Tudo é executado onde decidir, com as permissões que conceder.",
+      "args": []
+    },
+    "setup.featureControlTitle": {
+      "en": "Stay in control",
+      "ptPT": "Mantenha o controlo",
+      "args": []
+    },
+    "setup.featureTasksBody": {
+      "en": "Give your assistant tasks and let it help across your computer.",
+      "ptPT": "Dê tarefas ao seu assistente e deixe-o ajudar em todo o computador.",
+      "args": []
+    },
+    "setup.featureTasksTitle": {
+      "en": "Ask, create, and automate",
+      "ptPT": "Pergunte, crie e automatize",
+      "args": []
+    },
+    "setup.freeBsdChoiceHelp": {
+      "en": "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding.",
+      "ptPT": "No FreeBSD, instale a CLI se necessário e, em seguida, inicie o Gateway através do serviço do pacote openclaw ou execute openclaw gateway run num terminal. Ligue-se aqui com a mesma conta que utilizou na configuração inicial.",
+      "args": []
+    },
+    "setup.freeBsdLocalSubtitle": {
+      "en": "Connect to a Gateway you start with the FreeBSD service or in a terminal.",
+      "ptPT": "Ligue-se a um Gateway iniciado através do serviço do FreeBSD ou num terminal.",
+      "args": []
+    },
+    "setup.gatewayConnectionDropped": {
+      "en": "The Gateway connection dropped. OpenClaw will restore the dashboard automatically.",
+      "ptPT": "A ligação ao Gateway foi interrompida. O OpenClaw irá restaurar o painel automaticamente.",
+      "args": []
+    },
+    "setup.gatewayEyebrow": {
+      "en": "GATEWAY",
+      "ptPT": "GATEWAY",
+      "args": []
+    },
+    "setup.gatewayNoDirectConnection": {
+      "en": "This gateway does not advertise a direct connection.",
+      "ptPT": "Este Gateway não disponibiliza uma ligação direta.",
+      "args": []
+    },
+    "setup.gatewayOffline": {
+      "en": "GATEWAY OFFLINE",
+      "ptPT": "GATEWAY SEM LIGAÇÃO",
+      "args": []
+    },
+    "setup.gatewayPassword": {
+      "en": "Gateway password",
+      "ptPT": "Palavra-passe do Gateway",
+      "args": []
+    },
+    "setup.gatewayPort": {
+      "en": "Gateway port",
+      "ptPT": "Porta do Gateway",
+      "args": []
+    },
+    "setup.gatewayStopped": {
+      "en": "GATEWAY STOPPED",
+      "ptPT": "GATEWAY PARADO",
+      "args": []
+    },
+    "setup.gatewayStoppedDescription": {
+      "en": "The Gateway is stopped. The desktop companion will remain available in the tray.",
+      "ptPT": "O Gateway está parado. A aplicação continuará disponível na área de notificação.",
+      "args": []
+    },
+    "setup.gatewayToken": {
+      "en": "Gateway token",
+      "ptPT": "Token do Gateway",
+      "args": []
+    },
+    "setup.gatewayUrl": {
+      "en": "Gateway URL",
+      "ptPT": "URL do Gateway",
+      "args": []
+    },
+    "setup.gatewaysFound": {
+      "en": "{count} FOUND",
+      "ptPT": "TOTAL DE GATEWAYS: {count}",
+      "args": [
+        "count"
+      ]
+    },
+    "setup.gatewaysOnNetwork": {
+      "en": "GATEWAYS ON THIS NETWORK",
+      "ptPT": "GATEWAYS NESTA REDE",
+      "args": []
+    },
+    "setup.getStarted": {
+      "en": "Get started",
+      "ptPT": "Começar",
+      "args": []
+    },
+    "setup.hideCredential": {
+      "en": "Hide credential",
+      "ptPT": "Ocultar credencial",
+      "args": []
+    },
+    "setup.installBundled": {
+      "en": "Install bundled OpenClaw",
+      "ptPT": "Instalar o OpenClaw incluído",
+      "args": []
+    },
+    "setup.installBundledHint": {
+      "en": "Installs this app's bundled OpenClaw runtime in ~/.openclaw. Update the desktop app to change versions.",
+      "ptPT": "Instala o ambiente de execução do OpenClaw incluído nesta aplicação em ~/.openclaw. Atualize a aplicação de ambiente de trabalho para alterar a versão.",
+      "args": []
+    },
+    "setup.installCliDescription": {
+      "en": "Install the OpenClaw CLI to connect to a local Gateway.",
+      "ptPT": "Instale a CLI do OpenClaw para ligar a um Gateway local.",
+      "args": []
+    },
+    "setup.installCliHint": {
+      "en": "Installs the CLI and managed Node runtime in ~/.openclaw.",
+      "ptPT": "Instala a CLI e o ambiente de execução Node gerido em ~/.openclaw.",
+      "args": []
+    },
+    "setup.installFreeBsdHint": {
+      "en": "Installs the CLI in ~/.openclaw using your system Node.js and npm.",
+      "ptPT": "Instala a CLI em ~/.openclaw, utilizando o Node.js e o npm do sistema.",
+      "args": []
+    },
+    "setup.installHint": {
+      "en": "Installs OpenClaw and its managed runtime in ~/.openclaw.",
+      "ptPT": "Instala o OpenClaw e o seu ambiente de execução gerido em ~/.openclaw.",
+      "args": []
+    },
+    "setup.installLog": {
+      "en": "INSTALL LOG",
+      "ptPT": "REGISTO DE INSTALAÇÃO",
+      "args": []
+    },
+    "setup.installOpenClaw": {
+      "en": "Install OpenClaw",
+      "ptPT": "Instalar OpenClaw",
+      "args": []
+    },
+    "setup.installingBundledRuntime": {
+      "en": "This app's bundled OpenClaw runtime is being installed in your home directory.",
+      "ptPT": "O ambiente de execução do OpenClaw incluído nesta aplicação está a ser instalado na sua pasta pessoal.",
+      "args": []
+    },
+    "setup.installingEyebrow": {
+      "en": "INSTALLING",
+      "ptPT": "A INSTALAR",
+      "args": []
+    },
+    "setup.installingFreeBsdCli": {
+      "en": "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation.",
+      "ptPT": "A instalação da CLI requer uma versão compatível do Node.js e do npm do sistema. Após a instalação, inicie o Gateway através do serviço do pacote ou num terminal.",
+      "args": []
+    },
+    "setup.installingOpenClaw": {
+      "en": "Installing OpenClaw…",
+      "ptPT": "A instalar o OpenClaw…",
+      "args": []
+    },
+    "setup.installingRuntime": {
+      "en": "OpenClaw and its managed runtime are being installed in your home directory.",
+      "ptPT": "O OpenClaw e o seu ambiente de execução gerido estão a ser instalados na sua pasta pessoal.",
+      "args": []
+    },
+    "setup.issueEyebrow": {
+      "en": "SETUP ISSUE",
+      "ptPT": "PROBLEMA DE CONFIGURAÇÃO",
+      "args": []
+    },
+    "setup.lastGatewayActionFailed": {
+      "en": "The last Gateway action failed. Check the service, then retry.",
+      "ptPT": "A última ação do Gateway falhou. Verifique o serviço e tente novamente.",
+      "args": []
+    },
+    "setup.localChoiceHelp": {
+      "en": "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
+      "ptPT": "A maioria das pessoas escolhe este computador. O OpenClaw instala tudo e mantém o seu assistente em execução em segundo plano.",
+      "args": []
+    },
+    "setup.localGateway": {
+      "en": "LOCAL GATEWAY",
+      "ptPT": "GATEWAY LOCAL",
+      "args": []
+    },
+    "setup.localSubtitle": {
+      "en": "Private to this computer. Installs and starts automatically.",
+      "ptPT": "Privado neste computador. Instala e inicia automaticamente.",
+      "args": []
+    },
+    "setup.lookingNearby": {
+      "en": "Looking for nearby OpenClaw gateways…",
+      "ptPT": "À procura de Gateways OpenClaw próximos…",
+      "args": []
+    },
+    "setup.nearbyGatewaysFound": {
+      "en": "Nearby Gateways found: {count}",
+      "ptPT": "Número de Gateways próximos: {count}",
+      "args": [
+        "count"
+      ]
+    },
+    "setup.needsAttention": {
+      "en": "OpenClaw needs attention",
+      "ptPT": "O OpenClaw requer atenção",
+      "args": []
+    },
+    "setup.needsCli": {
+      "en": "OpenClaw needs the CLI",
+      "ptPT": "O OpenClaw requer a CLI",
+      "args": []
+    },
+    "setup.oneMoment": {
+      "en": "One moment",
+      "ptPT": "Aguarde um momento",
+      "args": []
+    },
+    "setup.openingRemoteDashboard": {
+      "en": "Opening the remote dashboard…",
+      "ptPT": "A abrir o painel remoto…",
+      "args": []
+    },
+    "setup.operationFailed": {
+      "en": "OpenClaw could not complete the operation.",
+      "ptPT": "O OpenClaw não conseguiu concluir a operação.",
+      "args": []
+    },
+    "setup.password": {
+      "en": "Password",
+      "ptPT": "Palavra-passe",
+      "args": []
+    },
+    "setup.permissionsNotice": {
+      "en": "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+      "ptPT": "O OpenClaw pode executar ações com as permissões e os serviços que ativar. Reveja os pedidos e ligue apenas ferramentas em que confia.",
+      "args": []
+    },
+    "setup.preparingCompanion": {
+      "en": "Preparing your companion",
+      "ptPT": "A preparar a aplicação de ambiente de trabalho",
+      "args": []
+    },
+    "setup.preparingControlUi": {
+      "en": "Finding your gateway and preparing the Control UI.",
+      "ptPT": "A localizar o Gateway e a preparar a Control UI.",
+      "args": []
+    },
+    "setup.preparingRemoteDashboard": {
+      "en": "Preparing the remote dashboard…",
+      "ptPT": "A preparar o painel remoto…",
+      "args": []
+    },
+    "setup.profileLabel": {
+      "en": "· PROFILE {profile}",
+      "ptPT": "· PERFIL {profile}",
+      "args": [
+        "profile"
+      ]
+    },
+    "setup.recommended": {
+      "en": "Recommended",
+      "ptPT": "Recomendado",
+      "args": []
+    },
+    "setup.reconnecting": {
+      "en": "Reconnecting",
+      "ptPT": "A restabelecer a ligação",
+      "args": []
+    },
+    "setup.releaseChannel": {
+      "en": "Release channel",
+      "ptPT": "Canal de lançamento",
+      "args": []
+    },
+    "setup.remoteConnection": {
+      "en": "Remote connection",
+      "ptPT": "Ligação remota",
+      "args": []
+    },
+    "setup.remoteConnectionHelp": {
+      "en": "Connect with a Gateway address or an SSH tunnel.",
+      "ptPT": "Ligue-se através do endereço do Gateway ou de um túnel SSH.",
+      "args": []
+    },
+    "setup.remoteConnectionType": {
+      "en": "Remote connection type",
+      "ptPT": "Tipo de ligação remota",
+      "args": []
+    },
+    "setup.remoteGateway": {
+      "en": "REMOTE GATEWAY",
+      "ptPT": "GATEWAY REMOTO",
+      "args": []
+    },
+    "setup.remoteRetryHelp": {
+      "en": "Open Connection Settings to check the remote Gateway.",
+      "ptPT": "Abra as Definições de ligação para verificar o Gateway remoto.",
+      "args": []
+    },
+    "setup.remoteSubtitle": {
+      "en": "Connect to a Gateway running elsewhere.",
+      "ptPT": "Ligue-se a um Gateway em execução noutro local.",
+      "args": []
+    },
+    "setup.restartingGateway": {
+      "en": "Restarting Gateway…",
+      "ptPT": "A reiniciar o Gateway…",
+      "args": []
+    },
+    "setup.retryingEveryFewSeconds": {
+      "en": "Retrying every few seconds…",
+      "ptPT": "A tentar novamente a cada poucos segundos…",
+      "args": []
+    },
+    "setup.running": {
+      "en": "RUNNING",
+      "ptPT": "EM EXECUÇÃO",
+      "args": []
+    },
+    "setup.runtimeVersion": {
+      "en": "OpenClaw {version}",
+      "ptPT": "OpenClaw {version}",
+      "args": [
+        "version"
+      ]
+    },
+    "setup.savedCredentialsHint": {
+      "en": "Saved credentials stay hidden. Leave blank to keep them for the same connection.",
+      "ptPT": "As credenciais guardadas permanecem ocultas. Deixe em branco para as manter nesta mesma ligação.",
+      "args": []
+    },
+    "setup.searching": {
+      "en": "SEARCHING",
+      "ptPT": "A PROCURAR",
+      "args": []
+    },
+    "setup.showCredential": {
+      "en": "Show credential",
+      "ptPT": "Mostrar credencial",
+      "args": []
+    },
+    "setup.sshTarget": {
+      "en": "SSH target",
+      "ptPT": "Destino SSH",
+      "args": []
+    },
+    "setup.sshTunnel": {
+      "en": "SSH tunnel",
+      "ptPT": "Túnel SSH",
+      "args": []
+    },
+    "setup.standingBy": {
+      "en": "OpenClaw is standing by",
+      "ptPT": "OpenClaw em espera",
+      "args": []
+    },
+    "setup.startGateway": {
+      "en": "Start Gateway",
+      "ptPT": "Iniciar Gateway",
+      "args": []
+    },
+    "setup.startingGateway": {
+      "en": "Starting Gateway…",
+      "ptPT": "A iniciar o Gateway…",
+      "args": []
+    },
+    "setup.stepProgress": {
+      "en": "Step 2 of 2",
+      "ptPT": "Passo 2 de 2",
+      "args": []
+    },
+    "setup.stepProgressShort": {
+      "en": "2 of 2",
+      "ptPT": "2 de 2",
+      "args": []
+    },
+    "setup.thisComputer": {
+      "en": "On this computer",
+      "ptPT": "Neste computador",
+      "args": []
+    },
+    "setup.token": {
+      "en": "Token",
+      "ptPT": "Token",
+      "args": []
+    },
+    "setup.unavailable": {
+      "en": "UNAVAILABLE",
+      "ptPT": "INDISPONÍVEL",
+      "args": []
+    },
+    "setup.updateRemoteConnection": {
+      "en": "Update the remote Gateway address or authentication.",
+      "ptPT": "Atualize o endereço ou a autenticação do Gateway remoto.",
+      "args": []
+    },
+    "setup.updateTitle": {
+      "en": "OpenClaw update",
+      "ptPT": "Atualização do OpenClaw",
+      "args": []
+    },
+    "setup.waitingForGateway": {
+      "en": "OpenClaw is waiting for the local Gateway to become healthy.",
+      "ptPT": "O OpenClaw está à espera que o Gateway local fique operacional.",
+      "args": []
+    },
+    "setup.welcomeDescription": {
+      "en": "Your personal AI assistant, living wherever you choose. It answers questions, works with your files and apps, and can chat with you wherever you are.",
+      "ptPT": "O seu assistente pessoal de IA, disponível onde escolher. Responde a perguntas, trabalha com os seus ficheiros e aplicações e conversa consigo onde quer que esteja.",
+      "args": []
+    },
+    "setup.welcomeEyebrow": {
+      "en": "WELCOME",
+      "ptPT": "BOAS-VINDAS",
+      "args": []
+    },
+    "setup.welcomeTitle": {
+      "en": "Welcome to OpenClaw",
+      "ptPT": "Boas-vindas ao OpenClaw",
+      "args": []
+    },
+    "setup.windowOpened": {
+      "en": "WINDOW OPENED",
+      "ptPT": "JANELA ABERTA",
+      "args": []
+    },
+    "tray.bundledRuntime": {
+      "en": "Bundled runtime: {flavor}",
+      "ptPT": "Ambiente de execução incluído: {flavor}",
+      "args": [
+        "flavor"
+      ]
+    },
+    "tray.checkUpdates": {
+      "en": "Check for Updates",
+      "ptPT": "Procurar atualizações",
+      "args": []
+    },
+    "tray.connectionSettings": {
+      "en": "Connection Settings",
+      "ptPT": "Definições de ligação",
+      "args": []
+    },
+    "tray.gatewayChecking": {
+      "en": "Gateway: Checking…",
+      "ptPT": "Gateway: a verificar…",
+      "args": []
+    },
+    "tray.gatewayStatus": {
+      "en": "Gateway: {status}",
+      "ptPT": "Gateway: {status}",
+      "args": [
+        "status"
+      ]
+    },
+    "tray.isolatedProfile": {
+      "en": "Isolated profile: {profile}",
+      "ptPT": "Perfil isolado: {profile}",
+      "args": [
+        "profile"
+      ]
+    },
+    "tray.keepAwake": {
+      "en": "Keep computer awake",
+      "ptPT": "Manter o computador ativo",
+      "args": []
+    },
+    "tray.keepAwakeInactive": {
+      "en": "Keep computer awake (inactive)",
+      "ptPT": "Manter o computador ativo (inativo)",
+      "args": []
+    },
+    "tray.noUpdateAction": {
+      "en": "No update action available",
+      "ptPT": "Nenhuma ação de atualização disponível",
+      "args": []
+    },
+    "tray.openDashboard": {
+      "en": "Open Dashboard",
+      "ptPT": "Abrir painel",
+      "args": []
+    },
+    "tray.openDownloadPage": {
+      "en": "Open download page",
+      "ptPT": "Abrir página de transferência",
+      "args": []
+    },
+    "tray.pendingApprovalOne": {
+      "en": "Gateway: {gateway} · 1 approval pending",
+      "ptPT": "Gateway: {gateway} · 1 aprovação pendente",
+      "args": [
+        "gateway"
+      ]
+    },
+    "tray.pendingApprovals": {
+      "en": "Gateway: {gateway} · {count} approvals pending",
+      "ptPT": "Gateway: {gateway} · {count} aprovações pendentes",
+      "args": [
+        "gateway",
+        "count"
+      ]
+    },
+    "tray.quickChat": {
+      "en": "Quick Chat",
+      "ptPT": "Conversa rápida",
+      "args": []
+    },
+    "tray.quitOpenClaw": {
+      "en": "Quit OpenClaw",
+      "ptPT": "Sair do OpenClaw",
+      "args": []
+    },
+    "tray.restartGateway": {
+      "en": "Restart Gateway",
+      "ptPT": "Reiniciar Gateway",
+      "args": []
+    },
+    "tray.restartToUpdate": {
+      "en": "Restart to update",
+      "ptPT": "Reiniciar para atualizar",
+      "args": []
+    },
+    "tray.runtimeDialogAction": {
+      "en": "Use bundled runtime",
+      "ptPT": "Utilizar o ambiente de execução incluído",
+      "args": []
+    },
+    "tray.runtimeDialogMessage": {
+      "en": "Current runtime: {currentRuntime}\n\nUse this app's bundled {flavor} runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.",
+      "ptPT": "Ambiente de execução atual: {currentRuntime}\n\nUtilizar o ambiente de execução {flavor} incluído nesta aplicação para o Gateway? Esta ação reinstala e reinicia o serviço. As próximas atualizações da aplicação voltarão a pedir-lhe que escolha esta ação.",
+      "args": [
+        "currentRuntime",
+        "flavor"
+      ]
+    },
+    "tray.runtimeDialogTitle": {
+      "en": "Use bundled runtime",
+      "ptPT": "Utilizar o ambiente de execução incluído",
+      "args": []
+    },
+    "tray.runtimeNoInstalledService": {
+      "en": "No installed Gateway service",
+      "ptPT": "Sem serviço do Gateway instalado",
+      "args": []
+    },
+    "tray.savedGateways": {
+      "en": "Saved Gateways",
+      "ptPT": "Gateways guardados",
+      "args": []
+    },
+    "tray.setupChromeExtension": {
+      "en": "Set Up Chrome Extension…",
+      "ptPT": "Configurar a extensão do Chrome…",
+      "args": []
+    },
+    "tray.startAtLogin": {
+      "en": "Start at Login",
+      "ptPT": "Iniciar ao iniciar sessão",
+      "args": []
+    },
+    "tray.startGateway": {
+      "en": "Start Gateway",
+      "ptPT": "Iniciar Gateway",
+      "args": []
+    },
+    "tray.stopGateway": {
+      "en": "Stop Gateway",
+      "ptPT": "Parar Gateway",
+      "args": []
+    },
+    "tray.useBundledRuntime": {
+      "en": "Use bundled runtime…",
+      "ptPT": "Utilizar o ambiente de execução incluído…",
+      "args": []
+    },
+    "update.available": {
+      "en": "Update available v{version}",
+      "ptPT": "Atualização disponível v{version}",
+      "args": [
+        "version"
+      ]
+    },
+    "update.checkFailed": {
+      "en": "Update check failed",
+      "ptPT": "Falha ao procurar atualizações",
+      "args": []
+    },
+    "update.downloadProgress": {
+      "en": "{downloaded} of {total}",
+      "ptPT": "{downloaded} de {total}",
+      "args": [
+        "downloaded",
+        "total"
+      ]
+    },
+    "update.downloaded": {
+      "en": "{size} downloaded",
+      "ptPT": "Transferido: {size}",
+      "args": [
+        "size"
+      ]
+    },
+    "update.downloading": {
+      "en": "Downloading in the background…",
+      "ptPT": "A transferir em segundo plano…",
+      "args": []
+    },
+    "update.downloadingVersion": {
+      "en": "Update available v{version} — downloading…",
+      "ptPT": "Atualização disponível v{version} — a transferir…",
+      "args": [
+        "version"
+      ]
+    },
+    "update.manualMessage": {
+      "en": "Install the latest system package from the release page.",
+      "ptPT": "Instale o pacote de sistema mais recente a partir da página de versões.",
+      "args": []
+    },
+    "update.noneAvailable": {
+      "en": "No update is available.",
+      "ptPT": "Não está disponível nenhuma atualização.",
+      "args": []
+    },
+    "update.openDownloadPage": {
+      "en": "Open download page",
+      "ptPT": "Abrir página de transferência",
+      "args": []
+    },
+    "update.openPageFailed": {
+      "en": "Could not open release page",
+      "ptPT": "Não foi possível abrir a página de versões",
+      "args": []
+    },
+    "update.ready": {
+      "en": "Update ready",
+      "ptPT": "Atualização pronta",
+      "args": []
+    },
+    "update.readyMessage": {
+      "en": "Version v{version} is installed and ready.",
+      "ptPT": "A versão v{version} está instalada e pronta.",
+      "args": [
+        "version"
+      ]
+    },
+    "update.restartToUpdate": {
+      "en": "Restart to update",
+      "ptPT": "Reiniciar para atualizar",
+      "args": []
+    },
+    "update.upToDate": {
+      "en": "OpenClaw is up to date",
+      "ptPT": "O OpenClaw está atualizado",
+      "args": []
+    }
+  }
+}

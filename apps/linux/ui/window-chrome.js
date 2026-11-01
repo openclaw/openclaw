@@ -1,11 +1,60 @@
 (config) => {
   if (window !== window.top) return;
-  if (config.origin && (location.origin !== config.origin ||
-      (config.base && location.pathname !== config.base && !location.pathname.startsWith(config.base + "/")))) return;
-  if (!config.origin && !(location.protocol === "tauri:" || location.hostname === "tauri.localhost")) return;
-
+  const pageUrl = new URL(location.href);
   const dashboard = Boolean(config.origin);
+  const localOrigin =
+    (pageUrl.protocol === "tauri:" && pageUrl.hostname === "localhost" && pageUrl.port === "" &&
+      pageUrl.username === "" && pageUrl.password === "") ||
+    ((pageUrl.origin === "http://tauri.localhost" || pageUrl.origin === "https://tauri.localhost") &&
+      pageUrl.username === "" && pageUrl.password === "");
+  const base = config.base?.replace(/\/$/u, "") ?? "";
+  const configuredPage =
+    Boolean(config.origin) && pageUrl.username === "" && pageUrl.password === "" &&
+    pageUrl.origin === config.origin &&
+    (!base || pageUrl.pathname === base || pageUrl.pathname.startsWith(base + "/"));
+  const shellHost = pageUrl.protocol === "tauri:" || pageUrl.hostname === "tauri.localhost";
+  if (shellHost && !localOrigin && !configuredPage) {
+    return;
+  }
+  const shellPages = ["/", "/index.html", "/gateways.html", "/quickchat.html"];
+  if (config.localeOnly && pageUrl.pathname !== "/quickchat.html") {
+    return;
+  }
+  if (dashboard) {
+    if (!configuredPage) {
+      return;
+    }
+  } else if (!localOrigin || !shellPages.includes(pageUrl.pathname)) {
+    return;
+  }
   const macos = config.platform === "macos";
+  const chrome = config.chrome ?? {};
+  const chromeText = (key, fallback, args = {}) => {
+    const template = typeof chrome[key] === "string" ? chrome[key] : fallback;
+    const expected = new Set(
+      [...template.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu)].map(([, name]) => name),
+    );
+    const provided = Object.keys(args);
+    if (provided.length !== expected.size || provided.some((name) => !expected.has(name))) {
+      throw new TypeError(`Unexpected ${key} arguments`);
+    }
+    return template.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu, (_token, name) => String(args[name]));
+  };
+  if (!dashboard) {
+    if (!config.localeOnly) {
+      Object.defineProperty(window, "__OPENCLAW_TAURI_CHROME__", {
+        value: chrome,
+        configurable: false,
+      });
+    }
+    Object.defineProperty(window, "__OPENCLAW_TAURI_LOCALE__", {
+      value: config.shellLocale === "pt-PT" ? "pt-PT" : "en",
+      configurable: false,
+    });
+  }
+  if (config.localeOnly) {
+    return;
+  }
   const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
   let enabled = !dashboard;
   let installed = false;
@@ -21,7 +70,9 @@
     document.documentElement.classList.toggle("openclaw-window-fullscreen", state.fullscreen);
     document.documentElement.classList.toggle("openclaw-window-unfocused", !state.focused);
     if (maximize) {
-      const label = state.maximized ? "Restore window" : "Maximize window";
+      const label = state.maximized
+        ? chromeText("restoreWindow", "Restore window")
+        : chromeText("maximizeWindow", "Maximize window");
       maximize.title = label;
       maximize.setAttribute("aria-label", label);
       maximize.dataset.maximized = String(state.maximized);
@@ -46,7 +97,7 @@
       if (errorNotice) errorNotice.hidden = true;
     } catch (error) {
       if (errorNotice) {
-        errorNotice.textContent = `Window action failed: ${String(error)}`;
+        errorNotice.textContent = chromeText("windowActionFailed", "Window action failed: {error}", { error });
         errorNotice.hidden = false;
       }
     }
@@ -142,11 +193,11 @@
       controls.hidden = true;
       controls.className = "openclaw-window-controls";
       controls.setAttribute("role", "group");
-      controls.setAttribute("aria-label", "Window controls");
+      controls.setAttribute("aria-label", chromeText("windowControls", "Window controls"));
       for (const [action, label, shape] of [
-        ["minimize", "Minimize window", '<path d="M3 8h10"/>'],
-        ["toggle-maximize", "Maximize window", '<rect class="maximize" x="3.5" y="3.5" width="9" height="9"/><path class="restore" d="M5.5 3.5v-1h8v8h-1m-10-6h8v8h-8z"/>'],
-        ["close", "Close window", '<path d="m3.5 3.5 9 9m0-9-9 9"/>'],
+        ["minimize", chromeText("minimizeWindow", "Minimize window"), '<path d="M3 8h10"/>'],
+        ["toggle-maximize", chromeText("maximizeWindow", "Maximize window"), '<rect class="maximize" x="3.5" y="3.5" width="9" height="9"/><path class="restore" d="M5.5 3.5v-1h8v8h-1m-10-6h8v8h-8z"/>'],
+        ["close", chromeText("closeWindow", "Close window"), '<path d="m3.5 3.5 9 9m0-9-9 9"/>'],
       ]) {
         const button = document.createElement("button");
         button.type = "button";

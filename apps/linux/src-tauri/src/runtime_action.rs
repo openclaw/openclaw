@@ -127,15 +127,12 @@ impl Observation {
         self.0.pointer(pointer).and_then(Value::as_u64)
     }
 
-    pub(crate) fn current_runtime(&self) -> String {
-        let path = self.runtime_path();
+    pub(crate) fn current_runtime(&self) -> Option<String> {
+        let path = self.runtime_path()?;
         let kind = self
             .text("/service/runtimeIntent/pin/runtime")
             .unwrap_or("runtime");
-        match path {
-            Some(path) => format!("{kind}: {}", path.display()),
-            None => "No installed Gateway service".into(),
-        }
+        Some(format!("{kind}: {}", path.display()))
     }
 
     pub(crate) fn uses_runtime_path(&self, expected: &Path) -> bool {

@@ -1,3 +1,14 @@
+const nativeI18nReady = window["__OPENCLAW_TAURI_I18N_READY__"];
+const shellI18n = nativeI18nReady
+  ? await nativeI18nReady
+  : {
+      locale: "en",
+      text: (_key, args = {}, fallback = _key) =>
+        fallback.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/gu, (token, name) =>
+          Object.hasOwn(args, name) ? String(args[name]) : token,
+        ),
+    };
+const t = (key, fallback, args = {}) => shellI18n.text(key, args, fallback);
 const tauri = window["__TAURI__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
@@ -89,7 +100,7 @@ function render({
   activity = null,
   description,
   dot = "working",
-  eyebrow = "DESKTOP COMPANION",
+  eyebrow = t("setup.desktopCompanion", "DESKTOP COMPANION"),
   showInstall = false,
   title,
 }) {
@@ -102,17 +113,26 @@ function render({
     elements.activityLabel.textContent = activity;
   }
   const bundled = bundledRuntimeLabel();
-  elements.installButton.textContent = bundled ? "Install bundled OpenClaw" : "Install OpenClaw";
+  elements.installButton.textContent = bundled
+    ? t("setup.installBundled", "Install bundled OpenClaw")
+    : t("setup.installOpenClaw", "Install OpenClaw");
   elements.bundledInstall.textContent = bundled
-    ? `Bundled with app v${firstRunBuild.version} · ${bundled}` : "";
+    ? t("setup.bundledRuntimeLabel", "Bundled with app v{version} · {flavor}", {
+        version: firstRunBuild.version,
+        flavor: bundled,
+      })
+    : "";
   show(elements.bundledInstall, Boolean(bundled));
   show(elements.channelLabel, !bundled);
   show(elements.channelField, !bundled);
   elements.installHint.textContent = bundled
-    ? "Installs this app's bundled OpenClaw runtime in ~/.openclaw. Update the desktop app to change versions."
+    ? t(
+        "setup.installBundledHint",
+        "Installs this app's bundled OpenClaw runtime in ~/.openclaw. Update the desktop app to change versions.",
+      )
     : firstRunBuild?.platform === "freebsd"
-      ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-      : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
+      ? t("setup.installFreeBsdHint", "Installs the CLI in ~/.openclaw using your system Node.js and npm.")
+      : t("setup.installHint", "Installs OpenClaw and its managed runtime in ~/.openclaw.");
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
   show(elements.editConnection, false);
@@ -139,7 +159,9 @@ function formatInstallLine(line) {
     return line;
   }
   if (event.event === "done" && event.ok === true) {
-    return `✓ Installed${event.version ? ` ${event.version}` : ""}`;
+    return t("install.done", "✓ Installed{version}", {
+      version: event.version ? ` ${event.version}` : "",
+    });
   }
   if (event.event !== "step" || !event.name) {
     return line;
@@ -147,22 +169,31 @@ function formatInstallLine(line) {
 
   const name =
     {
-      node: "Node runtime",
-      git: "Git checkout",
-      openclaw: "OpenClaw CLI",
-      "gateway-service": "Gateway service",
-      "control-ui": "Control UI build",
-      "cli-build": "CLI build",
+      node: t("install.nodeRuntime", "Node runtime"),
+      git: t("install.gitCheckout", "Git checkout"),
+      openclaw: t("install.openClawCli", "OpenClaw CLI"),
+      "gateway-service": t("install.gatewayService", "Gateway service"),
+      "control-ui": t("install.controlUiBuild", "Control UI build"),
+      "cli-build": t("install.cliBuild", "CLI build"),
     }[event.name] || event.name;
   switch (event.status) {
     case "start":
-      return `→ ${name}${event.version ? ` ${event.version}` : ""}…`;
+      return t("install.stepStart", "→ {name}{version}…", {
+        name,
+        version: event.version ? ` ${event.version}` : "",
+      });
     case "ok":
-      return `✓ ${name}`;
+      return t("install.stepDone", "✓ {name}", { name });
     case "skip":
-      return `– ${name} skipped${event.reason ? ` (${event.reason})` : ""}`;
+      return t("install.stepSkipped", "– {name} skipped{reason}", {
+        name,
+        reason: event.reason ? ` (${event.reason})` : "",
+      });
     case "warn":
-      return `! ${name}${event.reason ? `: ${event.reason}` : ""}`;
+      return t("install.stepWarning", "! {name}{reason}", {
+        name,
+        reason: event.reason ? `: ${event.reason}` : "",
+      });
     default:
       return line;
   }
@@ -201,7 +232,7 @@ function friendlyError(error) {
   if (typeof error === "string") {
     return error;
   }
-  return error?.message || "OpenClaw could not complete the operation.";
+  return error?.message || t("setup.operationFailed", "OpenClaw could not complete the operation.");
 }
 
 function gatewayHost(gateway) {
@@ -210,14 +241,16 @@ function gatewayHost(gateway) {
 
 function renderGateways(gateways) {
   elements.gatewayList.replaceChildren();
-  elements.discoveryStatus.textContent = gateways.length ? `${gateways.length} FOUND` : "SEARCHING";
+  elements.discoveryStatus.textContent = gateways.length
+    ? t("setup.gatewaysFound", "{count} FOUND", { count: gateways.length })
+    : t("setup.searching", "SEARCHING");
   elements.remoteSubtitle.textContent = gateways.length
-    ? `${gateways.length} nearby Gateway${gateways.length === 1 ? "" : "s"} found on your network.`
-    : "Connect to a Gateway running elsewhere.";
+    ? t("setup.nearbyGatewaysFound", "Nearby Gateways found: {count}", { count: gateways.length })
+    : t("setup.remoteSubtitle", "Connect to a Gateway running elsewhere.");
   if (!gateways.length) {
     const empty = document.createElement("p");
     empty.className = "discovery-empty";
-    empty.textContent = "Looking for nearby OpenClaw gateways…";
+    empty.textContent = t("setup.lookingNearby", "Looking for nearby OpenClaw gateways…");
     elements.gatewayList.append(empty);
     return;
   }
@@ -230,7 +263,10 @@ function renderGateways(gateways) {
       gateway.tls || gateway.directReachable || gatewayHost(gateway).toLowerCase().endsWith(".ts.net")
     );
     if (button.disabled) {
-      button.title = "This gateway does not advertise a direct connection.";
+      button.title = t(
+        "setup.gatewayNoDirectConnection",
+        "This gateway does not advertise a direct connection.",
+      );
     }
 
     const copy = document.createElement("span");
@@ -267,11 +303,11 @@ function renderGateways(gateways) {
       })
         .then(() => {
           button.disabled = false;
-          elements.discoveryStatus.textContent = "WINDOW OPENED";
+          elements.discoveryStatus.textContent = t("setup.windowOpened", "WINDOW OPENED");
         })
         .catch(() => {
           button.disabled = false;
-          elements.discoveryStatus.textContent = "CONNECT FAILED";
+          elements.discoveryStatus.textContent = t("setup.connectFailed", "CONNECT FAILED");
         });
     });
     elements.gatewayList.append(button);
@@ -292,7 +328,7 @@ async function refreshGateways() {
     }
   } catch {
     discoverySignature = null;
-    elements.discoveryStatus.textContent = "UNAVAILABLE";
+    elements.discoveryStatus.textContent = t("setup.unavailable", "UNAVAILABLE");
   } finally {
     discoveryPending = false;
   }
@@ -300,14 +336,16 @@ async function refreshGateways() {
 
 async function connect(action) {
   render(action ? {
-    activity: `${action === "restart" ? "Restarting" : "Starting"} gateway…`,
-    description: "OpenClaw is waiting for the local gateway to become healthy.",
-    eyebrow: "GATEWAY",
-    title: "One moment",
+    activity: action === "restart"
+      ? t("setup.restartingGateway", "Restarting Gateway…")
+      : t("setup.startingGateway", "Starting Gateway…"),
+    description: t("setup.waitingForGateway", "OpenClaw is waiting for the local Gateway to become healthy."),
+    eyebrow: t("setup.gatewayEyebrow", "GATEWAY"),
+    title: t("setup.oneMoment", "One moment"),
   } : {
-    activity: "Checking local services…",
-    description: "Finding your gateway and preparing the Control UI.",
-    title: "Connecting to OpenClaw",
+    activity: t("setup.checkingLocalServices", "Checking local services…"),
+    description: t("setup.preparingControlUi", "Finding your gateway and preparing the Control UI."),
+    title: t("setup.connecting", "Connecting to OpenClaw"),
   });
   try {
     if (action) {
@@ -336,10 +374,10 @@ async function connect(action) {
 function renderWelcome() {
   render({
     description:
-      "Your personal AI assistant, living wherever you choose. It answers questions, works with your files and apps, and can chat with you wherever you are.",
+      t("setup.welcomeDescription", "Your personal AI assistant, living wherever you choose. It answers questions, works with your files and apps, and can chat with you wherever you are."),
     dot: "idle",
-    eyebrow: "WELCOME",
-    title: "Welcome to OpenClaw",
+    eyebrow: t("setup.welcomeEyebrow", "WELCOME"),
+    title: t("setup.welcomeTitle", "Welcome to OpenClaw"),
   });
   show(elements.discovery, false);
   show(elements.welcomeScreen, true);
@@ -349,16 +387,20 @@ function renderConnectionChoices(error = null) {
   const freebsd = firstRunBuild?.platform === "freebsd";
   const bundled = bundledRuntimeLabel();
   elements.localSubtitle.textContent = freebsd
-    ? "Connect to a Gateway you start with the FreeBSD service or in a terminal."
-    : bundled ? `Bundled with app v${firstRunBuild.version} · ${bundled}. Installs and starts automatically.`
-    : "Private to this computer. Installs and starts automatically.";
+    ? t("setup.freeBsdLocalSubtitle", "Connect to a Gateway you start with the FreeBSD service or in a terminal.")
+    : bundled
+      ? t("setup.bundledLocalSubtitle", "Bundled with app v{version} · {flavor}. Installs and starts automatically.", {
+          version: firstRunBuild.version,
+          flavor: bundled,
+        })
+      : t("setup.localSubtitle", "Private to this computer. Installs and starts automatically.");
   render({
     description: error || (freebsd
-      ? "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding."
-      : "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background."),
+      ? t("setup.freeBsdChoiceHelp", "On FreeBSD, install the CLI if needed, then start your Gateway with the openclaw package service or run openclaw gateway run in a terminal. Connect here using the same account you used for onboarding.")
+      : t("setup.localChoiceHelp", "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.")),
     dot: error ? "error" : "idle",
-    eyebrow: "CHOOSE YOUR GATEWAY",
-    title: "Where should your assistant live?",
+    eyebrow: t("setup.chooseGatewayEyebrow", "CHOOSE YOUR GATEWAY"),
+    title: t("setup.chooseGatewayTitle", "Where should your assistant live?"),
   });
   show(elements.connectionChoices, true);
   show(elements.setupProgress, true);
@@ -375,11 +417,14 @@ function selectConnection(connection) {
   elements.connectionRemote.classList.toggle("selected", isRemote);
   elements.connectionLocal.setAttribute("aria-pressed", String(!isRemote));
   elements.connectionRemote.setAttribute("aria-pressed", String(isRemote));
-  elements.footerMode.textContent = isRemote ? "REMOTE GATEWAY" : "LOCAL GATEWAY";
+  elements.footerMode.textContent = isRemote
+    ? t("setup.remoteGateway", "REMOTE GATEWAY")
+    : t("setup.localGateway", "LOCAL GATEWAY");
   show(elements.remoteDetails, isRemote);
   show(elements.setupContinue, !isRemote && !editingConnection);
   elements.setupContinue.textContent = bundledRuntimeLabel() && firstRunPhase === "missingCli"
-    ? "Install bundled OpenClaw" : "Continue";
+    ? t("setup.installBundled", "Install bundled OpenClaw")
+    : t("common.continue", "Continue");
   show(elements.discovery, isRemote);
   if (isRemote) {
     void refreshGateways();
@@ -405,7 +450,9 @@ function revealRemoteCredential(revealed) {
   elements.remoteCredentialToggle.setAttribute("aria-pressed", String(revealed));
   elements.remoteCredentialToggle.setAttribute(
     "aria-label",
-    revealed ? "Hide credential" : "Show credential",
+    revealed
+      ? t("setup.hideCredential", "Hide credential")
+      : t("setup.showCredential", "Show credential"),
   );
 }
 
@@ -462,7 +509,9 @@ async function connectRemoteGateway() {
     endpoint.setAttribute("aria-invalid", "true");
     endpoint.focus();
     showRemoteFeedback(
-      isDirect ? "Enter a Gateway URL to continue." : "Enter an SSH target to continue.",
+      isDirect
+        ? t("setup.enterGatewayUrl", "Enter a Gateway URL to continue.")
+        : t("setup.enterSshTarget", "Enter an SSH target to continue."),
       true,
     );
     return;
@@ -473,7 +522,7 @@ async function connectRemoteGateway() {
   if (!isDirect && (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)) {
     elements.remotePort.setAttribute("aria-invalid", "true");
     elements.remotePort.focus();
-    showRemoteFeedback("Enter a Gateway port between 1 and 65535.", true);
+    showRemoteFeedback(t("setup.enterGatewayPortRange", "Enter a Gateway port between 1 and 65535."), true);
     return;
   }
 
@@ -482,7 +531,7 @@ async function connectRemoteGateway() {
   remoteConnectionPending = true;
   elements.remoteConnect.disabled = true;
   elements.setupContinue.disabled = true;
-  showRemoteFeedback("Preparing the remote dashboard…", false);
+  showRemoteFeedback(t("setup.preparingRemoteDashboard", "Preparing the remote dashboard…"), false);
 
   try {
     await invoke("connect_remote_gateway", {
@@ -497,7 +546,7 @@ async function connectRemoteGateway() {
           : null,
       remotePort: isDirect ? null : remotePort,
     });
-    showRemoteFeedback("Opening the remote dashboard…", false);
+    showRemoteFeedback(t("setup.openingRemoteDashboard", "Opening the remote dashboard…"), false);
   } catch (error) {
     showRemoteFeedback(friendlyError(error), true);
   } finally {
@@ -517,11 +566,11 @@ function renderRemoteRetry(message) {
   editingConnection = true;
   renderAction(
     {
-      actionLabel: "Retry",
-      description: message || "Open Connection Settings to check the remote Gateway.",
+      actionLabel: t("common.retry", "Retry"),
+      description: message || t("setup.remoteRetryHelp", "Open Connection Settings to check the remote Gateway."),
       dot: "error",
-      eyebrow: "REMOTE GATEWAY",
-      title: "Connection needs attention",
+      eyebrow: t("setup.remoteGateway", "REMOTE GATEWAY"),
+      title: t("setup.connectionNeedsAttention", "Connection needs attention"),
     },
     retryRemote,
   );
@@ -555,10 +604,10 @@ async function editConnection() {
   activeRemoteRetry = null;
   editingConnection = true;
   render({
-    description: "Update the remote Gateway address or authentication.",
+    description: t("setup.updateRemoteConnection", "Update the remote Gateway address or authentication."),
     dot: "idle",
-    eyebrow: "REMOTE GATEWAY",
-    title: "Connection Settings",
+    eyebrow: t("setup.remoteGateway", "REMOTE GATEWAY"),
+    title: t("setup.connectionSettings", "Connection Settings"),
   });
   show(elements.connectionChoices, true);
   show(elements.connectionLocal, false);
@@ -574,7 +623,7 @@ async function editConnection() {
   syncRemoteAuthentication();
   revealRemoteCredential(false);
   elements.remoteCredentialHint.textContent =
-    "Saved credentials stay hidden. Leave blank to keep them for the same connection.";
+    t("setup.savedCredentialsHint", "Saved credentials stay hidden. Leave blank to keep them for the same connection.");
   try {
     const settings = await invoke("bootstrap", { connectionSettings: true });
     const remote = settings.remote;
@@ -587,7 +636,7 @@ async function editConnection() {
     }
     if (remote) {
       primaryAction = retryRemote;
-      elements.primaryAction.textContent = "Retry";
+      elements.primaryAction.textContent = t("common.retry", "Retry");
       show(elements.actionControls, true);
     }
   } catch (error) {
@@ -610,32 +659,32 @@ async function install() {
   elements.installButton.disabled = true;
   elements.channel.disabled = true;
   elements.installLog.textContent = "";
-  elements.logStatus.textContent = "RUNNING";
+  elements.logStatus.textContent = t("setup.running", "RUNNING");
   show(elements.logWrap, true);
   render({
-    activity: "Installing OpenClaw…",
+    activity: t("setup.installingOpenClaw", "Installing OpenClaw…"),
     description:
       bundledRuntimeLabel()
-        ? "This app's bundled OpenClaw runtime is being installed in your home directory."
+        ? t("setup.installingBundledRuntime", "This app's bundled OpenClaw runtime is being installed in your home directory.")
         : firstRunBuild?.platform === "freebsd"
-        ? "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation."
-        : "OpenClaw and its managed runtime are being installed in your home directory.",
-    eyebrow: "INSTALLING",
-    title: "Preparing your companion",
+        ? t("setup.installingFreeBsdCli", "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation.")
+        : t("setup.installingRuntime", "OpenClaw and its managed runtime are being installed in your home directory."),
+    eyebrow: t("setup.installingEyebrow", "INSTALLING"),
+    title: t("setup.preparingCompanion", "Preparing your companion"),
   });
   try {
     await invoke("install_cli", { channel: bundledRuntimeLabel() ? "stable" : elements.channel.value });
-    elements.logStatus.textContent = "COMPLETE";
+    elements.logStatus.textContent = t("setup.complete", "COMPLETE");
   } catch (error) {
     const message = friendlyError(error);
-    elements.logStatus.textContent = "FAILED";
+    elements.logStatus.textContent = t("setup.failed", "FAILED");
     appendLog(message);
     render({
       description: message,
       dot: "error",
-      eyebrow: "SETUP ISSUE",
+      eyebrow: t("setup.issueEyebrow", "SETUP ISSUE"),
       showInstall: true,
-      title: "OpenClaw needs attention",
+      title: t("setup.needsAttention", "OpenClaw needs attention"),
     });
   } finally {
     elements.installButton.disabled = false;
@@ -647,14 +696,14 @@ function renderRetry(message) {
   show(elements.logWrap, false);
   renderAction(
     {
-      actionLabel: "Try again",
+      actionLabel: t("common.tryAgain", "Try again"),
       description: message,
       dot: "error",
-      eyebrow: "CONNECTION ISSUE",
+      eyebrow: t("setup.connectionIssue", "CONNECTION ISSUE"),
       // A broken managed CLI can only be replaced by reinstalling; retry alone
       // must never be the sole exit from a connection failure.
       showInstall: true,
-      title: "OpenClaw needs attention",
+      title: t("setup.needsAttention", "OpenClaw needs attention"),
     },
     connect,
   );
@@ -716,40 +765,45 @@ elements.updateDismiss.addEventListener("click", () => {
 await listen("install-progress", ({ payload }) => appendLog(payload.line));
 await listen("updater://not-available", () => {
   renderUpdate({
-    message: "No update is available.",
-    title: "OpenClaw is up to date",
+    message: t("update.noneAvailable", "No update is available."),
+    title: t("update.upToDate", "OpenClaw is up to date"),
   });
 });
 await listen("updater://available", ({ payload }) => {
   elements.updateProgress.removeAttribute("value");
   renderUpdate({
-    message: "Downloading in the background…",
+    message: t("update.downloading", "Downloading in the background…"),
     progress: true,
-    title: `Update available v${payload.version} — downloading…`,
+    title: t("update.downloadingVersion", "Update available v{version} — downloading…", { version: payload.version }),
   });
 });
 await listen("updater://progress", ({ payload }) => {
   if (payload.total) {
     elements.updateProgress.max = payload.total;
     elements.updateProgress.value = payload.downloaded;
-    elements.updateMessage.textContent = `${formatBytes(payload.downloaded)} of ${formatBytes(payload.total)}`;
+    elements.updateMessage.textContent = t("update.downloadProgress", "{downloaded} of {total}", {
+      downloaded: formatBytes(payload.downloaded),
+      total: formatBytes(payload.total),
+    });
   } else {
     elements.updateProgress.removeAttribute("value");
-    elements.updateMessage.textContent = `${formatBytes(payload.downloaded)} downloaded`;
+    elements.updateMessage.textContent = t("update.downloaded", "{size} downloaded", {
+      size: formatBytes(payload.downloaded),
+    });
   }
 });
 await listen("updater://ready", ({ payload }) => {
   renderUpdate({
     action: () => invoke("relaunch"),
-    actionLabel: "Restart to update",
-    message: `Version v${payload.version} is installed and ready.`,
-    title: "Update ready",
+    actionLabel: t("update.restartToUpdate", "Restart to update"),
+    message: t("update.readyMessage", "Version v{version} is installed and ready.", { version: payload.version }),
+    title: t("update.ready", "Update ready"),
   });
 });
 await listen("updater://available-manual", ({ payload }) => {
   const availableUpdate = {
-    message: "Install the latest system package from the release page.",
-    title: `Update available v${payload.version}`,
+    message: t("update.manualMessage", "Install the latest system package from the release page."),
+    title: t("update.available", "Update available v{version}", { version: payload.version }),
   };
   const openDownloadPage = async () => {
     let result = availableUpdate;
@@ -758,7 +812,7 @@ await listen("updater://available-manual", ({ payload }) => {
     } catch (error) {
       result = {
         message: friendlyError(error),
-        title: "Could not open release page",
+        title: t("update.openPageFailed", "Could not open release page"),
       };
     }
     if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
@@ -767,19 +821,19 @@ await listen("updater://available-manual", ({ payload }) => {
     renderUpdate({
       ...result,
       action: openDownloadPage,
-      actionLabel: "Open download page",
+      actionLabel: t("update.openDownloadPage", "Open download page"),
     });
   };
   renderUpdate({
     ...availableUpdate,
     action: openDownloadPage,
-    actionLabel: "Open download page",
+    actionLabel: t("update.openDownloadPage", "Open download page"),
   });
 });
 await listen("updater://error", ({ payload }) => {
   renderUpdate({
     message: payload.message,
-    title: "Update check failed",
+    title: t("update.checkFailed", "Update check failed"),
   });
 });
 void invoke("updater_ready");
@@ -790,12 +844,14 @@ const mode = new URLSearchParams(window.location.search).get("mode");
 firstRunBuild = await invoke("build_info").catch(() => null);
 if (firstRunBuild?.runtimeFlavor === "jit" || firstRunBuild?.runtimeFlavor === "aot") {
   elements.runtimeFlavor.textContent = firstRunBuild.runtimeFlavor === "aot"
-    ? "BUNDLED AOT · EXPERIMENTAL"
-    : "BUNDLED JIT";
+    ? t("setup.bundledAot", "BUNDLED AOT · EXPERIMENTAL")
+    : t("setup.bundledJit", "BUNDLED JIT");
   if (firstRunBuild.testProfile) {
-    elements.runtimeFlavor.textContent += ` · PROFILE ${firstRunBuild.testProfile.toUpperCase()}`;
+    elements.runtimeFlavor.textContent += t("setup.profileLabel", " · PROFILE {profile}", {
+      profile: firstRunBuild.testProfile.toUpperCase(),
+    });
   }
-  elements.runtimeFlavor.title = `OpenClaw ${firstRunBuild.version}`;
+  elements.runtimeFlavor.title = t("setup.runtimeVersion", "OpenClaw {version}", { version: firstRunBuild.version });
   show(elements.runtimeFlavor, true);
   show(elements.runtimeSeparator, true);
 }
@@ -805,34 +861,34 @@ if (mode === "connectionSettings") {
   renderRemoteRetry();
 } else if (mode === "missingCli") {
   render({
-    description: "Install the OpenClaw CLI to connect to a local Gateway.",
+    description: t("setup.installCliDescription", "Install the OpenClaw CLI to connect to a local Gateway."),
     dot: "idle",
-    eyebrow: "CLI REQUIRED",
+    eyebrow: t("setup.cliRequired", "CLI REQUIRED"),
     showInstall: true,
-    title: "OpenClaw needs the CLI",
+    title: t("setup.needsCli", "OpenClaw needs the CLI"),
   });
 } else if (mode === "reconnecting") {
   render({
-    activity: "Retrying every few seconds…",
+    activity: t("setup.retryingEveryFewSeconds", "Retrying every few seconds…"),
     description:
-      "The gateway connection dropped. OpenClaw will restore the dashboard automatically.",
-    eyebrow: "GATEWAY OFFLINE",
-    title: "Reconnecting",
+      t("setup.gatewayConnectionDropped", "The Gateway connection dropped. OpenClaw will restore the dashboard automatically."),
+    eyebrow: t("setup.gatewayOffline", "GATEWAY OFFLINE"),
+    title: t("setup.reconnecting", "Reconnecting"),
   });
 } else if (mode === "stopped") {
   renderAction(
     {
-      actionLabel: "Start Gateway",
+      actionLabel: t("setup.startGateway", "Start Gateway"),
       description:
-        "The gateway is stopped. The desktop companion will remain available in the tray.",
+        t("setup.gatewayStoppedDescription", "The Gateway is stopped. The desktop companion will remain available in the tray."),
       dot: "idle",
-      eyebrow: "GATEWAY STOPPED",
-      title: "OpenClaw is standing by",
+      eyebrow: t("setup.gatewayStopped", "GATEWAY STOPPED"),
+      title: t("setup.standingBy", "OpenClaw is standing by"),
     },
     () => connect("start"),
   );
 } else if (mode === "error") {
-  renderRetry("The last gateway action failed. Check the service, then retry.");
+  renderRetry(t("setup.lastGatewayActionFailed", "The last Gateway action failed. Check the service, then retry."));
 } else {
   await connect();
 }

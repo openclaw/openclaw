@@ -4,9 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>Quick Chat</title>
+    <title data-i18n="quickChat.windowTitle">Quick Chat</title>
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="quickchat.css" />
+    <script src="i18n/catalog.js" defer></script>
+    <script src="tauri-i18n.js" defer></script>
   </head>
   <body>
     <main id="composer" class="composer">
@@ -15,6 +17,7 @@
         class="agent-chip"
         type="button"
         aria-label="Choose agent"
+        data-i18n-aria-label="quickChat.chooseAgent"
         aria-haspopup="menu"
         aria-expanded="false"
       >
@@ -23,15 +26,15 @@
           <path d="m5 6.5 3 3 3-3" />
         </svg>
       </button>
-      <section id="reply" class="reply" aria-label="Agent reply" aria-live="polite" hidden>
+      <section id="reply" class="reply" aria-label="Agent reply" data-i18n-aria-label="quickChat.agentReply" aria-live="polite" hidden>
         <header class="reply-header">
-          <span id="reply-agent-name" class="reply-agent-name">Agent</span>
+          <span id="reply-agent-name" class="reply-agent-name" data-i18n="quickChat.agentDefault">Agent</span>
           <span id="reply-state" class="reply-state" aria-hidden="true"></span>
         </header>
         <div id="reply-scroll" class="reply-scroll">
           <div class="reply-prompt-row"><p id="reply-prompt" class="reply-prompt"></p></div>
           <div id="reply-text" class="reply-text"></div>
-          <span id="reply-thinking" class="reply-thinking">Thinking…</span>
+          <span id="reply-thinking" class="reply-thinking" data-i18n="quickChat.thinking">Thinking…</span>
           <p id="reply-error" class="status reply-error" role="alert"></p>
         </div>
         <div id="reply-widgets" class="reply-widgets" hidden></div>
@@ -43,7 +46,9 @@
             id="message"
             rows="1"
             placeholder="Message Agent"
+            data-i18n-placeholder="quickChat.messageDefault"
             aria-label="Quick Chat message"
+            data-i18n-aria-label="quickChat.messageLabel"
             autocomplete="off"
           ></textarea>
           <button
@@ -51,6 +56,7 @@
             class="icon-button toggle-reply"
             type="button"
             aria-label="Expand reply"
+            data-i18n-aria-label="quickChat.expandReply"
             aria-expanded="false"
             aria-controls="reply"
             disabled
@@ -63,7 +69,7 @@
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="M11 3h6v6m0-6-8 8M8 4H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1v-4" />
             </svg>
-            <span>Open dashboard</span>
+            <span data-i18n="quickChat.openDashboard">Open dashboard</span>
           </button>
           <span class="controls-spacer"></span>
           <button
@@ -71,6 +77,7 @@
             class="icon-button gear"
             type="button"
             aria-label="Quick Chat shortcut settings"
+            data-i18n-aria-label="quickChat.shortcutSettingsLabel"
             aria-expanded="false"
             hidden
           >
@@ -79,22 +86,22 @@
               <circle cx="12" cy="12" r="3" />
             </svg>
           </button>
-          <button id="send" class="send" type="button" aria-label="Send message" disabled>
+          <button id="send" class="send" type="button" aria-label="Send message" data-i18n-aria-label="quickChat.sendMessage" disabled>
             <span id="send-icon" class="send-icon" aria-hidden="true">↑</span>
           </button>
         </div>
       </div>
     </main>
-    <section id="agent-menu" class="popover" aria-label="Choose agent" hidden>
-      <div class="popover-title">Agents</div>
+    <section id="agent-menu" class="popover" aria-label="Choose agent" data-i18n-aria-label="quickChat.chooseAgent" hidden>
+      <div class="popover-title" data-i18n="quickChat.agents">Agents</div>
       <div id="agent-list" class="agent-list" role="menu"></div>
     </section>
     <section id="shortcut-settings" class="popover shortcut-settings" hidden>
-      <div class="popover-title">Quick Chat shortcut</div>
+      <div class="popover-title" data-i18n="quickChat.shortcutSettings">Quick Chat shortcut</div>
       <div class="shortcut-row">
         <code id="shortcut-value" class="shortcut-value"></code>
-        <button id="shortcut-capture" class="subtle-button" type="button">Press new shortcut</button>
-        <button id="shortcut-reset" class="subtle-button" type="button">Reset</button>
+        <button id="shortcut-capture" class="subtle-button" type="button" data-i18n="quickChat.pressNewShortcut">Press new shortcut</button>
+        <button id="shortcut-reset" class="subtle-button" type="button" data-i18n="common.reset">Reset</button>
       </div>
       <p id="shortcut-error" class="shortcut-error" role="alert"></p>
     </section>
