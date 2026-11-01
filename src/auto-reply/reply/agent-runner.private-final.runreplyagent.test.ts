@@ -386,7 +386,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it.each(["required", "optional"] as const)(
-    "accounts for a %s NO_REPLY turn when metadata payloads remain",
+    "honors successful %s NO_REPLY when only metadata payloads remain",
     async (terminalReplyExpectation) => {
       const onDeliberateSilentTerminalReply = vi.fn();
       const { result } = await runPrivateFinalCase({
@@ -398,13 +398,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       });
       const payloads = normalizeReplyPayloads(result);
       const failures = payloads.filter((payload) => payload.isError === true);
-      if (terminalReplyExpectation === "required") {
-        expect(failures).toEqual([expect.objectContaining({ text: expect.any(String) })]);
-        expect(onDeliberateSilentTerminalReply).not.toHaveBeenCalled();
-      } else {
-        expect(failures).toEqual([]);
-        expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
-      }
+      expect(failures).toEqual([]);
+      expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
       expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
       expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     },
