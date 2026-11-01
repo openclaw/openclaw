@@ -6,6 +6,7 @@ import type {
   SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createCorePluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import type { OpenClawIdAccount } from "./account-sign-in.js";
 import type { DeviceTokenBinding } from "./device-token-binding.js";
 
 /** Everything the Gateway keeps about its claw. */
@@ -58,6 +59,30 @@ export type InviteReport = {
   resolution?: "approved" | "denied" | "expired";
   resolved_at?: number;
 };
+
+/** Refuses recovery if an awaited lookup belongs to a root or binding that has since changed. */
+export function assertSameClawIdentity(
+  current: StoredClaw | undefined,
+  expected: StoredClaw,
+): void {
+  if (
+    current?.binding !== expected.binding ||
+    current?.authority?.anchor.root_pub !== expected.authority?.anchor.root_pub
+  ) {
+    throw new Error("claw identity changed during registration recovery");
+  }
+}
+
+/** Keeps verified display claims JSON-safe without retaining missing fields or token metadata. */
+export function storedOwnerProfile(
+  account: OpenClawIdAccount,
+): NonNullable<StoredClaw["owner_profile"]> {
+  return {
+    sub: account.sub,
+    ...(typeof account.email === "string" ? { email: account.email } : {}),
+    ...(typeof account.name === "string" ? { name: account.name } : {}),
+  };
+}
 
 const RECORD_KEY = "current";
 

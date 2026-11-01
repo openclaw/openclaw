@@ -57,6 +57,7 @@ ready message.
 | createEnrollmentCode    | `POST /v1/enrollment-codes`                           | user                                      | - -> `{ code, expires_at }` (one-time, 10 min)                                                     |
 | checkClawName           | `POST /v1/claw-names`                                 | gateway (any K_gw; the code is not spent) | `{ code, name }` -> `{ name, account_tag, hostname, available }`                                   |
 | registerClaw            | `POST /v1/claws`                                      | gateway (key = binding.k_gw)              | `{ code, descriptor }` -> `{ claw_id, owner_account_id }`                                          |
+| getRegistration         | `GET /v1/claws/{claw_id}/registration`                | gateway (current registered K_gw only)    | -> `{ claw_id, owner_account_id, descriptor }`; no account-session fallback                        |
 | listClaws               | `GET /v1/claws`                                       | user                                      | -> `{ claws: [{ claw_id, hostname, name, relationship, role, online, descriptor_published_at }] }` |
 | publishDescriptor       | `PUT /v1/claws/{claw_id}/descriptor`                  | gateway                                   | `{ descriptor }` -> 204; `stale_binding` if binding_seq decreases                                  |
 | getDescriptor           | `GET /v1/claws/{claw_id}/descriptor`                  | user                                      | -> `{ descriptor }`                                                                                |
@@ -115,6 +116,10 @@ location.host`.
   it is free. Names are 1-57 characters of `a-z`, `0-9` and single hyphens, start with a
   letter and do not end with a hyphen (the whole label stays within 63); some names are
   reserved for service hostnames. Invalid names are `bad_request`.
+- `getRegistration` lets a Gateway recover a lost local registration receipt without relinking.
+  Only the currently registered K_gw can read it; wrong keys and unknown claws get the same 404.
+  Before retaining the account ID, the Gateway must match the returned claw ID, root public key
+  and complete signed binding to its own committed identity. It must not adopt remote authority.
 - `registerClaw` refuses a binding hostname that is not `<valid name>-<the code account's
   tag>` (`bad_request`) or that any claw ever had (`conflict`). Hostnames are never reused:
   a retired claw's hostname stays assigned.

@@ -18,6 +18,7 @@ export const DISCOVERY_ENDPOINTS = {
   createEnrollmentCode: { method: "POST", path: "/v1/enrollment-codes", auth: "user" },
   checkClawName: { method: "POST", path: "/v1/claw-names", auth: "gateway" },
   registerClaw: { method: "POST", path: "/v1/claws", auth: "gateway" },
+  getRegistration: { method: "GET", path: "/v1/claws/{claw_id}/registration", auth: "gateway" },
   listClaws: { method: "GET", path: "/v1/claws", auth: "user" },
   publishDescriptor: { method: "PUT", path: "/v1/claws/{claw_id}/descriptor", auth: "gateway" },
   getDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/descriptor", auth: "user" },
@@ -84,6 +85,9 @@ export type CheckClawNameResponse = {
 export type RegisterClawRequest = { code: string; descriptor: ClawDescriptor };
 /** Response to {@link RegisterClawRequest}. */
 export type RegisterClawResponse = { claw_id: string; owner_account_id: string };
+
+/** Own registration receipt; only the currently registered K_gw may read it. */
+export type GetRegistrationResponse = RegisterClawResponse & { descriptor: ClawDescriptor };
 
 /** One entry of GET /v1/claws. Everything except `claw_id` is reported by Discovery and display-only. */
 export type ClawListEntry = {

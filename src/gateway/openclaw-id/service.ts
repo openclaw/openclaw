@@ -292,7 +292,8 @@ export function createOpenClawIdService(params: {
   // Publishes the descriptor and a fresh snapshot; best effort, never authority.
   const publish = async (enrollmentCode?: string): Promise<PublishOutcome | undefined> => {
     const config = params.getConfig();
-    const record = (await getAuthority()).current();
+    const owner = await getAuthority();
+    let record = owner.current();
     if (!config?.discoveryUrl || !config.relayUrl || !record?.authority) {
       return undefined;
     }
@@ -302,13 +303,20 @@ export function createOpenClawIdService(params: {
       import("./gateway-key.js"),
     ]);
     const { signer } = await loadGatewaySigner(params.getStateDir());
-    const outcome = await publishClaw({
-      record,
-      relayUrl: config.relayUrl,
-      client: createDiscoveryClient({ baseUrl: config.discoveryUrl, signer }),
-      signer,
-      ...(enrollmentCode ? { enrollmentCode } : {}),
-    });
+    const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer });
+    const { reconcileRegistration } = await import("./registration-recovery.js");
+    const recoveryFailure = await reconcileRegistration(owner, client);
+    // Recovery persisted the account before publication; consume the authority's current record.
+    record = owner.current()!;
+    const outcome =
+      recoveryFailure ??
+      (await publishClaw({
+        record,
+        relayUrl: config.relayUrl,
+        client,
+        signer,
+        ...(enrollmentCode ? { enrollmentCode } : {}),
+      }));
     lastPublish = outcome;
     if (outcome.state === "published") {
       await (

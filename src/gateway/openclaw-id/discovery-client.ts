@@ -11,6 +11,7 @@ import {
   type MailboxPayload,
   type ReceiveMailResponse,
   type RegisterClawResponse,
+  type GetRegistrationResponse,
   type SendMailResponse,
   type SignedStatement,
   type StatementSigner,
@@ -83,6 +84,9 @@ export function createDiscoveryClient(params: {
     /** Registers the claw with a one-time enrollment code from the signed-in owner. */
     registerClaw: (code: string, descriptor: ClawDescriptor) =>
       call<RegisterClawResponse>("registerClaw", {}, { code, descriptor }),
+    /** Reads only this Gateway's registration, authenticated by the currently registered K_gw. */
+    getRegistration: (clawId: string) =>
+      call<GetRegistrationResponse>("getRegistration", { claw_id: clawId }),
     publishDescriptor: (descriptor: ClawDescriptor) =>
       call<void>("publishDescriptor", { claw_id: descriptor.claw_id }, { descriptor }),
     publishSnapshot: (clawId: string, snapshot: SignedStatement<"MembershipSnapshot">) =>

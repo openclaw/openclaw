@@ -43,11 +43,6 @@ export function publicationPending(record: StoredClaw | undefined): boolean {
   );
 }
 
-// True when the claw is registered at Discovery, so the Gateway can publish on its own.
-function registered(record: StoredClaw | undefined): boolean {
-  return Boolean(record?.authority && record.discovery.owner_account_id);
-}
-
 type RetryLogger = { info: (message: string) => void; warn: (message: string) => void };
 
 /** Dependencies of {@link createPublicationRetry}; delays and randomness are injectable for tests. */
@@ -162,7 +157,7 @@ export function createPublicationRetry(params: PublicationRetryParams) {
       (error: unknown): PublishOutcome => ({
         state: "failed",
         code: "internal",
-        message: String((error as Error)?.message ?? error),
+        message: error instanceof Error ? error.message : String(error),
         retryable: true,
       }),
     );
@@ -243,11 +238,11 @@ export function createPublicationRetry(params: PublicationRetryParams) {
 
     /**
      * Enables retry and refresh timers and publishes once (remote access started): pending
-     * work, and a freshly signed snapshot even when Discovery is current.
+     * work, missing registration receipts, and a fresh snapshot even when Discovery is current.
      */
     async start(): Promise<void> {
       active = true;
-      if (running || !registered(params.current())) {
+      if (running || !params.current()?.authority) {
         return;
       }
       cancelTimer();

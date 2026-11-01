@@ -30,8 +30,10 @@ import {
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { OpenClawIdAccount } from "./account-sign-in.js";
 import {
+  assertSameClawIdentity,
   readStoredClaw,
   writeStoredClaw,
+  storedOwnerProfile,
   type InviteReport,
   type StoredClaw,
 } from "./claw-store.js";
@@ -263,14 +265,7 @@ export function createOpenClawIdAuthority(
         if (owner && owner !== account.sub) {
           return;
         }
-        await commit({
-          ...current,
-          owner_profile: {
-            sub: account.sub,
-            ...(typeof account.email === "string" ? { email: account.email } : {}),
-            ...(typeof account.name === "string" ? { name: account.name } : {}),
-          },
-        });
+        await commit({ ...current, owner_profile: storedOwnerProfile(account) });
       });
     },
 
@@ -762,10 +757,13 @@ export function createOpenClawIdAuthority(
       return peers.toSorted();
     },
 
-    /** Records Discovery publication progress (best effort; never authority). */
-    recordDiscovery(update: Partial<StoredClaw["discovery"]>): Promise<void> {
+    /** Records mirror progress; recovery may require the same committed binding through settlement. */
+    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw) {
       return serialize(async () => {
         const current = await load();
+        if (expected) {
+          assertSameClawIdentity(current, expected);
+        }
         if (current) {
           const next = { ...current, discovery: { ...current.discovery, ...update } };
           const owner = next.discovery.owner_account_id;

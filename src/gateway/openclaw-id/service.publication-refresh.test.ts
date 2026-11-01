@@ -33,6 +33,7 @@ vi.mock("./mailbox-reader.js", () => ({ startMailboxReader: () => ({ stop() {} }
 
 let stateDir: string;
 let service: OpenClawIdService;
+let authority: ReturnType<typeof createOpenClawIdAuthority>;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -40,6 +41,9 @@ beforeEach(() => {
   // Fixed external Discovery answers; signing, authority and publication are real.
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.endsWith("/registration")) {
+      return Response.json({ error: { code: "not_found", message: "not found" } }, { status: 404 });
+    }
     const body = url.endsWith("/v1/claw-names")
       ? {
           name: "studio",
@@ -52,7 +56,7 @@ beforeEach(() => {
         : {};
     return new Response(JSON.stringify(body), { status: 200 });
   });
-  const authority = createOpenClawIdAuthority(memoryStore());
+  authority = createOpenClawIdAuthority(memoryStore());
   service = createOpenClawIdService({
     getConfig: () => ({
       enabled: true,
@@ -140,6 +144,90 @@ describe("service publication refresh scheduling", () => {
     await commitLink();
     await expectArmed();
   });
+
+  it.each(["matching", "wrong root", "wrong binding", "temporary outage"])(
+    "reconciles missing registration at startup only for the exact committed identity (%s)",
+    async (scenario) => {
+      await commitLink();
+      await service.stop();
+      const committed = authority.current()!;
+      await authority.recordDiscovery({
+        owner_account_id: null,
+        published_binding_seq: 0,
+        published_snapshot_seq: 0,
+      });
+      const descriptor = {
+        v: 1,
+        claw_id: committed.claw_id,
+        transport: "iroh",
+        relay_url: "https://relay.test/",
+        root_pub:
+          scenario === "wrong root"
+            ? "ed25519:" + "00".repeat(32)
+            : committed.authority!.anchor.root_pub,
+        rotations: [],
+        published_at: nowSeconds(),
+        binding:
+          scenario === "wrong binding"
+            ? {
+                ...committed.binding!,
+                body: { ...committed.binding!.body, hostname: "another.claws.test" },
+              }
+            : committed.binding,
+      };
+      const writes: string[] = [];
+      let lookups = 0;
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.endsWith("/registration")) {
+          lookups += 1;
+          expect(new Headers(init?.headers).get("openclaw-signature")).toBeTruthy();
+          if (scenario === "temporary outage" && lookups === 1) {
+            return Response.json(
+              { error: { code: "unavailable", message: "HTTP 503" } },
+              { status: 503 },
+            );
+          }
+          return Response.json({
+            claw_id: committed.claw_id,
+            owner_account_id: "acct-owner",
+            descriptor,
+          });
+        }
+        // Registration metadata must be durable before any remote publication is attempted.
+        expect(authority.current()?.discovery.owner_account_id).toBe("acct-owner");
+        writes.push(url);
+        return new Response(null, { status: 204 });
+      });
+      await service.reconcileRuntimePolicy();
+      if (scenario === "temporary outage") {
+        expect(authority.current()?.discovery.owner_account_id).toBeNull();
+        expect((await service.linkStatus()).publication).toMatchObject({
+          state: "failed",
+          code: "unavailable",
+        });
+        await vi.advanceTimersByTimeAsync(2_000);
+        // The timer starts async signing/file I/O; wait for the public completion, not timer delivery.
+        await vi.waitFor(async () => {
+          expect(lookups).toBe(2);
+          await expectArmed();
+        });
+      }
+      if (scenario === "matching" || scenario === "temporary outage") {
+        expect(authority.current()?.discovery.owner_account_id).toBe("acct-owner");
+        expect(writes.some((url) => url.endsWith("/snapshot"))).toBe(true);
+        await expectArmed();
+      } else {
+        expect(authority.current()?.discovery.owner_account_id).toBeNull();
+        expect(writes).toEqual([]);
+        expect((await service.linkStatus()).publication).toMatchObject({
+          state: "failed",
+          code: "registration_mismatch",
+        });
+      }
+    },
+  );
 
   it("arms after successful owner-key regeneration", async () => {
     await commitLink();
