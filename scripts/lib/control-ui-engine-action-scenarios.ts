@@ -53,45 +53,46 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
     });
   });
   return [
-    ...(["open", "close"] as const).map((direction): EngineScenario => ({
-      ...sidebar,
-      id: `sidebar-${direction}`,
-      explicitOnly: true,
-      viewports: ["mobile"],
-      expected: `One native activation ${direction}s the populated drawer and preserves the conversation.`,
-      prepare: async (page, gateway) => {
-        await sidebar.prepare(page, gateway);
-        if (direction === "open") {
-          await page.keyboard.press("Escape");
-          await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
-          await page
-            .locator(".shell-nav")
-            .evaluate((drawer) =>
-              Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
-            );
-        }
-      },
-      run: async (page) => {
-        if (direction === "open") {
-          await openNavigationDrawer(page);
-          if (!(await page.locator(".shell-nav :focus").first().isVisible())) {
-            throw new Error("Opening the mobile drawer must focus a control inside it");
+    ...(["open", "close"] as const).map((direction): EngineScenario =>
+      Object.assign({}, sidebar, {
+        id: `sidebar-${direction}`,
+        explicitOnly: true,
+        viewports: ["mobile"],
+        expected: `One native activation ${direction}s the populated drawer and preserves the conversation.`,
+        prepare: async (page, gateway) => {
+          await sidebar.prepare(page, gateway);
+          if (direction === "open") {
+            await page.keyboard.press("Escape");
+            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            await page
+              .locator(".shell-nav")
+              .evaluate((drawer) =>
+                Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
+              );
           }
-        } else {
-          await page.keyboard.press("Escape");
-          await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
-          await page
-            .locator(".shell-nav")
-            .evaluate((drawer) =>
-              Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
-            );
-          if ((await page.locator("#control-ui-main").getAttribute("inert")) !== null) {
-            throw new Error("Closing the mobile drawer must restore the conversation");
+        },
+        run: async (page) => {
+          if (direction === "open") {
+            await openNavigationDrawer(page);
+            if (!(await page.locator(".shell-nav :focus").first().isVisible())) {
+              throw new Error("Opening the mobile drawer must focus a control inside it");
+            }
+          } else {
+            await page.keyboard.press("Escape");
+            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            await page
+              .locator(".shell-nav")
+              .evaluate((drawer) =>
+                Promise.all(drawer.getAnimations().map((animation) => animation.finished)),
+              );
+            if ((await page.locator("#control-ui-main").getAttribute("inert")) !== null) {
+              throw new Error("Closing the mobile drawer must restore the conversation");
+            }
           }
-        }
-        return { nativeActivations: 1 };
-      },
-    })),
+          return { nativeActivations: 1 };
+        },
+      } satisfies Partial<EngineScenario>),
+    ),
     {
       ...cronSearch,
       id: "cron-unbound-input-paste",
