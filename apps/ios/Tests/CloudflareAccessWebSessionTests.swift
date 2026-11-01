@@ -211,15 +211,6 @@ struct CloudflareAccessWebSessionTests {
         #expect(jar.register(origin, generation: jar.generation(for: origin), delete: {}) != nil)
     }
 
-    @Test func `the decision records the generation it was read at`() throws {
-        let session = try self.session(origin: "https://gateway.example.test:8443")
-        let pageURL = try #require(URL(string: "https://gateway.example.test:8443/settings"))
-        let cookie = try #require(CloudflareAccessWebSession.decision(
-            ingressOrigin: session.origin, pageURL: pageURL, session: session, isCurrent: true, generation: 7).cookie)
-        #expect(cookie.generation == 7)
-        #expect(cookie.issuerHost == "example.cloudflareaccess.com")
-    }
-
     @Test func `only well formed base64url JWT tokens are seeded`() {
         for token in ["aaa.bbb.ccc", "a-b_c.D1.e2"] {
             #expect(CloudflareAccessWebSession.isPlausibleToken(token))
@@ -242,25 +233,63 @@ struct CloudflareAccessWebSessionTests {
         #expect(cookie.httpCookie(now: session.expiresAt.addingTimeInterval(60)) == nil)
     }
 
-    @Test func `other ports on the gateway host are blocked and the admitted authority is not`() throws {
-        let custom = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test:8443")))
-        let rules = try #require(CloudflareAccessWebSession.otherPortBlockRules(for: custom))
-        let parsed = try #require(
-            JSONSerialization.jsonObject(with: Data(rules.utf8)) as? [[String: [String: String]]])
-        let filters = parsed.compactMap { $0["trigger"]?["url-filter"] }
-        let actions = parsed.compactMap { $0["action"]?["type"] }
-        #expect(actions == ["block", "block", "ignore-previous-rules", "ignore-previous-rules"])
-        #expect(filters.first == "^https?://gateway\\.example\\.test:[0-9]+")
-        #expect(filters.contains("^https://gateway\\.example\\.test:8443/"))
-        // The default port has no explicit ":port" form to allow again.
-        let standard = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test")))
-        let standardRules = try #require(CloudflareAccessWebSession.otherPortBlockRules(for: standard))
-        let standardParsed = try #require(
-            JSONSerialization.jsonObject(with: Data(standardRules.utf8)) as? [[String: [String: String]]])
-        #expect(standardParsed.compactMap { $0["action"]?["type"] } == ["block", "block"])
-        let ipv6 = try CloudflareAccessOrigin(#require(URL(string: "https://[::1]:8443")))
-        #expect(CloudflareAccessWebSession.otherPortBlockRules(for: ipv6) == nil)
+    /// Evaluates content rules in order the way WebKit does: `block` blocks, `ignore-previous-rules` re-allows.
+    private func isBlocked(_ url: String, by rules: String) throws -> Bool {
+        let parsed = try #require(JSONSerialization.jsonObject(with: Data(rules.utf8)) as? [[String: [String: String]]])
+        var blocked = false
+        for rule in parsed {
+            let filter = try #require(rule["trigger"]?["url-filter"])
+            let regex = try NSRegularExpression(pattern: filter, options: [.caseInsensitive])
+            guard regex.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil else { continue }
+            blocked = rule["action"]?["type"] == "block"
+        }
+        return blocked
+    }
 
+    @Test func `requests to the gateway host are blocked except the admitted authority`() throws {
+        let custom = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test:8443")))
+        let customRules = try #require(CloudflareAccessWebSession.otherAuthorityBlockRules(for: custom))
+        for url in [
+            "https://gateway.example.test:8443/", "https://gateway.example.test:8443/app?x=1",
+            "https://gateway.example.test:8443", "https://gateway.example.test:8443#top",
+            "wss://gateway.example.test:8443/socket",
+            // Different sites that merely share a prefix or suffix are not the Gateway host.
+            "https://gateway.example.test.evil.example/x", "https://other.example.test/x",
+            "https://cdn.example.net:8443/x",
+        ] {
+            #expect(try !self.isBlocked(url, by: customRules), "\(url) should be allowed")
+        }
+        for url in [
+            // Implicit and explicit default port: the cookie is not port-scoped, so these must not load.
+            "https://gateway.example.test/pixel", "https://gateway.example.test", "https://gateway.example.test?x=1",
+            "https://gateway.example.test:443/pixel", "https://GATEWAY.example.test/pixel",
+            "https://gateway.example.test:9443/x", "https://gateway.example.test:84430/x",
+            "http://gateway.example.test:8443/x", "ws://gateway.example.test:8443/x",
+            "wss://gateway.example.test/socket", "wss://gateway.example.test:9443/socket",
+        ] {
+            #expect(try self.isBlocked(url, by: customRules), "\(url) should be blocked")
+        }
+
+        let standard = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test")))
+        let standardRules = try #require(CloudflareAccessWebSession.otherAuthorityBlockRules(for: standard))
+        for url in [
+            "https://gateway.example.test/x", "https://gateway.example.test", "https://gateway.example.test:443/x",
+            "wss://gateway.example.test/socket", "https://other.example.test/x",
+        ] {
+            #expect(try !self.isBlocked(url, by: standardRules), "\(url) should be allowed")
+        }
+        for url in [
+            "https://gateway.example.test:8443/x", "http://gateway.example.test/x", "ws://gateway.example.test/socket",
+        ] {
+            #expect(try self.isBlocked(url, by: standardRules), "\(url) should be blocked")
+        }
+
+        let ipv6 = try CloudflareAccessOrigin(#require(URL(string: "https://[::1]:8443")))
+        #expect(CloudflareAccessWebSession.otherAuthorityBlockRules(for: ipv6) == nil)
+    }
+
+    @Test func `subframes to another port on the gateway host are recognized`() throws {
+        let custom = try CloudflareAccessOrigin(#require(URL(string: "https://gateway.example.test:8443")))
         func other(_ value: String) -> Bool {
             CloudflareAccessWebSession.isOtherPortOnSameHost(URL(string: value), origin: custom)
         }

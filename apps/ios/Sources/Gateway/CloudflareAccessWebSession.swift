@@ -134,29 +134,39 @@ enum CloudflareAccessWebSession {
         return origin.contains(url) && url.standardized.path.hasPrefix("/cdn-cgi/access/login")
     }
 
-    /// Cookies are not port-scoped (RFC 6265), so keep the Dashboard from talking to other ports on the
-    /// Gateway host at all: block every `host:port` request except the admitted authority.
-    /// Returns WebKit content-rule JSON, or nil when the host is not a plain DNS name or IPv4 address.
-    static func otherPortBlockRules(for origin: CloudflareAccessOrigin) -> String? {
-        guard let host = origin.url.host?.lowercased(), !host.isEmpty,
+    /// Cookies are not port-scoped (RFC 6265), so keep the Dashboard from talking to the Gateway host at all
+    /// except through the admitted authority: block every request to the host on any port, explicit or
+    /// implicit, then allow only the admitted `host[:port]`. A custom-port origin therefore also blocks the
+    /// implicit default port. Returns WebKit content-rule JSON, or nil when the host is not a plain DNS name
+    /// or IPv4 address. `webScheme` and `socketScheme` name the admitted transports (tests use cleartext).
+    static func otherAuthorityBlockRules(for origin: CloudflareAccessOrigin) -> String? {
+        self.blockRules(host: origin.url.host, port: origin.url.port, webScheme: "https", socketScheme: "wss")
+    }
+
+    static func blockRules(host: String?, port: Int?, webScheme: String, socketScheme: String) -> String? {
+        guard let host = host?.lowercased(), !host.isEmpty,
               host.utf8.allSatisfy({ byte in
                   (byte >= 0x30 && byte <= 0x39) || (byte >= 0x61 && byte <= 0x7A) || byte == 0x2D || byte == 0x2E
               })
         else { return nil }
         let escaped = host.replacingOccurrences(of: ".", with: "\\.")
         var rules: [[String: Any]] = []
-        for scheme in ["https?", "wss?"] {
-            rules.append([
-                "trigger": ["url-filter": "^\(scheme)://\(escaped):[0-9]+"],
-                "action": ["type": "block"],
-            ])
+        func add(_ filter: String, _ action: String) {
+            rules.append(["trigger": ["url-filter": filter], "action": ["type": action]])
         }
-        if let port = origin.url.port {
-            for scheme in ["https", "wss"] {
-                rules.append([
-                    "trigger": ["url-filter": "^\(scheme)://\(escaped):\(port)/"],
-                    "action": ["type": "ignore-previous-rules"],
-                ])
+        // The authority must end at ':', a path/query/fragment delimiter, or the end of the URL, so
+        // `gateway.example.test.evil.example` is not mistaken for the host.
+        for scheme in ["https?", "wss?"] {
+            add("^\(scheme)://\(escaped)[:/?#]", "block")
+            add("^\(scheme)://\(escaped)$", "block")
+        }
+        let defaultPort = webScheme == "https" ? 443 : 80
+        let port = port ?? defaultPort
+        let authorities = port == defaultPort ? [escaped, "\(escaped):\(port)"] : ["\(escaped):\(port)"]
+        for scheme in [webScheme, socketScheme] {
+            for authority in authorities {
+                add("^\(scheme)://\(authority)[/?#]", "ignore-previous-rules")
+                add("^\(scheme)://\(authority)$", "ignore-previous-rules")
             }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys]) else { return nil }

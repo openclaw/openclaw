@@ -685,7 +685,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     {
         let jar = CloudflareAccessWebCookieJar.shared
         guard let cookie = accessCookie.httpCookie(),
-              let rules = CloudflareAccessWebSession.otherPortBlockRules(for: accessCookie.origin),
+              let rules = CloudflareAccessWebSession.otherAuthorityBlockRules(for: accessCookie.origin),
               let id = jar.register(
                   accessCookie.origin,
                   generation: accessCookie.generation,
