@@ -6,7 +6,6 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import { withOpenClawAgentDatabaseRuntime } from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -146,90 +145,82 @@ async function persistPreparedInlineAuthFailure(
     try {
       return await runOpenClawAgentWriteAdmission(
         databaseTarget,
-        () =>
-          withOpenClawAgentDatabaseRuntime(
+        async () => {
+          const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
             databaseTarget,
-            async (database) => {
-              const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
-                databaseTarget,
-                database.db,
-                {
-                  moduleUrl: resolveRuntimeWorkerUrl(
-                    runtimeProcessEntrypoints.authProfileInlineUsage,
-                  ),
-                  input: {},
-                },
-              );
-              const executionResult = await withAuthProfileCleanup(
-                () =>
-                  client.run(async (scope) => {
-                    const readTarget = () =>
-                      scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined });
-                    const rows = await readTarget();
-                    const store = loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath);
-                    hasCredentials = Object.keys(store?.profiles ?? {}).length > 0;
-                    assertCurrent();
-                    const result = await scope.execute({
-                      type: "authProfiles.inlineFailure",
-                      input: {
-                        ...input,
-                        inheritedUsageStats,
-                        expectedCredentials:
-                          rows.store.status === "readable" ? rows.store.raw : null,
-                      },
-                    });
-                    if (!result.ok) {
-                      return result;
-                    }
-                    const { receipt } = result;
-                    durableReceipt = receipt;
-                    // Publication failure cannot turn a known commit into a retryable failed write.
-                    try {
-                      await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
-                    } catch (error) {
-                      clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-                        owner.databasePath,
-                        effectiveAgentDir,
-                      );
-                      reportCommittedInlineAuthFailure(
-                        "auth usage committed but publication failed",
-                        error,
-                      );
-                    }
-                    return result;
-                  }, assertCurrent),
-                async (outcome) => {
-                  try {
-                    await client.close();
-                  } catch (cleanupError) {
-                    if (!outcome.ok) {
-                      throw new AggregateError(
-                        [outcome.error, cleanupError],
-                        "Auth usage and owner cleanup failed",
-                        { cause: cleanupError },
-                      );
-                    }
-                    if (!outcome.value.ok) {
-                      throw new AggregateError(
-                        [inlineAuthFailureError(outcome.value.error), cleanupError],
-                        "Auth usage refusal and owner cleanup failed",
-                        { cause: cleanupError },
-                      );
-                    }
-                    reportCommittedInlineAuthFailure(
-                      "auth usage committed before owner cleanup failed",
-                      cleanupError,
-                    );
-                  }
-                },
-              );
-              if (!executionResult.ok) {
-                throw inlineAuthFailureError(executionResult.error);
-              }
-              return executionResult.receipt;
+            { execution },
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.authProfileInlineUsage),
+              input: {},
             },
-            assertCurrent,
-          ),
+          );
+          const executionResult = await withAuthProfileCleanup(
+            () =>
+              client.run(async (scope) => {
+                const readTarget = () =>
+                  scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined });
+                const rows = await readTarget();
+                const store = loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath);
+                hasCredentials = Object.keys(store?.profiles ?? {}).length > 0;
+                assertCurrent();
+                const result = await scope.execute({
+                  type: "authProfiles.inlineFailure",
+                  input: {
+                    ...input,
+                    inheritedUsageStats,
+                    expectedCredentials: rows.store.status === "readable" ? rows.store.raw : null,
+                  },
+                });
+                if (!result.ok) {
+                  return result;
+                }
+                const { receipt } = result;
+                durableReceipt = receipt;
+                // Publication failure cannot turn a known commit into a retryable failed write.
+                try {
+                  await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
+                } catch (error) {
+                  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+                    owner.databasePath,
+                    effectiveAgentDir,
+                  );
+                  reportCommittedInlineAuthFailure(
+                    "auth usage committed but publication failed",
+                    error,
+                  );
+                }
+                return result;
+              }, assertCurrent),
+            async (outcome) => {
+              try {
+                await client.close();
+              } catch (cleanupError) {
+                if (!outcome.ok) {
+                  throw new AggregateError(
+                    [outcome.error, cleanupError],
+                    "Auth usage and owner cleanup failed",
+                    { cause: cleanupError },
+                  );
+                }
+                if (!outcome.value.ok) {
+                  throw new AggregateError(
+                    [inlineAuthFailureError(outcome.value.error), cleanupError],
+                    "Auth usage refusal and owner cleanup failed",
+                    { cause: cleanupError },
+                  );
+                }
+                reportCommittedInlineAuthFailure(
+                  "auth usage committed before owner cleanup failed",
+                  cleanupError,
+                );
+              }
+            },
+          );
+          if (!executionResult.ok) {
+            throw inlineAuthFailureError(executionResult.error);
+          }
+          return executionResult.receipt;
+        },
         true,
       );
     } catch (error) {
