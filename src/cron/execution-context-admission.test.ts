@@ -528,6 +528,22 @@ describe("occurrence pause", () => {
     expect(text).toContain("it was archived");
     expect(text).toContain("openclaw automations enable job-1");
   });
+
+  it("keeps a boundary emoji whole in the pause notice name", () => {
+    // 119 ASCII units + one astral emoji (2 UTF-16 units) is 121 units, so a raw
+    // slice(0, 120) would keep only the high surrogate. NonEmptyString has no
+    // maxLength, so a user-configured automation name can reach this length.
+    const name = `${"x".repeat(119)}🚀`;
+    const text = buildScheduledParentPauseNotice({
+      job: { id: "job-1", name },
+      pause: { reason: "archived", parentSessionKey: PARENT_KEY },
+    });
+    const shown = /Automation "([^"]*)"/u.exec(text)?.[1];
+    expect(shown).toBeDefined();
+    expect(shown!.length).toBeLessThanOrEqual(120);
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(loneSurrogate.test(shown!)).toBe(false);
+  });
 });
 
 describe("prepareCronRunAdmission", () => {
