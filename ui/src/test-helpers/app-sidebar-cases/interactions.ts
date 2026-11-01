@@ -282,8 +282,8 @@ describe("AppSidebar catalog session rows", () => {
 
     await dom.click(section!.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!);
     expect(
-      dom.text('[data-session-section="catalog:codex"] .sidebar-session-group-count')?.trim(),
-    ).toBe("2");
+      dom.query('[data-session-section="catalog:codex"] .sidebar-session-group-count'),
+    ).toBeNull();
   });
 
   it.each([true, false])(

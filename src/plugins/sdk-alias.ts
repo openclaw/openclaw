@@ -387,7 +387,6 @@ const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "agent-runtime-test-contracts",
   "channel-contract-testing",
   "channel-ingress-test-runtime",
-  "channel-target-testing",
   "channel-test-helpers",
   "compiled-subprocess-testing",
   "plugin-test-api",

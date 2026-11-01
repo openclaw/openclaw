@@ -84,7 +84,9 @@ describe("gateway method registry", () => {
   });
 
   it("rejects unknown core handlers", () => {
-    for (const method of "claws.status claws.update.apply claws.remove.apply".split(" ")) {
+    for (const method of "templates.status templates.update.apply templates.remove.apply".split(
+      " ",
+    )) {
       expect(() => createCoreGatewayMethodDescriptors({ [method]: handler })).toThrow(
         `gateway method handler is missing a descriptor: ${method}`,
       );
@@ -113,7 +115,7 @@ describe("gateway method registry", () => {
     ]);
     expect(registry.getScope("config.get")).toBe(READ_SCOPE);
     expect(registry.getScope("aux.approvals")).toBe("operator.approvals");
-    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
+    expect(registry.isControlPlaneWrite("templates.add.apply")).toBe(true);
     expect(registry.listMethods()).toContain("config.openFile");
     expect(registry.listAdvertisedMethods()).not.toContain("config.openFile");
     for (const descriptor of coreDescriptors) {

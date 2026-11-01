@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { getComposerTextarea, renderChatView } from "./chat-view.test-helpers.ts";
 import {
@@ -18,7 +19,7 @@ afterEach(() => {
 const workingStatus = (container: HTMLElement) =>
   container.querySelector(".chat-working-indicator__status")?.textContent;
 
-it("keeps a contention check separate from sending and the composer draft", () => {
+it("keeps a contention check separate from sending and the composer draft", async () => {
   const onRefresh = vi.fn();
   const onSend = vi.fn();
   const onDraftChange = vi.fn();
@@ -31,6 +32,7 @@ it("keeps a contention check separate from sending and the composer draft", () =
   });
   const input = getComposerTextarea(container);
   expect(input.value).toBe("My unsent draft");
+  await waitForSolid(() => expect(container.querySelector(".chat-error__refresh")).not.toBeNull());
   container.querySelector<HTMLButtonElement>(".chat-error__refresh")?.click();
   expect(onRefresh).toHaveBeenCalledOnce();
   expect(onSend).not.toHaveBeenCalled();

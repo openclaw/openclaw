@@ -277,7 +277,11 @@ describe("readGatewayServiceState", () => {
           return;
         }
         if (condition === "absent") {
-          const run = await admitUpdateCommandRun({ opts: { restart: shouldRestart }, root: home });
+          const run = await admitUpdateCommandRun({
+            env: process.env,
+            opts: { restart: shouldRestart },
+            root: home,
+          });
           expect(run.env.HOME).toBe(home);
           expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
         }

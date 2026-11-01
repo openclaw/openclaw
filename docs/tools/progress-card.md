@@ -114,7 +114,7 @@ Tests are running.
 | live flow  | running |
 ```
 
-Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. In the session hovercard, the Agent Notepad pins the bar above the note and shows that label. Other raw HTML is stripped by the Markdown sanitizer.
+Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. The session hovercard shows a compact note and the current step; it omits progress bars. Other raw HTML is stripped by the Markdown sanitizer.
 
 ## Limits
 
@@ -155,7 +155,7 @@ The progress card retains its disclosure choice for the same Gateway, session, a
 
 On mobile, open **Details → Task progress** and use **Show in chat** in the bottom-right **⋯** menu beside Refresh. It hides or restores progress in chat using the same preference as Settings, while keeping the saved card available in Details. New activity, refreshing, and navigation do not turn the preference back on.
 
-The dashboard widget and session hovercard remain separate read-only placements. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session, even when the chat-card preference is off. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm removal with a read or clear response for that session and agent.
+The dashboard widget and session hovercard remain separate read-only placements. Hover a session row in the sidebar or a session-reference link in chat to see its compact task summary, even when the chat-card preference is off. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm removal with a read or clear response for that session and agent.
 
 ### Embedded composer placements
 
@@ -181,7 +181,7 @@ Transient refresh failures retain the last loaded card. The dashboard widget sho
 
 The Details, composer, and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
 
-Without a matching terminal outcome, unfinished steps appear paused when the Gateway reports no active run or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
+The saved checklist and live activity are separate. Ending the parent turn does not complete unfinished steps. The card shows active delegated work, current child failures and stops, and a short error when available. Exact child counts appear only after the session’s own child list has loaded. Connection loss or unavailable activity is labeled explicitly; these updates do not request a new agent turn. Without a matching terminal outcome, unfinished steps appear paused when there is no active work or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
 
 ## Refresh current work status
 

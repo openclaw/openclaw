@@ -24,7 +24,6 @@ import {
   buildLmstudioReasoningEffortMap,
   LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
   LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS,
-  normalizeLmstudioTransportReasoningCompat,
 } from "./model-reasoning.js";
 
 export type LmstudioModelWire = {
@@ -195,11 +194,11 @@ function normalizeLmstudioConfiguredCompat(
   const { supportedReasoningEfforts, reasoningEffortMap, ...compat } = value;
   const normalizedEfforts = normalizeReasoningOptions(supportedReasoningEfforts);
   const normalizedMap = normalizeConfiguredReasoningEffortMap(reasoningEffortMap);
-  return normalizeLmstudioTransportReasoningCompat({
+  return {
     ...compat,
     ...(normalizedEfforts.length > 0 ? { supportedReasoningEfforts: normalizedEfforts } : {}),
     ...(normalizedMap ? { reasoningEffortMap: normalizedMap } : {}),
-  });
+  };
 }
 
 export function toFetchableLmstudioBaseUrl(value: string): string {

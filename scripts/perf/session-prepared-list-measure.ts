@@ -1,11 +1,19 @@
 // Owner-level Team-shaped list workload; transport/tool-turn proof stays in team-shape-stress.ts.
 // Run on an approved quiet host with --expose-gc --import ./scripts/tsx.mjs.
 // --collector-presentation adds prepared event rows for an unrestricted operator.
+// --list-shape sidebar|full|search|agent|mixed isolates warm list allocation and CPU per shape.
+// Shape mode seeds --sessions rows across --agents (default 8); mixed keeps the filter/page mix.
+// --reuse-fixture reopens a completed shape run; keep sessions/agents/list-shape unchanged.
+// Reused directories are serial-only. Compare revisions with separate timing/allocation passes.
+// --list-shape runtime-search exercises cold runtime-label rejection; --acp-rows gives one
+// third of rows persisted ACP ownership. --source-ref pins runtime owners to a Git revision.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -19,6 +27,7 @@ import type {
   GatewaySessionRow,
   SessionsListResult,
 } from "../../src/gateway/session-utils.types.js";
+import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
 
@@ -26,6 +35,7 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     sessions: { type: "string", default: "10800" },
+    agents: { type: "string", default: "8" },
     iterations: { type: "string", default: "1200" },
     warmup: { type: "string", default: "48" },
     "updates-per-list": { type: "string", default: "33" },
@@ -40,30 +50,115 @@ const { values } = parseArgs({
     "collector-presentation": { type: "boolean", default: false },
     "search-workload": { type: "boolean", default: false },
     "search-profile": { type: "boolean", default: false },
+    "list-shape": { type: "string" },
+    "reuse-fixture": { type: "boolean", default: false },
+    "acp-rows": { type: "boolean", default: false },
+    "source-ref": { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
 assert(values.mode === "timing" || values.mode === "allocation" || values.mode === "verify");
 assert(!values["cpu-profile"] || values.mode === "timing", "Separate CPU and heap sampling");
 assert(global.gc, "Run with --expose-gc");
-const integer = (name: "sessions" | "iterations" | "warmup" | "updates-per-list", min = 1) =>
-  parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
-const sessions = integer("sessions", 100);
+// Pin only the runtime projection owners; fixture, transport, and measurement stay identical.
+if (values["source-ref"]) {
+  const sources = new Map(
+    [
+      "src/agents/agent-runtime-metadata.ts",
+      "src/gateway/session-utils-projection.ts",
+      "src/gateway/session-utils-model.ts",
+      "src/gateway/session-utils-row.ts",
+      "src/gateway/worker-environments/placement-session-runtime.ts",
+      "src/gateway/session-row-model-facts.ts",
+      "src/gateway/session-row-projection-materialize.ts",
+      "src/gateway/session-utils-list.ts",
+    ].map((file) => [
+      new URL(`../../${file}`, import.meta.url).href,
+      execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" }),
+    ]),
+  );
+  registerHooks({
+    load(url, context, nextLoad) {
+      const source = sources.get(url);
+      return source === undefined
+        ? nextLoad(url, context)
+        : { format: "module-typescript", source, shortCircuit: true };
+    },
+  });
+}
+const integer = (
+  name: "sessions" | "agents" | "iterations" | "warmup" | "updates-per-list",
+  min = 1,
+) => parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
+const sessions = integer("sessions", values["list-shape"] ? 200 : 100);
+const agents = integer("agents", 4);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const updatesPerList = integer("updates-per-list", 0);
 const root = path.resolve(values["state-dir"]);
+const presentationSourceHash = createHash("sha256")
+  .update(readFileSync(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url)))
+  .digest("hex");
+const filterSourceHash = createHash("sha256")
+  .update(readFileSync(new URL("../../src/gateway/session-list-filters.ts", import.meta.url)))
+  .digest("hex");
 const anchor = Date.UTC(2026, 9, 25);
-const fixture = await generateTeamShapeStressFixture({
-  stateDir: root,
-  port: 40984,
-  seed: 224,
-  now: anchor,
-  sessions,
-  transcriptMiB: 0,
-});
+const siblingSessions = values["list-shape"] ? Math.floor(sessions / (agents * 2)) : 0;
+if (values["reuse-fixture"]) {
+  const previous = JSON.parse(readFileSync(path.join(root, "result.json"), "utf8"));
+  assert.equal(previous.sessions, sessions);
+  assert.equal(previous.agents, agents);
+  assert.equal(previous.listShape, values["list-shape"]);
+  assert.equal(previous.acpRows === true, values["acp-rows"]);
+  assert(values["list-shape"], "Reuse requires a completed shape workload");
+  assert(
+    !previous.metadataChurn &&
+      !previous.reconciliation &&
+      previous.updatesPerList === 0 &&
+      !values["metadata-churn"] &&
+      !values.reconciliation &&
+      updatesPerList === 0,
+    "Reuse requires non-mutating runs with --updates-per-list 0",
+  );
+}
+const fixture = values["reuse-fixture"]
+  ? {
+      summary: JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8")),
+      env: {
+        ...createGatewayBenchEnv(path.join(root, "home"), path.join(root, "openclaw.json"), {
+          startupTrace: false,
+        }),
+        OPENCLAW_STATE_DIR: root,
+        TMPDIR: path.join(root, "tmp"),
+        TMP: path.join(root, "tmp"),
+        TEMP: path.join(root, "tmp"),
+        USERPROFILE: path.join(root, "home"),
+        OPENCLAW_PROFILE: "team-shape-40984",
+        OPENCLAW_SKIP_CHANNELS: "1",
+      },
+    }
+  : await generateTeamShapeStressFixture({
+      stateDir: root,
+      port: 40984,
+      seed: 224,
+      now: anchor,
+      sessions: sessions - siblingSessions * (agents - 1),
+      transcriptMiB: 0,
+    });
 process.env = { ...fixture.env };
 const cfg: OpenClawConfig = JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+const siblings = Array.from(
+  { length: agents - 1 },
+  (_, index) =>
+    ["reviewer", "researcher", "planner", "builder", "tester", "writer", "helper"][index] ??
+    `synthetic-${index + 1}`,
+);
+if (siblingSessions && !values["reuse-fixture"]) {
+  for (const agentId of siblings) {
+    cfg.agents!.entries![agentId] = { workspace: path.join(root, "workspace", agentId) };
+  }
+  writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
+}
 const [
   config,
   memory,
@@ -103,6 +198,26 @@ if (values["search-workload"]) {
   main.model = "openai/gpt-4.1";
 }
 config.setRuntimeConfigSnapshot(cfg);
+if (siblingSessions && !values["reuse-fixture"]) {
+  const { writeSessionEntry } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+  for (const agentId of siblings) {
+    agentDb.runOpenClawAgentWriteTransaction(
+      (database) => {
+        for (let index = 0; index < siblingSessions; index++) {
+          writeSessionEntry(database, `agent:${agentId}:dashboard:fixture-${index}`, {
+            sessionId: `${agentId}-${index}`,
+            updatedAt: anchor - index * 1000,
+            label: `Synthetic ${agentId} dashboard ${index}`,
+            status: "done",
+            ...(index % 5 === 0 ? { archivedAt: anchor - index * 1000 } : {}),
+          });
+        }
+      },
+      { agentId },
+    );
+  }
+}
 plugins.setActivePluginRegistry(pluginRegistry.createEmptyPluginRegistry());
 const releaseForeground = foreground.retainSessionListForegroundWork();
 const inspector = new Session();
@@ -244,6 +359,19 @@ if (values.mode === "verify") {
   }
 }
 
+if (values["list-shape"] && values["list-shape"] !== "mixed") {
+  const shapes: Record<string, SessionsListParams> = {
+    sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
+    full: { source: "sessions-page", limit: 100, archived: "all" },
+    search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
+    "runtime-search": { source: "sessions-page", search: "openclaw", limit: 100, archived: "all" },
+    agent: { source: "sessions-page", agentId: "reviewer", limit: 100, archived: false },
+  };
+  const query = shapes[values["list-shape"]];
+  assert(query, "Unknown --list-shape");
+  cases.splice(0, cases.length, query);
+}
+
 function canonicalResult(result: SessionsListResult | GatewaySessionRow): string {
   const omitted = new Set(["ts", "rowsRevision", "rowRevision", "runtimeMs", "snapshotAt"]);
   return JSON.stringify(result, (key, value: unknown) => {
@@ -301,7 +429,7 @@ function sampledCpu(profile: Profiler.Profile) {
     "filterSessionEntries",
     "matchesSessionArchiveFilter",
     "readSessionRowModelFacts",
-    "mayMatchSessionRowModelSearch",
+    "prepareSessionRowModelSearch",
     "resolveGatewaySessionThinkingProjectionInternal",
     "resolveAvailableAgentHarnessPolicy",
     "projectGatewaySessionRunState",
@@ -344,6 +472,35 @@ function sampledCpu(profile: Profiler.Profile) {
 try {
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
+  if (values["acp-rows"]) {
+    const { writeAcpSessionMetaForMigration } =
+      await import("../../src/acp/runtime/session-meta.js");
+    const { buildAcpDatabaseSessionKey } =
+      await import("../../src/acp/runtime/session-meta-keys.js");
+    const entries = projection.selectEntries().toSorted((a, b) => a.key.localeCompare(b.key));
+    stateDb.runOpenClawStateWriteTransaction((database) => {
+      for (const [index, row] of entries.entries()) {
+        if (index % 3 || !row.entry) {
+          continue;
+        }
+        writeAcpSessionMetaForMigration({
+          database,
+          sessionKey: buildAcpDatabaseSessionKey(row.key, row.agentId),
+          sessionId: row.entry.sessionId,
+          lifecycleRevision: row.entry.lifecycleRevision,
+          meta: {
+            backend: "acpx",
+            agent: row.agentId,
+            runtimeSessionName: row.key,
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: anchor,
+          },
+        });
+      }
+    });
+    await projection.ensureMaterialized();
+  }
   const searchIdentities = values["search-workload"]
     ? await lists.prepareSessionSearchIdentityNames(projection, {}, true)
     : undefined;
@@ -464,8 +621,11 @@ try {
       (total, value) => total + (value.kind === "exact" ? value.calls : 0),
       0,
     );
+  const firstReadStarted = performance.now();
   const initialGolden = await capture();
+  const firstReadMs = performance.now() - firstReadStarted;
   let sequence = 0;
+  const durations: number[] = [];
   let listCpuMicros = 0;
   let updateCpuMicros = 0;
   let returnedRows = 0;
@@ -560,6 +720,7 @@ try {
         });
       }
       before = process.threadCpuUsage();
+      const callStarted = performance.now();
       const query = cases[sequence % cases.length]!;
       const result = await read(sequence++);
       used = process.threadCpuUsage(before);
@@ -583,6 +744,7 @@ try {
       assert(result.totalCount >= result.count);
       responses?.update(canonicalResult(result));
       if (measured) {
+        durations.push(performance.now() - callStarted);
         listCpuMicros += used.user + used.system;
         returnedRows += result.count;
         if (values["search-workload"]) {
@@ -665,6 +827,18 @@ try {
   }
   writeFileSync(path.join(root, "golden.json"), JSON.stringify(golden, null, 2));
   const bytes = allocation ? sampledBytes(allocation) : undefined;
+  const leafBytes = new Map<string, number>();
+  const rankLeaves = (node: HeapProfiler.SamplingHeapProfileNode) => {
+    const { functionName, url, lineNumber, columnNumber } = node.callFrame;
+    const frame = `${functionName || "(anonymous)"} ${url}:${lineNumber + 1}:${columnNumber + 1}`;
+    leafBytes.set(frame, (leafBytes.get(frame) ?? 0) + node.selfSize);
+    for (const child of node.children) {
+      rankLeaves(child);
+    }
+  };
+  if (allocation) {
+    rankLeaves(allocation.head);
+  }
   const partitionTotals = (metrics: typeof beforeSelections) =>
     metrics.partitions.reduce(
       (total, part) => ({ hits: total.hits + part.hits, misses: total.misses + part.misses }),
@@ -680,8 +854,15 @@ try {
   const runningCandidateSelections =
     candidateSelections(afterSelections) - candidateSelections(beforeSelections);
   const sampled = cpu ? sampledCpu(cpu) : undefined;
+  durations.sort((a, b) => a - b);
   const result = {
     mode: values.mode,
+    presentationSourceHash,
+    filterSourceHash,
+    listShape: values["list-shape"],
+    allocationLeaves: Array.from(leafBytes)
+      .toSorted((a, b) => b[1] - a[1])
+      .slice(0, 30),
     runningCandidateWorkload: values["running-candidates"],
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
@@ -696,6 +877,15 @@ try {
     presentationSelectionsPerCall: presentationSelections / iterations,
     collectorChildrenPerCall: collectorChildren / iterations,
     sessions,
+    acpRows: values["acp-rows"],
+    sourceRef: values["source-ref"] ?? "working-tree",
+    firstReadMs,
+    latencyMs: {
+      median: durations[Math.floor(durations.length * 0.5)],
+      p95: durations[Math.floor(durations.length * 0.95)],
+      max: durations.at(-1),
+    },
+    agents: Object.keys(cfg.agents?.entries ?? {}).length,
     iterations,
     warmup,
     updatesPerList,

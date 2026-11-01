@@ -12,7 +12,7 @@ import {
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
-export function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
+function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {
     throw new Error(
       "Local sandbox source paths must be UTF-8; rename the invalid Git path before retrying",

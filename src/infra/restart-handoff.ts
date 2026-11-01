@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { Selectable } from "kysely";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { truncateOptionalText } from "../shared/text-truncate.js";
 import {
@@ -92,7 +93,7 @@ export function formatGatewayRestartHandoffDiagnostic(handoff: GatewayRestartHan
     `age=${formatShortDuration(now - handoff.createdAt)}`,
     `expiresIn=${formatShortDuration(handoff.expiresAt - now)}`,
   ].filter((value): value is string => Boolean(value));
-  return `Recent restart handoff: ${detail.join("; ")}`;
+  return terminalText`Recent restart handoff: ${detail.join("; ")}`;
 }
 
 function normalizeCreatedAt(value: number | undefined): number {

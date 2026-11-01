@@ -388,6 +388,23 @@ describe("printDaemonStatus", () => {
     expect(errors).toContain("may be from an earlier run");
   });
 
+  it("names the installed service's journal instead of the caller's profile", () => {
+    withMockedPlatform("linux", () =>
+      withEnv({ OPENCLAW_PROFILE: "isolated" }, () => {
+        printDaemonStatus({
+          service: {
+            ...runningService,
+            command: { programArguments: ["node", "openclaw.mjs", "gateway"], environment: {} },
+          },
+          gateway,
+          port: emptyPort("free"),
+        });
+        expect(output(runtime.error)).toContain("journalctl --user -u openclaw-gateway.service");
+        expect(output(runtime.error)).not.toContain("openclaw-gateway-isolated.service");
+      }),
+    );
+  });
+
   it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
     withMockedPlatform("win32", () => {
       printDaemonStatus({
@@ -490,33 +507,33 @@ describe("printDaemonStatus", () => {
     });
   });
 
-  it("prints extra gateways as warnings with cleanup scoped to the detected gateway", () => {
-    const extraService = {
-      platform: "darwin" as const,
-      label: "com.example.openclaw-gateway",
-      scope: "user" as const,
-      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    };
-    renderGatewayServiceCleanupHintsMock.mockReturnValue([
-      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ]);
-
-    printDaemonStatus({
-      service: runningService,
-      extraServices: [extraService],
-    });
-
-    expect(runtime.error).not.toHaveBeenCalled();
-    expectMockLineContains(runtime.log, "Other gateway-like services detected");
-    expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
-    expectMockLineContains(
-      runtime.log,
-      "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
-    );
-    expect(output()).not.toContain("ai.openclaw.gateway");
-  });
-
+  it.each([undefined, "external", " ExTeRnAl "])(
+    "prints extra gateways with scoped cleanup and supervision-appropriate advice (%s)",
+    (mode) =>
+      withEnv({ OPENCLAW_SUPERVISOR_MODE: mode }, () => {
+        const extraService = {
+          platform: "darwin" as const,
+          label: "com.example.openclaw-gateway",
+          scope: "user" as const,
+          detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        };
+        renderGatewayServiceCleanupHintsMock.mockReturnValue([
+          "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+          "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        ]);
+        printDaemonStatus({ service: runningService, extraServices: [extraService] });
+        expect(runtime.error).not.toHaveBeenCalled();
+        expectMockLineContains(runtime.log, "Other gateway-like services detected");
+        expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
+        expectMockLineContains(
+          runtime.log,
+          "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
+        );
+        expect(output()).not.toContain("ai.openclaw.gateway");
+        expect(output().includes("Recommendation: run a single gateway per machine")).toBe(!mode);
+        expect(output().includes("If you need multiple gateways")).toBe(!mode);
+      }),
+  );
   registerServiceInspectionHintTests({
     renderHints: renderGatewayServiceCleanupHintsMock,
     output,

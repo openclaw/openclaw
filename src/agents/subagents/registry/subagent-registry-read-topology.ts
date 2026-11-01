@@ -80,7 +80,11 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     if (!key) {
       return;
     }
-    const rows = index.get(key) ?? [];
+    let rows = index.get(key) ?? [];
+    if (index === snapshotRunsByChildSessionKey && runsByChildSessionKey.get(key) === rows) {
+      // Published child groups remain stable while the owner patches its next generation.
+      rows = rows.slice();
+    }
     const membership = membershipFor(runId);
     const position = membership[positionKey];
     if (position !== undefined) {
@@ -132,8 +136,9 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
   function patch(
     changes: ReadonlyMap<string, T | undefined>,
     inMemoryChanges: ReadonlyMap<string, T | undefined>,
-  ): void {
+  ): { affected: Iterable<string>; membershipChanged: boolean } {
     revision = {};
+    let membershipChanged = false;
     const affected = new Map<string, Set<string>>();
     const touch = (child: string) => {
       if (child && !affected.has(child)) {
@@ -164,6 +169,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         previous.some((key, position) => key !== next[position])
       ) {
         descendantsBySessionKey.clear();
+        membershipChanged = true;
       }
       touch(previous[0] ?? "");
       touch(next[0] ?? "");
@@ -220,7 +226,11 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       ] as const) {
         updateIndex(index, child, entry);
       }
-      const candidates = memory && !rows.includes(memory) ? [...rows, memory] : rows.slice();
+      const candidates = memory && !rows.includes(memory) ? [...rows, memory] : rows;
+      if (candidates !== rows && runsByChildSessionKey.get(child) === rows) {
+        // A memory-only overlay can retire a shared array before the next durable patch.
+        snapshotRunsByChildSessionKey.set(child, rows.slice());
+      }
       updateIndex(runsByChildSessionKey, child, candidates.length ? candidates : undefined);
       const byRequester = new Map<string, T>();
       for (const row of rows) {
@@ -240,6 +250,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         );
       }
     }
+    return { affected: affected.keys(), membershipChanged };
   }
   patch(runs, new Map());
   for (const [key, entry] of inMemoryDisplayByChildSessionKey) {

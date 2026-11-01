@@ -1,8 +1,8 @@
 import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 
 /** History callers retain their prepared physical target and read owner through restoration. */
 export type SessionColdReadPreparation = {

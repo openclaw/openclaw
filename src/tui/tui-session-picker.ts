@@ -72,7 +72,7 @@ export function resolveResumeSession(
   | { kind: "ambiguous"; candidates: SessionPickerChoice[] }
   | { kind: "none" } {
   const trimmedQuery = query.trim();
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(trimmedQuery);
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(trimmedQuery).normalize("NFC");
   const choices = buildSessionChoices(sessions);
   const exact = choices.find((choice) => choice.value === trimmedQuery);
   if (exact) {
@@ -80,12 +80,12 @@ export function resolveResumeSession(
   }
 
   const substringMatches = choices.filter((choice) =>
-    normalizeLowercaseStringOrEmpty(choice.matchText).includes(normalizedQuery),
+    normalizeLowercaseStringOrEmpty(choice.matchText).normalize("NFC").includes(normalizedQuery),
   );
   const matches =
     substringMatches.length > 0
       ? substringMatches
-      : fuzzyFilter(choices, trimmedQuery, (choice) => choice.matchText);
+      : fuzzyFilter(choices, normalizedQuery, (choice) => choice.matchText.normalize("NFC"));
   const match = matches[0];
   if (matches.length === 1 && match) {
     return { kind: "match", session: match };

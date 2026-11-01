@@ -18,6 +18,7 @@ import {
   retainSessionWorkspaceArtifacts,
   refreshSessionWorkspaceState,
 } from "./chat-session-workspace-state.ts";
+import { textFile } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -71,15 +72,7 @@ async function fixture({ loadInitialListing = true } = {}) {
       listFiles,
       getFile: async () => ({
         sessionKey: listing.sessionKey,
-        file: {
-          path: "reports/inventory.csv",
-          name: "inventory.csv",
-          kind: "read",
-          missing: false,
-          previewKind: "text",
-          contentEncoding: "utf8",
-          content: "item,count\nnotebooks,3",
-        },
+        file: textFile("reports/inventory.csv", "item,count\nnotebooks,3"),
       }),
     }),
   };
@@ -403,6 +396,27 @@ it("keeps unresolved, project, external and artifact homonyms distinct", () => {
   expect(new Set(results.map((entry) => entry.key)).size).toBe(4);
   expect(workspaceCatalogSearch(listing, "opaque-id")).toEqual([]);
   expect(workspaceCatalogSearch(listing, "")).toEqual([]);
+});
+
+it("searches local Files candidates with sigma equivalence and literal separators", () => {
+  const file = "ΕΛΕΓΧΟΣ/A  B.md";
+  const listing = catalogListing([workspaceFile(file, "modified")], {
+    artifacts: [artifact("report", "ΕΛΕΓΧΟΣ")],
+    browser: {
+      path: "",
+      search: "unrelated",
+      entries: [{ path: "stale.md", name: "stale.md", kind: "file" }],
+    },
+  });
+  for (const query of ["Σ", "σ", "ς", "  Σ  "]) {
+    expect(workspaceCatalogSearch(listing, query).map((entry) => entry.path)).toEqual([
+      file,
+      "ΕΛΕΓΧΟΣ",
+    ]);
+  }
+  expect(workspaceCatalogSearch(listing, "A  B.md")).toHaveLength(1);
+  expect(workspaceCatalogSearch(listing, "A B.md")).toEqual([]);
+  expect(workspaceCatalogSearch(listing, "A--B.md")).toEqual([]);
 });
 
 it.each([

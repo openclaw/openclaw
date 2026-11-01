@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
+import { appendCurrentInboundContext } from "../../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
-import { normalizeChatType } from "../../../channels/chat-type.js";
 import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
-import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
@@ -10,7 +9,9 @@ import {
   runWithGatewayDetachedWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
+import type { ReplyOperation } from "../../../sessions/session-controller.contracts.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../../sessions/session-controller.mailbox-claim.js";
+import { isSessionControllerSourceQueued } from "../../../sessions/session-controller.mailbox-source.js";
 import {
   detachSessionControllerSources,
   getExistingSessionControllerMailbox,
@@ -20,11 +21,18 @@ import {
   type SessionControllerMailboxClaim,
 } from "../../../sessions/session-controller.mailbox.js";
 import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
-import type { SessionControllerEntry } from "../../../sessions/session-controller.state.js";
+import {
+  getSessionControllerEntryForOperation,
+  type SessionControllerEntry,
+} from "../../../sessions/session-controller.state.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
-import { collectRuntimeMetadata, resolveFollowupReplyAnchor } from "./delivery-context.js";
+import {
+  collectCurrentInboundContext,
+  collectRuntimeMetadata,
+  resolveFollowupReplyDeliveryKey,
+} from "./delivery-context.js";
 import { runOutsideAdmittedGenerationScopes } from "./drain-admission-scope.js";
 import {
   buildCollectTranscriptInput,
@@ -46,6 +54,36 @@ import { followupQueueSources, followupSourceRunners } from "./state.js";
 import { isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type AdmissionSessionRebind = { from: string; to: string };
+
+/** The queued input owns this fact through preparation retries and consumes it with its turn. */
+export function handoffCompletedSourceReply(operation: ReplyOperation, source: FollowupRun): void {
+  const mailbox = getSessionControllerEntryForOperation(operation).mailbox;
+  const next = mailbox?.entries.find(
+    (input) =>
+      !input.claim &&
+      isSessionControllerSourceQueued(input) &&
+      !input.retirementRequested &&
+      !input.abortSignal.aborted,
+  )?.source;
+  if (
+    operation.result ||
+    operation.abortSignal.aborted ||
+    !next ||
+    (next.admissionSessionId ?? next.run.sessionId) !== operation.sessionId ||
+    next.currentInboundEventKind === "room_event" ||
+    next.run.sourceReplyDeliveryMode !== "message_tool_only" ||
+    next.originatingChatId !== source.originatingChatId ||
+    resolveFollowupReplyDeliveryKey(next) !== resolveFollowupReplyDeliveryKey(source)
+  ) {
+    return;
+  }
+  next.currentInboundContext = appendCurrentInboundContext(next.currentInboundContext, [
+    {
+      kind: "runtime-instruction",
+      text: "The immediately preceding turn already delivered its final user-visible reply via the message tool. Treat the current queued content as a fresh request; do not replay that answer merely to finish the preceding turn. Answer the new request normally, including explicit requests to repeat or discuss the prior reply.",
+    },
+  ]);
+}
 
 function consumeQueueSummaryDelivery(
   queue: Pick<
@@ -97,19 +135,7 @@ function consumeQueueSummaryDelivery(
 function buildOverflowTranscriptIdempotencyKey(source: FollowupRun, prompt: string): string {
   const promptHash = createHash("sha256").update(prompt).digest("hex");
   const routeHash = createHash("sha256")
-    .update(
-      JSON.stringify([
-        channelRouteDedupeKey({
-          channel: source.originatingChannel,
-          to: source.originatingTo,
-          accountId: source.originatingAccountId,
-          threadId: source.originatingThreadId,
-        }),
-        resolveFollowupReplyAnchor(source) ?? "",
-        source.originatingReplyToMode ?? "",
-        normalizeChatType(source.originatingChatType) ?? "",
-      ]),
-    )
+    .update(resolveFollowupReplyDeliveryKey(source))
     .digest("hex");
   return `followup-overflow:${source.run.sessionId}:${routeHash}:${source.messageId ?? source.enqueuedAt}:${promptHash}`;
 }
@@ -179,7 +205,9 @@ async function executeClaim(
       queue.activeSummarySources.add(item);
     }
   }
-  const summaryLines = sources.map((item) => {
+  // A summary prompt shows only the newest cap lines; source context pairs with those lines.
+  const summarizedSources = queue.cap > 0 ? sources.slice(-queue.cap) : sources;
+  const summaryLines = summarizedSources.map((item) => {
     const index = queue.summarySources.indexOf(item);
     if (index >= 0) {
       return queue.summaryLines[index] ?? "";
@@ -193,10 +221,7 @@ async function executeClaim(
     return item.summaryLine ?? item.prompt;
   });
   const prompt = claim.summary
-    ? (previewQueueSummaryPrompt({
-        droppedCount: sources.length,
-        summaryLines: queue.cap > 0 ? summaryLines.slice(-queue.cap) : summaryLines,
-      }) ?? "")
+    ? (previewQueueSummaryPrompt({ droppedCount: sources.length, summaryLines }) ?? "")
     : buildCollectPrompt({
         title: "[Queued messages while agent was busy]",
         items: sources,
@@ -230,7 +255,9 @@ async function executeClaim(
       ...resolveOriginRoutingMetadata(sources),
       ...collectRuntimeMetadata(sources, cancellation.signal),
       ...collectQueuedPromptMedia(sources),
-      ...(claim.summary ? { currentInboundContext: undefined } : {}),
+      ...(claim.summary
+        ? { currentInboundContext: collectCurrentInboundContext(summarizedSources) }
+        : {}),
       prompt,
       transcriptPrompt: claim.summary ? prompt : buildCollectTranscriptInput(sources).text,
       userTurnTranscriptRecorder: recorder,

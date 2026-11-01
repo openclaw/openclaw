@@ -12,12 +12,8 @@ export function renderGatewayCostUsageSummary(
   days: number,
   rich: boolean,
 ): string[] {
-  const formatTotals = (totals: CostUsageSummary["totals"]) => {
-    const known = `${formatUsd(totals.totalCost) ?? "$0.00"} · ${formatTokenCount(totals.totalTokens) ?? "0"} tokens`;
-    return totals.usageReport?.state === "unavailable"
-      ? `unavailable (known subtotal: ${known})`
-      : known;
-  };
+  const formatTotals = (totals: CostUsageSummary["totals"]) =>
+    `${formatUsd(totals.totalCost) ?? "$0.00"} · ${formatTokenCount(totals.totalTokens) ?? "0"} tokens`;
   const cachePrefix = formatCostUsageCachePrefix(summary.cacheStatus);
   const lines = [
     colorize(rich, theme.heading, `Usage cost (${days} days)`),

@@ -3,11 +3,15 @@
 //   --state-dir .local/knowledge-measure --output .local/knowledge-measure.json
 // --built --root <checkout> selects its dist entries/SDK. Run separate processes AB/BA.
 // Source-only --baseline-dir <tree> substitutes storage-base.ts and storage-journal.ts;
+// repeat --baseline-file <repo-relative-path> to substitute other files instead.
 // use C/A/A/C runs for warm comparisons. Source startup heap includes loader overhead.
 // Natural heap is sampled before forced-GC retention diagnostics; neither is per-worker RSS.
 // Startup and warm CPU/allocation are per isolate. This wrapper does not prove host labels.
 // --scan-pages 256 measures synthetic ~14 KiB catalog scans, editing one document every 10 calls.
+// Add --evidence-mib 1 for one distinct 1 MiB text artifact per page with a missing quote;
+// artifact stamps settle before worker startup. --snapshot-dir <dir> saves post-GC worker snapshots.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,19 +27,29 @@ const { values } = parseArgs({
     output: { type: "string" },
     built: { type: "boolean" },
     "baseline-dir": { type: "string" },
+    "baseline-file": { type: "string", multiple: true },
     iterations: { type: "string", default: "2000" },
     stores: { type: "string", default: "40" },
     "scan-pages": { type: "string", default: "0" },
+    "evidence-mib": { type: "string", default: "0" },
+    "snapshot-dir": { type: "string" },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(!values.built || !values["baseline-dir"], "--baseline-dir is source-only");
+assert(
+  !values["baseline-file"] || values["baseline-dir"],
+  "--baseline-file requires --baseline-dir",
+);
 const iterations = Number(values.iterations);
 const storeCount = Number(values.stores);
 const scanPages = Number(values["scan-pages"]);
+const evidenceMiB = Number(values["evidence-mib"]);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(Number.isSafeInteger(storeCount) && storeCount > 0 && storeCount <= 100);
 assert(Number.isSafeInteger(scanPages) && scanPages >= 0 && scanPages <= 1000);
+assert(Number.isFinite(evidenceMiB) && evidenceMiB >= 0 && evidenceMiB <= 16);
+assert(!evidenceMiB || scanPages, "--evidence-mib requires --scan-pages");
 const root = path.resolve(values.root);
 assert(
   !values["baseline-dir"] ||
@@ -47,8 +61,15 @@ const state = await fs.mkdtemp(path.join(path.resolve(values["state-dir"]), "run
 const prefix = values.built ? "dist" : "src";
 const extension = values.built ? ".js" : ".ts";
 const baselineFiles = values["baseline-dir"]
-  ? ["extensions/knowledge/src/storage-base.ts", "extensions/knowledge/src/storage-journal.ts"]
+  ? (values["baseline-file"] ?? [
+      "extensions/knowledge/src/storage-base.ts",
+      "extensions/knowledge/src/storage-journal.ts",
+    ])
   : [];
+const snapshotDir = values["snapshot-dir"] ? path.resolve(values["snapshot-dir"]) : undefined;
+if (snapshotDir) {
+  await fs.mkdir(snapshotDir, { recursive: true });
+}
 const baselineDir = path.join(state, "baseline");
 const sdk = Object.fromEntries(
   ["database-engine-worker-runtime", "feature-contract", "routing", "sqlite-worker-runtime"].map(
@@ -66,6 +87,7 @@ const report = {
   iterations,
   stores: storeCount,
   scanPages,
+  evidenceMiB,
   load: os.loadavg(),
   scope: "Synthetic Knowledge workers; startup/import and warm owner work, not Gateway throughput",
   results: [],
@@ -159,7 +181,7 @@ async function launch(name, config) {
   return {
     worker,
     ready: ready.promise,
-    diagnostic: (operation) => request(diagnostics.port1, { operation }),
+    diagnostic: (operation, snapshot) => request(diagnostics.port1, { operation, snapshot }),
     call: (op, input) =>
       request(
         worker,
@@ -192,13 +214,21 @@ async function measure(client, name, operation) {
   const warm = await client.diagnostic("end");
   await delay(1000);
   const naturalHeap = await client.worker.getHeapStatistics();
-  const retained = await client.diagnostic("retained");
+  const retained = await client.diagnostic(
+    "retained",
+    snapshotDir
+      ? path.join(snapshotDir, `${path.basename(state)}-${name}.heapsnapshot`)
+      : undefined,
+  );
+  const sortedLatencies = latencies.toSorted((a, b) => a - b);
   report.results.push({
     name,
     startup: retained.startup,
     coldNaturalHeap,
     naturalHeap,
     forcedGcHeap: retained.heap,
+    forcedGcMemory: retained.memory,
+    ...(retained.snapshot ? { snapshot: retained.snapshot } : {}),
     scriptCount: retained.scriptCount,
     warm: {
       ...warm,
@@ -206,7 +236,9 @@ async function measure(client, name, operation) {
       iterations,
       operationLatency: {
         count: latencies.length,
-        p95Ms: latencies.toSorted((a, b) => a - b)[Math.ceil(latencies.length * 0.95) - 1],
+        p50Ms: sortedLatencies[Math.ceil(sortedLatencies.length * 0.5) - 1],
+        p95Ms: sortedLatencies[Math.ceil(sortedLatencies.length * 0.95) - 1],
+        p99Ms: sortedLatencies[Math.ceil(sortedLatencies.length * 0.99) - 1],
       },
     },
     load: os.loadavg(),
@@ -242,15 +274,33 @@ try {
   if (scanPages) {
     const directory = path.join(config.root, "private", "people");
     await fs.mkdir(directory, { recursive: true });
+    const artifacts = path.join(config.root, "private", "artifacts");
+    if (evidenceMiB) {
+      await fs.mkdir(artifacts, { recursive: true });
+    }
     for (let index = 0; index < scanPages; index++) {
       const title = `Synthetic person ${index}`;
       const body =
         `# ${title}\n\n[[Synthetic person ${(index + 1) % scanPages}]]\n\n` +
         `Synthetic knowledge paragraph ${index} revision 0.\n\n`.repeat(300);
+      let evidence = "";
+      if (evidenceMiB) {
+        const bytes = Buffer.alloc(
+          Math.ceil(evidenceMiB * 1024 * 1024),
+          `synthetic artifact ${index}\n`,
+        );
+        const filename = `${index}.txt`;
+        await fs.writeFile(path.join(artifacts, filename), bytes);
+        evidence = `evidence:\n  - path: artifacts/${filename}\n    sha256: ${createHash("sha256").update(bytes).digest("hex")}\n    mediaType: text/plain\n    quote: absent synthetic citation\n`;
+      }
       await fs.writeFile(
         path.join(directory, `${index}.md`),
-        `---\nformat: knowledge-record-v1\nid: synthetic_person_${index}\nrevision: 1\nkind: page\ntitle: ${title}\nscope:\n  visibility: private\nrecorded_at: 2026-10-01T00:00:00Z\nupdated_at: 2026-10-01T00:00:00Z\nlifecycle: active\ntype: person\n---\n${body}`,
+        `---\nformat: knowledge-record-v1\nid: synthetic_person_${index}\nrevision: 1\nkind: page\ntitle: ${title}\nscope:\n  visibility: private\nrecorded_at: 2026-10-01T00:00:00Z\nupdated_at: 2026-10-01T00:00:00Z\nlifecycle: active\ntype: person\n${evidence}---\n${body}`,
       );
+    }
+    if (evidenceMiB) {
+      // Verification caches only settled file stamps (mtime and ctime), not newly written fixtures.
+      await delay(2100);
     }
   }
   storage = await launch("storage", config);
@@ -264,7 +314,7 @@ try {
         );
       }
       const result = await storage.call("catalog");
-      assert.equal(result.records, scanPages);
+      assert.equal(result.records, evidenceMiB ? 0 : scanPages);
       return;
     }
     const result = await storage.call("sourceCheck", {
@@ -275,6 +325,14 @@ try {
     assert.equal(result.state, "missing");
     assert.equal(result.receipt, null);
   });
+  if (evidenceMiB) {
+    const diagnostics = await storage.call("diagnostics");
+    const invalidEvidence = diagnostics.issues.filter(
+      (issue) => issue.code === "invalid-evidence",
+    ).length;
+    assert.equal(invalidEvidence, scanPages);
+    report.invalidEvidence = invalidEvidence;
+  }
   await fs.mkdir(path.dirname(path.resolve(values.output)), { recursive: true });
   await fs.writeFile(values.output, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(report));

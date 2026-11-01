@@ -5,6 +5,7 @@ import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { expect, it } from "vitest";
 import controlUiViteConfig, {
   createControlUiPrecompressedAssetVariants,
@@ -25,7 +26,7 @@ it("builds raw inventories and refreshes cached identity without changing compre
   await cp(path.join(repoRoot, "ui/public"), output, { recursive: true });
   await mkdir(path.join(output, "assets"));
   const assetName = "assets/app-content-hash.js";
-  const source = "export const answer = 42;";
+  const source = `${"// unchanged asset content\n".repeat(200)}export const answer = 42;`;
   const compressed = await createControlUiPrecompressedAssetVariants(assetName, source);
   const deferredFiles = [
     "assets/__vite-browser-external-2447137e-CWgf1vdC.js",
@@ -38,7 +39,7 @@ it("builds raw inventories and refreshes cached identity without changing compre
     "assets/de-AbCd1234.js",
     "assets/locale-config-hints-zh-CN-AbCd1234.js",
     "assets/locale-namespace-fr-settings-AbCd1234.js",
-    "assets/mermaid.min-AbCd1234.js",
+    "assets/pele.min-AbCd1234.js",
     "assets/unhashed.js",
     "assets/session-actions-AbCd1234.js.map",
     "plugins/example/assets/plugin-AbCd1234.js",
@@ -61,6 +62,14 @@ it("builds raw inventories and refreshes cached identity without changing compre
   expect(config.define ?? {}).not.toHaveProperty("globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO");
   await refreshControlUiBuildOutput(output, first, [assetName], false);
   const previousWorker = read("sw.js");
+  for (const [suffix, decode] of [
+    ["br", brotliDecompressSync],
+    ["gz", gunzipSync],
+  ] as const) {
+    expect(decode(readFileSync(path.join(output, `sw.js.${suffix}`))).toString()).toBe(
+      previousWorker,
+    );
+  }
   const rawInventory = JSON.parse(previousWorker.match(/^const OFFLINE_BOOT = (.+);$/mu)![1]!);
   const inventories = {
     assets: expect.arrayContaining([{ path: assetName, integrity: digest(source) }]),
@@ -88,6 +97,12 @@ it("builds raw inventories and refreshes cached identity without changing compre
   expect(html).not.toContain("branch-</script>");
   expect(html).not.toContain(first.buildId);
   const worker = read("sw.js");
+  for (const [suffix, decode] of [
+    ["br", brotliDecompressSync],
+    ["gz", gunzipSync],
+  ] as const) {
+    expect(decode(readFileSync(path.join(output, `sw.js.${suffix}`))).toString()).toBe(worker);
+  }
   expect(worker).toContain('const EMBEDDED_CACHE_VERSION = "second-build";');
   const offline = JSON.parse(worker.match(/^const OFFLINE_BOOT = (.+);$/mu)![1]!);
   expect(offline).toMatchObject({

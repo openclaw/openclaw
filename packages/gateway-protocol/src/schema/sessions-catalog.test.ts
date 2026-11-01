@@ -190,6 +190,7 @@ describe("SessionRowSchema", () => {
     const row = {
       ...baseRow,
       lastRunId: "run-settled",
+      backgroundProcessCount: 1,
       snapshotAt: 200,
       activeLeafEntryId: "leaf-rendered",
       activeModel: "fixture-model",
@@ -209,7 +210,6 @@ describe("SessionRowSchema", () => {
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
-      restartRecoveryStatus: "tombstoned",
       permissionMode: "workspace",
       sandboxMode: "off",
       communication: { receive: "ask" },
@@ -224,6 +224,9 @@ describe("SessionRowSchema", () => {
       { permissionMode: "unrestricted" },
       { lastRunId: "" },
       { archiveReason: "unknown" },
+      { backgroundProcessCount: 0 },
+      { backgroundProcessCount: -1 },
+      { backgroundProcessCount: 1.5 },
     ]);
     rows.accepts(
       baseRow,

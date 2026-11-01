@@ -60,15 +60,19 @@ export function defineTypographyModuleBoundaryTests(
         await page.keyboard.press("Enter");
         const menu = page.locator(".sidebar-identity-menu");
         await menu.waitFor();
-        const settingsShortcut = menu
-          .locator('[data-value="command:settings"]')
-          .locator(".session-menu__shortcut");
-
-        const report = await settingsShortcut.evaluate((element) => ({
-          body: getComputedStyle(document.body).fontFamily,
-          shortcut: getComputedStyle(element).fontFamily,
-          text: element.textContent?.replace(/\s+/gu, ""),
-        }));
+        const report = await page.evaluate(() => {
+          const element = document.querySelector(
+            '.sidebar-identity-menu [data-value="command:settings"] .session-menu__shortcut',
+          );
+          if (!element) {
+            throw new Error("Settings shortcut must be present in the open identity menu");
+          }
+          return {
+            body: getComputedStyle(document.body).fontFamily,
+            shortcut: getComputedStyle(element).fontFamily,
+            text: element.textContent?.replace(/\s+/gu, ""),
+          };
+        });
         expect(report.body).toMatch(/^"?JetBrains Mono/u);
         expect(report.shortcut).toMatch(/^system-ui,/u);
         const applePlatform = platform === "MacIntel";

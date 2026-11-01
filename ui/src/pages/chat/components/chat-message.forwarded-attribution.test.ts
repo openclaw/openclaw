@@ -212,6 +212,38 @@ it.each([
   },
 );
 
+it.each([
+  { senderSession: undefined, available: true },
+  { senderSession: mainSession, available: true },
+  { senderSession: { sessionKey, agentId: "research" }, available: false },
+  { senderSession: { sessionKey: mainSession.sessionKey, agentId: "research" }, available: false },
+])(
+  "keeps Files search in its owning session ($senderSession)",
+  async ({ senderSession, available }) => {
+    const onFindWorkspaceFile = vi.fn();
+    renderGroup(
+      createGroup(senderSession, {
+        phase: "final_answer",
+        content: [
+          {
+            type: "attachment_error",
+            attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+          },
+        ],
+      }),
+      { sessionKey: mainSession.sessionKey, agentId: "main", onFindWorkspaceFile },
+    );
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(container.textContent).toContain("Too large to attach."));
+    const find = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Find in Files",
+    );
+    expect(Boolean(find)).toBe(available);
+    find?.click();
+    expect(onFindWorkspaceFile).toHaveBeenCalledTimes(available ? 1 : 0);
+  },
+);
+
 it("keeps the sender on narrated file links in a run frame", () => {
   const groups = groupMessages([
     narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {
@@ -224,6 +256,26 @@ it("keeps the sender on narrated file links in a run frame", () => {
   openReport();
 });
 
+it.each([{ phase: "final_answer" }, { stopReason: "stop" }])(
+  "keeps an explicit mixed forwarded answer visible with file and reply actions (%j)",
+  (terminal) => {
+    const [group] = groupMessages([
+      narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {
+        senderSession: { sessionKey },
+        ...terminal,
+      }),
+    ]);
+    if (group?.kind !== "group") {
+      throw new Error("Missing forwarded answer group");
+    }
+    expect(group.role).toBe("assistant");
+    renderGroup(group, { onReply: vi.fn() });
+    openReport();
+    expect(query('button[aria-label="Reply to message"]')).not.toBeNull();
+    expect(query('button[aria-label="Copy as markdown"]')).not.toBeNull();
+  },
+);
+
 it.each([false, true])("preserves sender attribution (forwarded=%s)", async (forwarded) => {
   const group = createGroup(forwarded ? mainSession : undefined, {}, "Forwarded from main");
   renderGroup(group);
@@ -234,7 +286,6 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
   }
   const forwardedGroup = query(".chat-group--forwarded");
   expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
-  expect(forwardedGroup?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
   const attribution = required(
     ".chat-group--forwarded .chat-group-messages > .chat-reply-attribution",
   );

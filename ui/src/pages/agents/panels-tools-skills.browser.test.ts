@@ -13,7 +13,11 @@ import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts"
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createBaseParams, createReadToolCatalog } from "./panels-tools-skills.test-support.ts";
+import {
+  createBaseParams,
+  createReadToolCatalog,
+  openToolGroups,
+} from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
@@ -23,7 +27,9 @@ function mountTools(
   overrides: Parameters<typeof createBaseParams>[0] = {},
   container?: HTMLElement,
 ) {
-  return mountSolid(AgentTools, createBaseParams(overrides), container);
+  const view = mountSolid(AgentTools, createBaseParams(overrides), container);
+  openToolGroups(view.container);
+  return view;
 }
 
 const text = (element: Element | null | undefined) => element?.textContent?.trim();
@@ -194,6 +200,7 @@ describe("agents tools panel (browser)", () => {
       };
     }
     mountSolid(AgentTools, params, container);
+    openToolGroups(container);
 
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe(status);
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
@@ -210,6 +217,7 @@ describe("agents tools panel (browser)", () => {
     const container = document.createElement("div");
     const params = createBaseParams({ effective: toolPreview });
     const view = mountSolid(AgentTools, params, container);
+    openToolGroups(container);
 
     expect(content(container, ".agent-tools-notices .callout.info")).toBe(
       "Discovery is incomplete.",
@@ -458,27 +466,26 @@ describe("agents tools panel (browser)", () => {
   ] as const)("opens a live tool chip with $behavior scrolling", async ({ reduced, behavior }) => {
     const container = document.createElement("div");
     document.body.append(container);
-    mountTools({ catalog: createReadToolCatalog(), effective: toolPreview }, container);
+    mountSolid(
+      AgentTools,
+      createBaseParams({ catalog: createReadToolCatalog(), effective: toolPreview }),
+      container,
+    );
     await Promise.resolve();
 
     const group = container.querySelector<HTMLDetailsElement>(".agent-tools-group");
-    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
+    expect(container.querySelector(".agent-tool-card")).toBeNull();
     const chip = container.querySelector<HTMLAnchorElement>(
       '.agent-tools-runtime-chip[href="#agent-tool-read"]',
     );
 
     expect(chip?.getAttribute("href")).toBe("#agent-tool-read");
-    assert(group && tool && chip, "Missing agent tool runtime chip");
+    assert(group && chip, "Missing agent tool runtime chip");
 
     expect(group.open).toBe(false);
-    expect(tool.open).toBe(false);
-
-    const summary = tool.querySelector<HTMLElement>("summary");
-    assert(summary, "Missing agent tool summary");
-    expect(toolSwitch(container, "read").closest(".agent-tool-summary")).toBe(summary);
-    const scrollIntoView = vi.fn();
-    tool.scrollIntoView = scrollIntoView;
-    const focus = vi.spyOn(summary, "focus");
+    const scrollIntoView = vi
+      .spyOn(HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced }));
     const previousUrl = window.location.href;
     const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
@@ -488,20 +495,29 @@ describe("agents tools panel (browser)", () => {
         requestAnimationFrame(resolve);
       });
 
+      const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card")!;
+      const summary = tool.querySelector<HTMLElement>("summary")!;
       expect(group.open).toBe(true);
       expect(tool.open).toBe(true);
+      expect(toolSwitch(container, "read").closest(".agent-tool-summary")).toBe(summary);
+      expect(document.activeElement).toBe(summary);
       const requestedUrl = replaceState.mock.calls[0]?.[2];
       expect(requestedUrl).toBeInstanceOf(URL);
       expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
       expect(window.location.href).toBe(previousUrl);
       expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior });
-      expect(focus).toHaveBeenCalledOnce();
+      expect(scrollIntoView.mock.contexts[0]).toBe(tool);
       group.open = false;
       group.dispatchEvent(new Event("toggle"));
       expect(tool.open).toBe(false);
+      await waitForSolid(() => expect(container.querySelector(".agent-tool-card")).toBeNull());
+      group.querySelector<HTMLElement>(":scope > summary")!.click();
+      await waitForSolid(() =>
+        expect(container.querySelector<HTMLDetailsElement>(".agent-tool-card")?.open).toBe(false),
+      );
     } finally {
       vi.unstubAllGlobals();
-      focus.mockRestore();
+      scrollIntoView.mockRestore();
       replaceState.mockRestore();
       container.remove();
     }

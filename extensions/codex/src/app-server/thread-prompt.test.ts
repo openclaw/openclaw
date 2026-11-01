@@ -88,6 +88,15 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
     expect(instructions).toContain("Use or store credentials the user supplies as requested");
   });
 
+  it.each(["full", "minimal"] as const)(
+    "keeps shared permission recovery guidance in %s mode",
+    (promptMode) => {
+      const instructions = render({ promptMode }, { dynamicTools: [] });
+      expect(instructions.match(/Permission blocks:/g)).toHaveLength(1);
+      expect(instructions).toContain("Omit unverified remediation advice");
+    },
+  );
+
   it.each([
     [false, false, false],
     [true, false, false],

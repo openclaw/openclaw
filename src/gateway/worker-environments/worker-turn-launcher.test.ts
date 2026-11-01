@@ -318,7 +318,6 @@ describe("worker turn launcher local placement", () => {
         sessionKey: claim.sessionKey,
         sessionId: operation.sessionId,
         admission: undefined,
-        recoveryOwnerLease: undefined,
         databaseClaim,
       });
       using projection = vi.spyOn(fx.placements, "readProjection");
@@ -618,6 +617,7 @@ describe("worker turn launcher local placement", () => {
               inlineProviderModels: [],
               configuredCatalogEntries: [],
             },
+            run: <T>(run: () => T): T => run(),
             [Symbol.asyncDispose]: release,
           };
         }),
@@ -628,7 +628,7 @@ describe("worker turn launcher local placement", () => {
       `Cloud worker turns require the OpenClaw runtime, not ${runtimeId}`,
     );
 
-    expectUncalled(runLocal, getEnvironment);
+    expectUncalled(runLocal, environments.acquireTurnCredential, environments.startTunnel);
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     expect(release).toHaveBeenCalledOnce();
   });

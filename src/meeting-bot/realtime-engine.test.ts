@@ -436,6 +436,7 @@ describe("meeting realtime engine output ownership", () => {
       await fixture.expectWrite(1, fresh);
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
       expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      expect(fixture.handle.getHealth().clearCount).toBe(1);
       expect(fixture.beginOutput).toHaveBeenCalledOnce();
       expect(fixture.beginOutput).toHaveBeenCalledAfter(fixture.clearOutput);
       fixture.releaseWrite(0);

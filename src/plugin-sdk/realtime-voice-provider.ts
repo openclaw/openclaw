@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type WebSocket from "ws";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import type { captureWsEventAsync } from "../proxy-capture/runtime.js";
 import type {
   RealtimeVoiceBridge,
@@ -345,6 +346,7 @@ export class RealtimeVoiceWebSocketTransport<Event extends RealtimeWireEvent> {
       return;
     }
     const socket = this.ws;
+    materializeErrorStack(error);
     this.terminalError = error;
     if (!this.lifecycle.failure(connection)) {
       return;

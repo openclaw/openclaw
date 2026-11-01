@@ -124,6 +124,14 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
+`server.commit` and `server.builtAt` optionally identify the running Gateway
+artifact. They are captured at process startup, not read from a checkout each
+time a client connects. Missing build provenance is omitted rather than replaced
+with the current time. Authenticated members receive these fields alongside
+`server.version` without requiring diagnostic or update scopes. The Control UI
+shows them on **Settings → About**, separately from its frontend build details;
+`system.info` and `update.status` retain their existing access requirements.
+
 Clients that do not use health details at connection time can advertise
 `hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
 then sends `snapshot.health: {}` instead of the cached health details. The
@@ -312,6 +320,8 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `no-question-input`: cannot collect structured question answers. The ACP bridge
+  advertises this capability so its turns omit `ask_user` and ask in ordinary text.
 - `ultrafast`: accepts the explicit `"ultrafast"` fast-mode value in session metadata.
   Without it, session responses and events present that value as Fast (`true`)
   for released native decoders that only accept booleans and `"auto"`. This is a
@@ -320,8 +330,11 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
   remove the legacy projection only when those released clients are no longer supported.
 - `chat-only-assistant-text`: renders assistant text from `chat` and omits the
   redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
+- `chat-queue-status`: presents queued input from authoritative pending-input receipts.
+  Successful queue acknowledgments are omitted for this recipient; refusals, drops,
+  and errors remain visible. Clients without it retain a transient textual acknowledgment.
 
-Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities. The session metadata owner records the operator client's declaration for tool listing and replaces it on the next operator turn; an empty declaration or a channel-originated turn clears it. Internal wakes and restart recovery retain that session fact, so they list the same tools even without a current client. Session reset or deletion removes it. Existing sessions acquire it on their next operator turn. Calls still require current client capabilities, and attached-client tools check that their bound recipient is connected at execution. For example, `screen` refuses a call without its requesting Control UI and asks the model to retry from the open Control UI.
+Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities. The session metadata owner records the operator client's declaration for tool listing and replaces it on the next operator turn; an empty declaration or a channel-originated turn clears it. Internal wakes, including post-restart resume inputs, retain that session fact, so they list the same tools even without a current client. Session reset or deletion removes it. Existing sessions acquire it on their next operator turn. Calls still require current client capabilities, and attached-client tools check that their bound recipient is connected at execution. For example, `screen` refuses a call without its requesting Control UI and asks the model to retry from the open Control UI.
 
 ### Node connect example
 

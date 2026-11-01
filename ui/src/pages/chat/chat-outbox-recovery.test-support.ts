@@ -31,3 +31,12 @@ export function idleChatHistory(sessionKey = "agent:main") {
     sessionInfo: row(sessionKey, { hasActiveRun: false, status: "done" }),
   };
 }
+
+export function createQueuedLocalCommand(
+  id: string,
+  text: string,
+  { createdAt = 1, sessionKey = "agent:main" }: { createdAt?: number; sessionKey?: string } = {},
+) {
+  const [localCommandName = "", ...args] = text.slice(1).split(" ");
+  return { id, text, createdAt, sessionKey, localCommandName, localCommandArgs: args.join(" ") };
+}

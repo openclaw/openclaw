@@ -13,6 +13,15 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
 import { log } from "./logger.js";
+import {
+  describePromptCacheFactChanges,
+  describeToolChanges,
+  type PromptCacheToolSnapshot,
+  describePromptCacheSectionChanges,
+  fingerprintPromptSections,
+  formatChangedPromptSections,
+  type PromptSectionDigests,
+} from "./prompt-cache-facts.js";
 import { fingerprintMessage, type PromptHistoryFingerprint } from "./prompt-cache-history.js";
 import type { ProviderPromptState } from "./provider-prompt-state.js";
 
@@ -21,59 +30,11 @@ type PromptCacheIdentity = { sessionId: string; promptCacheKey?: string; session
 
 export type { PromptCacheChange };
 
-type PromptCacheToolSnapshot = {
-  name: string;
-  descriptionDigest?: string;
-  schemaDigest?: string;
-};
-
 type PromptCacheToolDescriptor = {
   readonly name?: string;
   readonly description?: string;
   readonly parameters?: object;
 };
-
-const PROMPT_SECTION_NAMES = [
-  "Skills",
-  "Tooling",
-  "Project Context",
-  "Memory Recall",
-  "Temporal Context",
-  "Runtime",
-  "Runtime Context",
-  "Conversation Context",
-  "Subagent Context",
-  "Model Aliases",
-  "Other",
-] as const;
-// Known sections keep short names; any other heading is keyed by its own sanitized
-// line so a warning names the section that moved. Bodies are only ever hashed.
-type PromptSectionDigests = Record<string, string>;
-const promptSectionHeadings = new Map<string, string>(
-  PROMPT_SECTION_NAMES.map((name) => [`${name === "Project Context" ? "#" : "##"} ${name}`, name]),
-);
-const MAX_PROMPT_SECTION_KEYS = 48;
-const MAX_PROMPT_SECTION_HEADING_CHARS = 80;
-const MAX_NAMED_SECTION_CHANGES = 8;
-
-function resolvePromptSectionKey(heading: string, sections: PromptSectionDigests): string {
-  const line = heading.trimEnd();
-  const known = promptSectionHeadings.get(line);
-  if (known) {
-    return known;
-  }
-  const key = sanitizeForLog(line).slice(0, MAX_PROMPT_SECTION_HEADING_CHARS);
-  return key in sections || Object.keys(sections).length < MAX_PROMPT_SECTION_KEYS ? key : "Other";
-}
-
-function formatChangedPromptSections(before?: PromptSectionDigests, after?: PromptSectionDigests) {
-  const changed = [...new Set([...Object.keys(after ?? {}), ...Object.keys(before ?? {})])].filter(
-    (key) => before?.[key] !== after?.[key],
-  );
-  const named = changed.slice(0, MAX_NAMED_SECTION_CHANGES).join(", ") || "Other";
-  const hidden = changed.length - MAX_NAMED_SECTION_CHANGES;
-  return hidden > 0 ? `${named}, +${hidden} more` : named;
-}
 
 type PromptCacheSnapshot = {
   provider: string;
@@ -109,6 +70,16 @@ type PromptCacheTracker = {
   toolPinChanged?: boolean;
 };
 
+// Private, bounded before-images allow fact parsing to stay off the ordinary request path.
+// Weak keys follow the existing snapshot lifecycle (current + last measured, max 512 trackers).
+// Never attach text to the snapshots delivered to tracing/context-engine consumers.
+const promptFactSources = new WeakMap<PromptCacheSnapshot, string>();
+const toolFactSources = new WeakMap<
+  readonly PromptCacheToolSnapshot[],
+  Map<PromptCacheToolSnapshot, string>
+>();
+const MAX_PROMPT_FACT_SOURCE_CHARS = 32_768;
+const MAX_TOOL_FACT_SOURCE_CHARS = 16_384;
 const trackers = new Map<string, PromptCacheTracker>();
 
 /** Retired session IDs cannot reuse their cross-turn diagnostic baselines. */
@@ -130,6 +101,7 @@ const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
 const MAX_HISTORY_DIFF_FIELDS = 8;
+const MAX_NAMED_SECTION_CHANGES = 8;
 // Known fields retain stable markers; other diagnostics name bounded keys, never values.
 const HISTORY_ENVELOPE_FIELDS = new Set([
   "role",
@@ -347,79 +319,6 @@ function describeProviderPrefix(
   return `${continuation ? "continuation:" : ""}${details}`;
 }
 
-function describeToolChanges(previous: PromptCacheSnapshot, next: PromptCacheSnapshot): string {
-  const before = new Map(previous.tools.map((tool) => [tool.name, tool]));
-  const after = new Map(next.tools.map((tool) => [tool.name, tool]));
-  const changed: Record<"added" | "removed" | "description" | "schema", string[]> = {
-    added: [],
-    removed: [],
-    description: [],
-    schema: [],
-  };
-  for (const tool of next.tools) {
-    const prior = before.get(tool.name);
-    if (!prior) {
-      changed.added.push(tool.name);
-    } else {
-      if (prior.descriptionDigest !== tool.descriptionDigest) {
-        changed.description.push(tool.name);
-      }
-      if (prior.schemaDigest !== tool.schemaDigest) {
-        changed.schema.push(tool.name);
-      }
-    }
-  }
-  for (const tool of previous.tools) {
-    if (!after.has(tool.name)) {
-      changed.removed.push(tool.name);
-    }
-  }
-  const details = [`${previous.toolCount} -> ${next.toolCount} tools`];
-  for (const [kind, names] of Object.entries(changed)) {
-    if (names.length > 0) {
-      const sample = names
-        .slice(0, 5)
-        .map((name) => JSON.stringify(name.slice(0, 80)))
-        .join(", ");
-      details.push(`${kind}: ${sample}${names.length > 5 ? ` (+${names.length - 5} more)` : ""}`);
-    }
-  }
-  return details.join("; ");
-}
-
-function fingerprintPromptSections(
-  prompt: string,
-  digest: string,
-  previousDigest?: string,
-  previousSections?: PromptSectionDigests,
-): PromptSectionDigests | undefined {
-  if (digest === previousDigest) {
-    return previousSections;
-  }
-  if (!/^#{1,2} /m.test(prompt)) {
-    return undefined;
-  }
-  const sections: PromptSectionDigests = {};
-  let name = "Other";
-  let start = 0;
-  const append = (end: number) => {
-    if (end > start) {
-      sections[name] = sha256Hex(`${sections[name] ?? ""}${prompt.slice(start, end)}`);
-    }
-  };
-  for (const heading of prompt.matchAll(/^#{1,2} [^\n]*(?:\n|$)/gm)) {
-    append(heading.index);
-    start = heading.index;
-    name = resolvePromptSectionKey(heading[0], sections);
-    // Injected files own the rest of the stable prefix, including their headings.
-    if (name === "Project Context") {
-      break;
-    }
-  }
-  append(prompt.length);
-  return sections;
-}
-
 function diffSnapshots(
   previous: PromptCacheSnapshot,
   next: PromptCacheSnapshot,
@@ -476,6 +375,8 @@ export function collectPromptCacheTools(
   tools: readonly PromptCacheToolDescriptor[],
 ): PromptCacheToolSnapshot[] {
   const snapshots: PromptCacheToolSnapshot[] = [];
+  let descriptionChars = 0;
+  const descriptions = new Map<PromptCacheToolSnapshot, string>();
   for (const tool of tools) {
     try {
       const name = tool.name?.trim();
@@ -493,16 +394,26 @@ export function collectPromptCacheTools(
           toolSchemaFingerprints.set(parameters, schemaDigest);
         }
       }
-      snapshots.push({
+      const snapshot = {
         name,
         descriptionDigest: description === undefined ? undefined : sha256Hex(description),
         schemaDigest,
-      });
+      };
+      if (
+        description !== undefined &&
+        descriptionChars + description.length <= MAX_TOOL_FACT_SOURCE_CHARS
+      ) {
+        descriptionChars += description.length;
+        descriptions.set(snapshot, description);
+      }
+      snapshots.push(snapshot);
     } catch {
       continue;
     }
   }
-  return sortPromptCacheToolsByName(snapshots);
+  const sorted = sortPromptCacheToolsByName(snapshots);
+  toolFactSources.set(sorted, descriptions);
+  return sorted;
 }
 
 // The session tool pin holds the tool block on every route; system prompts are
@@ -527,6 +438,10 @@ export function beginPromptCacheObservation(
   const previous = trackers.get(key);
   const requestedAt = Date.now();
   const tools = sortPromptCacheToolsByName(params.tools);
+  const descriptions = toolFactSources.get(params.tools);
+  if (descriptions) {
+    toolFactSources.set(tools, descriptions);
+  }
   const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
   const prefix = splitSystemPrompt?.stablePrefix ?? params.systemPrompt;
   const systemPromptDigest = sha256Hex(prefix);
@@ -562,6 +477,16 @@ export function beginPromptCacheObservation(
     toolCount: tools.length,
     tools,
   };
+  const suffix = splitSystemPrompt?.dynamicSuffix ?? "";
+  if (suffix.length <= MAX_PROMPT_FACT_SOURCE_CHARS) {
+    const retained =
+      previous && previous.snapshot.systemPromptSuffixDigest === systemPromptSuffixDigest
+        ? promptFactSources.get(previous.snapshot)
+        : undefined;
+    // Detach the bounded suffix from a potentially much larger stable-prefix string.
+    // UTF-16 preserves exact code units, including unpaired surrogates.
+    promptFactSources.set(snapshot, retained ?? Buffer.from(suffix, "utf16le").toString("utf16le"));
+  }
   let history = previous?.history ?? [];
   for (let index = 0; index < params.messages.length; index++) {
     const fingerprint = fingerprintMessage(params.messages[index]!, previous?.history[index]);
@@ -692,6 +617,60 @@ export function recordAggregateTruncation(params: PromptCacheIdentity): void {
   tracker.pendingChanges = changes;
 }
 
+function describeDropFacts(
+  changes: PromptCacheChange[] | null,
+  previous: PromptCacheSnapshot | undefined,
+  next: PromptCacheSnapshot,
+): PromptCacheChange[] | null {
+  if (!previous || !changes) {
+    return changes;
+  }
+  return changes.map((change) => {
+    const facts: string[] = [];
+    if (change.code === "systemPromptSuffix") {
+      const beforeSource = promptFactSources.get(previous);
+      const afterSource = promptFactSources.get(next);
+      if (beforeSource === undefined || afterSource === undefined) {
+        return { ...change, detail: `${change.detail}; facts: unavailable (source size bound)` };
+      }
+      facts.push(...describePromptCacheSectionChanges(beforeSource, afterSource));
+    } else if (change.code === "tools") {
+      for (const [index, tool] of next.tools.entries()) {
+        const prior = previous.tools.find((candidate) => candidate.name === tool.name);
+        if (!prior || prior.descriptionDigest === tool.descriptionDigest) {
+          continue;
+        }
+        const before =
+          prior.descriptionDigest === undefined
+            ? ""
+            : toolFactSources.get(previous.tools)?.get(prior);
+        const after =
+          tool.descriptionDigest === undefined ? "" : toolFactSources.get(next.tools)?.get(tool);
+        const label = tool.name === "computer" ? "computer" : `tool[${index + 1}]`;
+        facts.push(
+          ...(before === undefined || after === undefined
+            ? ["unavailable (source size bound)"]
+            : describePromptCacheFactChanges(
+                before,
+                after,
+                tool.name === "computer" ? "computer" : "description",
+              )
+          ).map((fact) => `${label}.description.${fact} changed`),
+        );
+        if (facts.length > MAX_NAMED_SECTION_CHANGES) {
+          break;
+        }
+      }
+    }
+    return facts.length
+      ? {
+          ...change,
+          detail: `${change.detail}; facts: ${facts.slice(0, MAX_NAMED_SECTION_CHANGES).join(", ")}${facts.length > MAX_NAMED_SECTION_CHANGES ? ", remaining" : ""}`,
+        }
+      : change;
+  });
+}
+
 export function completePromptCacheObservation(
   params: PromptCacheIdentity & {
     usage?: NormalizedUsage;
@@ -737,7 +716,7 @@ export function completePromptCacheObservation(
     ? {
         previousCacheRead,
         cacheRead,
-        changes,
+        changes: describeDropFacts(changes, previousSnapshot, tracker.snapshot),
         ...(previousProviderPrompt?.wire || params.providerPrompt?.wire
           ? {
               requests: {

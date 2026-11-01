@@ -181,6 +181,7 @@ export function completeEmbeddedAttemptResult(
   const evidence = readSubscriptionCompletionEvidence(subscription);
 
   if (
+    !attempt.inputAlreadyDelivered &&
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
     terminal.promptErrorSource !== "hook:before_agent_run" &&
@@ -281,7 +282,10 @@ export function completeEmbeddedAttemptResult(
     assistant?.stopReason === "stop" &&
     !assistant.content.some(isRunnerToolCallBlock)
   ) {
-    const allowedToolNames = input.prepared.toolCatalog.toolSearchRunPlan.liveAllowedToolNames;
+    const { liveAllowedToolNames, capabilityToolNames } =
+      input.prepared.toolCatalog.toolSearchRunPlan;
+    // Deferred names need native correction too; detection never executes text.
+    const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
     textToolCallAttempt =
       allowedToolNames.size > 0 &&
       isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>
@@ -300,6 +304,7 @@ export function completeEmbeddedAttemptResult(
     ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
     ...state,
     ...evidence,
+    ...(attempt.inputAlreadyDelivered ? { inputAlreadyDelivered: true as const } : {}),
     preparedTerminalReply: keptReply,
     sandboxRuntime: input.setup.sandboxRuntime,
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),

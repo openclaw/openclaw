@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  pluginRegistrationContractRegistry,
+  getPluginRegistrationContracts,
   resolveWebFetchProviderContractEntriesForPluginId,
 } from "../../plugins/contracts/registry.js";
 import { resolveBundledExplicitWebFetchProvidersFromPublicArtifacts } from "../../plugins/web-provider-public-artifacts.explicit.js";
@@ -24,7 +24,7 @@ function resolveWebFetchCredentialValue(provider: WebFetchProviderPlugin): unkno
 /** Installs web fetch provider contract tests for all providers owned by one plugin. */
 export function describeWebFetchProviderContracts(pluginId: string) {
   const providerIds =
-    pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)
+    getPluginRegistrationContracts().find((entry) => entry.pluginId === pluginId)
       ?.webFetchProviderIds ?? [];
 
   let providerEntries:

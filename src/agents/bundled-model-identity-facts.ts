@@ -1,6 +1,10 @@
+import { canonicalModelKey } from "@openclaw/model-catalog-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
-import { createBundledStaticCatalogModelResolver } from "./embedded-agent-runner/model.static-catalog.js";
+import {
+  createBundledStaticCatalogModelResolver,
+  listBundledVendorCatalogRows,
+} from "./embedded-agent-runner/model.static-catalog.js";
 
 /**
  * Facts a bundled first-party catalog declares about the model itself. Route facts
@@ -52,5 +56,42 @@ export function createBundledModelIdentityFactsResolver(): (
       ...(model.family ? { family: model.family } : {}),
     };
     return Object.keys(facts).length > 0 ? facts : undefined;
+  };
+}
+
+/** Model facts every route inherits from the vendor row when its own row does not say. */
+type VendorModelFacts = Pick<ModelCompatConfig, "requiresReasoningContentOnAssistantMessages">;
+
+/**
+ * Resolves vendor model facts for a route that serves the vendor's model under its own id
+ * (an aggregator's vendor-prefixed or dated id maps to the vendor row by canonical key). Only facts about the model
+ * itself cross routes, over the same request API; ladders, defaults and wire maps stay with
+ * the serving route. Ambiguous canonical keys inherit nothing.
+ */
+export function createVendorModelFactsResolver(): (route: {
+  provider: string;
+  id: string;
+  api: string;
+}) => VendorModelFacts | undefined {
+  const resolveModel = createBundledStaticCatalogModelResolver({ includeRuntimeDiscovery: true });
+  let vendors: Map<string, { provider: string; id: string } | null> | undefined;
+  return ({ provider, id, api }) => {
+    if (!vendors) {
+      vendors = new Map();
+      for (const row of listBundledVendorCatalogRows()) {
+        const key = canonicalModelKey(row.id);
+        vendors.set(key, vendors.has(key) ? null : row);
+      }
+    }
+    const vendor = vendors.get(canonicalModelKey(id));
+    if (!vendor || normalizeProviderId(vendor.provider) === normalizeProviderId(provider)) {
+      return undefined;
+    }
+    const model = resolveModel({ provider: vendor.provider, modelId: vendor.id });
+    const replay =
+      model?.api === api ? model.compat?.requiresReasoningContentOnAssistantMessages : undefined;
+    return replay === undefined
+      ? undefined
+      : { requiresReasoningContentOnAssistantMessages: replay };
   };
 }

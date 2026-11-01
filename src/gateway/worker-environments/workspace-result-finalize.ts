@@ -346,6 +346,10 @@ export async function reconcileWorkspaceAfterTurn(params: {
       params.beforeTurnSignal,
     );
   } catch (error) {
+    // Cancelling input refresh is not a reconciliation failure; its caller keeps the abort reason.
+    if (params.beforeTurnSignal?.aborted && error === params.beforeTurnSignal.reason) {
+      throw error;
+    }
     await createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertResultCurrent)
       .reportFailure(workspaceError(error))
       .catch(() => undefined);

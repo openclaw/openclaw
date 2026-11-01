@@ -9,15 +9,16 @@ import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { createRuntimeTestRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 
-export type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
+type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
 type TranscriptPage = {
   threadId: string;
   items: SessionCatalogTranscriptItem[];
   nextCursor?: string;
 };
 
-export function commandFixture(groups: string[] = ["Team"]) {
+export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawConfig["agents"]) {
   const config: OpenClawConfig = {
+    agents,
     plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
   };
   setRuntimeConfigSnapshot(config);

@@ -110,7 +110,9 @@ export async function ensureLoaded(
     }
   }
   const loadedRevision = getCronJobsStoreRevision(state.deps.storeKey);
-  const loaded = await loadCronJobsStoreWithConfigJobsByKey(state.deps.storeKey);
+  const loaded = await loadCronJobsStoreWithConfigJobsByKey(state.deps.storeKey, {
+    includeConfigRevisions: Boolean(state.deps.onDefinitionChange),
+  });
   const loadNowMs = state.deps.nowMs();
   // Persisted cron rows are validated lazily, so treat them as raw records at the
   // store boundary and only trust the CronJob shape after validation below.
@@ -211,9 +213,7 @@ export async function ensureLoaded(
   loadedCronStoreRevisions.set(state, {
     revision: loadedRevision,
   });
-  if (previousJobs) {
-    emitCronDefinitionChanges(state, previousJobs, jobs);
-  }
+  emitCronDefinitionChanges(state, previousJobs, jobs, loaded.configRevisions);
 
   if (quarantinedConfigJobs.length > 0 && !opts?.deferQuarantinePersist) {
     // Config decoding and runtime validation reject rows in separate passes;
@@ -469,6 +469,7 @@ export async function persistCronJobMutation(params: {
       createAdmission: streamAdmission?.createAdmission,
       input: structuredClone({
         storeKey: source.storeKey,
+        includeConfigRevisions: Boolean(state.deps.onDefinitionChange),
         agentId: params.agentId,
         preconditionJob: params.preconditionJob,
         expectedJob: params.expectedJob,
@@ -493,22 +494,29 @@ export async function persistCronJobMutation(params: {
       assertCurrent,
       // Config availability may change after dispatch; deletion is checked against worker rows.
       snapshot: params.jobMutationSnapshot,
-      publish({ store, names, changed, notifications: committedNotifications, logs }) {
+      publish({
+        store,
+        configRevisions,
+        names,
+        changed,
+        notifications: committedNotifications,
+        logs,
+      }) {
         published = true;
         notifications = committedNotifications;
         for (const entry of logs) {
           state.deps.log[entry.level](entry.fields, entry.message);
         }
+        const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
         if (changed) {
           markCommitted?.();
+          noteCronJobsStoreCommit(source.storeKey);
+          // Mutations can cancel queued requests even when every execution slot is occupied.
+          // Wake their transient owners only after this store operation releases its lock.
+          void state.op.then(() => {
+            wakeCronRunQueues(state);
+          });
         }
-        const unchanged = getCronJobsStoreRevision(source.storeKey) === observedRevision;
-        noteCronJobsStoreCommit(source.storeKey);
-        // Mutations can cancel queued requests even when every execution slot is occupied.
-        // Wake their transient owners only after this store operation releases its lock.
-        void state.op.then(() => {
-          wakeCronRunQueues(state);
-        });
         if (unchanged) {
           publishCronJobNames(source.storeKey, source.context, names);
         }
@@ -522,7 +530,7 @@ export async function persistCronJobMutation(params: {
           params.afterCommit?.();
         } finally {
           try {
-            emitCronDefinitionChanges(state, previousJobs, store.jobs);
+            emitCronDefinitionChanges(state, previousJobs, store.jobs, configRevisions);
             publishDurableNextRunChanges({
               state,
               storeJobs: store.jobs,

@@ -18,7 +18,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { hostname, loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -31,6 +31,7 @@ import type * as MachineState from "../../src/state/config-machine-state-write.j
 import type * as Reads from "../../src/state/openclaw-state-db-readonly.js";
 import type * as State from "../../src/state/openclaw-state-db.js";
 import type { OpenClawStateReadCommand } from "../../src/state/openclaw-state-read.types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -123,10 +124,6 @@ const closeNative = await built<typeof Native.closeDefaultRetainedNativeWorkerSo
 );
 installRole("gateway");
 
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
-
 async function measure(run: () => Promise<void>, operations: number) {
   global.gc!();
   await nextTurn();
@@ -152,7 +149,7 @@ async function measure(run: () => Promise<void>, operations: number) {
     const processCpu = process.cpuUsage(processCpuBefore);
     const memoryAfter = process.memoryUsage();
     const allocatedBytes = values.allocations
-      ? allocated((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
       : undefined;
     return {
       operations,

@@ -1,3 +1,4 @@
+import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { EvaluationError } from "./errors.js";
@@ -12,11 +13,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const batch = { state: "synthetic", questions: { q: { type: "boolean" as const } } };
-const context = (signal = new AbortController().signal) => ({
-  model: "kev-latest",
+const batch = {
+  state: { type: "text" as const, text: "synthetic" },
+  questions: { q: { type: "boolean" as const } },
+};
+const context = (
+  signal = new AbortController().signal,
+  model = "kev-latest",
+): DecisionProviderContextV2 => ({
+  model: { provider: "typesafe", id: model, name: model },
+  config: {},
+  auth: { mode: "api-key", apiKey: "typesafe-local" },
   signal,
   deadlineMonotonicMs: performance.now() + 30_000,
+  isAdmissible: () => true,
 });
 const expectedResult = (model: string) => ({
   status: "ok",
@@ -40,10 +50,10 @@ async function setup() {
     return { evaluate };
   });
   vi.doMock("./client.js", initialize);
-  const { registeredDecisionProvider } = await import("./transport.test-support.js");
+  const { registeredPreparedDecisionProvider } = await import("./transport.test-support.js");
   const config: { baseUrl?: string } = { baseUrl: "http://127.0.0.1:1234" };
   const current = () => ({ plugins: { entries: { typesafe: { config } } } });
-  const provider = registeredDecisionProvider(current);
+  const provider = registeredPreparedDecisionProvider(current);
   return { provider, config, started, release, evaluate, initialize };
 }
 
@@ -77,11 +87,10 @@ it.each(["abort", "deadline", "config", "credentials"])(
 
 it("shares pending initialization between callers", async () => {
   const { started, release, evaluate, initialize, provider } = await setup();
-  expect(provider.isReady?.()).toBe(true);
   expect(initialize).not.toHaveBeenCalled();
   const first = provider.evaluate(batch, context());
   await started.promise;
-  const second = provider.evaluate(batch, { ...context(), model: "jev-latest" });
+  const second = provider.evaluate(batch, context(undefined, "jev-latest"));
   expect(evaluate).not.toHaveBeenCalled();
   release.resolve();
   await expect(first).resolves.toMatchObject(expectedResult("kev-latest"));

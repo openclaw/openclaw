@@ -22,6 +22,7 @@ import {
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
+import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
@@ -35,7 +36,7 @@ import {
   reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
-import { clearChatMessagesFromCache, readChatSessionSnapshot } from "./session-message-cache.ts";
+import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 function createSessionObservationRefresh(
   sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
@@ -171,6 +172,65 @@ function applyObservedChatSessionRow(
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  protected cachedSessionState() {
+    const state = this.state;
+    if (!state || !this.ownsChatSnapshot({ sessionKey: state.sessionKey })) {
+      return undefined;
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+      sessionKey: state.sessionKey,
+    });
+    return snapshot?.sessionId === state.currentSessionId ? snapshot?.sessionState : undefined;
+  }
+
+  protected cachedSessionStatePending() {
+    return (
+      !this.state?.connected ||
+      (!this.resourceSessionObservation()?.hasObserved &&
+        (!selectedChatSessionRow(this.state) || this.state.sessions.state.resultCached))
+    );
+  }
+
+  protected displayedParentSession(row: GatewaySessionRow | undefined) {
+    const parent = this.observedParentSessionRow();
+    const current = resolveChatPaneParentSession(row, parent ? [parent] : []);
+    if (current || this.parentSessionObservation?.observation?.hasObserved) {
+      return current;
+    }
+    const cached = this.cachedSessionState()?.parentSession;
+    if (
+      cached &&
+      this.context.sessions.deletionState(
+        cached.key,
+        parseAgentSessionKey(cached.key)?.agentId ?? resolveChatAgentId(this.state!),
+      )
+    ) {
+      return null;
+    }
+    return this.cachedSessionStatePending() ||
+      resolveUiSessionNavigationParentKey(row) === cached?.key
+      ? (cached ?? null)
+      : null;
+  }
+
+  private cacheParentSession() {
+    const state = this.state;
+    if (!state || !this.ownsChatSnapshot({ sessionKey: state.sessionKey })) {
+      return;
+    }
+    const target = { sessionKey: state.sessionKey };
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
+    if (!snapshot?.sessionState || snapshot.sessionId !== state.currentSessionId) {
+      return;
+    }
+    const parentSession = this.displayedParentSession(selectedChatSessionRow(state));
+    if (JSON.stringify(snapshot.sessionState.parentSession) !== JSON.stringify(parentSession)) {
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
+        ...snapshot,
+        sessionState: { ...snapshot.sessionState, parentSession },
+      });
+    }
+  }
   // Capability identity matters because a replacement restarts its canonical revision at zero.
   private canonicalSessionList?: {
     sessions: SessionCapability;
@@ -216,9 +276,6 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       state.sessionKey,
       resolveChatAgentId(state),
     );
-    for (const { key, agentId } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
-    }
     // Live rows retire on disconnect; the session owner retains same-identity
     // presentation (including deferred metadata) until the next canonical list.
     const presentation = this.context.sessions.presentation;
@@ -245,6 +302,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       this.ownsChatSnapshot({ sessionKey: state.sessionKey })
     ) {
       commitCurrentChatHistorySnapshot(state, undefined, selectedSession);
+      this.cacheParentSession();
     }
     const outboxState = selectedSession
       ? JSON.stringify([
@@ -410,6 +468,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         if (!current()) {
           return;
         }
+        this.cacheParentSession();
         this.publishParentRow?.();
         if (
           !notification?.eventPending &&
@@ -431,6 +490,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (!current()) {
       binding.observation.dispose();
     } else {
+      this.cacheParentSession();
       this.publishParentRow?.();
       refresh.refresh();
     }
@@ -613,6 +673,15 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       // The owner can publish its first result synchronously before the handle returns.
       this.projectObservedSessionRow();
       const observation = binding.observation;
+      const pendingAbort = state.pendingAbort;
+      if (
+        pendingAbort &&
+        !observation.hasObserved &&
+        uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId)
+      ) {
+        // A parked pane skips resource discovery, but its queued Stop needs current ownership.
+        refreshRunner.refresh();
+      }
       const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
       if (
         previousObservationSessionId &&

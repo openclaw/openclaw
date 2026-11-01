@@ -114,6 +114,9 @@ it.each([390, 2048])("fits skill rows at %ipx", async (width) => {
   await click(".agent-chat__attach-menu .agent-chat__input-btn--attach");
   await expect.poll(() => container.querySelector('[data-value="open-skills"]')).not.toBeNull();
   await click('[data-value="open-skills"]');
+  await expect
+    .poll(() => container.querySelector('.agent-chat__capability-menu [data-value^="skill:"]'))
+    .not.toBeNull();
   await afterLayout();
   const dropdown = query(".agent-chat__capability-menu");
   const menu = query(".oc-menu", dropdown);
@@ -349,8 +352,10 @@ it.each([
   }
   const draft =
     "A typed line that wraps within the available composer width. ".repeat(12) +
-    "\nA second editable line.";
+    "\nA second editable line.".repeat(40);
   await control.fill(draft);
+  await afterLayout();
+  // The pane-derived cap settles after the draft first reaches it.
   await afterLayout();
   expect([textarea.value, props.draft]).toEqual([draft, draft]);
   expect(placeholder.checkVisibility()).toBe(false);
@@ -377,6 +382,75 @@ it.each([
     expect(getComputedStyle(textarea).scrollbarGutter).toBe("auto");
   }
 });
+
+// Chromium reserves a stable gutter without a scrollbar; only WebKit can regress classic bars.
+it.each(server.browser === "webkit" ? ["classic", "overlay"] : ["overlay"])(
+  "settles %s-scrollbar drafts crossing the height cap",
+  async (bar) => {
+    await page.viewport(390, 800);
+    container.classList.add("chat");
+    container.style.width = "342px";
+    if (bar === "overlay") {
+      // Overlay scrollbars (iOS, Android) take no width from the text.
+      const style = container.appendChild(document.createElement("style"));
+      style.textContent =
+        ".agent-chat__composer-combobox > textarea::-webkit-scrollbar { width: 0; }";
+    }
+    drawComposer(createComposerProps());
+    const textarea = container.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__composer-combobox > textarea",
+    )!;
+    let toggles = 0;
+    const observer = new MutationObserver(() => toggles++);
+    observer.observe(textarea, { attributeFilter: ["data-composer-scrollable"] });
+    const type = async (draft: string) => {
+      textarea.value = draft;
+      textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+      await afterLayout();
+      toggles = 0;
+      await afterLayout();
+      return toggles;
+    };
+    const text =
+      "handover for plugin hot reload. To test it, make the knowledge fix and hit reload ";
+    const draft = text.repeat(24);
+    // Typing past the cap must not swap the end inset for a gutter that later
+    // disappears: each wrap change would undo the overflow that caused it.
+    const overflows = async (length: number) => {
+      // A late settle toggles once; an oscillating gutter toggles every frame.
+      expect(await type(draft.slice(0, length)), `toggles at ${length}`).toBeLessThan(2);
+      return textarea.scrollHeight > textarea.clientHeight + 1;
+    };
+    let [fits, length] = [0, draft.length];
+    expect(await overflows(length)).toBe(true);
+    while (length - fits > 1) {
+      const middle = Math.floor((fits + length) / 2);
+      [fits, length] = (await overflows(middle)) ? [fits, middle] : [middle, length];
+    }
+    expect(await overflows(fits)).toBe(false);
+    // Measure synchronously, without frames, which drafts overflow only until
+    // the text gains the 8px gutter swap. Those lengths are the unstable ones.
+    const inset = Number.parseFloat(getComputedStyle(textarea).paddingRight);
+    const fitsWithInset = (draftLength: number, endInset: number) => {
+      textarea.value = draft.slice(0, draftLength);
+      textarea.style.paddingInlineEnd = `${endInset}px`;
+      const result = textarea.scrollHeight <= textarea.clientHeight + 1;
+      textarea.style.paddingInlineEnd = "";
+      textarea.value = draft.slice(0, fits);
+      return result;
+    };
+    let last = length;
+    while (!fitsWithInset(last, inset) && fitsWithInset(last, inset - 8)) {
+      last++;
+    }
+    // Without such a draft this case no longer exercises the defect.
+    expect(last).toBeGreaterThan(length);
+    for (; length <= last; length++) {
+      await overflows(length);
+    }
+    observer.disconnect();
+  },
+);
 
 it.each([
   [320, "active"],

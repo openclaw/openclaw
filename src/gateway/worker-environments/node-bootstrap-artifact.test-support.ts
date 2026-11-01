@@ -111,7 +111,7 @@ export function useNodeBootstrapArtifactFixtures() {
     }),
   );
   const createProvider = (options: Parameters<typeof createNodeBootstrapArtifactProvider>[0]) => {
-    const provider = createNodeBootstrapArtifactProvider(options);
+    const provider = createNodeBootstrapArtifactProvider({ install: "npm", ...options });
     providers.push(provider);
     return provider;
   };
@@ -208,6 +208,20 @@ export function useNodeBootstrapArtifactFixtures() {
       ".env": "FAKE_PRIVATE_VALUE=do-not-transfer",
       "src/private.ts": "source-only",
       "extensions/remote-runtime/package.json": pluginPackage,
+    });
+    await writeFiles(packageRoot, {
+      "node_modules/native-runtime/package.json": {
+        name: "native-runtime",
+        version: "1.2.3",
+        main: "index.js",
+      },
+      "node_modules/native-runtime/index.js": "module.exports = 42;",
+      "extensions/remote-runtime/node_modules/native-runtime/package.json": {
+        name: "native-runtime",
+        version: "1.2.3",
+        main: "index.js",
+      },
+      "extensions/remote-runtime/node_modules/native-runtime/index.js": "module.exports = 42;",
     });
     const aiRoot =
       mode === "source"

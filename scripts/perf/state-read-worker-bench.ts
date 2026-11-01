@@ -18,6 +18,8 @@
  * --retained-heap collects before/after the measured window in a separate retention
  * diagnostic pass. Its forced pre-window GC makes its timings unsuitable as gates.
  * Native total-allocated-byte deltas, when available, also measure untraced churn.
+ * --snapshot adds post-GC worker snapshots at both retention boundaries; use with
+ * --retained-heap and keep this diagnostic pass separate from latency gates.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -38,11 +40,13 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "200" },
     rows: { type: "string", default: "10000" },
     "retained-heap": { type: "boolean", default: false },
+    snapshot: { type: "boolean", default: false },
     "owner-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
   },
 });
 const kinds = ["acp", "shared-facts", "lifecycle", "plugins", "machine-state", "session-list"];
+assert(!values.snapshot || values["retained-heap"], "--snapshot requires --retained-heap");
 assert(kinds.includes(values.kind), `--kind must be one of ${kinds.join(", ")}`);
 assert(values.output, "--output must name a new synthetic fixture directory");
 const root = path.resolve(values.output);
@@ -234,7 +238,7 @@ type Measurement = {
   initialMemory?: { allocatedBytes?: number };
   finalMemory?: { allocatedBytes?: number };
 };
-async function sample(name: string, operation: "start" | "stop" | "collect") {
+async function sample(name: string, operation: "start" | "stop" | "collect" | "snapshot") {
   const ready = fs.readdirSync(output).flatMap((file) => {
     if (!file.endsWith(".ready.json")) {
       return [];
@@ -340,7 +344,7 @@ try {
     await read(commands[index % commands.length]!);
   }
   const retainedBefore = values["retained-heap"]
-    ? await sample("retained-before", "collect")
+    ? await sample("retained-before", values.snapshot ? "snapshot" : "collect")
     : undefined;
   await delay(1_100);
   const before = census();
@@ -366,7 +370,7 @@ try {
   const after = census();
   assert.equal(after.tasks - before.tasks, iterations, "Worker task census must cover every reply");
   const retainedAfter = values["retained-heap"]
-    ? await sample("retained-after", "collect")
+    ? await sample("retained-after", values.snapshot ? "snapshot" : "collect")
     : undefined;
   latencies.sort((left, right) => left - right);
   const result = {

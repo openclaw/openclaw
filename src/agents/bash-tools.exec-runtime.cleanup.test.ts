@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
@@ -305,12 +305,13 @@ it.each([
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
     const cleanupFailure = "sandbox artifact cleanup failed";
-    queueRun(async () => createRunExit({ exitCode: commandCode }));
+    const secret = `ghp_${"a".repeat(36)}`;
+    queueRun(async () => createRunExit({ exitCode: commandCode }), "saved process output");
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
       await finalization.wait();
       if (fails) {
-        throw new Error(cleanupFailure);
+        throw new Error(`${cleanupFailure}: token=${secret}`);
       }
     });
     try {
@@ -349,8 +350,14 @@ it.each([
         const outcome = await run.promise;
         expect(outcome.status).toBe(fails || commandCode !== 0 ? "failed" : "completed");
         if (fails) {
+          assert(outcome.status === "failed");
           expect(outcome.aggregated).toContain(cleanupFailure);
           expect(run.session.aggregated).toContain(cleanupFailure);
+          expect(outcome.message).toContain(cleanupFailure);
+          expect(outcome.message).not.toContain("saved process output");
+          expect(outcome.reason).toContain("saved process output");
+          expect(outcome.reason.split(cleanupFailure)).toHaveLength(2);
+          expect(JSON.stringify(outcome)).not.toContain(secret);
         }
         expect(finalizeExec).toHaveBeenCalledOnce();
       });

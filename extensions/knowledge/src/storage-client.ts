@@ -28,6 +28,7 @@ const SDK_MODULES = [
   "openclaw/plugin-sdk/feature-contract",
   "openclaw/plugin-sdk/routing",
   "openclaw/plugin-sdk/sqlite-worker-runtime",
+  "openclaw/plugin-sdk/text-utility-runtime",
 ];
 // Resolve through whatever resolver the host installed for this plugin module.
 export function sdkUrls(): Record<string, string> {

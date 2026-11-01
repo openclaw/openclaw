@@ -1,10 +1,9 @@
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
-const wait = (promise: Promise<unknown>) => withTestTimeout(promise, 1_000, "task did not settle");
 const failTask = (error: Error) => () => Promise.reject(error);
 function heldTask(value: number) {
   const started = createDeferred();
@@ -16,7 +15,7 @@ function heldTask(value: number) {
   return { run, started: started.promise, release: release.resolve };
 }
 
-it("keeps pending promise allocation bounded when the task list grows", async () => {
+it("keeps pending promise allocation bounded when the task list grows", async ({ signal }) => {
   async function countPendingPromises(taskCount: number): Promise<number> {
     const limit = 8;
     const started = createDeferred();
@@ -41,7 +40,7 @@ it("keeps pending promise allocation bounded when the task list grows", async ()
     hook.enable();
     const run = scope.run(true, () => runTasksWithConcurrency({ tasks, limit }));
     try {
-      await wait(started.promise);
+      await withinTest(started.promise, signal);
       return promiseCount;
     } finally {
       hook.disable();
@@ -57,11 +56,11 @@ it("keeps pending promise allocation bounded when the task list grows", async ()
   expect(largeQueue).toBeLessThanOrEqual(smallQueue * 2);
 });
 
-it.each([
+it.for([
   [false, false],
   [true, false],
   [true, true],
-])("isolates failures (%s, %s)", async (hookThrows, throwOnError) => {
+])("isolates failures (%s, %s)", async ([hookThrows, throwOnError], { signal }) => {
   const scope = new AsyncLocalStorage<string>();
   async function runCaller(caller: string) {
     const taskError = new Error("task failed");
@@ -109,7 +108,7 @@ it.each([
       expect(result).toMatchObject({ results: [undefined, undefined, 20], hasError: true });
       expect(result.firstError).toBe(taskError);
     }
-    await wait(completed.promise);
+    await withinTest(completed.promise, signal);
     expect(contexts).toEqual([caller, taskContext, taskContext, caller, caller]);
     expect(onTaskError).toHaveBeenNthCalledWith(1, taskError, 0);
     expect(onTaskError).toHaveBeenNthCalledWith(2, secondError, 1);
@@ -128,15 +127,15 @@ it("preserves submitted factories and task order with bounded worker count", asy
   const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
   const resultSettled = Promise.allSettled([resultPromise]);
   try {
-    await withinTest(wait(Promise.all([first.started, second.started])), signal);
+    await withinTest(Promise.all([first.started, second.started]), signal);
     expect(jobs.map((job) => job.run.mock.calls.length)).toEqual([1, 1, 0, 0]);
     tasks[2] = vi.fn(async () => 30);
     tasks.push(vi.fn(async () => 50));
     second.release();
-    await withinTest(wait(third.started), signal);
+    await withinTest(third.started, signal);
     expect(fourth.run).not.toHaveBeenCalled();
     first.release();
-    await withinTest(wait(fourth.started), signal);
+    await withinTest(fourth.started, signal);
     third.release();
     fourth.release();
     const { hasError, firstError, results } = await withinTest(resultPromise, signal);

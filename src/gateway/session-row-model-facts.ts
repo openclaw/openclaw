@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -13,8 +12,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
+import { normalizeSessionSearchLiteral } from "../shared/session-search-text.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -27,7 +28,7 @@ import {
 import type { SessionListModelCatalog } from "./session-utils.types.js";
 
 /** A conservative vocabulary of admitted identities; never reconstruct thinking facts to reject a query. */
-export function mayMatchSessionRowModelSearch(
+export function prepareSessionRowModelSearch(
   params: Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
     "cfg" | "modelCatalog" | "rowContext"
@@ -52,8 +53,7 @@ export function mayMatchSessionRowModelSearch(
       }
     >;
   },
-  search: string,
-): boolean {
+): (search: string) => boolean {
   const fields = new Set<string>(["openclaw", "codex", "auto", "acpx", "-"]);
   const providers = new Set<string>();
   const models = new Set<string>();
@@ -69,7 +69,7 @@ export function mayMatchSessionRowModelSearch(
   const lower = (value: string) => {
     let text = lowercaseFields.get(value);
     if (text === undefined) {
-      text = normalizeLowercaseStringOrEmpty(value);
+      text = normalizeSessionSearchLiteral(value);
       lowercaseFields.set(value, text);
     }
     return text;
@@ -198,12 +198,6 @@ export function mayMatchSessionRowModelSearch(
       ref(undefined, run.model);
     }
   }
-  for (const backend of resolveRuntimeCliBackends("metadata")) {
-    runtime(backend.id);
-  }
-  for (const { harness } of listRegisteredAgentHarnesses()) {
-    runtime(harness.id);
-  }
   for (const snapshot of metadata) {
     for (const plugin of snapshot?.plugins ?? []) {
       for (const id of [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])]) {
@@ -251,22 +245,34 @@ export function mayMatchSessionRowModelSearch(
   for (const field of modelFields) {
     add(field);
   }
-  if ([...fields].some((field) => field.includes(search))) {
-    return true;
-  }
-  // Bare historical models can infer a provider; rejection must cover every possible pairing.
-  if (search.includes("/")) {
-    for (const provider of providers) {
-      for (const model of models) {
-        modelFields.length = 0;
-        addSessionListSearchModelFields(modelFields, { provider, model });
-        if (modelFields.some((field) => field?.includes(search))) {
-          return true;
+  return (search) => {
+    for (const field of fields) {
+      if (field.includes(search)) {
+        return true;
+      }
+    }
+    // Direct runtime registration is live within a retained registry generation.
+    const matchesRuntime = (id: string) =>
+      normalizeSessionSearchLiteral(id).includes(search) ||
+      normalizeSessionSearchLiteral(normalizeOptionalAgentRuntimeId(id)).includes(search);
+    if (
+      resolveRuntimeCliBackends("metadata").some((backend) => matchesRuntime(backend.id)) ||
+      listRegisteredAgentHarnesses().some(({ harness }) => matchesRuntime(harness.id))
+    ) {
+      return true;
+    }
+    // Bare historical models can infer a provider; rejection covers every possible pairing.
+    if (search.includes("/")) {
+      for (const provider of providers) {
+        for (const model of models) {
+          if (`${provider}/${model}`.includes(search)) {
+            return true;
+          }
         }
       }
     }
-  }
-  return false;
+    return false;
+  };
 }
 
 /** Search and row presentation share model policy without preparing unrelated row fields. */
@@ -283,6 +289,7 @@ export function readSessionRowModelFacts(params: {
   rowContext: SessionListRowContext;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   lightweightListRow?: boolean;
+  runtimeResolution?: SessionRuntimeResolution;
 }) {
   const { cfg, key, agentId, source, rowContext } = params;
   const lightweight = params.lightweightListRow === true;
@@ -321,6 +328,7 @@ export function readSessionRowModelFacts(params: {
     sessionKey: key,
     entry: params.entry,
     preparedAcpMeta: params.preparedAcpMeta,
+    runtimeResolution: params.runtimeResolution,
     modelCatalog:
       rowModelCatalog ?? (lightweight || metadataSnapshot !== undefined ? [] : undefined),
     modelCatalogRouteVariants: preparedCatalog?.routeVariants,

@@ -35,7 +35,11 @@ import {
   type SessionListFilterParams,
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
-import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import {
+  mergeSessionEntryPages,
+  sortAndLimitSessionEntries,
+  type SessionEntryPair,
+} from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -51,6 +55,7 @@ import {
 } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
+import { createSessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
@@ -79,8 +84,8 @@ export function selectSessionEntries(
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    const entries: SessionEntryPair[] = [];
-    const ownerEntries: SessionEntryPair[] = [];
+    const pages: SessionEntryPair[][] = [];
+    const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
     let totalCount = 0;
     let hits = 0;
@@ -112,8 +117,8 @@ export function selectSessionEntries(
       } else {
         hits++;
       }
-      entries.push(...part.entries);
-      ownerEntries.push(...part.ownerEntries);
+      pages.push(part.entries);
+      ownerPages.push(part.ownerEntries);
       totalCount += part.totalCount;
       activityExpiresAt = Math.min(activityExpiresAt, part.activityExpiresAt ?? Infinity);
       for (const owner of part.ownerFacet) {
@@ -122,8 +127,8 @@ export function selectSessionEntries(
     }
     recordSessionRowPartitionCache(hits, misses, getMainThreadTaskName());
     filteredResult = {
-      entries,
-      ownerEntries,
+      entries: mergeSessionEntryPages(pages, pageEnd, params.opts.sortBy),
+      ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy),
       totalCount,
       ownerFacet: sortSessionOwnerFacet(owners),
       ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
@@ -135,8 +140,9 @@ export function selectSessionEntries(
     );
   }
   const { ownerEntries, entries: filtered, ...facets } = filteredResult;
-  const sharedEntries =
-    params.entriesSorted && !incremental
+  const sharedEntries = incremental
+    ? filtered.slice(offset)
+    : params.entriesSorted
       ? filtered
       : sortAndLimitSessionEntries(
           filtered,
@@ -147,7 +153,7 @@ export function selectSessionEntries(
   let ownerCount = 0;
   if (ownerLimit > 0) {
     const owned =
-      params.entriesSorted && !incremental
+      params.entriesSorted || incremental
         ? ownerEntries
         : sortAndLimitSessionEntries(ownerEntries, ownerLimit, params.opts.sortBy);
     ownerCount = owned.length;
@@ -336,6 +342,7 @@ export function prepareSessionRowSelection(
     prepared?.ordered ? undefined : rows,
   );
   const { entries } = selected;
+  let runtimeResolution: ReturnType<typeof createSessionRuntimeResolution> | undefined;
   return {
     cfg,
     opts,
@@ -369,6 +376,7 @@ export function prepareSessionRowSelection(
       return projection.modelFacts(
         { agentId: winner.agentId, key: winner.key, storePath: winner.storeTarget.storePath },
         prepared?.metadataPrepared === true,
+        (runtimeResolution ??= createSessionRuntimeResolution(cfg)),
       );
     },
     modelSearchMayMatch: (search: string) => projection.modelSearchMayMatch(search),
@@ -529,6 +537,8 @@ export async function listProjectedSessions(params: {
   const selectionPreparation = {
     metadataOnly: !opts.search?.trim() && opts.hasBoard === undefined,
     includeCatalog: true,
+    requireCurrentCatalog: true,
+    catalogSignal: client?.connectionSignal,
   };
   return projection.withSelectionPreparation(async () => {
     const dirtyRowCount = projection.dirtyRowCount;

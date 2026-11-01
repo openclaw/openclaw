@@ -228,6 +228,12 @@ describe("effort selection", () => {
     expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
     expect(standardOnly.input.disabled).toBe(false);
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    await speedFixture(speedState(true, undefined, false, true));
+    expect(summary().getAttribute("data-chat-fast-mode")).toBe("false");
+    expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-fast-badge")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-gauge-needle")).not.toBeNull();
+    expect(summary().title).toBe("High");
     await speedFixture(speedState("ultrafast"));
     expect(speed("ultrafast").disabled).toBe(true);
     expect(summary().getAttribute("aria-label")).toContain("Ultrafast");

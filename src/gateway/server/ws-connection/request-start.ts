@@ -164,6 +164,7 @@ export function scheduleGatewayRequestStart(
       request.method === "sessions.resolve" ||
       request.method === "sessions.describe" ||
       request.method === "sessions.list" ||
+      request.method === "sessions.catalog.list" ||
       request.method === "users.list" ||
       request.method === "agents.list" ||
       request.method === "agent.identity.get" ||

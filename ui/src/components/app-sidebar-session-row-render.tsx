@@ -22,7 +22,6 @@ import { sameSidebarPresentation } from "./sidebar-projection-cache.ts";
 import type { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
-import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import "./tooltip.ts";
 
 /** Compose independently owned session state and context indicators. */
@@ -161,11 +160,10 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   // Personal pins and rail shortcuts do not mutate shared session groups.
   const rowDraggable = createMemo(() => pinnable() || groupWriteAccess().allowed);
   const marqueeLabelTemplate = () => {
-    const teamValue = team();
     const labelValue = label();
     return renderHoverMarquee(
       <>
-        {teamValue ? undefined : indicators.originIndicators}
+        {indicators.originIndicators}
         {labelValue}
       </>,
       "sidebar-recent-session__name",
@@ -223,6 +221,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           ),
           "sidebar-recent-session--dragging":
             host().sessionOrganizer.draggingSessionKey === session().key,
+          "sidebar-recent-session--naming": session().titlePending,
         },
       ]}
       style={{ "--session-color": color() ? `var(--session-color-${color()})` : undefined }}
@@ -266,15 +265,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         draggable="false"
         aria-current={session().visuallyActive ? "page" : undefined}
         aria-describedby={[stateId(), metaId()].filter(Boolean).join(" ") || undefined}
+        aria-busy={session().titlePending ? "true" : undefined}
         onClick={(event: MouseEvent) => host().handleSessionRowClick(event, actionSession())}
       >
         {indicators.persistentIndicator}
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row">
-            <Show when={session().titlePending} fallback={marqueeLabel()}>
-              <SessionTitlePlaceholder />
-            </Show>
-          </span>
+          <span class="sidebar-recent-session__title-row">{marqueeLabel()}</span>
           <span class="sidebar-recent-session__details">
             <Show when={session().channelPresentation}>
               {(channel) => (
@@ -304,9 +300,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           class={[
             "sidebar-child-session-toggle",
             {
-              "sidebar-child-session-toggle--running": !team() && session().runningChildCount > 0,
-              "sidebar-child-session-toggle--failed":
-                !team() && !(session().runningChildCount > 0) && session().failedChildCount > 0,
+              "sidebar-child-session-toggle--running": session().runningChildCount > 0,
             },
           ]}
           type="button"
@@ -323,20 +317,23 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             },
           )}
           aria-description={
-            !team() && !childrenExpanded() && session().runningChildCount > 0
+            !childrenExpanded() && session().runningChildCount > 0
               ? t("sessionsView.activeRun")
               : undefined
           }
           onClick={() => host().toggleSessionChildren(actionSession())}
         >
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
-            <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
+            <Show
+              when={!childrenExpanded() && session().runningChildCount > 0}
+              fallback={<Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />}
+            >
+              <span class="session-run-spinner" />
+            </Show>
           </span>
-          {team() ? undefined : (
-            <span class="sidebar-child-session-toggle__count">
-              {session().childSessionKeys.length}
-            </span>
-          )}
+          <span class="sidebar-child-session-toggle__count">
+            {session().childSessionKeys.length}
+          </span>
         </button>
       </Show>
       <span class="sidebar-recent-session__aside session-row-aside">
@@ -411,51 +408,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     </div>
   );
   return row;
-}
-type PendingSessionCreate = NonNullable<ReturnType<SessionListHost["sessionCreateDisplay"]>>;
-
-/** Local create facts occupy the future roster slot until canonical takeover:
- *  selected, actionless, and aligned with real rows. A rendered custom group
- *  leads that group's list; any other create leads the session list. Only the
- *  native session list has that slot: the agent-only roster shows no row for a
- *  new session, so a handoff row there would flash under the agent and vanish on
- *  admission. */
-export function renderPendingSessionCreateRow(
-  pending: () => PendingSessionCreate | undefined,
-  listItem = false,
-) {
-  return (
-    <Show when={pending()}>
-      {(value) => {
-        const row = (
-          <div class="sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
-            <div
-              class="sidebar-recent-session__link"
-              aria-current="page"
-              aria-busy={value().creation.admitted ? undefined : "true"}
-            >
-              <span class="sidebar-session-indicator" aria-hidden="true" />
-              <span class="sidebar-recent-session__text">
-                <span class="sidebar-recent-session__title-row">
-                  <Show when={value().displayName} fallback={<SessionTitlePlaceholder />}>
-                    {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
-                  </Show>
-                </span>
-              </span>
-            </div>
-          </div>
-        );
-        // Inside a section list it takes the tree wrapper its admitted row will have.
-        return listItem ? (
-          <div class="sidebar-session-tree" role="listitem">
-            {row}
-          </div>
-        ) : (
-          row
-        );
-      }}
-    </Show>
-  );
 }
 export function renderChildSessionLoadError(host: () => SessionListHost, parentKey: string) {
   const error = createMemo(() => host().sessionData.childSessionErrorsByParent.get(parentKey));

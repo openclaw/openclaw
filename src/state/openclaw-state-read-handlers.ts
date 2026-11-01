@@ -18,7 +18,6 @@ import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identi
 import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import {
   isCronStateReadCommand,
@@ -74,6 +73,10 @@ import {
   readUpdateRunReconciliationCandidates,
 } from "../infra/update-run-reconciliation.read.js";
 import {
+  canCollectPluginSourceSnapshotsInDatabase,
+  inspectPluginCohortRecoveryRows,
+} from "../infra/update-run-recovery-store.js";
+import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
@@ -87,6 +90,7 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import { readTemplateStateCommandInDatabase } from "../templates/state-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
@@ -141,8 +145,8 @@ export function readOpenClawStateDatabaseCommand(
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
 ) {
-  if (command.type === "claws.inventory") {
-    return readClawStateCommandInDatabase(db, command);
+  if (command.type === "templates.inventory") {
+    return readTemplateStateCommandInDatabase(db, command);
   }
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return {
@@ -327,6 +331,18 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       run: readInterruptedUpdateCandidate(db),
+    };
+  }
+  if (command.type === "updateRuns.pluginCohortRecoveries") {
+    return {
+      type: command.type,
+      pairs: runSqliteReadSnapshotSync(db, () => inspectPluginCohortRecoveryRows(db)),
+    };
+  }
+  if (command.type === "updateRuns.pluginSnapshotCollection") {
+    return {
+      type: command.type,
+      allowed: runSqliteReadSnapshotSync(db, () => canCollectPluginSourceSnapshotsInDatabase(db)),
     };
   }
   if (command.type === "exec-approvals.read") {
