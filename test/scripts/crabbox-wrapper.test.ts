@@ -7,6 +7,7 @@ import {
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  constants as fsConstants,
   copyFileSync,
   cpSync,
   existsSync,
@@ -4989,8 +4990,8 @@ require('node:module').syncBuiltinESMExports();`,
           preparedDependencyRoot ?? dependencyTempDirs.make("openclaw-capsule-dependencies-");
         const hydratedSource = path.join(dependencyRoot, "a");
         const selectedSource = path.join(dependencyRoot, "b");
-        const dependencyBin = path.join(root, "dependency-bin");
-        mkdirSync(dependencyBin);
+        const dependencyBin = path.join(dependencyRoot, "bin");
+        mkdirSync(dependencyBin, { recursive: true });
         const dependencyEnv = {
           ...env,
           CI: "true",
@@ -5045,6 +5046,13 @@ require('node:module').syncBuiltinESMExports();`,
           );
         };
         if (!preparedDependencyRoot) {
+          // The installer prepends dirname(process.execPath); a symlink resolves to the host.
+          // Keep a real Node copy beside pinned pnpm so both lookups stay fixture-owned.
+          copyFileSync(
+            nodeExecPath,
+            path.join(dependencyBin, "node"),
+            fsConstants.COPYFILE_FICLONE,
+          );
           writeDependencySource(hydratedSource, "a");
           writeDependencySource(selectedSource, "b");
         }
@@ -5168,6 +5176,9 @@ require('node:module').syncBuiltinESMExports();`,
           },
         });
         expect(preparedGraph).toBe("graph-a");
+        expect(imported.result.stderr).toContain(
+          path.join(realpathSync(dependencyBin), "node") + "\n",
+        );
         const payload = path.join(imported.receiver, ".capsule-proof/payload");
         if (scenario === "graph") {
           expect(imported.result.status, failureDetail(imported.result)).toBe(0);
