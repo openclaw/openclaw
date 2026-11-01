@@ -6,8 +6,7 @@ function configWith(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-// All fixtures stay at zero or one agent so the heartbeat-owner warning
-// never fires; every warning below comes from the empty-allow collector.
+// Every warning below comes from the empty-allow collector.
 describe("collectConfigValidationWarnings empty allow (#147342)", () => {
   it("warns for an empty allow list on global tools", () => {
     const warnings = collectConfigValidationWarnings(
