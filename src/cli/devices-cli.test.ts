@@ -337,6 +337,41 @@ describe("mutations", () => {
     await run("reject", "  req-1  ", "--timeout", "15000");
     expectCall(0, "device.pair.reject", { params: { requestId: "req-1" }, timeoutMs: 15000 });
   });
+  it.each([
+    {
+      args: ["remove", "ghost"],
+      method: "device.pair.remove",
+      reason: "unknown deviceId",
+      text: "No paired device matches ghost.",
+    },
+    {
+      args: ["reject", "ghost"],
+      method: "device.pair.reject",
+      reason: "unknown requestId",
+      text: "No pending device request matches ghost.",
+    },
+  ])(
+    "explains $method unknown ids instead of the generic failure",
+    async ({ args, method, reason, text }) => {
+      callGateway.mockRejectedValueOnce(
+        Object.assign(new Error(reason), { gatewayCode: "INVALID_REQUEST" }),
+      );
+      await run(...args);
+      expectCall(0, method);
+      expectText(errors(), [text, "devices list"]);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      runtime.error.mockClear();
+      runtime.exit.mockClear();
+      callGateway.mockRejectedValueOnce(
+        Object.assign(new Error(reason), { gatewayCode: "INVALID_REQUEST" }),
+      );
+      expect(await refusal(...args, "--json")).toContain(text);
+    },
+  );
+  it("keeps other remove failures on the root handler", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+    await expect(run("remove", "device-1")).rejects.toThrow("gateway closed");
+  });
   it("clears every paired device and pending request", async () => {
     list([{ requestId: "req-1" }], [{ deviceId: "device-1" }, { deviceId: "device-2" }])
       .mockResolvedValueOnce({ deviceId: "device-1" })
