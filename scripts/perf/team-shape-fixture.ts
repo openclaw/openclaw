@@ -208,15 +208,11 @@ export async function generateTeamShapeFixture(
         ? { session: { maintenance: { maxEntries: Math.max(5_000, options.sessions * 2) } } }
         : {}),
       agents: {
-        ...(options.teamStress
-          ? {
-              ownership: "explicit" as const,
-              defaults: {
-                systemAgent: { agentId: "main" },
-                subagents: { archiveAfterMinutes: 24 * 60 },
-              },
-            }
-          : {}),
+        ownership: "explicit" as const,
+        defaults: {
+          systemAgent: { agentId: "main" },
+          ...(options.teamStress ? { subagents: { archiveAfterMinutes: 24 * 60 } } : {}),
+        },
         entries: Object.fromEntries(
           Array.from(
             { length: options.agents },

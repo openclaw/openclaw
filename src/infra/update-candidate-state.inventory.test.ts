@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, beforeEach, describe, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveCronStoreSelectionInDatabase } from "../cron/store/paths.js";
 import { runCommandBuffered } from "../process/exec.js";
@@ -360,7 +361,7 @@ describe("snapshot legacy cron identity", () => {
         ),
       );
       expect(selection).toMatchObject({ status: "ready", storeKey });
-      expect(await fs.readFile(source)).toEqual(original);
+      expectBytesEqual(await fs.readFile(source), original, "source");
     },
   );
 });

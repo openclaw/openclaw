@@ -194,11 +194,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
       const patch: Partial<SessionEntry> = preserveUserFacingRunState
         ? metadataPatch
-        : projectSessionSnapshotChanges({
-            initial: entry,
-            next,
-            current: currentEntry,
-          });
+        : {
+            ...projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry }),
+            // This run's final observation supersedes its own provider-boundary writes.
+            totalTokens: next.totalTokens,
+            totalTokensFresh: next.totalTokensFresh,
+            totalTokensVersion: next.totalTokensVersion,
+          };
       if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
         // Clear the current snooze, including one set while this run was in flight.
         patch.snoozedUntil = undefined;

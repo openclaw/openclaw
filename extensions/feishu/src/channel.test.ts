@@ -602,7 +602,6 @@ describe("Feishu cards and delivery", () => {
           },
         });
         expect(sent.mediaAccess).toBe(mediaAccess);
-        expect(sent.mediaAccess).not.toBe(forgedMediaAccess);
       } else {
         expect(sent).toMatchObject({ to: "chat:oc_group_1", text: sixTables });
       }
@@ -909,7 +908,6 @@ describe("Feishu attachment intent", () => {
         : { threadId: "om_parent" }),
     });
     expect(args(sender).mediaAccess).toBe(mediaAccess);
-    expect(args(sender).mediaAccess).not.toBe(forgedMediaAccess);
     expect(details(result).messageId).toBe("om_sent");
   });
 });

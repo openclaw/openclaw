@@ -2435,7 +2435,7 @@ td.data-table-key-col {
 }
 
 @starting-style {
-  .agent-select__menu.oc-menu:popover-open {
+  .agent-select__menu.oc-menu.oc-overlay:popover-open {
     opacity: 1;
   }
 }

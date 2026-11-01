@@ -9,6 +9,8 @@ if (!unsupportedControlUiBrowser) {
   const initial = prepareApplicationStartup();
   initializeControlUiDocumentHead();
   const early = startEarlyApplicationGateway(initial);
+  // Keep transport first; the scoped read and validation overlap the application graph.
+  initial.prewarmChatSnapshot();
   // Route hints fetch the renderer while the challenge/signature is pending.
   // Cold chat evaluation overlaps the reply; New and admitted cached views
   // must not wait for a challenge from an unreachable Gateway.
