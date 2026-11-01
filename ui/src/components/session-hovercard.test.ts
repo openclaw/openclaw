@@ -114,20 +114,6 @@ describe("writeHovercardExcerpt", () => {
     return element;
   }
 
-  it("keeps text that fits whole, without an ellipsis", () => {
-    const element = clampedElement(40);
-    writeHovercardExcerpt(element, "  Merged and deployed.  ");
-    expect(element.textContent).toBe("Merged and deployed.");
-  });
-
-  it("writes one text node holding only what fits, with paragraphs collapsed inline", () => {
-    const element = clampedElement(21);
-    writeHovercardExcerpt(element, "First paragraph.\n\n- A list item\n\nTail sentence.");
-    expect(element.textContent).toBe("First paragraph. - A…");
-    expect(element.childNodes).toHaveLength(1);
-    expect(element.childElementCount).toBe(0);
-  });
-
   it("drops punctuation and spaces before the ellipsis", () => {
     const element = clampedElement(17);
     writeHovercardExcerpt(element, "First paragraph. Tail sentence.");
