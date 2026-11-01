@@ -124,8 +124,8 @@ export function writeTranscriptArchive(params: {
   if (existing) {
     return existing;
   }
-  // Archives are the long-lived cold tier; compress when the runtime can so
-  // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
+  // Keep new archives readable under the shared expansion budget; the encoder
+  // retains JSONL when compression would exceed it.
   const encoded = encodeSessionArchiveContent(params.content);
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const archivePath = `${resolveSqliteTranscriptArchivePath({

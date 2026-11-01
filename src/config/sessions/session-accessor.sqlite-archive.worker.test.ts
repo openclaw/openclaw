@@ -191,9 +191,9 @@ describe("SQLite transcript archive worker", () => {
     const archive = materialized[0]?.archive;
     expect(archive).toBeTruthy();
     expect(fs.existsSync(materialized[0]?.archivedTranscript?.archivedPath ?? "")).toBe(false);
-    expect(archive?.encoding).toBe("zstd");
+    const bytes = Buffer.from(archive?.bytes ?? new Uint8Array());
     expect(
-      zstdDecompressSync(Buffer.from(archive?.bytes ?? new Uint8Array())).toString("utf8"),
+      (archive?.encoding === "zstd" ? zstdDecompressSync(bytes) : bytes).toString("utf8"),
     ).toBe(jsonl(events));
   });
 

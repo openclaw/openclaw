@@ -5,12 +5,14 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
 const zstdCodec = resolveZstdCodec();
+export const SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES = 1024 * 1024;
 
 export function encodeSessionArchiveContent(content: string): {
   bytes: Buffer;
@@ -22,14 +24,27 @@ export function encodeSessionArchiveContent(content: string): {
   }
   // Default zstd level (3) matches the ratio/speed point Codex uses for cold
   // rollouts; archives are write-once so speed matters less than footprint.
-  return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
+  const bytes = zstdCodec.compress(plain);
+  return plain.length > bytes.length + SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES
+    ? { bytes: plain, suffix: "" }
+    : { bytes, suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
 export function readSessionArchiveContentSync(filePath: string): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
   }
-  return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
+  const stored = fs.readFileSync(filePath);
+  // Enforce the expansion budget inside zlib's chunk loop, before concatenation.
+  const maxOutputLength = stored.length + SESSION_ARCHIVE_EXPANSION_MARGIN_BYTES;
+  try {
+    return zstdCodec.decompress(stored, maxOutputLength).toString("utf8");
+  } catch (error) {
+    if (error instanceof Error && hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+      error.message = `Session archive ${filePath} exceeds ${maxOutputLength} decompressed bytes; the archive is unchanged. Export it as uncompressed JSONL to read it.`;
+    }
+    throw error;
+  }
 }
 
 /**
