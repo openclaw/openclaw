@@ -17,6 +17,7 @@ import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 type ReadinessResult = {
   ready: boolean;
   failing: string[];
+  plannedDrain?: true;
   suppressed?: string[];
   uptimeMs: number;
   eventLoop?: GatewayEventLoopHealth;
@@ -102,6 +103,7 @@ export function createReadinessChecker(
       "getRuntimeSnapshot" | "getAutostartSuppression" | "isAmbientAutostartSuppressed"
     >;
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+    getPlannedDrain?: () => boolean;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     allowPendingAgentDatabases?: boolean;
@@ -118,14 +120,15 @@ export function createReadinessChecker(
 
   const readReadiness = (
     agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+    startup: StartupResult,
+    plannedDrain: boolean,
   ): ReadinessResult => {
-    const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
     if (startup.status === "starting") {
       return { ready: false, failing: [startup.pendingReason], uptimeMs };
     }
-    if (startup.status === "draining") {
+    if (startup.status === "draining" && !plannedDrain) {
       return { ready: false, failing: ["gateway-draining"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
@@ -212,11 +215,19 @@ export function createReadinessChecker(
   };
   return () => {
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    const result = readReadiness(agentDatabases);
+    const startup = getStartup();
+    const plannedDrain = startup.status === "draining" && deps.getPlannedDrain?.() === true;
+    const result = readReadiness(agentDatabases, startup, plannedDrain);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
+      // Admission stays closed, but an operator can still see independent health failures.
+      ...(plannedDrain && {
+        ready: false,
+        plannedDrain: true as const,
+        failing: ["gateway-draining", ...result.failing],
+      }),
       ...(agentDatabases?.length ? { agentDatabases } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };

@@ -84,6 +84,7 @@ function createReadinessHarness(params: {
   getStartupPending?: () => boolean;
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
+  getPlannedDrain?: () => boolean;
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
   getStateDatabaseFailure?: Parameters<typeof createReadinessChecker>[0]["getStateDatabaseFailure"];
   shouldSkipChannelReadiness?: Parameters<
@@ -101,6 +102,7 @@ function createReadinessHarness(params: {
       getStartupPending: params.getStartupPending,
       getStartupPendingReason: params.getStartupPendingReason,
       getGatewayDraining: params.getGatewayDraining,
+      getPlannedDrain: params.getPlannedDrain,
       getEventLoopHealth: params.getEventLoopHealth,
       getStateDatabaseFailure: params.getStateDatabaseFailure,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
@@ -192,6 +194,22 @@ describe("createReadinessChecker", () => {
       gatewayDraining = false;
       expect(readiness()).toEqual(readySnapshot());
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("preserves closed admission and reports independent failures while a reversible lease drains", () => {
+    withReadinessClock(() => {
+      for (const blocked of [false, true]) {
+        const { readiness } = createReadinessHarness({
+          accounts: { slack: managedAccount(blocked ? { lifecycle: "blocked" } : {}) },
+          getGatewayDraining: () => true,
+          getPlannedDrain: () => true,
+        });
+        expect(readiness()).toEqual({
+          ...failingSnapshot(blocked ? ["gateway-draining", "slack"] : ["gateway-draining"]),
+          plannedDrain: true,
+        });
+      }
     });
   });
 
