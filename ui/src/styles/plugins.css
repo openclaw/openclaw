@@ -189,6 +189,8 @@
   width: 100%;
   min-height: 44px;
   padding-left: 34px;
+  /* The field radius runs tighter than the control radius in square themes. */
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugin-catalog-results__empty {
@@ -848,6 +850,7 @@ openclaw-plugins-page
 .plugins-settings-search .settings-input {
   width: 100%;
   padding-left: calc(var(--space-3) + 24px);
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugins-settings-row {
