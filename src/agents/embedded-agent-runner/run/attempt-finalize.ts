@@ -203,9 +203,6 @@ export async function completeEmbeddedAttemptAfterTurn(
   }
   const { diagnosticTrace } = input.diagnostics;
   const { shouldRecordCompletedBootstrapTurn } = bootstrap;
-  const skillWorkshopAvailable = bundleTools.uncompactedEffectiveTools.some(
-    (tool) => tool.name === "skill_workshop",
-  );
   const { hookRunner } = sessionRuntime.agentSession;
   const { promptStartedAt, yieldAborted, transcriptLeafId } = prompt;
   const { sessionIdUsed, promptError, messagesSnapshot } = settled;
@@ -403,7 +400,7 @@ export async function completeEmbeddedAttemptAfterTurn(
           agentDir,
         ),
         authProfileId: attempt.authProfileId,
-        skillWorkshopAvailable,
+        toolNames: bundleTools.uncompactedEffectiveTools.map((tool) => tool.name),
         compacted: compactionOccurredThisAttempt,
         ...(attempt.config ? { config: attempt.config } : {}),
       },

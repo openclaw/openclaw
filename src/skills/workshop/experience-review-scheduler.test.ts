@@ -39,15 +39,14 @@ function turn(
   { sessionKey = source.sessionKey, ...overrides }: TurnOptions = {},
 ) {
   scheduler.schedule({
-    event: { messages: [], success: true },
+    event: { messages: [], success: true, modelIterations },
     ctx: {
       runId: `run-${modelIterations}`,
       sessionKey,
       workspaceDir: "/workspace",
       modelProviderId: "openai",
       modelId: "gpt-test",
-      modelIterations,
-      skillWorkshopAvailable: true,
+      toolNames: ["read", "skill_workshop"],
       foregroundPromptContext: {
         agentId: "main",
         workspaceDir: "/workspace",
@@ -103,9 +102,7 @@ it("defers queued reviews when a foreground turn hits the shared rate limit", as
 });
 
 it.each(["reported", "messages", "interrupted"])("accumulates %s iterations", async (kind) => {
-  const usedSkills = [
-    { name: "deploy", source: "workspace", activation: "read", skillFile: "/ws/deploy/SKILL.md" },
-  ] as const;
+  const usedSkills = [{ name: "deploy", source: "workspace", activation: "read" }] as const;
   for (const count of [6, 3, 1]) {
     const messages =
       kind !== "messages"
@@ -116,8 +113,12 @@ it.each(["reported", "messages", "interrupted"])("accumulates %s iterations", as
             ...Array.from({ length: count }, () => ({ role: "assistant" })),
           ];
     countedTurn(kind !== "messages" ? count : 0, count === 1 ? 1 : 0, {
-      usedSkills,
-      event: { messages, success: kind !== "interrupted" },
+      event: {
+        messages,
+        success: kind !== "interrupted",
+        ...(kind !== "messages" ? { modelIterations: count } : {}),
+        skillsUsed: usedSkills,
+      },
     });
   }
   await fireTimers();

@@ -520,7 +520,7 @@ describe("embedded attempt phase lifecycle state", () => {
         modelId: "model",
         modelContextWindowTokens: 180_000,
         authProfileId: "profile-1",
-        skillWorkshopAvailable: false,
+        toolNames: [],
         compacted: false,
         trace: {
           traceId: "11111111111111111111111111111111",

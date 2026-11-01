@@ -106,11 +106,12 @@ describe("runCodexAppServerAttempt agent-end context", () => {
           expect(result.terminal).toEqual({ kind: "ok" });
         }
 
-        const ctx = runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.ctx;
+        const call = runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0];
+        const ctx = call?.ctx;
         expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
         expect(typeof ctx?.foregroundPromptContext?.agentDir).toBe("string");
-        expect(ctx?.modelIterations).toBe(10);
-        expect(ctx?.skillWorkshopAvailable).toBe(true);
+        expect(call?.event.modelIterations).toBe(10);
+        expect(ctx?.toolNames).toContain("skill_workshop");
         const reviewSource =
           runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.skillExperienceReviewSource;
         if (outcome === "provider refusal") {
