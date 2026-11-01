@@ -613,6 +613,10 @@ reject the verified incident OV G3C intermediate in both trust modes. The report
 reducer requires all twelve TLS class/method identities exactly once, separately
 from the existing Access case and packaged-library checks.
 
+These rows use the Android toolchain action's filtered dependency install for
+native resource generation. They skip the full workspace pnpm store cache so the
+hosted runner has space to unpack the Android system image.
+
 Platform-root incident cases require either exact Conscrypt key rejection or
 OkHttp's specific blocklist rejection after verifying the raw peer chain and
 hostname. They do not depend on Android downloading a platform blocklist update.
