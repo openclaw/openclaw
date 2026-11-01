@@ -38,12 +38,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
@@ -54,6 +49,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -252,17 +248,9 @@ let connected = false;
 const collections: { kind: number; ms: number }[] = [];
 let start = Infinity;
 let end = Infinity;
-const record = (entries: PerformanceEntry[]) => {
-  for (const entry of entries) {
-    if (entry.startTime >= start && entry.startTime < end) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-};
-const observer = new PerformanceObserver((events) => record(events.getEntries()));
+const observer = new PerformanceObserver((events) =>
+  recordGcCollections(events.getEntries(), collections, start, end),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -465,7 +453,7 @@ try {
     const usedThread = process.threadCpuUsage(threadCpu);
     loop.disable();
     await nextTurn();
-    record(observer.takeRecords());
+    recordGcCollections(observer.takeRecords(), collections, start, end);
     observer.disconnect();
     let allocation:
       | {
