@@ -166,28 +166,33 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
         <span class="meetings-row__title">
           {props.entry.title || props.entry.providerName || props.entry.providerId}
         </span>
-        <span class="meetings-row__meta">
-          {props.entry.providerName || props.entry.providerId} ·{" "}
-          <time datetime={props.entry.startedAt}>
-            {new Date(props.entry.startedAt).toLocaleTimeString(undefined, {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </time>{" "}
+        <span class="meetings-row__meta meetings-row__status">
+          <span class="meetings-row__when">
+            {props.entry.providerName || props.entry.providerId} ·{" "}
+            <time datetime={props.entry.startedAt}>
+              {new Date(props.entry.startedAt).toLocaleTimeString(undefined, {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}
+            </time>
+            {!props.entry.active && duration() ? ` · ${duration()}` : null}
+          </span>{" "}
           {props.entry.active ? (
             <span class="meetings-live">{t("meetings.inProgress")}</span>
-          ) : duration() ? (
-            ` · ${duration()}`
           ) : null}
         </span>
-        {participants() ? (
-          <span class="meetings-row__meta meetings-row__participants">
-            {participants()}
-            {props.entry.participants.length > 3 ? ` +${props.entry.participants.length - 3}` : ""}
+        <span class="meetings-row__people">
+          {participants() ? (
+            <span class="meetings-row__meta meetings-row__participants">
+              {participants()}
+              {props.entry.participants.length > 3
+                ? ` +${props.entry.participants.length - 3}`
+                : ""}
+            </span>
+          ) : null}
+          <span class="meetings-row__meta">
+            {t("transcripts.savedCount", { count: String(props.entry.utteranceCount) })}
           </span>
-        ) : null}
-        <span class="meetings-row__meta">
-          {t("transcripts.savedCount", { count: String(props.entry.utteranceCount) })}
         </span>
         <span class="meetings-row__overview">
           {props.entry.utteranceCount === 0

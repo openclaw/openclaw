@@ -374,6 +374,10 @@ suite.define(() => {
       const filters = view.locator("form.transcripts-filters");
       const trigger = view.getByRole("button", { name: "Filters", exact: true });
       const panel = view.getByRole("dialog", { name: "Filters", exact: true });
+      const people = view.locator(".meetings-row__participants");
+      expect((await people.boundingBox())?.y).toBe(
+        (await people.locator("+ .meetings-row__meta").boundingBox())?.y,
+      );
       await expectAbsent(view.locator(".transcripts-filters details"));
       await expectAbsent(view.getByRole("button", { name: "Refresh", exact: true }));
       expect(await panel.isVisible()).toBe(false);
@@ -425,6 +429,16 @@ suite.define(() => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
+      await view.getByRole("tab", { name: "Transcript", exact: true }).click();
+      const find = view.getByRole("searchbox", { name: "Search within this transcript" });
+      const top = async (locator: Locator) => (await locator.boundingBox())?.y ?? Number.NaN;
+      await find.fill("a long query that is wider than the search field on this phone");
+      const submit = view.getByRole("button", { name: "Search", exact: true });
+      await submit.click();
+      const clear = view.getByRole("button", { name: "Clear search", exact: true });
+      await clear.waitFor();
+      expect(await top(submit)).toBe(await top(clear));
+      expect(Math.abs((await top(find)) - (await top(submit)))).toBeLessThan(2);
     }));
 
   it("shows an actionable empty state and refreshes without hiding errors", () =>

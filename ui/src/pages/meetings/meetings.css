@@ -109,6 +109,11 @@
   gap: var(--space-1);
 }
 
+/* Only phones join these two lines; elsewhere they stay separate column items. */
+.meetings-row__people {
+  display: contents;
+}
+
 .meetings-row--silent .meetings-row__title {
   color: var(--muted);
 }
@@ -347,12 +352,12 @@
 
 /* Search and a filter button replace the filter block; Filters renders these at the same query. */
 .transcripts-filters--phone {
-  --settings-control-height: 44px;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-2);
 }
 
 .transcripts-filters__search {
+  --settings-control-height: 44px;
   position: relative;
 }
 
@@ -455,13 +460,77 @@
     padding-inline: 0;
   }
 
-  /* The row rail already separates meetings. */
+  /* The row rail already separates meetings, so the text can sit closer to it. */
+  .meetings-day .transcripts-list {
+    padding-inline-start: 0;
+  }
+
+  .meetings-day .transcripts-list > li::before {
+    inset-inline-start: -4px;
+  }
+
   .meetings-day .transcripts-list__entry {
+    padding-inline: var(--space-3) 0;
     border-block-start: 0;
   }
 
-  /* A full-width field fits the placeholder and keeps its height when Clear search appears. */
+  /* The badge keeps the first line by truncating the source and time beside it. */
+  .meetings-row__status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .meetings-row__when {
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meetings-row__status .meetings-live {
+    flex: none;
+  }
+
+  /* People truncate first; the utterance count stays whole on the same line. */
+  .meetings-row__people {
+    display: flex;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .meetings-row__participants + .meetings-row__meta {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .meetings-row__participants + .meetings-row__meta::before {
+    margin-inline-end: var(--space-1);
+    content: "\00b7";
+  }
+
+  .transcripts-reader {
+    padding-inline: 0;
+  }
+
+  .transcripts-reader__header h1 {
+    font-size: 22px;
+  }
+
+  /* One row with or without Clear search; a long query scrolls inside its field. */
+  .transcripts-search {
+    flex-wrap: nowrap;
+  }
+
   .transcripts-search .field {
-    flex-basis: 100%;
+    flex: 1 1 0;
+  }
+
+  .transcripts-search .btn {
+    flex: none;
+  }
+
+  .transcripts-search input {
+    text-overflow: ellipsis;
   }
 }
