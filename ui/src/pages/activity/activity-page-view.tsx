@@ -118,9 +118,9 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   return haystack.includes(needle);
 }
 
-const STATUS_KINDS = { running: "warn", done: "ok", error: "danger" } as const satisfies Record<
+const STATUS_KINDS = { running: "accent", done: "ok", error: "danger" } as const satisfies Record<
   ActivityStatus,
-  "warn" | "ok" | "danger"
+  "accent" | "ok" | "danger"
 >;
 
 function toggle(ids: ReadonlySet<string>, id: string, open = !ids.has(id)) {

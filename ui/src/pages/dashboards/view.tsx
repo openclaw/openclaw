@@ -23,6 +23,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -150,10 +151,7 @@ function DashboardGrid(props: {
           <div class="dashboard-card__heading">
             <h2>{title()}</h2>
             <Show when={childProps.row.status === "running"}>
-              <span class="dashboard-card__live">
-                <i />
-                {t("dashboardsPage.live")}
-              </span>
+              <SettingsStatus kind="accent" label={t("dashboardsPage.live")} />
             </Show>
           </div>
           <div class="dashboard-card__author">

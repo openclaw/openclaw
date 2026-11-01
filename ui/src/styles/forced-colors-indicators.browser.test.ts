@@ -94,6 +94,32 @@ fixture.describe("Control UI forced-colors indicators", () => {
     );
   });
 
+  it("keeps status dots painted when forced colors repaint backgrounds", async () => {
+    await withBrowserPage(
+      fixture.page({ forcedColors: "active", colorScheme: "light" }),
+      async (page) => {
+        await page.setContent(
+          styleDocument(
+            css,
+            `<span id="palette" style="color:CanvasText"></span>
+            <span class="status-dot settings-status__dot"></span>
+            <span class="status-dot cron-table__state-dot"></span>
+            <span class="status-dot activity-pulse__running"></span>
+            <span class="status-dot activity-feed__presence-dot"></span>`,
+          ),
+        );
+        const colors = await page.evaluate(() => ({
+          expected: getComputedStyle(document.getElementById("palette")!).color,
+          actual: Array.from(
+            document.querySelectorAll(".status-dot"),
+            (element) => getComputedStyle(element).backgroundColor,
+          ),
+        }));
+        expect(colors.actual).toEqual(Array(4).fill(colors.expected));
+      },
+    );
+  });
+
   it("keeps row-button keyboard focus visible when forced colors suppress shadows", async () => {
     const classes = [
       "channels-item__detail",
