@@ -279,7 +279,9 @@ export async function runStatusScript(params: StatusScriptParams) {
       observe() {}
     },
     URL: globalThis.URL,
+    URLSearchParams: globalThis.URLSearchParams,
     atob: globalThis.atob,
+    btoa: globalThis.btoa,
     crypto: { randomUUID: () => "teams-caption-epoch" },
     document,
     location,
@@ -354,6 +356,7 @@ export function audioStatusParams(params: StatusOverrides = {}): StatusScriptPar
 }
 
 export function runLeaveScript(params: {
+  meetingUrl?: string;
   bodyText?: string;
   currentUrl?: string;
   leave?: PageControl;
@@ -383,8 +386,54 @@ export function runLeaveScript(params: {
     };
   }
   const run = runInNewContext(
-    `(${teamsMeetingPageScripts.leave({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
-    { URL: globalThis.URL, document, location, window },
+    `(${teamsMeetingPageScripts.leave({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: params.meetingUrl ?? URL })})`,
+    {
+      URL: globalThis.URL,
+      URLSearchParams: globalThis.URLSearchParams,
+      atob: globalThis.atob,
+      btoa: globalThis.btoa,
+      document,
+      location,
+      window,
+    },
   ) as () => string;
   return { result: JSON.parse(run()) as Record<string, unknown>, window };
+}
+
+export function runAudioCaptureScript(params: {
+  action?: "start" | "pull" | "stop";
+  captureId?: string;
+  currentUrl?: string;
+  inCallControl?: PageControl;
+  meetingSessionId?: string;
+  meetingUrl?: string;
+  priorMeeting?: Record<string, unknown>;
+}) {
+  const currentUrl = params.currentUrl ?? URL;
+  const location = new globalThis.URL(currentUrl);
+  const window: Record<string, unknown> = {};
+  window[MEETING_STATE_KEY] = {
+    sessionId: params.meetingSessionId ?? "session-1",
+    inCallUrl: currentUrl,
+    inCallControl: params.inCallControl,
+    ...params.priorMeeting,
+  };
+  const script = teamsMeetingPageScripts.audioCapture({
+    action: params.action ?? "start",
+    captureId: params.captureId ?? "capture-1",
+    meetingSessionId: params.meetingSessionId ?? "session-1",
+    meetingUrl: params.meetingUrl ?? URL,
+  });
+  const run = runInNewContext(`(${script})`, {
+    URL: globalThis.URL,
+    URLSearchParams: globalThis.URLSearchParams,
+    atob: globalThis.atob,
+    btoa: globalThis.btoa,
+    location,
+    window,
+    AudioContext: function AudioContext() {
+      throw new Error("capture admitted");
+    },
+  }) as () => Promise<string>;
+  return run();
 }

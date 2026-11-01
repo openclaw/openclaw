@@ -1,16 +1,86 @@
 import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-runtime";
+import { teamsWorkMeetingThread } from "./teams-meetings-work-coordinates.js";
 
-export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): string | undefined {
-  if (!url) {
+type TeamsMeetingIdentity = { kind: "work"; key: string } | { kind: "consumer"; key: string };
+
+function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentity | undefined {
+  // Keep this parsing logic in sync with the inline browser-context mirror in
+  // teams-meetings-page-scripts.ts (pageIdentitySource): that copy cannot import this
+  // function because it must be self-contained JS executed inside the Teams tab.
+  // URL parsing otherwise silently drops controls; reject rather than repair.
+  if (
+    !url ||
+    Array.from(url).some(
+      (character) =>
+        character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127 || character === "\\",
+    )
+  ) {
     return undefined;
   }
   try {
+    // Reject authority/path spellings that URL would silently repair.
+    const raw = url.match(
+      /^https:\/\/(teams\.microsoft\.com|teams\.live\.com)(?::443)?(\/[^?#]*)(?:[?#]|$)/i,
+    );
+    if (!raw) {
+      return undefined;
+    }
     const parsed = new URL(url);
+    if (raw[2] !== parsed.pathname) {
+      return undefined;
+    }
     if (parsed.protocol !== "https:" || parsed.port || parsed.username || parsed.password) {
       return undefined;
     }
     const hostname = parsed.hostname.toLowerCase();
     if (hostname === "teams.microsoft.com") {
+      if (parsed.pathname.toLowerCase() === "/light-meetings/launch") {
+        const threadId = teamsWorkMeetingThread(parsed.searchParams.getAll("coords"));
+        return threadId ? { kind: "work", key: threadId } : undefined;
+      }
+      // Microsoft's short work invitation (teams.microsoft.com/meet/<id>?p=...) can be
+      // opened directly, or the server can 302 it to this same-host launcher page before
+      // the SPA renders the meeting; both must resolve to the identical owned meeting so
+      // browser reuse/recovery/status do not treat the redirect as a foreign session.
+      const launcherTarget =
+        parsed.pathname.toLowerCase() === "/dl/launcher/launcher.html"
+          ? parsed.searchParams.get("url")
+          : undefined;
+      const launcherMatch = launcherTarget?.match(/^\/_#\/meet\/([0-9]+)(?:\?(.+))?$/i);
+      const shortMeeting =
+        parsed.pathname.match(/^\/meet\/([0-9]+)\/?$/) ??
+        (launcherMatch ? ([undefined, launcherMatch[1]] as const) : undefined);
+      if (shortMeeting) {
+        // Microsoft calls p HashedPasscode, not the displayed meeting passcode.
+        // Treat it as opaque: no decoding beyond URL query encoding, no assumed
+        // alphabet/length, and no reconstruction of a legacy thread identifier.
+        const launcherParams = launcherMatch
+          ? new URLSearchParams(launcherMatch[2] ?? "")
+          : undefined;
+        const passcodes = launcherParams
+          ? launcherParams.getAll("p")
+          : parsed.searchParams.getAll("p");
+        const passcode = passcodes[0];
+        const rawSearch = launcherMatch ? (launcherMatch[2] ?? "") : parsed.search.slice(1);
+        const rawPasscode = rawSearch
+          .split("&")
+          .find((entry) => new URLSearchParams(entry).has("p"))
+          ?.split("=")
+          .slice(1)
+          .join("=");
+        if (
+          passcodes.length !== 1 ||
+          !passcode ||
+          /[\s\ufffd]/u.test(passcode) ||
+          Array.from(passcode).some(
+            (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+          ) ||
+          /%(?![0-9a-f]{2})/i.test(rawPasscode ?? "")
+        ) {
+          return undefined;
+        }
+        return { kind: "work", key: `meet:${shortMeeting[1]}:p:${encodeURIComponent(passcode)}` };
+      }
       const match = parsed.pathname.match(/^\/l\/meetup-join\/([^/]+)(?:\/0)?\/?$/i);
       if (!match?.[1]) {
         return undefined;
@@ -19,7 +89,7 @@ export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): strin
       if (!/^19:[^/]+@thread\.(?:v2|tacv2)$/i.test(threadId)) {
         return undefined;
       }
-      return `teams-work:${threadId}`;
+      return { kind: "work", key: threadId };
     }
     if (hostname === "teams.live.com") {
       const launcherTarget =
@@ -56,7 +126,10 @@ export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): strin
         : typeof lightMeeting?.passcode === "string"
           ? lightMeeting.passcode
           : parsed.searchParams.get("p");
-      return `teams-consumer:${meetCode.toLowerCase()}:p:${encodeURIComponent(passcode ?? "")}`;
+      return {
+        kind: "consumer",
+        key: `${meetCode.toLowerCase()}:p:${encodeURIComponent(passcode ?? "")}`,
+      };
     }
   } catch {
     return undefined;
@@ -69,14 +142,19 @@ export function normalizeTeamsMeetingUrl(input: unknown): string {
     throw new Error("Microsoft Teams meeting URL is required");
   }
   const value = input.trim();
-  if (!normalizeTeamsMeetingUrlForReuse(value)) {
+  if (!parseTeamsMeetingIdentity(value)) {
     throw new Error(
-      "Microsoft Teams meeting URL must use https://teams.microsoft.com/l/meetup-join/... or https://teams.live.com/meet/<id>",
+      "Microsoft Teams meeting URL must use https://teams.microsoft.com/meet/<id>?p=<HashedPasscode>, https://teams.microsoft.com/l/meetup-join/... or https://teams.live.com/meet/<id>",
     );
   }
   const parsed = new URL(value);
   parsed.hash = "";
   return parsed.toString();
+}
+
+export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): string | undefined {
+  const meetingIdent = parseTeamsMeetingIdentity(url);
+  return meetingIdent ? `teams-${meetingIdent.kind}:${meetingIdent.key}` : undefined;
 }
 
 export function isSameTeamsMeetingUrl(

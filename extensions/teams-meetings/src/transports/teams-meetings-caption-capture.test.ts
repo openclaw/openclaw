@@ -283,12 +283,22 @@ it("finalizes caption capture before an SPA navigation can mix meetings", async 
 
 it("keeps the live caption observer during a bounded in-call control rerender", async () => {
   const leave = control({ label: "Leave" });
-  const currentUrl = "https://teams.live.com/v2/";
+  // Regression coverage for the work-host short-link/launcher-redirect fix: the owned
+  // in-call rewrite must still be recognized when the original join used
+  // teams.microsoft.com (not just teams.live.com).
+  const currentUrl = "https://teams.microsoft.com/v2/";
   const page = await runCaptionStatusScript({
     captionRows: [captionRow("Caption before control rerender")],
     currentUrl,
     leave,
     priorMeeting: rerenderOwner(leave, currentUrl),
+  });
+
+  expect(page.result.inCall).toBe(true);
+  expect(page.window[CAPTIONS]).toMatchObject({
+    observerInstalled: true,
+    observer: { disconnect: expect.any(Function) },
+    visible: [{ text: "Caption before control rerender" }],
   });
 
   leave.isConnected = false;
