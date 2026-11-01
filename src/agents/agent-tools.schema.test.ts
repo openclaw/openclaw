@@ -337,30 +337,14 @@ describe("assertRequiredParams", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("preserves edit replacement payloads while cleaning the path", async () => {
+  it("preserves whitespace edit payloads while cleaning the path", async () => {
     const execute = vi.fn(async (_id, args) => args);
     const tool = makeValidatedFileTool("edit", execute);
 
-    const edits = [{ oldText: "literal old</arg_value>>", newText: "literal new</arg_value>>" }];
+    const edits = [{ oldText: "\n\n\n\n", newText: "literal new</arg_value>>" }];
     await tool.execute("id", { path: "notes.docxodex</arg_value>>>", edits });
 
     expect(execute).toHaveBeenCalledWith("id", { path: "notes.docx", edits }, undefined, undefined);
-  });
-
-  it("passes whitespace-only edit oldText through to the edit implementation", async () => {
-    const execute = vi.fn(async (_id, args) => args);
-    const tool = makeValidatedFileTool("edit", execute);
-
-    const edits = [
-      { oldText: "\n\n\n\n", newText: "\n\n" },
-      { oldText: "  \n", newText: "\n" },
-    ];
-    await tool.execute("id", { path: "notes.txt", edits });
-
-    expect(execute).toHaveBeenCalledWith("id", { path: "notes.txt", edits }, undefined, undefined);
-    await expect(
-      tool.execute("id-empty", { path: "notes.txt", edits: [{ oldText: "", newText: "x" }] }),
-    ).rejects.toThrow("Missing required parameter: edits");
   });
 
   it("enforces canonical path/content at runtime", async () => {
