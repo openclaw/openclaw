@@ -7,7 +7,7 @@
  *
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-active-accounting-measure.ts
  *   --state-dir <fixture> --prepare --events 40000
- * Repeat without --prepare: --label A1 --scenario bounded|estimate|after-append|bytes-after-append
+ * Repeat without --prepare: --label A1 --scenario bounded|estimate|after-append|bytes-after-append|actor-bytes-after-append
  *   --samples 5 --iterations 10 --mode timing|allocation
  * Run A1/A2 controls and baseline/candidate serially in counterbalanced order,
  * using separate processes at each head. For all-thread CPU profiles add
@@ -48,7 +48,15 @@ const { values } = parseArgs({
   },
 });
 assert(values["state-dir"], "--state-dir must name a synthetic team-shape fixture");
-assert(["bounded", "estimate", "after-append", "bytes-after-append"].includes(values.scenario));
+assert(
+  [
+    "bounded",
+    "estimate",
+    "after-append",
+    "bytes-after-append",
+    "actor-bytes-after-append",
+  ].includes(values.scenario),
+);
 assert(["timing", "allocation"].includes(values.mode));
 const integer = (value: string, minimum: number) => {
   const number = Number(value);
@@ -95,6 +103,8 @@ const { importSqliteSessionRowsBatch } =
   await import("../../src/config/sessions/session-accessor.sqlite-import.js");
 const { persistSessionTranscriptTurn } =
   await import("../../src/config/sessions/session-accessor.transcript-turn.js");
+const { acquireSessionInputActor, withSessionInputActor } =
+  await import("../../src/config/sessions/session-input-actor.js");
 const { readSessionTranscriptAccountingAsync } =
   await import("../../src/gateway/session-transcript-readers.js");
 const { estimateContextTokensFromSessionTranscript } =
@@ -122,6 +132,7 @@ const writer = {
 };
 const usage = { input: 4096, output: 64 };
 const inspector = new Session();
+let inputActor: Awaited<ReturnType<typeof acquireSessionInputActor>>;
 const sumAllocation = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((sum, child) => sum + sumAllocation(child), 0);
 const stats = (numbers: number[]) => {
@@ -212,7 +223,7 @@ try {
     const databaseBytes = statSync(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).size;
     const options = {
       includeByteSize: true,
-      includeUsage: values.scenario !== "bytes-after-append",
+      includeUsage: !values.scenario.endsWith("bytes-after-append"),
     };
     const read = () =>
       values.scenario === "estimate"
@@ -259,6 +270,18 @@ try {
         worktreeFiles: team.worktreeFiles,
       }),
     );
+    if (values.scenario === "actor-bytes-after-append") {
+      inputActor = await acquireSessionInputActor(
+        {
+          agentId: target.agentId,
+          env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env }),
+          target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+        },
+        { assertCurrent() {}, assertReadable() {} },
+      );
+      assert(inputActor);
+    }
     for (let sample = 0; sample < samples; sample++) {
       global.gc();
       if (values.mode === "allocation") {
@@ -281,12 +304,23 @@ try {
       const mainCpu = process.threadCpuUsage();
       for (let iteration = 0; iteration < iterations; iteration++) {
         if (values.scenario.endsWith("after-append")) {
-          await persistSessionTranscriptTurn(target, {
-            messages: [
-              { message: { role: "assistant", content: "Synthetic appended answer", usage } },
-            ],
-            touchSessionEntry: false,
-          });
+          const append = () =>
+            persistSessionTranscriptTurn(target, {
+              messages: [
+                { message: { role: "assistant", content: "Synthetic appended answer", usage } },
+              ],
+              touchSessionEntry: false,
+              ...(inputActor ? { expectedSessionId: target.sessionId } : {}),
+            });
+          const actor = inputActor;
+          if (actor) {
+            await withSessionInputActor(
+              { phase: "acceptInput", acquire: async () => actor },
+              append,
+            );
+          } else {
+            await append();
+          }
         }
         let readFinished = false;
         const started = performance.now();
@@ -341,6 +375,7 @@ try {
   }
 } finally {
   inspector.disconnect();
+  await inputActor?.actor.release();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   await drainGlobalSingletonLifecycleState();
