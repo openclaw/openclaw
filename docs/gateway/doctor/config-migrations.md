@@ -1093,8 +1093,13 @@ Separate pending turns of one child are preserved. Repairs use the
 existing SQLite backup and exact-row compare-and-apply owner; no database schema
 or assignment format changes. Ordinary Gateway startup does not run this repair.
 
-Unknown or malformed ownership and bindings changed during repair are preserved
-with recoverable warnings, allowing updates to finish best effort. Retry
+When both an assignment and its matching current requester lack a lifecycle
+revision, Doctor preserves the assignment without reporting a pending repair.
+This follows the runtime's existing same-session ownership check; it does not
+backfill a revision, adopt another requester, or mark a result delivered.
+
+One-sided missing lifecycle evidence, unknown or malformed ownership, and
+bindings changed during repair are preserved with recoverable warnings, allowing updates to finish best effort. Retry
 `openclaw doctor --fix` after resolving those warnings. Historical retry exhaustion
 without durable evidence stays unresolved: neither the age of an assignment nor
 a child's completed execution proves its result was delivered or abandoned.

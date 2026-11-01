@@ -127,11 +127,15 @@ async function normalizeRow(
           ) {
             return false;
           }
+          // Legacy same-session owners may both omit a lifecycle revision, as at runtime.
+          if (assignment.owner.lifecycleRevision === current.entry.lifecycleRevision) {
+            return true;
+          }
           if (!assignment.owner.lifecycleRevision || !current.entry.lifecycleRevision) {
             unknownLifecycle = true;
             return true;
           }
-          return assignment.owner.lifecycleRevision === current.entry.lifecycleRevision;
+          return false;
         });
         if (unknownLifecycle) {
           warnings.push(

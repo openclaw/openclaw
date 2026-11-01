@@ -166,6 +166,32 @@ it.each(
   state.expectState();
 });
 
+it.each([false, true])(
+  "preserves revision-less same-session work without blocking repair (duplicates=%s)",
+  async (duplicates) => {
+    getSessionEntryByIdAsync.mockResolvedValue(sessionEntry());
+    const legacy = {
+      ...task({ lifecycleRevision: undefined }),
+      submission: submission("child", "legacy-call"),
+      recordedCompletion: completion,
+    };
+    const submissions = { version: 1, owner: legacy.owner, receipts: [legacy.submission] };
+    const state = fixture(duplicates ? [legacy, { ...legacy }] : [legacy], {
+      nativeSubagentSubmissions: submissions,
+    });
+    expect(await migration.detectLegacyState(state)).toEqual(
+      duplicates ? { preview: [expect.any(String)] } : null,
+    );
+    const result = await migration.migrateLegacyState(state);
+    expect(result.warnings).toEqual([]);
+    expect(result.changes.length > 0).toBe(duplicates);
+    state.expectState({ nativeSubagentAssignments: inventory([legacy]) });
+    expect(await migration.detectLegacyState(state)).toBeNull();
+    expect(await migration.migrateLegacyState(state)).toEqual(unchanged);
+    state.expectState({ nativeSubagentAssignments: inventory([legacy]) });
+  },
+);
+
 it.each([false, true])("merges aliases, keeps turns, converges (reverse=%s)", async (reverse) => {
   const receipt = submission("child", "child-call");
   const aliases = [
