@@ -475,7 +475,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
       mocks.readCommand.mockResolvedValue(command);
       mocks.buildGatewayInstallPlan.mockResolvedValue(command);
       mocks.auditGatewayServiceConfig.mockResolvedValue(
-        createRecommendedServiceAudit("gateway-node-prefix-skew", "Gateway Node versions are split."),
+        createRecommendedServiceAudit(
+          "gateway-node-prefix-skew",
+          "Gateway Node versions are split.",
+        ),
       );
       mocks.isSystemdUnitActive.mockResolvedValue(ok(active));
       await runRepair();
