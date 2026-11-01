@@ -16,7 +16,7 @@ it("keeps a boundary emoji whole in the truncated message preview", async () => 
   document.body.append(frame);
   const confirmation = createMcpAppConfirm();
   mountSolid(() => <McpAppConfirmation confirmation={confirmation} />);
-  confirmation.request({
+  const decision = confirmation.request({
     frame,
     title: "Parts library",
     text: `${"a".repeat(199)}🚀${"b".repeat(40)}`,
@@ -31,6 +31,7 @@ it("keeps a boundary emoji whole in the truncated message preview", async () => 
   expect(LONE_SURROGATE.test(shown)).toBe(false);
   expect(shown.length).toBeLessThanOrEqual(201);
   confirmation.finish(false);
+  await expect(decision).resolves.toBe(false);
 });
 
 it("focuses each pending decision once and returns focus after keyboard completion", async () => {
