@@ -163,7 +163,6 @@ function createBoundary(action: "update" | "triage" = "update") {
     ${MANAGED_HANDOFF_RESULT_SOURCE}
     ${MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE}
     ${HANDOFF_OWNED_COMMAND_SCRIPT}
-    ${sourceBetween("async function collectUpdateFailureTriage()", "\n(async () => {")}
     ${sourceBetween("function cleanupSensitiveFiles()", "${MANAGED_HANDOFF_SQLITE_SOURCE}")}
     managedUpdateLease = initialLease;
     if (params.action === "update") {

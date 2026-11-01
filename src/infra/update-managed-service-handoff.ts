@@ -127,7 +127,7 @@ const { pathToFileURL } = require("node:url");
 
 ${MANAGED_HANDOFF_BOOTSTRAP_SOURCE}
 
-const { parseLaunchctlJob, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches } =
+const { parseLaunchctlJob, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, handoffLedger, packageActivationIdentity, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
@@ -209,6 +209,7 @@ let parkedServiceInvocation = null;
 let parkedServiceFragment = null;
 let restorationArmed = false;
 let updaterStarted = false;
+let originalInstallationIdentity;
 let pendingServiceStop;
 let finishBeforeParkNotice;
 
@@ -369,7 +370,9 @@ let foregroundParkFlight;
 let foregroundRespawn = false;
 async function assertForegroundOrigin(closed = false) {
   assertGatewayParkOwner();
-  await runLedger.assertForegroundUpdateOrigin(params.foregroundOrigin, closed);
+  // Parking precedes the updater, so the installed runtime still owns origin checks.
+  const { assertForegroundUpdateOrigin } = await import(pathToFileURL(params.recoveryModulePath).href);
+  await assertForegroundUpdateOrigin(params.foregroundOrigin, closed);
   assertGatewayParkOwner();
 }
 async function parkForegroundGateway() {
@@ -469,42 +472,7 @@ function killOwnedCommand(child) {
 
 ${HANDOFF_OWNED_COMMAND_SCRIPT}
 
-async function collectUpdateFailureTriage() {
-  try {
-    if (!triageFailure || !ownsManagedUpdateLease()) return;
-    // Diagnostic reads share this boundary so they cannot bypass terminal cleanup.
-    await captureManagedUpdateResult();
-    appendLog("If triage is unavailable, run " + params.triageRecoveryCommand + " on the Gateway host.");
-    // The helper and outer updater start from the same installation. Preserve
-    // its complete export; absent exports have only the helper's observed failure.
-    const recordedFailure = fs.existsSync(params.triageContextPath);
-    if (recordedFailure) {
-      appendLog("Saved update failure: " + params.triageContextPath);
-      appendLog("Reuse this diagnostic context on the Gateway host: " + params.triageContextCommand);
-    }
-    const failure = recordedFailure
-      ? JSON.parse(fs.readFileSync(params.triageContextPath, "utf8"))
-      : { error: "Managed update failed: " + (triageFailure.payload?.stats?.reason || triageFailure.reason) };
-    const recovery = typeof triageFailure.restored === "boolean"
-      ? "Service recovery " + (triageFailure.restored ? "succeeded." : "failed.")
-      : "Service recovery outcome was not recorded; inspect the handoff log before restarting.";
-    failure.error = [failure.error, recovery, triageFailure.recoveryReason].filter(Boolean).join("\n");
-    // Keep the canonical export intact even when installed triage cannot start.
-    // Only this private annotated input is removed with the helper's other files.
-    fs.writeFileSync(params.triageInputPath, JSON.stringify(failure), { mode: 0o600, flag: "wx" });
-    appendLog("starting diagnostic-only update triage after service recovery settled");
-    const exit = await runOwnedUpdateCommand(
-      "diagnostic",
-      [...params.triageCommandArgv, "--update-result", params.triageInputPath],
-      Math.min(params.recoveryTimeoutMs, 60_000),
-    );
-    appendLog(!exit.signal && exit.code === 0
-      ? "update triage completed; diagnostic report is above"
-      : "update triage could not complete; " + params.triageHint);
-  } catch (error) {
-    appendLog("update triage could not complete: " + String(error) + "; " + params.triageHint);
-  }
-}
+
 
 
 (async () => {
@@ -558,9 +526,12 @@ async function collectUpdateFailureTriage() {
   const controlDeadlineAt = performance.now() + params.parentExitTimeoutMs;
   try {
     if (params.action === "update" && params.runId) {
-      // Admission and stop recording use the serving runtime. Terminal writes after
-      // the updater starts must load the installed runtime in a fresh process.
-      runLedger = await import(pathToFileURL(params.recoveryModulePath).href);
+      // Refuse before ownership transfer when the installation it would update is incomplete.
+      if (!fs.existsSync(params.recoveryModulePath)) throw new Error("installed runtime is unavailable: " + params.recoveryModulePath);
+      // Bookkeeping, including lazy fs-safe loads, must survive a missing install.
+      // Terminal writes prefer the fresh candidate after any schema migration.
+      runLedger = handoffLedger;
+      originalInstallationIdentity = packageActivationIdentity(params.updateLeaseKey, true);
       for (const name of ["adoptUpdateRun", "finishUpdateRun", "getUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
         if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
       }
@@ -747,6 +718,10 @@ async function collectUpdateFailureTriage() {
     // Sentinels and diagnostic exports never authorize activation.
     let result = null;
     try { if (!outputOverflow) result = JSON.parse(updaterOutput); } catch {}
+    if ((exit.signal || !result) && shouldRecoverInterruptedUpdater()) {
+      await recoverInterruptedUpdater();
+      return;
+    }
     if (!exit.signal && ownsManagedUpdateLease() && result?.status === "skipped" &&
       result.reason === "update-ledger-busy" && result.root === undefined && result.runId === undefined &&
       ((result.mode === "unknown" && exit.code === 0) || (result.mode === "finalize" && exit.code === 1))) {
@@ -1009,6 +984,12 @@ async function spawnManagedServiceUpdateHandoff(
       "gateway",
       "restart",
       "--preserve-definition",
+      "--json",
+    ]),
+    finalizeCommandArgv: resolveManagedServiceCliArgv(commandRuntime, [
+      "update",
+      "finalize",
+      "--yes",
       "--json",
     ]),
     recoveryTimeoutMs: owner.recoveryTimeoutMs,
