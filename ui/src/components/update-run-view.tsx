@@ -1,11 +1,16 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
+import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import { projectUpdateRun, updateRunStepOwner } from "../app/update-run-projection.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
+import { redactToolDetail } from "../lib/browser-redact.ts";
+import { clampText } from "../lib/format.ts";
 import { i18nRevision, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { useStreamAutoFollow } from "../lib/reactive/stream-auto-follow.ts";
+import { copyMarkdownText } from "./markdown-copy.ts";
 import "../styles/update-run-view.css";
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
@@ -35,6 +40,87 @@ function formatUpdateRunStepLabel(step: string): string {
     ? t(`updates.run.stepLabel.${key}`)
     : owner.replace(/[-_:]+/gu, " ").replace(/^./u, (letter) => letter.toUpperCase());
   return step.startsWith("warning:") ? t("updates.run.stepWarning", { step: label }) : label;
+}
+
+function repairPrompt(run: UpdateRunRecord): string {
+  // The report truncates some diagnostics, so redact complete source fields first.
+  const safeRun = JSON.parse(
+    JSON.stringify(run, (_key, value) =>
+      typeof value === "string" ? redactRepairFact(value) : value,
+    ),
+    // SAFETY: the update record is JSON data; the replacer changes only string values.
+  ) as UpdateRunRecord;
+  const report = renderUpdateRunReport(safeRun);
+  const facts = clampText(
+    redactRepairFact(
+      [
+        `Run ID: ${safeRun.runId}`,
+        `Installed: ${formatUpdateIdentity([
+          ["version", safeRun.before.version],
+          ["SHA", safeRun.before.sha],
+        ])}`,
+        `Requested target: ${formatUpdateIdentity([
+          ["version", safeRun.target.version],
+          ["SHA", safeRun.target.sha],
+          ["tag", safeRun.target.tag],
+        ])}`,
+        report.markdown,
+      ].join("\n"),
+    ),
+    1_800,
+  );
+  return t("updates.run.repairPrompt", { facts });
+}
+
+function formatUpdateIdentity(fields: Array<[string, string | null | undefined]>): string {
+  return (
+    fields
+      .flatMap(([label, value]) => (value ? [`${label}: ${clampText(value, 120)}`] : []))
+      .join("; ") || "unknown"
+  );
+}
+
+function redactRepairFact(value: string): string {
+  return redactToolDetail(value).replace(
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*/gu,
+    "[redacted private key]",
+  );
+}
+
+// Feedback belongs to one recorded revision; a newer revision clears it.
+const runRevision = (run: UpdateRunRecord) => `${run.runId}:${run.updatedAtMs}`;
+
+function RepairPromptAction(props: { run: UpdateRunRecord }) {
+  const [copied, setCopied] = createSignal<{ revision: string; copied: boolean } | null>(null);
+  const status = () => {
+    const current = copied();
+    return current && current.revision === runRevision(props.run) ? current.copied : undefined;
+  };
+  return (
+    <div class="update-run-view__prompt-action">
+      <button
+        class="btn btn--sm update-run-view__copy-prompt"
+        type="button"
+        onClick={(event) => {
+          const run = props.run;
+          const revision = runRevision(run);
+          copyMarkdownText(
+            event.currentTarget,
+            repairPrompt(run),
+            () => runRevision(props.run) === revision,
+            (result) => setCopied(result === undefined ? null : { revision, copied: result }),
+          );
+        }}
+      >
+        {t("updates.run.copyAgentPrompt")}
+      </button>
+      <span role="status" aria-live="polite">
+        <Show when={status() !== undefined}>
+          {status() ? t("updates.run.promptCopied") : t("updates.run.promptCopyFailed")}
+        </Show>
+      </span>
+    </div>
+  );
 }
 
 const STEP_MARKS = {
@@ -108,6 +194,19 @@ export function UpdateRunView(props: {
     i18nRevision();
     return props.run ? projectUpdateRun(props.run, props.connected, props.serving) : null;
   });
+  // History, acknowledged abandonment, and OCM-owned installs carry no repair action.
+  const repairable = () => {
+    const run = props.run;
+    const current = view();
+    return run &&
+      current &&
+      !current.historical &&
+      !current.reconciled &&
+      run.target.installationMethod !== "ocm" &&
+      isReportableUpdateRun(run)
+      ? run
+      : undefined;
+  };
   return (
     <openclaw-update-run-view>
       <Show when={view()}>
@@ -217,6 +316,7 @@ export function UpdateRunView(props: {
                 <div class="update-run-view__report-body" tabindex={0}>
                   <For each={current().report.lines}>{(line) => <p>{line}</p>}</For>
                 </div>
+                <Show when={repairable()}>{(run) => <RepairPromptAction run={run()} />}</Show>
               </section>
             </Show>
           </section>
