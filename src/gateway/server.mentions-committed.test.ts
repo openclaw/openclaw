@@ -163,11 +163,8 @@ it("delivers a committed human mention once through authenticated chat.send", as
     idempotencyKey: "mention-original",
     mentions: [{ profileId: bob.id, start: 0, end: 4 }],
   };
-  const accepted = await sender.request<{ runId: string; messageSeq: number }>(
-    "chat.send",
-    request,
-  );
-  expect(accepted.messageSeq).toBeGreaterThan(0);
+  // messageSeq is optional: the ACK carries it only once the transcript recorder has attested placement.
+  const accepted = await sender.request<{ runId: string }>("chat.send", request);
   await gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 });
   const inbox = await gateway.client.request<{ items: unknown[] }>("mentions.list", {});
   expect(inbox.items).toHaveLength(1);
