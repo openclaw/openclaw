@@ -421,6 +421,8 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   expect(instructions).toContain("## UI Presentation");
   expect(instructions).toContain("Permission blocks:");
   expect(instructions).toContain("Omit unverified remediation advice");
+  expect(instructions?.match(/## Handoffs/g)).toHaveLength(1);
+  expect(instructions).toContain("materially greater time, compute, cost, or scope");
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
   expect(instructions).toContain("Use or store credentials the user supplies as requested");

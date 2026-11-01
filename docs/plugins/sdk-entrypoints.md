@@ -354,6 +354,15 @@ personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
 
+## Handoff guidance
+
+Native agent harnesses can include `buildHandoffPromptSection().join("\n")` from
+`openclaw/plugin-sdk/agent-harness-runtime` alongside their standing developer
+instructions. This shared guidance preserves outcomes, real constraints, bounded
+recovery, and owner escalation across handoffs. Include it even without session
+tools and in minimal worker prompts; omit it for intentional raw/no-prompt calls.
+It is advisory text, not a permission grant or a retry/completion mechanism.
+
 ## Tool failure diagnostics
 
 Agent harnesses can import `readToolOperatorHint(error)` from

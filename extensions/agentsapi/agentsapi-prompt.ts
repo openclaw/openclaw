@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   buildCredentialSafetyPrompt,
+  buildHandoffPromptSection,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
   buildTemporalContextText,
@@ -145,6 +146,7 @@ export async function buildAgentsApiInstructions(
           messageTool,
         })
       : undefined,
+    params.promptMode !== "none" ? buildHandoffPromptSection().join("\n") : undefined,
     // Without Gateway control tools, omit the shared builder's CLI setup hint:
     // the hosted VM cannot configure the Gateway with a local OpenClaw CLI.
     buildCredentialSafetyPrompt(

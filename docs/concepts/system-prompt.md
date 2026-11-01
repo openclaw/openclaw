@@ -139,6 +139,55 @@ Resumed room CLI turns retain new thread notes, system events, and MCP App conte
 
 On channels with native approval cards/buttons, the prompt tells the agent to rely on that UI first, and to include a manual `/approve` command only when the tool result says chat approvals are unavailable or manual approval is the only path.
 
+## Outcome-focused handoffs
+
+The shared **Handoffs** guidance applies to copy/paste briefs, cross-session
+assignments, and subagents, including minimal prompts and provider execution-style
+overrides. Native Codex, Copilot, and Agents API harnesses consume the same
+section through the Plugin SDK. It is not conditional on session tools or
+`delegationMode`; intentional raw/no-prompt calls remain unchanged. Existing
+sessions retain their normal prompt refresh and native binding lifetimes.
+
+Handoffs preserve the requested outcome, completion evidence, prior effects, and
+real constraints. Suggested methods remain adaptable. Preparation-only status
+and the decision needed to authorize execution should be explicit; an imported
+brief is not itself permission to act on another owner's machine.
+
+Receivers reconcile the brief with the current authorized request. Ordinary,
+in-scope recovery can continue without another instruction: investigate a failed
+method, check supported capabilities before declaring them absent, and reconcile
+uncertain effects before retrying. Explicit budgets, pauses, cancellation, and
+required evidence remain binding. New authority or materially greater time,
+compute, cost, or scope calls for an owner decision, with a recommended next step;
+it does not authorize unlimited retries or completion at any cost.
+
+Partial packets and child-run completion are evidence, not automatic completion
+of the original task. Keep remaining work explicit and with a capable executor,
+using the supported return or escalation route. A supervised child relays needed
+coordination through its parent. Promise later completion only when a real
+completion or watch path exists.
+
+These are proportional behavioral defaults, not a mandatory handoff template or
+new runtime enforcement. They do not change permissions, retry budgets,
+provisioning, or scheduling. Model behavior still requires evaluation; checking
+that the prompt contains these instructions does not prove compliance.
+
+### Behavioral evaluation
+
+The opt-in QA scenario `outcome-focused-handoff-live` uses fresh sessions and
+synthetic workspace inputs for sender composition, clean completion, recoverable
+setup, an explicit pause, and materially larger effort. With an already configured
+live model, run `pnpm openclaw qa suite --provider-mode live-frontier --scenario
+outcome-focused-handoff-live --concurrency 1 --model <provider/model> --alt-model
+<provider/model>`.
+
+Use the same fixture, model, effort, and budgets on baseline and candidate.
+Filesystem assertions check exact completion or non-execution, not the meaning
+of the brief or reply. Review retained observations for invented restrictions,
+actionable escalation, false completion, and unnecessary extra work. A passing
+artifact check is not a passing semantic evaluation; matching baseline/candidate
+behavior is not evidence of improvement. Mock responses cannot prove compliance.
+
 ## Prompt modes
 
 OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):

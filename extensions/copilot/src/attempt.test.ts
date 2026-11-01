@@ -1435,6 +1435,8 @@ describe("runCopilotAttempt", () => {
       const content = requireSystemMessage(sdk);
       expect(content).toContain("Permission blocks:");
       expect(content).toContain("Omit unverified remediation advice");
+      expect(content.match(/## Handoffs/g)).toHaveLength(1);
+      expect(content).toContain("materially greater time, compute, cost, or scope");
       await waitForEventLoopTurn();
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),

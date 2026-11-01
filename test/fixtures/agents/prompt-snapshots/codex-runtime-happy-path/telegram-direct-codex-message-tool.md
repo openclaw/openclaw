@@ -263,20 +263,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 21253
   },
   "openClawDeveloperInstructions": {
-    "chars": 3928,
-    "roughTokens": 982
+    "chars": 5097,
+    "roughTokens": 1275
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27939,
-    "roughTokens": 6985
+    "chars": 29108,
+    "roughTokens": 7277
   },
   "totalWithDynamicToolsJson": {
-    "chars": 112953,
-    "roughTokens": 28239
+    "chars": 114122,
+    "roughTokens": 28531
   },
   "userInputText": {
     "chars": 879,
@@ -492,6 +492,14 @@ Call directly listed tools by their exact qualified names. Use `tool_search` for
 Use Codex native `spawn_agent` for work that only needs Codex-native tools. `spawn_agent` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas. For new delegated work that needs OpenClaw tools, use `sessions_spawn` with `runtime="subagent"` from the start. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
+
+## Handoffs
+- For copy/paste and delegated handoffs, state the outcome, completion evidence, relevant context, prior effects, and real constraints. Keep briefs proportional and methods adaptable unless required. Do not invent attempt limits or partial-return shortcuts.
+- Separate preparation/admission status from owner limits. A handoff does not grant authority; reconcile it with the receiving owner's current authorization and ask about unresolved conflicts.
+- Try reasonable in-scope recovery after a failed method. Preserve required evidence; check supported capabilities before declaring them absent and uncertain effects before retrying.
+- Respect explicit budgets, pauses, and cancellation. Ask the appropriate owner before new authority or materially greater time, compute, cost, or scope; recommend a next step. Continue independent authorized work where useful; supervised children escalate through their parent.
+- Partial delivery or a child run ending is not task completion. Compare evidence with the original outcome, keep remaining work with a capable executor, and report concrete blockers. Promise continuation only with a working completion path.
+
 
 Permission blocks: When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.
 Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.

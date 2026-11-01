@@ -2,6 +2,7 @@ import type { SessionConfig } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCredentialSafetyPrompt,
+  buildHandoffPromptSection,
   buildDelegationGuidanceSection,
   buildHarnessVisibleReplyGuidance,
   listToolPromptGuidance,
@@ -139,6 +140,7 @@ export async function createCopilotSessionSetup(params: {
               },
               requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
             }),
+            input.promptMode !== "none" ? buildHandoffPromptSection().join("\n") : undefined,
             buildCredentialSafetyPrompt({
               controlToolsAvailable:
                 input.disableTools !== true &&

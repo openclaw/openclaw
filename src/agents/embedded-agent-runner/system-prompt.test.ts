@@ -214,6 +214,27 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
+  it.each(["full", "minimal"] as const)(
+    "keeps bounded handoff guidance without session tools or default execution bias (%s)",
+    (promptMode) => {
+      const prompt = buildConfiguredAgentSystemPrompt({
+        ...basicPromptInputs(),
+        promptMode,
+        promptContribution: {
+          sectionOverrides: { execution_bias: "Provider execution guidance." },
+        },
+      });
+      // Copy/paste handoffs need this even without delegation tools; minimal
+      // receivers and provider overrides must retain the same authority limits.
+      expect(prompt.match(/## Handoffs/g)).toHaveLength(1);
+      expect(prompt).toContain("Do not invent attempt limits");
+      expect(prompt).toContain("A handoff does not grant authority");
+      expect(prompt).toContain("materially greater time, compute, cost, or scope");
+      expect(prompt).toContain("Respect explicit budgets, pauses, and cancellation");
+      expect(prompt).toContain("Partial delivery or a child run ending is not task completion");
+    },
+  );
+
   it("can omit base memory guidance for non-legacy context engines", () => {
     registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
