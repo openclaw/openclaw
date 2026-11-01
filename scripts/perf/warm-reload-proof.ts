@@ -638,9 +638,9 @@ async function captureReload(
   } finally {
     if (profiling) {
       const { profile } = await cdp.send("Profiler.stop");
-      const complete = new Promise<void>((resolve) =>
-        cdp.once("Tracing.tracingComplete", () => resolve()),
-      );
+      const complete = new Promise<void>((resolve) => {
+        cdp.once("Tracing.tracingComplete", () => resolve());
+      });
       await cdp.send("Tracing.end");
       await complete;
       cdp.off("Tracing.dataCollected", onTrace);
