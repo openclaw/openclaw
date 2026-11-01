@@ -4,6 +4,8 @@ import { unsupportedControlUiBrowser } from "./app/boot-capabilities.ts";
 import { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { initializeControlUiDocumentHead } from "./app/control-ui-document-head.ts";
 import { startEarlyApplicationGateway } from "./app/early-gateway.ts";
+// Input before a lazy surface loads still decides how that surface shows focus.
+import "./lib/programmatic-focus.ts";
 
 if (!unsupportedControlUiBrowser) {
   const initial = prepareApplicationStartup();

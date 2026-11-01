@@ -14,6 +14,7 @@ import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-ques
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import { focusProgrammatically } from "../../../lib/programmatic-focus.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -79,7 +80,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   createPendingFocus(focusTarget, {
     requested: ([isCollapsed], previous) =>
       !isCollapsed && (previous !== undefined || initialModel.autoFocus !== false),
-    focus: () => panel?.focus({ preventScroll: true }),
+    focus: () => panel && focusProgrammatically(panel, { preventScroll: true }),
   });
   const setCollapsed = (value: boolean) => {
     if (props.panel.onCollapsedChange) {
@@ -88,7 +89,9 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       setUncontrolledCollapsed(value);
       // Controlled callers own their destination (for example, the chat composer).
       if (value) {
-        onSettled(() => expandButton?.focus({ preventScroll: true }));
+        onSettled(
+          () => expandButton && focusProgrammatically(expandButton, { preventScroll: true }),
+        );
       }
     }
   };
