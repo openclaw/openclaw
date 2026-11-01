@@ -16,12 +16,9 @@ import {
 } from "../config-revision.js";
 import { normalizeCronRunJobId } from "../run-history.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
-import { removeStaleCronJobFamilyRows } from "../store.js";
+import { removeStaleCronJobFamilyRowsByKey } from "../store.js";
 import type { CronJobMutation } from "../store/job-mutations.types.js";
-import {
-  isSystemMonitorDeclaration,
-  systemOwnedDeclarationKeyNamespace,
-} from "../system-owned-declaration.js";
+import { systemOwnedDeclarationKeyNamespace } from "../system-owned-declaration.js";
 import type { CronJobCreate, CronJobPatch } from "../types.js";
 import { declarativeFields } from "./jobs-declarative.js";
 import { persistUpdatedJob } from "./jobs-mutation-persistence.js";
@@ -50,7 +47,7 @@ import type {
   CronUpdateOptions,
   CronUpdatePrecondition,
 } from "./state.js";
-import { emit } from "./state.js";
+import { emit, prepareCronServiceStore } from "./state.js";
 import {
   captureCronJobMutationSource,
   captureCronServiceMutationSource,
@@ -84,7 +81,7 @@ export async function quiesceJobs(
       }
       cancelled = true;
       for (const job of jobs) {
-        requestActiveCronJobCancellation(job.id, "Claw agent removal.");
+        requestActiveCronJobCancellation(job.id, "Template agent removal.");
       }
     };
     await commitGuard(cancel);
@@ -98,14 +95,15 @@ export async function add(
   input: CronJobCreate,
   opts?: CronAddOptions,
 ): Promise<CronAddResult> {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     source.assertCurrent();
     warnIfDisabled(state, "add");
-    if (input.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
-      throw new Error("system-owned payloads cannot be created by cron clients");
-    }
     const declarationKey = normalizeOptionalString(input.declarationKey);
     const systemOwnedDeclarationNamespace = systemOwnedDeclarationKeyNamespace(declarationKey);
     if (systemOwnedDeclarationNamespace && opts?.systemOwned !== true) {
@@ -131,11 +129,14 @@ export async function add(
     source.assertCurrent();
     const mutation: CronJobMutation = {
       kind: "add",
+      createdAtMs: opts?.streamExecApproval?.createdAtMs,
       input: { ...normalizedInput, id: normalizedId ?? crypto.randomUUID() },
       matchingJobIds: opts?.matchesExisting
         ? (state.store?.jobs.filter(opts.matchesExisting).map((job) => job.id) ?? [])
         : undefined,
       options: {
+        pluginCommand: opts?.pluginCommand,
+        pluginCommandSourceDigest: opts?.pluginCommandSourceDigest,
         streamSandbox: opts?.streamSandbox,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
@@ -162,11 +163,13 @@ export async function add(
     const existing = plan.previous.jobs.find((entry) => entry.id === job.id);
     const captured = consumeRuntimeAuthorityMutationOptions(opts);
     Object.assign(mutation.options, captured);
-    reconcileRuntimeAuthority({
-      job,
-      ...captured,
-      explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
-    });
+    if (!existing?.pluginCommand) {
+      reconcileRuntimeAuthority({
+        job,
+        ...captured,
+        explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
+      });
+    }
     plan.updated =
       existing !== undefined &&
       !isDeepStrictEqual(
@@ -250,7 +253,7 @@ export async function removeStaleJobFamily(
 ): Promise<number> {
   return await locked(state, async () => {
     await ensureLoadedForOperation(state);
-    return await removeStaleCronJobFamilyRows(state.deps.storePath, family, opts);
+    return await removeStaleCronJobFamilyRowsByKey(state.deps.storeKey, family, opts);
   });
 }
 
@@ -265,17 +268,8 @@ async function updateLoadedJob(params: {
   const { state, source, id, patch, precondition, opts } = params;
   source.assertCurrent();
   warnIfDisabled(state, "update");
-  if (patch.payload?.kind === "heartbeat") {
-    throw new Error("system-owned payloads cannot be patched by cron clients");
-  }
   await ensureLoadedForOperation(state);
   const job = findJobOrThrow(state, id);
-  // Existing monitors are config-driven: any patch (disable, reschedule,
-  // repurpose) would silently diverge from its owner until the next reconcile,
-  // so updates are rejected outright. Removal stays allowed only to the owner.
-  if (isSystemMonitorDeclaration(job.declarationKey)) {
-    throw new Error("system-owned monitor jobs cannot be edited by cron clients");
-  }
   const now = state.deps.nowMs();
   const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
     ? await resolveConfiguredChannelsForValidation(state)
@@ -288,10 +282,13 @@ async function updateLoadedJob(params: {
     patch,
     options: {
       streamSandbox: opts?.streamSandbox,
+      operatorSource: opts?.operatorSource,
+      operatorSourceExecutionRevision: opts?.operatorSourceExecutionRevision,
       inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
+      bindSourceConversation: opts?.bindSourceConversation,
       captured: false,
     },
   };
@@ -307,12 +304,14 @@ async function updateLoadedJob(params: {
   }
   const captured = consumeRuntimeAuthorityMutationOptions(opts);
   Object.assign(mutation.options, captured);
-  reconcileRuntimeAuthority({
-    job: nextJob,
-    ...captured,
-    explicitlyMutatesToolsAllow:
-      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
-  });
+  if (!previousJob.pluginCommand) {
+    reconcileRuntimeAuthority({
+      job: nextJob,
+      ...captured,
+      explicitlyMutatesToolsAllow:
+        patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+    });
+  }
   source.assertCurrent();
   return await persistUpdatedJob({
     state,
@@ -339,6 +338,10 @@ export async function update(
   patch: CronJobPatch,
   opts?: CronUpdateOptions,
 ) {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   return await locked(state, async () => await updateLoadedJob({ state, source, id, patch, opts }));
 }
@@ -351,6 +354,10 @@ export async function updateWithPrecondition(
   precondition: CronUpdatePrecondition,
   opts?: CronUpdateOptions,
 ) {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   return await locked(
     state,
@@ -360,6 +367,10 @@ export async function updateWithPrecondition(
 
 /** Removes a cron job through its worker owner before canceling and cleaning up host work. */
 export async function remove(state: CronServiceState, id: string, opts?: CronRemoveOptions) {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   let sessionCleanup:
     | {
@@ -380,12 +391,6 @@ export async function remove(state: CronServiceState, id: string, opts?: CronRem
     const removedJob = state.store.jobs.find((j) => j.id === id);
     if (!removedJob) {
       return { ok: true, removed: false } as const;
-    }
-    // Config is the monitor's source of truth: ad-hoc deletion would disable
-    // the feature until an unrelated reload, so only gateway reconciliation
-    // (stale-monitor cleanup) may remove one.
-    if (isSystemMonitorDeclaration(removedJob.declarationKey) && opts?.systemOwned !== true) {
-      throw new Error("system-owned monitor jobs cannot be removed by cron clients");
     }
     if (opts?.expectedConfigRevision !== undefined) {
       const actualConfigRevision = resolveCronJobConfigRevision(removedJob);
@@ -505,6 +510,10 @@ export async function removeAgentJobsTransactional<T>(
   agentId: string,
   commit: () => Promise<T>,
 ): Promise<T> {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronServiceMutationSource(state);
   return await locked(state, async () => {
     source.assertCurrent();

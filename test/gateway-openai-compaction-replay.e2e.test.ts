@@ -1,16 +1,23 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { json } from "node:stream/consumers";
 import { afterEach, expect, it } from "vitest";
 import { SessionManager } from "../src/agents/sessions/session-manager.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import type { GatewayClient } from "../src/gateway/client.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { writeRestartToolCalls } from "./gateway-restart.test-support.js";
+import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
   type OpenAiResponsesModelServer,
 } from "./helpers/openai-responses-model-fixture.js";
-import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import {
+  writeOpenAiResponsesText,
+  writeOpenAiResponsesSse,
+} from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -34,32 +41,15 @@ it(
   "Gateway OpenAI Responses compaction replay replays persisted provider state on the next embedded turn",
   { timeout: 180_000 },
   async () => {
-    const modelServer = await startMockModelServer();
-    modelServers.push(modelServer);
-    const instance = await createOpenClawTestInstance({
+    const { instance, modelServer, connect } = await setupResponsesProof("replay-proof", {
+      reasoning: true,
+      toolProfile: "minimal",
       name: "gateway-openai-compaction-replay",
-      config: createOpenAiResponsesModelConfig({
-        baseUrl: modelServer.baseUrl,
-        providerId: "replay-proof",
-        modelId: "replay-proof",
-        reasoning: true,
-        toolProfile: "minimal",
-      }),
-      env: {
-        OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      },
+      env: { OPENCLAW_DEBUG_MODEL_TRANSPORT: "1" },
+      respond: writeModelResponse,
     });
-    instances.push(instance);
     await instance.startGateway();
-
-    const client = await connectGatewayClient({
-      url: instance.url,
-      token: instance.gatewayToken,
-      role: "operator",
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-    });
+    const client = await connect();
     try {
       await runAgentTurn(client, "capture compaction state");
       // The provider can terminate after emitting only a compaction item. The
@@ -130,10 +120,7 @@ it(
   },
 );
 
-async function runAgentTurn(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
-  message: string,
-) {
+async function runAgentTurn(client: GatewayClient, message: string) {
   const runId = randomUUID();
   const response = await client.request<{ runId?: string; status?: string }>(
     "agent",
@@ -152,17 +139,51 @@ function expectCompactionReplay(input: unknown[]): string {
   return JSON.stringify(input);
 }
 
-async function startMockModelServer() {
+async function setupResponsesProof(
+  modelId: string,
+  options: {
+    name: string;
+    reasoning: boolean;
+    toolProfile: "coding" | "minimal";
+    env?: Record<string, string | undefined>;
+    respond(response: ServerResponse, sequence: number): void;
+  },
+) {
   const requests: CapturedRequest[] = [];
   const server = await startOpenAiResponsesModelServer({
-    modelId: "replay-proof",
-    bindError: "compaction replay model server did not bind",
+    modelId,
+    bindError: "Responses proof model server did not bind",
     onRequest: async (request, response) => {
       requests.push((await json(request)) as CapturedRequest);
-      writeModelResponse(response, requests.length);
+      options.respond(response, requests.length);
     },
   });
-  return { ...server, requests };
+  modelServers.push(server);
+  const instance = await createOpenClawTestInstance({
+    name: options.name,
+    config: createOpenAiResponsesModelConfig({
+      baseUrl: server.baseUrl,
+      providerId: modelId,
+      modelId,
+      reasoning: options.reasoning,
+      toolProfile: options.toolProfile,
+    }),
+    env: {
+      OPENCLAW_SKIP_PROVIDERS: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      ...options.env,
+    },
+  });
+  instances.push(instance);
+  return {
+    instance,
+    modelServer: { ...server, requests },
+    connect: () =>
+      connectProofClient(instance, {
+        role: "operator",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      }),
+  };
 }
 
 function writeModelResponse(response: ServerResponse, sequence: number): void {
@@ -207,4 +228,81 @@ function writeModelResponse(response: ServerResponse, sequence: number): void {
       },
     },
   ]);
+}
+
+const VISIBLE_MARKER = "NO_OP_WRITE_VISIBLE_ANSWER";
+
+it(
+  "Gateway no-op mutation continuation returns a visible answer after the first tool call is a no-op write",
+  { timeout: 180_000 },
+  async () => {
+    const { instance, modelServer, connect } = await setupResponsesProof("no-op-proof", {
+      name: "gateway-no-op-mutation",
+      reasoning: false,
+      toolProfile: "coding",
+      respond: (response, sequence) => {
+        if (sequence === 1) {
+          writeToolResponse(response);
+        } else {
+          writeOpenAiResponsesText(response, {
+            text: VISIBLE_MARKER,
+            messageId: "msg_no_op_visible",
+            responseId: "resp_no_op_visible",
+          });
+        }
+      },
+    });
+    const notePath = path.join(instance.homeDir, ".openclaw", "workspace", "note.txt");
+    await fs.mkdir(path.dirname(notePath), { recursive: true });
+    await fs.writeFile(notePath, "done\n", "utf8");
+    await instance.startGateway();
+
+    const client = await connect();
+    try {
+      const runId = randomUUID();
+      const response = await client.request<{
+        runId?: string;
+        status?: string;
+        result?: { payloads?: Array<{ text?: string }> };
+      }>(
+        "agent",
+        {
+          sessionKey: "agent:main:no-op-proof",
+          message: "Write note.txt with exactly done, then report the result.",
+          deliver: false,
+          idempotencyKey: runId,
+        },
+        { expectFinal: true, timeoutMs: 120_000 },
+      );
+
+      expect(response).toMatchObject({
+        status: "ok",
+        runId,
+        result: {
+          payloads: expect.arrayContaining([expect.objectContaining({ text: VISIBLE_MARKER })]),
+        },
+      });
+      expect(modelServer.requests).toHaveLength(2);
+      expect(JSON.stringify(modelServer.requests[1]?.input)).toContain("function_call_output");
+      expect(JSON.stringify(modelServer.requests[1]?.input)).toContain("No changes made");
+      await expect(fs.readFile(notePath, "utf8")).resolves.toBe("done\n");
+    } finally {
+      await disconnectGatewayClient(client);
+    }
+  },
+);
+
+function writeToolResponse(response: ServerResponse): void {
+  const item = {
+    type: "function_call",
+    id: "fc_no_op_write",
+    call_id: "call_no_op_write",
+    name: "write",
+    arguments: JSON.stringify({ path: "note.txt", content: "done\n" }),
+    status: "completed",
+  };
+  writeRestartToolCalls(response, "resp_no_op_write", [item], {
+    argumentEvent: "done",
+    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+  });
 }

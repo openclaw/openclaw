@@ -92,9 +92,6 @@ export async function patchMatrixQaGatewayMatrixAccount(params: {
 }
 
 function requireMatrixQaAccountReload(context: MatrixQaScenarioContext) {
-  if (!context.readGatewayAccountStartAt || !context.waitGatewayAccountReady) {
-    throw new Error("Matrix QA allowlist reload requires gateway generation readiness support");
-  }
   const readStartAt = context.readGatewayAccountStartAt;
   return {
     readStartAt: async (accountId: string) => {

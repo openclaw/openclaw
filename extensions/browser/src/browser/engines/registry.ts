@@ -71,5 +71,5 @@ export function resolveBrowserEngine(id: BrowserEngineId = "chromium"): BrowserE
 
 /** The same registered implementations drive status discovery and execution. */
 export function listBrowserEngines(): BrowserEngineDescriptor[] {
-  return Object.values(engines).map(({ descriptor }) => Object.assign({}, descriptor));
+  return Object.values(engines).map(({ descriptor }) => descriptor);
 }

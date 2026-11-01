@@ -4,39 +4,88 @@ import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { ChatMobileHost } from "./chat-mobile-host.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
+import { getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { fitSidebarLayout, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 
 // The lazy region separately owns the successful right outlet's contents.
 afterEach(cleanupSolid);
 
-it("retains loading panel contents when fitting a new layout snapshot", () => {
+it("releases each mobile details mount when its host is replaced or removed", () => {
+  const host = () => {
+    const { pane } = createMountedPanes([]);
+    getPaneTestRuntime(pane).mergedChrome = true;
+    const read = () => pane.render().layout!.region.mobileHost!;
+    read().navigate({ area: "details" });
+    return read;
+  };
+  const first = host();
+  const second = host();
+  const firstSnapshot = first();
+  const [mobileHost, replaceHost] = createSignal<ChatMobileHost | undefined>(firstSnapshot);
+  const mounted = mountSolid(() => (
+    <SidebarRegionView
+      presentationId="details-mount-lifetime"
+      panelIdPrefix="chat-details-mount-lifetime"
+      availableWidth={400}
+      narrow
+      mobileHost={mobileHost()}
+      layout={{ columns: [] }}
+      panelDefinitions={sidebarPanelDefinitions()}
+      callbacks={createNoopSidebarRegionCallbacks()}
+    />
+  ));
+  flush();
+  const details = mounted.container.querySelector(".chat-mobile-host__details");
+  expect(details).not.toBeNull();
+  expect(first().detailsMount).toBe(details);
+  const nextSnapshot = first();
+  expect(nextSnapshot).not.toBe(firstSnapshot);
+  expect(nextSnapshot.setDetailsMount).toBe(firstSnapshot.setDetailsMount);
+  replaceHost(nextSnapshot);
+  flush();
+  expect(first().detailsMount).toBe(details);
+  replaceHost(second());
+  flush();
+  expect(first().detailsMount).toBeNull();
+  expect(second().detailsMount).toBe(details);
+  replaceHost(undefined);
+  flush();
+  expect(second().detailsMount).toBeNull();
+  replaceHost(first());
+  flush();
+  expect(first().detailsMount).toBe(details);
+  mounted.unmount();
+  expect(first().detailsMount).toBeNull();
+});
+
+it("retains loading contents, primary input and outlet through resize and collapse", () => {
+  const primary = document.createElement("textarea");
+  primary.value = "Draft survives the side panel";
   const layout = openSlot({ columns: [] }, "workspace");
   let resize: (width: number) => void = () => {};
+  let changeOpen: (open: boolean) => void = () => {};
   const mounted = mountSolid(() => {
     const [width, setWidth] = createSignal(1400);
+    const [open, setOpen] = createSignal(true);
     resize = setWidth;
+    changeOpen = setOpen;
     return (
       <SidebarRegionView
         presentationId="loading-layout"
         panelIdPrefix="chat-panel-loading-layout"
         availableWidth={width()}
         narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
-        layout={fitSidebarLayout(layout, width())!}
+        callbacks={createNoopSidebarRegionCallbacks()}
+        layout={setSidebarOpen(fitSidebarLayout(layout, width())!, open())}
         panelDefinitions={sidebarPanelDefinitions()}
-        regionError={null}
+        primary={primary}
       />
     );
   });
@@ -54,39 +103,6 @@ it("retains loading panel contents when fitting a new layout snapshot", () => {
       .querySelector<HTMLElement>(".sidebar-region")
       ?.style.getPropertyValue("--side-panel-width"),
   ).toBe("382px");
-});
-
-it("retains the primary input and the region-owned outlet while changing the layout", () => {
-  const primary = document.createElement("textarea");
-  primary.value = "Draft survives the side panel";
-  const layout = openSlot({ columns: [] }, "workspace");
-  let changeOpen: (open: boolean) => void = () => {};
-  const mounted = mountSolid(() => {
-    const [open, setOpen] = createSignal(true);
-    changeOpen = setOpen;
-    return (
-      <SidebarRegionView
-        presentationId="native-layout"
-        panelIdPrefix="chat-panel-native-layout"
-        availableWidth={1400}
-        narrow={false}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
-        layout={setSidebarOpen(layout, open())}
-        panelDefinitions={sidebarPanelDefinitions()}
-        regionError={null}
-        primary={primary}
-      />
-    );
-  });
-  flush();
   const outlet = mounted.container.querySelector(".sidebar-region__right-runtime")!;
   const retainedPanel = document.createElement("iframe");
   outlet.append(retainedPanel);
@@ -130,7 +146,7 @@ it("parks on owner events and reveals with the parent's next props", () => {
   expect(content.value).toBe("Retained text");
 });
 
-it("releases region refs when the lazy host or its containing view unmounts", () => {
+it("releases region refs when the panel column or its containing view unmounts", async () => {
   let regionElement: HTMLElement | null = null;
   let headerElement: HTMLElement | null = null;
   let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
@@ -144,18 +160,9 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
         panelIdPrefix="chat-owned-region-refs"
         availableWidth={1400}
         narrow={false}
-        layout={{ columns: [] }}
+        layout={pending() ? { columns: [] } : openSlot({ columns: [] }, "workspace")}
         panelDefinitions={sidebarPanelDefinitions()}
-        callbacks={{
-          activatePanel() {},
-          togglePanelExpanded() {},
-          closeSlot() {},
-          openSlot() {},
-          reorderPanel() {},
-          resizePanel() {},
-          setOpen() {},
-        }}
-        regionError={pending() ? null : undefined}
+        callbacks={createNoopSidebarRegionCallbacks()}
         onRegionElementRef={(element) => {
           regionElement = element;
           return () => {
@@ -182,6 +189,7 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
     );
   });
   flush();
+  await waitForSolid(() => expect(regionView).not.toBeNull());
   const shell = regionElement;
   const firstView = regionView;
   const header = headerElement;
@@ -195,7 +203,7 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
   expect(headerElement).toBe(header);
   loading(false);
   flush();
-  expect(regionView).not.toBeNull();
+  await waitForSolid(() => expect(regionView).not.toBeNull());
   expect(regionView).not.toBe(firstView);
   mounted.unmount();
   expect(regionView).toBeNull();

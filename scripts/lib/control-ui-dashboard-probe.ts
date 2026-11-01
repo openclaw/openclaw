@@ -1,9 +1,38 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
+import type { ControlUiMockGateway } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
+
+/** Renew the ticket without changing the document generation on warm reload. */
+export function installRotatingBoardTickets(
+  snapshot: BoardSnapshot,
+  gateway: Pick<ControlUiMockGateway, "setRequestHandler">,
+) {
+  let generation = 0;
+  gateway.setRequestHandler("board.get", ({ respond }) => {
+    const board = structuredClone(snapshot);
+    for (const widget of board.widgets) {
+      if (widget.viewTicket && widget.frameUrl) {
+        widget.viewTicket = `fixture-ticket-${performance.timeOrigin}-${++generation}`;
+        const url = new URL(widget.frameUrl);
+        url.searchParams.set("bt", widget.viewTicket);
+        widget.frameUrl = url.href;
+      }
+    }
+    respond(board);
+  });
+}
 
 /** Serialized before app modules; all timestamps use the host document's clock. */
 export function installWidgetReadiness() {
   const ready = new Map<string, number>();
   const boardFrames = new Map<HTMLIFrameElement, number>();
+  const frameEvents: Array<{ id: number; stage: string; at: number }> = [];
+  const recordFrame = (frame: HTMLIFrameElement, stage: string) =>
+    frameEvents.push({
+      id: [...boardFrames.keys()].indexOf(frame) + 1,
+      stage,
+      at: performance.now(),
+    });
   let helloObserverAttachedMs: number | null = null;
   let helloPublishedMs: number | null = null;
   let helloHandledMs: number | null = null;
@@ -79,13 +108,23 @@ export function installWidgetReadiness() {
       return;
     }
     boardFrames.set(frame, performance.now());
+    recordFrame(frame, "inserted");
     stages.iframeInsertedMs ??= performance.now();
     frame.addEventListener("load", () => {
+      recordFrame(frame, "load");
       stages.sandboxDocLoadedMs ??= performance.now();
     });
   };
   new MutationObserver((records) => {
     for (const record of records) {
+      if (
+        record.type === "attributes" &&
+        record.target instanceof HTMLIFrameElement &&
+        boardFrames.has(record.target) &&
+        !record.target.style.opacity
+      ) {
+        recordFrame(record.target, "revealed");
+      }
       for (const node of record.addedNodes) {
         if (node instanceof HTMLIFrameElement) {
           observeFrame(node);
@@ -98,7 +137,12 @@ export function installWidgetReadiness() {
         }
       }
     }
-  }).observe(document, { childList: true, subtree: true });
+  }).observe(document, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["style"],
+  });
   window.addEventListener("message", (event) => {
     const method = event.data?.method;
     const type = event.data?.type;
@@ -177,6 +221,7 @@ export function installWidgetReadiness() {
         boardGetResponseMs: response("board.get", "start"),
         discoverResponseMs: response("mcp.app.discover", "start"),
         ...stages,
+        frameEvents,
         iframeInsertions: boardFrames.size,
         boardFetchCount: boardFetches.length,
         boardFetchStartMs: boardFetches[0]?.startMs ?? null,

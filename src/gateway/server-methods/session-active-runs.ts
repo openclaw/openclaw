@@ -64,12 +64,15 @@ function collectTrackedActiveSessionRuns(
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
   ),
   physicalPaths?: (locator: string, agentId?: string) => readonly string[],
+  trackedRpcSourceRefs?: RpcSourceRef[],
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
   for (const [runId, ref] of captured ?? listRpcSourceEntries()) {
     if (!matchesGateway(ref.input)) {
       continue;
     }
+    // Hidden and queued sources still correlate native operations in this Gateway.
+    trackedRpcSourceRefs?.push(ref);
     const active = ref.adapter;
     const identity = getRpcSourceIdentity(ref);
     const terminalPersistence =
@@ -168,39 +171,6 @@ export function hasRegisteredChatRunForSessionKey(
         params.agentId,
         params.defaultAgentId,
       ),
-  );
-}
-
-/** Returns true when either requested or canonical session key has a visible active run. */
-export function hasTrackedActiveSessionRun(
-  params: SessionRuntimeScope & {
-    requestedKey: string;
-    canonicalKey: string;
-    agentId?: string;
-    defaultAgentId?: string;
-  },
-): boolean {
-  const activeRuns = collectTrackedActiveSessionRuns(
-    false,
-    undefined,
-    undefined,
-    captureGatewayScopeMatcher(params.resolveGatewayContext),
-  );
-  return activeRuns.some(
-    (active) =>
-      active.storePaths.includes(params.storePath) &&
-      (isTrackedActiveSessionRunForKey(
-        active,
-        params.canonicalKey,
-        params.agentId,
-        params.defaultAgentId,
-      ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          params.agentId,
-          params.defaultAgentId,
-        )),
   );
 }
 
@@ -405,10 +375,7 @@ export function createVisibleActiveSessionRunProjector(
   physicalPaths?: (locator: string, agentId?: string) => readonly string[],
 ) {
   const matchesGateway = captureGatewayScopeMatcher(resolveGatewayContext);
-  const registrations = [...(captured ?? listRpcSourceEntries())].filter(([, ref]) =>
-    matchesGateway(ref.input),
-  );
-  const trackedRpcSourceRefs = registrations.map(([, ref]) => ref);
+  const trackedRpcSourceRefs: RpcSourceRef[] = [];
   const byKey = new Map<string, TrackedActiveSessionRun[]>();
   const byId = new Map<string, TrackedActiveSessionRun[]>();
   const candidateKeys = new Set([
@@ -430,9 +397,10 @@ export function createVisibleActiveSessionRunProjector(
   for (const run of collectTrackedActiveSessionRuns(
     false,
     undefined,
-    registrations,
+    captured,
     matchesGateway,
     physicalPaths,
+    trackedRpcSourceRefs,
   )) {
     for (const [index, key] of [
       [byKey, run.sessionKey],

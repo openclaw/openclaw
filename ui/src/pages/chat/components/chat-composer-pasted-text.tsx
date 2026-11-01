@@ -1,7 +1,8 @@
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
@@ -10,6 +11,8 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { AttachmentRemove } from "./chat-attachment-file.tsx";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 function readTextFromDataUrl(dataUrl: string): string | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);

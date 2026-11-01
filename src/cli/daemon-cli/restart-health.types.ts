@@ -41,6 +41,7 @@ export type GatewayRestartSnapshot = {
   gatewayBuildId?: string | null;
   probeError?: string;
   authenticationError?: string;
+  protocolMismatch?: string;
   staleConnection?: GatewayStaleConnectionReason;
   activatedPluginErrors?: PluginHealthErrorSummary[];
   unavailablePlugins?: UnavailablePluginHealthSummary[];

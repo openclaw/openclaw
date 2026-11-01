@@ -4,10 +4,11 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createFixtureDiagnostics } from "../../../test/helpers/fixture-diagnostics.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
+import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
+import { interceptUploadFile } from "./node-workspace-transfer-fixtures.test-support.js";
 import {
   nodeWorkspaceTransferInvalidReason,
   readNodeWorkspaceUpload,
@@ -49,11 +50,17 @@ function fixture(
   const currentRaw = manifest(entries);
   const headers = [baseRaw, currentRaw].flatMap((raw) => frame(Buffer.from(raw)));
   const payload = Buffer.concat([...headers, ...frame(file, 8)]);
-  const upload = (chunks: Iterable<Buffer>, contentLength = payload.length) => {
+  const upload = (chunks: Iterable<Buffer>, contentLength = payload.length, resultVersion?: 2) => {
     const request = Readable.from(chunks) as unknown as IncomingMessage;
-    request.headers = { "content-length": String(contentLength) };
+    request.headers = {
+      "content-length": String(contentLength),
+      ...(resultVersion
+        ? { "content-type": "application/vnd.openclaw.worker-workspace-reconcile-v2" }
+        : {}),
+    };
     return readNodeWorkspaceUpload({
       request,
+      resultVersion,
       baseManifestRef: `sha256:${digest(Buffer.from(baseRaw))}`,
       temporaryRoot,
       signal: controller.signal,
@@ -82,32 +89,43 @@ function fixture(
 }
 
 function observeUploadFile(onOpen: (handle: FileHandle) => void) {
-  const open = fs.open.bind(fs);
   let closedBytes: Buffer | undefined;
-  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    const handle = await open(...args);
-    if (args[1] === "wx" && path.basename(String(args[0])) === "result.bin") {
-      const close = handle.close.bind(handle);
-      vi.spyOn(handle, "close").mockImplementationOnce(async () => {
-        try {
-          closedBytes = await fs.readFile(args[0]);
-        } finally {
-          await close();
-        }
-      });
-      onOpen(handle);
-    }
-    return handle;
+  interceptUploadFile("result.bin", (handle, uploadPath) => {
+    const close = handle.close.bind(handle);
+    vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+      try {
+        closedBytes = await fs.readFile(uploadPath);
+      } finally {
+        await close();
+      }
+    });
+    onOpen(handle);
   });
   return { bytesBeforeClose: () => closedBytes };
 }
 
 describe("workspace upload byte stream", () => {
-  it("uploads and applies a result larger than the former total byte limit", async ({
-    onTestFailed,
-  }) => {
-    const diagnostics = createFixtureDiagnostics("workspace-large-upload");
-    onTestFailed(() => diagnostics.report("failure"));
+  it("bounds the declared v2 pack before reading its bytes", async () => {
+    const f = fixture();
+    const trailer = Buffer.concat([
+      ...frame(Buffer.from("null")),
+      lengthHeader(MAX_WORKSPACE_RESULT_GIT_PACK_BYTES + 1, 8),
+    ]);
+    const payload = Buffer.concat([f.payload, trailer]);
+    await expect(f.upload([payload], payload.length, 2)).rejects.toMatchObject({
+      code: "workspace-transfer-limit",
+    });
+    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
+  });
+  it("rejects a v2 body unless the upload owner negotiated it", async () => {
+    const f = fixture();
+    const payload = Buffer.concat([f.payload, ...frame(Buffer.from("null")), lengthHeader(0, 8)]);
+    await expect(f.upload([payload], payload.length)).rejects.toMatchObject({
+      reason: "trailing_bytes",
+    });
+    expect(await fs.readdir(f.temporaryRoot)).toEqual([]);
+  });
+  it("uploads and applies a result larger than the former total byte limit", async () => {
     const local = temporary.make("workspace-large-upload-local-");
     const chunk = Buffer.alloc(1024 * 1024, 0x61);
     // Exercise the upload size limit without generating a 540 MiB Git text patch.
@@ -134,14 +152,12 @@ describe("workspace upload byte stream", () => {
         yield* chunks;
       }
     }
-    diagnostics.stage("upload");
     const upload = await f.upload(
       body(),
       f.headers.reduce((size, buffer) => size + buffer.length, 0) +
         entries.length * (8 + fileBytes),
     );
     const stagedResultRef = workerWorkspaceResultRef("large-upload");
-    diagnostics.stage("stage-result");
     await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
       root: local,
       stagingRoot: upload.stagingRoot,
@@ -152,14 +168,12 @@ describe("workspace upload byte stream", () => {
       currentManifestRaw: upload.currentRaw,
     });
     const commit = vi.fn(async () => {});
-    diagnostics.stage("apply-result");
     const result = await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef,
       expectedBaseManifestRef: upload.baseManifestRef,
       journal: { load: noop, begin: noop, commit, abort: noop },
     });
-    diagnostics.stage("assertions");
     expect(result.manifestRef).toBe(upload.currentManifestRef);
     expect(commit).toHaveBeenCalledWith(upload.currentManifestRef);
     for (const entry of entries) {

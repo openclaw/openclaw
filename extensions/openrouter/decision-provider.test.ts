@@ -295,9 +295,7 @@ it("rejects unsupported native inputs, parameters and absent credentials before 
   await unavailable("unsupported-input", ctx);
   await unavailable("credentials-unavailable", { ...context(), auth: { mode: "api-key" } });
   const configured = context();
-  configured.config.agents = {
-    defaults: { models: modelParams({ max_tokens: 100 }) },
-  };
+  configured.config.agents = { defaults: { models: modelParams({ max_tokens: 100 }) } };
   await unavailable("unsupported-input", configured);
   expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
 });

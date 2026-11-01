@@ -7,25 +7,23 @@ import type { AnyAgentTool } from "./tools/common.js";
 import type { MediaGenerateToolOptions } from "./tools/media-generate-background.js";
 
 const mocks = vi.hoisted(() => {
-  const stubTool = (name: string, execute: AnyAgentTool["execute"] = vi.fn()): AnyAgentTool => ({
+  const stubTool = (name: string): AnyAgentTool => ({
     name,
     label: name,
     displaySummary: name,
     description: name,
     parameters: { type: "object", properties: {} },
-    execute,
+    execute: vi.fn(),
   });
-  const background: AnyAgentTool["execute"] = async () => ({
-    content: [{ type: "text", text: "Background task started." }],
-    details: {},
-  });
+  const mediaFactory = (name: string) =>
+    vi.fn((_options?: MediaGenerateToolOptions) => stubTool(name));
   return {
     cron: vi.fn((_options: unknown) => stubTool("cron")),
     transcripts: vi.fn((_options: unknown) => stubTool("transcripts")),
     status: vi.fn((_options: unknown) => stubTool("session_status")),
-    image: vi.fn((_options?: MediaGenerateToolOptions) => stubTool("image_generate", background)),
-    music: vi.fn((_options?: MediaGenerateToolOptions) => stubTool("music_generate", background)),
-    video: vi.fn((_options?: MediaGenerateToolOptions) => stubTool("video_generate", background)),
+    image: mediaFactory("image_generate"),
+    music: mediaFactory("music_generate"),
+    video: mediaFactory("video_generate"),
     textToSpeech: vi.fn<typeof import("../tts/tts.js").textToSpeech>(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
@@ -147,39 +145,33 @@ it.each([
   },
 );
 
-it.each([
-  [
-    "channel delivery",
-    {
-      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-      agentChannel: "matrix",
-      agentAccountId: "bot-a",
-      agentTo: "room:!FallbackRoom:Example.Org",
-      agentThreadId: "$FallbackThread:Example.Org",
-      currentChannelId: "room:!AbCdEf1234567890:example.org",
-      currentThreadTs: "$RootEvent:Example.Org",
+it("passes channel delivery into cron", () => {
+  createTools({
+    agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+    agentChannel: "matrix",
+    agentAccountId: "bot-a",
+    agentTo: "room:!FallbackRoom:Example.Org",
+    agentThreadId: "$FallbackThread:Example.Org",
+    currentChannelId: "room:!AbCdEf1234567890:example.org",
+    currentThreadTs: "$RootEvent:Example.Org",
+  });
+  expectOptions(mocks.cron, {
+    currentDeliveryContext: {
+      channel: "matrix",
+      to: "room:!AbCdEf1234567890:example.org",
+      accountId: "bot-a",
+      threadId: "$RootEvent:Example.Org",
     },
-    {
-      currentDeliveryContext: {
-        channel: "matrix",
-        to: "room:!AbCdEf1234567890:example.org",
-        accountId: "bot-a",
-        threadId: "$RootEvent:Example.Org",
-      },
-    },
-  ],
-  [
-    "self-remove scope",
-    {
-      agentSessionKey: "agent:main:cron:job-current",
-      cronSelfRemoveOnlyJobId: "job-current",
-    },
-    {
-      agentSessionKey: "agent:main:cron:job-current",
-      selfRemoveOnlyJobId: "job-current",
-    },
-  ],
-] as const)("passes %s into cron", (_name, options, expected) => {
-  createTools(options);
-  expectOptions(mocks.cron, expected);
+  });
+});
+
+it("passes self-remove scope into cron", () => {
+  createTools({
+    agentSessionKey: "agent:main:cron:job-current",
+    cronSelfRemoveOnlyJobId: "job-current",
+  });
+  expectOptions(mocks.cron, {
+    agentSessionKey: "agent:main:cron:job-current",
+    selfRemoveOnlyJobId: "job-current",
+  });
 });

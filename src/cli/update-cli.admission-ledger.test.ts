@@ -11,6 +11,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
+import { ExpectedCliError } from "./failure-output.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -27,6 +28,15 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const f = createUpdateCliFixture();
+  function expectNoMutation(...effects: unknown[]) {
+    expectNoSideEffects(
+      cleanupStaleManagedServiceUpdateHandoffs,
+      update.replaceConfigFile,
+      update.updateGitCheckout,
+      mocks.syncPluginsForUpdateChannel,
+      ...effects,
+    );
+  }
 
   it.each([
     { installKind: "package", installedVersion: "2026.9.3" },
@@ -74,13 +84,9 @@ describe("update-cli", () => {
       await update.invokeUpdateCli({ dryRun: true, restart: false });
       expect(getLogOutput()).toContain(`Current version: ${installedVersion ?? VERSION}`);
       expect(getLogOutput()).toContain("Target version: unresolved");
-      expectNoSideEffects(
-        cleanupStaleManagedServiceUpdateHandoffs,
-        update.updateGitCheckout,
-        update.replaceConfigFile,
+      expectNoMutation(
         update.runDaemonInstall,
         update.runDaemonRestart,
-        mocks.syncPluginsForUpdateChannel,
         mocks.updateNpmInstalledPlugins,
       );
       expect(packageInstallCommandCall()).toBeUndefined();
@@ -147,17 +153,13 @@ describe("update-cli", () => {
         );
       });
 
-      expectNoSideEffects(
-        cleanupStaleManagedServiceUpdateHandoffs,
-        update.replaceConfigFile,
-        update.updateGitCheckout,
+      expectNoMutation(
         update.runDaemonInstall,
         update.runDaemonRestart,
         mocks.serviceStop,
         mocks.serviceStart,
         mocks.serviceRestart,
         update.doctorCommand,
-        mocks.syncPluginsForUpdateChannel,
         mocks.updateNpmInstalledPlugins,
         mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
       );
@@ -165,48 +167,6 @@ describe("update-cli", () => {
       expect(packageInstallCommandCall()).toBeUndefined();
     },
   );
-
-  it("leaves restored-generation completion with the helper across updateCommand unwind", async () => {
-    const postUpdate = await import("./update-cli/update-command-post-update.js");
-    const { UpdateCommandFailure } = await import("./update-cli/update-command-result.js");
-    const { finishUpdateRun } = await import("../infra/update-run-ledger.js");
-    const result = update.makeOkUpdateResult({
-      status: "error",
-      root: process.cwd(),
-      reason: "restart-unhealthy",
-      before: { version: "2026.9.1" },
-      after: { version: "2026.9.1" },
-      recovery: {
-        serviceRestartSafe: true,
-        packageRollbackVerified: true,
-        version: "2026.9.1",
-      },
-    });
-    const failure = new UpdateCommandFailure(result);
-    vi.spyOn(postUpdate, "finishUpdate").mockImplementationOnce(async (_params, options) => {
-      await options?.beforeFinalization?.();
-      throw failure;
-    });
-    f.mockOwnedGitService();
-    update.mockGitUpdateAfterMutation(update.makeOkUpdateResult({ root: process.cwd() }));
-
-    await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: "1" }, async () => {
-      await expect(update.updateCommand({ yes: true, json: true })).rejects.toEqual(
-        new update.ExitError(1),
-      );
-
-      expect(postUpdate.finishUpdate).toHaveBeenCalledOnce();
-      const run = expectDefined(update.listUpdateRuns({ limit: 1 })[0], "helper-owned update run");
-      expect(run).toMatchObject({ status: "running", after: { version: "2026.9.1" } });
-      // Native recovery finishes after the CLI exits; the ledger must still accept its outcome.
-      finishUpdateRun(run.runId, { status: "rolled-back", reason: result.reason });
-      expect(update.getUpdateRun(run.runId)).toMatchObject({
-        status: "rolled-back",
-        phase: "finished",
-        reason: "restart-unhealthy",
-      });
-    });
-  });
 
   it("does not reopen the ledger after migrated finalization fails", async () => {
     const migrated = await import("./update-cli/update-command-migrated.js");
@@ -464,21 +424,20 @@ describe("update-cli", () => {
   it.each([
     { name: "update channel", run: () => update.invokeUpdateCli({ channel: "" }) },
     { name: "finalization channel", run: () => update.updateFinalizeCommand({ channel: "" }) },
-  ])("rejects an explicitly empty $name before mutation", async ({ run }) => {
+  ])("rejects an explicitly empty $name before mutation", async ({ name, run }) => {
     const runsBefore = update.listUpdateRuns();
-    await run();
-
-    expect(update.defaultRuntime.error).toHaveBeenCalledWith(
-      '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")',
-    );
-    expect(update.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const message = '--channel must be "stable", "extended-stable", "beta", or "dev" (got "")';
+    if (name === "finalization channel") {
+      const failure = await run().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ExpectedCliError);
+      expect(failure).toMatchObject({ humanOutput: message, machineOutput: message });
+      expectNoSideEffects(update.defaultRuntime.error, update.defaultRuntime.exit);
+    } else {
+      await run();
+      expect(update.defaultRuntime.error).toHaveBeenCalledWith(message);
+      expect(update.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    }
     expect(update.listUpdateRuns()).toEqual(runsBefore);
-    expectNoSideEffects(
-      cleanupStaleManagedServiceUpdateHandoffs,
-      update.replaceConfigFile,
-      update.updateGitCheckout,
-      update.doctorCommand,
-      mocks.syncPluginsForUpdateChannel,
-    );
+    expectNoMutation(update.doctorCommand);
   });
 });

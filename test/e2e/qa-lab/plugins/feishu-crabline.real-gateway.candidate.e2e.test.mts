@@ -183,8 +183,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
     const outbound = stage(account, "outbound.accepted")[0]!.body as {
       message: { msg_type: string; chat_id: string; parent_id?: string; body: { content: string } };
     };
-    expect(outbound.message.msg_type).toBe("post");
-    expect(outbound.message.chat_id).toBe("oc_shared_chat");
+    expect(outbound.message).toMatchObject({ msg_type: "post", chat_id: "oc_shared_chat" });
     expect(outbound.message.parent_id).toBeUndefined();
     expect(outbound.message.body.content).toContain(replies[index]);
     expect(outbound.message.body.content).not.toContain(replies[1 - index]);
@@ -195,8 +194,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
   );
   for (const account of accounts) {
     const own = requests.filter((entry) => entry.allInputText.includes(`中文入口 ${account}`));
-    expect(own).toHaveLength(1);
-    expect(own[0]!.outcome).toBe("success");
+    expect(own).toMatchObject([{ outcome: "success" }]);
     expect(own[0]!.allInputText).not.toContain(
       `中文入口 ${account === "alpha" ? "beta" : "alpha"}`,
     );

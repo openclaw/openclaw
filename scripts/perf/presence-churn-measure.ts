@@ -97,7 +97,6 @@ writeFileSync(
     agents: payloadScenario
       ? {
           ownership: "explicit",
-          defaults: { heartbeat: { every: "0m" } },
           entries: Object.fromEntries(
             Array.from({ length: agentCount }, (_, index) => {
               const id = index === 0 ? "main" : `synthetic-${index}`;

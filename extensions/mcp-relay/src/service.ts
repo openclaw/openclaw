@@ -492,15 +492,14 @@ export class RelayService {
         return;
       }
       if (typeof frame.type === "string" && frame.type.startsWith("ui.")) {
-        const uiStatus = this.#uiStatus();
-        if (this.#ui && uiStatus.available) {
+        if (this.#ui) {
           this.#ui.receive(frame);
         } else if (typeof frame.sid === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(frame.sid)) {
           sendControlFrame({
             type: "ui.error",
             sid: frame.sid,
             code: "unavailable",
-            message: uiStatus.reason,
+            message: this.#uiStatus().reason,
           });
         } else {
           socket.close(4400, "Invalid UI frame");

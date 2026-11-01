@@ -164,33 +164,6 @@ export async function renameDiscussionChannel(params: {
   throw new Error("ClickClack discussion channel name retries were exhausted");
 }
 
-function assertManagedChannelContract(
-  channel: Awaited<ReturnType<ClickClackClient["createChannel"]>>,
-  expected: {
-    sessionKey: string;
-    externalRef: string;
-    section: string;
-    externalUrl?: string;
-    displayTitle: string;
-  },
-): void {
-  // Older ClickClack servers omit display_title during the rollout skew window.
-  // A present field must still match so partial or broken deployments fail closed.
-  const displayTitleMatches =
-    !("display_title" in channel) || channel.display_title === expected.displayTitle;
-  if (
-    channel.external_managed !== true ||
-    (channel.external_ref ?? "") !== (expected.externalRef ?? "") ||
-    (channel.sidebar_section ?? "") !== (expected.section ?? "") ||
-    (channel.external_url ?? "") !== (expected.externalUrl ?? "") ||
-    !displayTitleMatches
-  ) {
-    throw new Error(
-      `ClickClack server does not support the managed discussion channel contract for ${expected.sessionKey}`,
-    );
-  }
-}
-
 function assertManagedChannelListContract(
   channels: Awaited<ReturnType<ClickClackClient["channels"]>>,
 ): void {
@@ -433,13 +406,21 @@ export async function openClickClackDiscussionBinding(
       throw new Error("ClickClack discussion channel name retries were exhausted");
     }
     try {
-      assertManagedChannelContract(resolved, {
-        sessionKey,
-        externalRef,
-        section,
-        externalUrl,
-        displayTitle,
-      });
+      // Older ClickClack servers omit display_title during the rollout skew window.
+      // A present field must still match so partial or broken deployments fail closed.
+      const displayTitleMatches =
+        !("display_title" in resolved) || resolved.display_title === displayTitle;
+      if (
+        resolved.external_managed !== true ||
+        (resolved.external_ref ?? "") !== (externalRef ?? "") ||
+        (resolved.sidebar_section ?? "") !== (section ?? "") ||
+        (resolved.external_url ?? "") !== (externalUrl ?? "") ||
+        !displayTitleMatches
+      ) {
+        throw new Error(
+          `ClickClack server does not support the managed discussion channel contract for ${sessionKey}`,
+        );
+      }
       if (adopted) {
         assertChannelPatch(resolved, managedFields);
       }

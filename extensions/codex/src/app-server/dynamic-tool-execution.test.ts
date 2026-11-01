@@ -2,10 +2,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  buildContractReplyPayloads,
-  createContractToolTerminalObserver,
-} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
@@ -348,27 +345,23 @@ describe("dynamic tool execution helpers", () => {
       executionStarted: true,
       sideEffectEvidence: true,
     };
-    const completedAction = vi.fn(async () => successful);
     const result = await executeTool({
       call: toolCall("exec"),
       toolBridge: {
         handleToolCall: async (_call, options) => {
-          const response = await completedAction();
           options?.onAgentToolResult?.({
             toolName: "exec",
             result: { content: [{ type: "text", text: "committed effect" }], details: {} },
             isError: false,
           });
-          return response;
+          return successful;
         },
       },
       timeoutMs: 1000,
       onAgentToolResult,
     });
-    expect(completedAction).toHaveBeenCalledOnce();
     expect(onAgentToolResult).toHaveBeenCalledOnce();
     expect(result).toBe(successful);
-    expect(result).toMatchObject({ success: true, sideEffectEvidence: true });
     expect(result.diagnosticTerminalReason).toBeUndefined();
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "onAgentToolResult handler failed: tool=exec error=Error",
@@ -452,7 +445,7 @@ describe("dynamic tool execution helpers", () => {
     );
   });
 
-  it("preserves partial search timeout details through terminal reply generation", async () => {
+  it("preserves partial search timeout details in terminal resolution", async () => {
     const details = {
       results: [{ path: "memory/first.md" }, { path: "memory/second.md" }],
       partial: true,
@@ -471,16 +464,11 @@ describe("dynamic tool execution helpers", () => {
       timeoutMs: 90_000,
       observeToolTerminal: createContractToolTerminalObserver("run-partial-memory-timeout"),
     });
-    expect(
-      buildContractReplyPayloads({
-        assistantText: "",
-        lastToolError: response.terminalResolution?.lastToolError,
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        text: "⚠️ Memory Search timed out after 30s; 2 partial results are available.",
-      }),
-    ]);
+    expect(response.terminalResolution?.lastToolError?.terminalDiagnostic).toEqual({
+      kind: "timeout",
+      timeoutMs: 30_000,
+      partialResults: 2,
+    });
     expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
       contentItems: bridgeResponse.contentItems,
       success: false,

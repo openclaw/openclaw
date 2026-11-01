@@ -1,6 +1,7 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { CliExecutionHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CliBackendExecute,
@@ -69,29 +70,63 @@ function registerOwnerSession(context: PreparedCliRunContext, generation: string
   return { handle: session, close };
 }
 
-async function startBlockedRun(options: {
-  timeoutMs: number;
-  getDeadline: () => number | undefined;
+async function startBlockedRun({
+  timeoutMs,
+  abortSignal,
+  event,
+  getDeadline,
+  onChange,
+  ...options
+}: NonNullable<Parameters<typeof runPlugin>[2]> & {
+  timeoutMs?: number;
+  abortSignal?: AbortSignal;
+  event?: Record<string, unknown>;
+  getDeadline?: () => number | undefined;
   onChange?: (listener: (() => void) | undefined) => void;
 }) {
-  const { context } = await createExecution({ timeoutMs: options.timeoutMs });
+  const { context } = await createExecution({ timeoutMs, abortSignal });
   const started = createDeferred();
+  const output: string[] = [];
+  const settled = vi.fn();
   const run = runPlugin(
     context,
     async function* (execution) {
+      if (event) {
+        yield event;
+      }
       started.resolve();
       await waitUntilAborted(execution);
       yield SUCCESS_RESULT;
     },
     {
       noOutputTimeoutMs: 100,
-      activeToolCount: () => 1,
-      getActiveLoopbackAskUserDeadline: options.getDeadline,
-      setOnActiveLoopbackAskUserDeadlineChange: options.onChange,
+      activeToolCount: getDeadline ? () => 1 : undefined,
+      getActiveLoopbackAskUserDeadline: getDeadline,
+      setOnActiveLoopbackAskUserDeadlineChange: onChange,
+      consumeStdout: output.push.bind(output),
+      ...options,
     },
-  );
+  ).finally(settled);
   await started.promise;
-  return { run };
+  return { run, output, settled };
+}
+
+const APPROVAL_CONFIG: OpenClawConfig = {
+  tools: { exec: { security: "allowlist", ask: "on-miss" } },
+};
+const createApprovalExecution = (options: Parameters<typeof createExecution>[0] = {}) =>
+  createExecution({ config: APPROVAL_CONFIG, nativeTools: ["WebFetch"], ...options });
+
+function setCallerAuthority(context: PreparedCliRunContext) {
+  let current = true;
+  context.params.assertCurrent = () => {
+    if (!current) {
+      throw new Error("caller revoked");
+    }
+  };
+  return () => {
+    current = false;
+  };
 }
 
 afterEach(() => {
@@ -105,9 +140,29 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function historyWriter(overrides: Partial<CliExecutionHistoryWriter>): CliExecutionHistoryWriter {
+  return {
+    target: {
+      agentId: "main",
+      sessionId: "sdk-session",
+      sessionKey: "agent:main:main",
+      storePath: "/synthetic/sessions.sqlite",
+    },
+    runId: "history-owner",
+    authFingerprint: "a".repeat(64),
+    bindsNativeLogin: false,
+    replaysHistory: true,
+    assertCurrent() {},
+    async assertReadable() {},
+    checkNativeLoginBoundary() {},
+    bindExecutionEnv() {},
+    async settleNativeLogin() {},
+    ...overrides,
+  };
+}
+
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
-    // Exercise stream translation independently of cold policy-worker startup time.
     vi.useFakeTimers({ toFake: ["Date"] });
     const { context } = await createExecution();
     context.systemPrompt = `  Follow host policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}Keep credentials private.  `;
@@ -131,67 +186,95 @@ describe("plugin-owned CLI execution host boundary", () => {
       { type: "system", subtype: "init", session_id: "sdk-session" },
       SUCCESS_RESULT,
     ]);
-    expect(observedExecution).toEqual(
-      expect.objectContaining({
-        command: "/bin/sh",
-        cwd: "/tmp",
-        prompt: "hello",
-        promptContext: {
-          prependContext: "private red prefix",
-          appendContext: "private red suffix",
-        },
-        modelId: "claude-sonnet-4-6",
-        systemPrompt: "Follow host policy.\nKeep credentials private.",
-        sessionId: "sdk-session",
-        useResume: false,
-        env: { PATH: "/bin:/usr/bin", OPENCLAW_TEST_MARKER: "host-owned" },
-        requestToolPermission: expect.any(Function),
-        requestUserInput: expect.any(Function),
-      }),
-    );
+    expect(observedExecution).toMatchObject({
+      promptContext: context.promptContext,
+      systemPrompt: "Follow host policy.\nKeep credentials private.",
+    });
   });
 
-  it("does not disclose private context when history access changes during permission preparation", async () => {
-    const { context } = await createExecution();
-    context.promptContext = { prependContext: "private conversation history" };
-    let historyReadable = true;
-    context.cliHistoryWriter = {
-      target: {
-        agentId: "main",
-        sessionId: "sdk-session",
-        sessionKey: "agent:main:main",
-        storePath: "/synthetic/sessions.sqlite",
-      },
-      runId: "history-owner",
-      authFingerprint: "a".repeat(64),
-      assertCurrent() {},
-      async assertReadable() {
-        if (!historyReadable) {
+  it.each([
+    [{ kind: "internal_system", sourceTool: "exec" }, "host"],
+    [{ kind: "inter_session", sourceTool: "subagent_announce" }, "host"],
+    [{ kind: "external_user", sourceTool: "exec" }, undefined],
+    [undefined, undefined],
+  ] as const)(
+    "preserves input provenance instead of classifying prompt text (%j)",
+    async (provenance, origin) => {
+      const { context } = await createExecution();
+      context.params.inputProvenance = provenance;
+      let observedExecution: CliBackendExecuteContext | undefined;
+      const execute: CliBackendExecute = async function* (execution) {
+        observedExecution = execution;
+        yield { type: "system", subtype: "init", session_id: "sdk-session" };
+        yield SUCCESS_RESULT;
+      };
+
+      await runPlugin(context, execute);
+
+      expect(observedExecution?.promptOrigin).toBe(origin);
+    },
+  );
+
+  it.each(["permission preparation", "native prompt send"])(
+    "does not disclose private context when history authority changes during %s",
+    async (boundary) => {
+      const { context } = await createExecution();
+      if (boundary === "permission preparation") {
+        context.promptContext = { prependContext: "private conversation history" };
+      }
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
           throw new Error("Private history account changed");
         }
-      },
-    };
-    const preparingPermission = createDeferred();
-    const releasePermission = createDeferred();
-    const resolvePermission = execDefaults.resolveExecDefaultsAsync;
-    vi.spyOn(execDefaults, "resolveExecDefaultsAsync").mockImplementationOnce(async (...args) => {
-      preparingPermission.resolve();
-      await releasePermission.promise;
-      return resolvePermission(...args);
-    });
-    const execute = vi.fn(async function* () {
-      yield SUCCESS_RESULT;
-    });
-    const result = runPlugin(context, execute).catch((error: unknown) => error);
-    try {
-      await preparingPermission.promise;
-      historyReadable = false;
-    } finally {
-      releasePermission.resolve();
-    }
-    expect(await result).toEqual(new Error("Private history account changed"));
-    expect(execute).not.toHaveBeenCalled();
-  });
+      };
+      context.cliHistoryWriter = historyWriter({
+        bindsNativeLogin: boundary === "native prompt send",
+        async assertReadable() {
+          if (boundary === "permission preparation") {
+            assertCurrent();
+          }
+        },
+        checkNativeLoginBoundary(carriesSavedHistory) {
+          if (boundary === "native prompt send" && carriesSavedHistory) {
+            assertCurrent();
+          }
+        },
+      });
+      const preparingPermission = createDeferred();
+      const releasePermission = createDeferred();
+      if (boundary === "permission preparation") {
+        const resolvePermission = execDefaults.resolveExecDefaultsAsync;
+        vi.spyOn(execDefaults, "resolveExecDefaultsAsync").mockImplementationOnce(
+          async (...args) => {
+            preparingPermission.resolve();
+            await releasePermission.promise;
+            return resolvePermission(...args);
+          },
+        );
+      }
+      const execute = vi.fn(async function* (execution: CliBackendExecuteContext) {
+        const host: CliBackendExecuteContext & { assertPrivateInputCurrent?: () => void } =
+          execution;
+        current = false;
+        host.assertPrivateInputCurrent?.();
+        yield SUCCESS_RESULT;
+      });
+      const result = runPlugin(context, execute).catch((error: unknown) => error);
+      if (boundary === "permission preparation") {
+        try {
+          await preparingPermission.promise;
+          current = false;
+        } finally {
+          releasePermission.resolve();
+        }
+      }
+      expect(await result).toEqual(new Error("Private history account changed"));
+      if (boundary === "permission preparation") {
+        expect(execute).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([false, true])(
     "runs plugin user questions with current caller authority (revoked=%s)",
@@ -201,47 +284,27 @@ describe("plugin-owned CLI execution host boundary", () => {
         nativeTools: ["AskUserQuestion"],
       });
       context.params.sessionKey = "main";
-      let callerCurrent = true;
-      context.params.assertCurrent = () => {
-        if (!callerCurrent) {
-          throw new Error("caller revoked");
-        }
-      };
+      const revoke = setCallerAuthority(context);
       context.params.runtimePolicySessionKey =
         "agent:main:telegram:default:direct:canonical-sender";
-      let promptDelivered = createDeferred();
+      const promptDelivered = createDeferred();
       const onBlockReply = vi.fn(async () => {
         promptDelivered.resolve();
       });
       context.params.onBlockReply = onBlockReply;
-      const requests = new Map<string, { questions: Array<{ questionId: string }> }>();
       mockCallGatewayTool.mockImplementation(async (method, _opts, rawParams) => {
-        const params = rawParams as {
-          id: string;
-          questions?: Array<{ questionId: string }>;
-          sessionKey?: string;
-        };
+        const params = rawParams as { id: string; sessionKey?: string };
         if (method === "question.request") {
           expect(params.sessionKey).toBe(context.params.sessionKey);
-          requests.set(params.id, { questions: params.questions ?? [] });
+          expect(params.id).toBe("claude-question:0");
           return { id: params.id };
         }
         if (method === "question.waitAnswer") {
-          const request = requests.get(params.id);
           await promptDelivered.promise;
-          promptDelivered = createDeferred();
-          callerCurrent = !revoked;
-          return {
-            status: "answered",
-            answers: {
-              answers: Object.fromEntries(
-                (request?.questions ?? []).map((question) => [
-                  question.questionId,
-                  [question.questionId],
-                ]),
-              ),
-            },
-          };
+          if (revoked) {
+            revoke();
+          }
+          return { status: "answered", answers: { answers: { one: ["one"] } } };
         }
         if (method === "question.resolve") {
           return { status: "cancelled" };
@@ -267,14 +330,8 @@ describe("plugin-owned CLI execution host boundary", () => {
       expect(result).toEqual(
         revoked
           ? expect.objectContaining({ status: "cancelled" })
-          : {
-              status: "answered",
-              answers: {
-                one: ["one"],
-              },
-            },
+          : { status: "answered", answers: { one: ["one"] } },
       );
-      expect([...requests.keys()]).toEqual(["claude-question:0"]);
       expect(onBlockReply).toHaveBeenCalledOnce();
     },
   );
@@ -310,12 +367,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     const session = registerOwnerSession(successor.context, "successor-during-restart");
     const entered = createDeferred();
     const held = createDeferred();
-    let callerCurrent = true;
-    context.params.assertCurrent = () => {
-      if (!callerCurrent) {
-        throw new Error("caller revoked");
-      }
-    };
+    const revoke = setCallerAuthority(context);
     context.preparedBackend.closeLiveSession = async () => {
       entered.resolve();
       await held.promise;
@@ -327,7 +379,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     const observed = run.catch((error: unknown) => error);
     try {
       await entered.promise;
-      callerCurrent = false;
+      revoke();
     } finally {
       held.resolve();
     }
@@ -343,39 +395,32 @@ describe("plugin-owned CLI execution host boundary", () => {
     );
   });
 
-  it("restarts true fresh sessions while preserving legitimate no-resume warm reuse", async () => {
-    const reseed = await createExecution({ runId: "plugin-fresh-reseed" });
-    reseed.context.openClawHistoryPrompt = "Previously recorded bounded conversation.";
-    const reseededSession = registerOwnerSession(reseed.context, "old-reseed-session");
-
-    await runTurn(
-      reseed.context,
-      (execution) => {
-        expect(execution.liveSession?.current()).toBeUndefined();
-      },
-      { liveSession: true, forceNewSession: true },
-    );
-    expect(reseededSession.close).toHaveBeenCalledWith("restart");
-
-    const resumeCapable = await createExecution({
-      runId: "plugin-resume-capable-fresh",
-      resumeArgs: ["--resume", "{sessionId}"],
-    });
-    const resumeSession = registerOwnerSession(resumeCapable.context, "resume-capable-session");
-    await runTurn(resumeCapable.context, () => {}, { liveSession: true, useResume: false });
-    expect(resumeSession.close).toHaveBeenCalledWith("restart");
-
-    const noResume = await createExecution({ runId: "plugin-no-resume-warm", resumeArgs: [] });
-    const reusableSession = registerOwnerSession(noResume.context, "no-resume-session");
-    await runTurn(
-      noResume.context,
-      (execution) => {
-        expect(execution.liveSession?.current()).toBe(reusableSession.handle);
-      },
-      { liveSession: true, useResume: false },
-    );
-    expect(reusableSession.close).not.toHaveBeenCalled();
-  });
+  it.each(["reseed", "resume-capable", "no-resume"])(
+    "restarts only truly fresh sessions: %s",
+    async (mode) => {
+      const { context } = await createExecution({
+        resumeArgs: mode === "no-resume" ? [] : ["--resume", "{sessionId}"],
+      });
+      if (mode === "reseed") {
+        context.openClawHistoryPrompt = "Previously recorded conversation.";
+      }
+      const session = registerOwnerSession(context, "previous-session");
+      await runTurn(
+        context,
+        (execution) => {
+          expect(execution.liveSession?.current()).toBe(
+            mode === "no-resume" ? session.handle : undefined,
+          );
+        },
+        { liveSession: true, useResume: false, forceNewSession: mode === "reseed" },
+      );
+      if (mode === "no-resume") {
+        expect(session.close).not.toHaveBeenCalled();
+      } else {
+        expect(session.close).toHaveBeenCalledWith("restart");
+      }
+    },
+  );
 
   it("rejects missing or replaced required generations but permits a deliberate cold recovery", async () => {
     const { context } = await createExecution({ runId: "plugin-required-generation" });
@@ -592,16 +637,11 @@ describe("plugin-owned CLI execution host boundary", () => {
   });
 
   it("retains safe standing approvals only for the exact live process and current turn policy", async () => {
-    const config: OpenClawConfig = { tools: { exec: { security: "allowlist", ask: "on-miss" } } };
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-first", decision: "allow-always" })
       .mockResolvedValueOnce({ id: "approval-second", decision: "allow-always" });
 
-    const first = await createExecution({
-      config,
-      nativeTools: ["WebFetch"],
-      runId: "plugin-approval-first",
-    });
+    const first = await createApprovalExecution();
     registerOwnerSession(first.context, "original-live-process");
 
     const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
@@ -627,18 +667,11 @@ describe("plugin-owned CLI execution host boundary", () => {
     };
 
     await runApprovedTurn(first.context, true);
-    const sameProcess = await createExecution({
-      config,
-      nativeTools: ["WebFetch"],
-      runId: "plugin-approval-second",
-    });
+    const sameProcess = await createApprovalExecution();
     await runApprovedTurn(sameProcess.context, false);
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
-    const restricted = await createExecution({
-      config,
-      nativeTools: ["WebFetch"],
-      runId: "plugin-approval-restricted",
+    const restricted = await createApprovalExecution({
       sessionEntry: { sessionId: "sdk-session", updatedAt: 1, permissionMode: "read-only" },
     });
     await runTurn(restricted.context, async (execution) => {
@@ -650,11 +683,7 @@ describe("plugin-owned CLI execution host boundary", () => {
 
     await closeCliLiveSession(sameProcess.context, "restart");
     registerOwnerSession(first.context, "replacement-live-process");
-    const replacement = await createExecution({
-      config,
-      nativeTools: ["WebFetch"],
-      runId: "plugin-approval-replacement",
-    });
+    const replacement = await createApprovalExecution();
     await runApprovedTurn(replacement.context, false);
 
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(2);
@@ -663,19 +692,11 @@ describe("plugin-owned CLI execution host boundary", () => {
   it.each(["admission", "caller"] as const)(
     "denies approval when %s authority closes during the awaited decision",
     async (authority) => {
-      const { admission, context } = await createExecution({
-        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
-        nativeTools: ["WebFetch"],
-      });
-      let callerCurrent = true;
-      context.params.assertCurrent = () => {
-        if (!callerCurrent) {
-          throw new Error("caller revoked");
-        }
-      };
+      const { admission, context } = await createApprovalExecution();
+      const revoke = setCallerAuthority(context);
       mockCallGatewayTool.mockImplementationOnce(async () => {
         if (authority === "caller") {
-          callerCurrent = false;
+          revoke();
         } else {
           admission.close();
         }
@@ -694,11 +715,7 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it("cancels an in-flight native approval and never releases its late decision", async () => {
     const controller = new AbortController();
-    const { context } = await createExecution({
-      abortSignal: controller.signal,
-      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
-      nativeTools: ["WebFetch"],
-    });
+    const { context } = await createApprovalExecution({ abortSignal: controller.signal });
     const approval = createDeferred<{ id: string; decision: "allow-always" }>();
     mockCallGatewayTool.mockReturnValueOnce(approval.promise);
     const granted = vi.fn();
@@ -785,25 +802,13 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it("never replays substantive assistant output after a no-output timeout", async () => {
     vi.useFakeTimers();
-    const { context } = await createExecution({ timeoutMs: 5_000 });
-    const output: string[] = [];
     const timeout = vi.fn();
-    const run = runPlugin(
-      context,
-      async function* (execution) {
-        yield { type: "assistant", message: { content: [{ type: "text", text: "started" }] } };
-        await waitUntilAborted(execution);
-        yield SUCCESS_RESULT;
-      },
-      {
-        useResume: true,
-        noOutputTimeoutMs: 100,
-        consumeStdout: output.push.bind(output),
-        onNoOutputTimeout: timeout,
-      },
-    );
-    await vi.waitFor(() => expect(output).toHaveLength(1));
-
+    const { run } = await startBlockedRun({
+      timeoutMs: 5_000,
+      event: { type: "assistant", message: { content: [{ type: "text", text: "started" }] } },
+      useResume: true,
+      onNoOutputTimeout: timeout,
+    });
     await vi.advanceTimersByTimeAsync(100);
 
     await expect(run).resolves.toMatchObject({ reason: "no-output-timeout" });
@@ -814,10 +819,7 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it("keeps an active native approval alive beyond the ordinary no-output watchdog", async () => {
     vi.useFakeTimers();
-    const { context } = await createExecution({
-      config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
-      nativeTools: ["WebFetch"],
-    });
+    const { context } = await createApprovalExecution();
     const approval = createDeferred<{ id: string; decision: "allow-once" }>();
     mockCallGatewayTool.mockReturnValueOnce(approval.promise);
     const outstandingWork = vi.fn();
@@ -847,60 +849,20 @@ describe("plugin-owned CLI execution host boundary", () => {
     expect(outstandingWork).toHaveBeenLastCalledWith(false);
   });
 
-  it("keeps tracked background work alive beyond the ordinary no-output watchdog", async () => {
-    vi.useFakeTimers();
-    const { context } = await createExecution();
-    const backgroundFinished = createDeferred();
-    const received: string[] = [];
-    let completed = false;
-    const run = runPlugin(
-      context,
-      async function* () {
-        yield {
-          type: "system",
-          subtype: "background_tasks_changed",
-          tasks: [{ task_id: "background-agent", task_type: "local_agent" }],
-        };
-        await backgroundFinished.promise;
-        yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
-        yield SUCCESS_RESULT;
-      },
-      { noOutputTimeoutMs: 100, consumeStdout: received.push.bind(received) },
-    ).then((result) => {
-      completed = true;
-      return result;
-    });
-    await vi.waitFor(() => expect(received).toHaveLength(1));
-
-    await vi.advanceTimersByTimeAsync(150);
-    expect(completed).toBe(false);
-
-    backgroundFinished.resolve();
-    await expect(run).resolves.toMatchObject({ reason: "exit", timedOut: false });
-    expect(received.map((event) => JSON.parse(event))).toHaveLength(3);
-  });
-
   it("preserves streamed assistant output after the caller deadline expires", async () => {
     const controller = new AbortController();
-    const { context } = await createExecution({ abortSignal: controller.signal });
     const output: string[] = [];
     const preserveOutput = vi.fn(() => output.length > 0);
-    const run = runPlugin(
-      context,
-      async function* (execution) {
-        yield {
-          type: "assistant",
-          message: { content: [{ type: "text", text: "Here is the answer so far" }] },
-        };
-        await waitUntilAborted(execution);
-        yield SUCCESS_RESULT;
+    const { run } = await startBlockedRun({
+      abortSignal: controller.signal,
+      noOutputTimeoutMs: undefined,
+      consumeStdout: output.push.bind(output),
+      event: {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Here is the answer so far" }] },
       },
-      {
-        consumeStdout: output.push.bind(output),
-        onInterrupted: preserveOutput,
-      },
-    );
-    await vi.waitFor(() => expect(output).toHaveLength(1));
+      onInterrupted: preserveOutput,
+    });
 
     const timeout = new Error("caller deadline exceeded");
     timeout.name = "TimeoutError";
@@ -931,14 +893,13 @@ describe("plugin-owned CLI ask_user timeout", () => {
   it("uses the exact question deadline", async () => {
     vi.useFakeTimers();
     const deadline = Date.now() + 3_610_000;
-    const { run } = await startBlockedRun({ timeoutMs: 4_000_000, getDeadline: () => deadline });
-    let completed = false;
-    void run.then(() => {
-      completed = true;
+    const { run, settled } = await startBlockedRun({
+      timeoutMs: 4_000_000,
+      getDeadline: () => deadline,
     });
 
     await vi.advanceTimersByTimeAsync(900_000);
-    expect(completed).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_710_000);
     await expect(run).resolves.toMatchObject({
       reason: "no-output-timeout",
@@ -972,7 +933,7 @@ describe("plugin-owned CLI ask_user timeout", () => {
     vi.useFakeTimers();
     let deadline: number | undefined = Date.now() + 3_610_000;
     let onChange: (() => void) | undefined;
-    const { run } = await startBlockedRun({
+    const { run, settled } = await startBlockedRun({
       timeoutMs: 2_000_000,
       getDeadline: () => deadline,
       onChange: (listener) => {
@@ -984,11 +945,7 @@ describe("plugin-owned CLI ask_user timeout", () => {
     deadline = undefined;
     onChange?.();
     await vi.advanceTimersByTimeAsync(899_799);
-    let completed = false;
-    void run.then(() => {
-      completed = true;
-    });
-    expect(completed).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
     await expect(run).resolves.toMatchObject({

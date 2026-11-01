@@ -1,11 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onCleanup, onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 
-type CommandPaletteInputProps = {
+export function CommandPaletteInput(props: {
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -17,16 +17,15 @@ type CommandPaletteInputProps = {
   onCompositionEnd?: () => void;
   actions?: JSX.Element;
   onPaste?: (event: ClipboardEvent) => void;
-  disabled?: boolean;
+  busy?: boolean;
   readOnly?: boolean;
   controls?: string;
   activeDescendant?: string;
   describedBy?: string;
-};
-
-export function CommandPaletteInput(props: CommandPaletteInputProps) {
+}) {
   let textarea!: HTMLTextAreaElement;
   let entry!: HTMLDivElement;
+  let widthReference!: HTMLDivElement;
   let actions!: HTMLDivElement;
   let measuredValue: string | undefined;
   let measuredPlaceholder: string | undefined;
@@ -86,17 +85,19 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
       measuredValue = textarea.value;
       measuredPlaceholder = textarea.placeholder;
     },
-    { targets: () => [entry, actions] },
+    // The entry height follows the textarea; observe only its available width.
+    { targets: () => [widthReference, actions], fonts: true },
   );
   onSettled(() => {
     props.onInputRef(textarea);
-  });
-  onCleanup(() => {
-    // A replacement field can mount before the old interop root is disposed.
-    props.onInputRef(undefined, textarea);
+    return () => {
+      // A replacement field can mount before the old interop root is disposed.
+      props.onInputRef(undefined, textarea);
+    };
   });
   return (
     <div ref={(element) => (entry = element)} class="cmd-palette__entry">
+      <div ref={(element) => (widthReference = element)} aria-hidden="true" />
       <div class="cmd-palette__input-scroll">
         <textarea
           ref={[
@@ -108,6 +109,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           ]}
           autofocus
           rows={1}
+          enterkeyhint="enter"
           id={COMMAND_PALETTE_INPUT_ID}
           class="cmd-palette__input"
           aria-label={props.placeholder}
@@ -117,7 +119,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           aria-activedescendant={props.activeDescendant}
           aria-describedby={props.describedBy}
           placeholder={committedPlaceholder()}
-          disabled={props.disabled}
+          aria-busy={props.busy ? "true" : undefined}
           readonly={props.readOnly}
           onScroll={() => textarea.isConnected && updateOverflow()}
           onPaste={(event) => props.onPaste?.(event)}

@@ -4,73 +4,63 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { buildStatusCommandReportLines } from "./status.command-report.js";
 import { createStatusCommandReportDataParams } from "./status.test-support.js";
 
-const fixture = vi.hoisted(() => ({ empty: false }));
-
 // mock-isolation: Report layout needs fixed backup facts, not a live database read.
-vi.mock("../state/backup-run-records.js", () => ({
-  readBackupRunFreshness: async () => ({}),
-}));
+vi.mock("../state/backup-run-records.js", () => ({ readBackupRunFreshness: async () => ({}) }));
 vi.mock("./status-overview-rows.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./status-overview-rows.ts")>()),
   buildStatusCommandOverviewRows: () => [{ Item: "OS", Value: "macOS" }],
 }));
-vi.mock("./status.command-sections.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./status.command-sections.js")>()),
-  buildStatusPluginCompatibilityLines: () => (fixture.empty ? [] : ["plugin warning"]),
-  buildStatusPairingRecoveryLines: () => (fixture.empty ? [] : ["pairing needed"]),
-  buildStatusModelSelectionLines: () => (fixture.empty ? [] : ["model warning"]),
-  buildStatusSecurityAuditLines: () => ["audit line"],
-  buildStatusSessionsRows: () => (fixture.empty ? [] : [{ Key: "main" }]),
-  buildStatusSystemEventsRows: () => (fixture.empty ? [] : [{ Event: "queued" }]),
-  buildStatusSystemEventsTrailer: () => "… +1 more",
-  buildStatusHealthRows: () => (fixture.empty ? [] : [{ Item: "Gateway" }]),
-  buildStatusFooterLines: () => ["FAQ", "Next steps:"],
-}));
-
-const renderTable: typeof terminalTable.renderTable = ({ columns, rows }) =>
-  `table:${columns.map((column) => column.header).join("+")}:${rows.length} \n\t`;
 
 beforeEach(() => {
-  fixture.empty = false;
   vi.spyOn(theme, "heading").mockImplementation((text) => `# ${String(text)}`);
-  vi.spyOn(theme, "muted").mockImplementation(String);
-  vi.spyOn(terminalTable, "renderTable").mockImplementation(renderTable);
+  for (const color of ["success", "warn", "muted", "error"] as const) {
+    vi.spyOn(theme, color).mockImplementation(String);
+  }
+  vi.spyOn(terminalTable, "renderTable").mockImplementation(
+    ({ columns, rows }) =>
+      `table:${columns.map((column) => column.header).join("+")}:${rows.length} \n\t`,
+  );
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("renders the full report in section order and trims table output", async () => {
+it.each([true, false])("orders and trims report sections (full=%s)", async (full) => {
   const params = createStatusCommandReportDataParams({ opts: { deep: true, verbose: false } });
-  expect((await buildStatusCommandReportLines(params)).join("\n")).toBe(
-    [
-      "# OpenClaw status",
-      "# Overview\ntable:Item+Value:1",
-      "# Plugin compatibility\nplugin warning",
-      "pairing needed",
-      "# Model selection\nmodel warning",
-      "# Security audit\naudit line",
-      "# Channels\ntable:Channel+Enabled+State+Detail:1",
-      "# Sessions\ntable:Key+Kind+Age+Model+Runtime+Tokens:1",
-      "# System events\ntable:Event:1\n… +1 more",
-      "# Health\ntable:Item+Status+Detail:1",
-      "# Usage\nusage line",
-      "FAQ\nNext steps:",
-    ].join("\n\n"),
+  params.summary.queuedSystemEvents = full ? ["one", "two", "three", "four", "five", "six"] : [];
+  if (!full) {
+    Object.assign(params, {
+      channels: { rows: [] },
+      usageLines: undefined,
+      pluginCompatibility: [],
+      pairingRecovery: null,
+      health: undefined,
+      securityAudit: undefined,
+    });
+    params.summary.sessions.recent = [];
+  }
+  const lines = await buildStatusCommandReportLines(params);
+  const output = lines.join("\n");
+  expect(lines.filter((line) => line.startsWith("# "))).toEqual([
+    "# OpenClaw status",
+    "# Overview",
+    ...(full ? ["# Plugin compatibility"] : []),
+    "# Security audit",
+    "# Channels",
+    "# Sessions",
+    ...(full ? ["# System events", "# Health", "# Usage"] : []),
+  ]);
+  if (full) {
+    expect(output).toContain("# Overview\ntable:Item+Value:1\n\n# Plugin compatibility");
+    expect(output).toContain(
+      "# System events\ntable:Event:5\n… +1 more\n\n# Health\ntable:Item+Status+Detail:1\n\n# Usage\nusage line\n\nFAQ: https://docs.openclaw.ai/faq",
+    );
+  } else {
+    expect(output).toContain(
+      "# Channels\nNo channels configured\n\n# Sessions\nNo sessions\n\nFAQ: https://docs.openclaw.ai/faq",
+    );
+  }
+  expect(output).not.toContain(" \n\t");
+  expect(output).toContain(
+    "FAQ: https://docs.openclaw.ai/faq\nTroubleshooting: https://docs.openclaw.ai/troubleshooting\nSupport: https://community.openclaw.ai/",
   );
-});
-
-it("renders empty-state messages and omits absent sections", async () => {
-  fixture.empty = true;
-  const lines = await buildStatusCommandReportLines(
-    createStatusCommandReportDataParams({ channels: { rows: [] }, usageLines: undefined }),
-  );
-  expect(lines.join("\n")).toBe(
-    [
-      "# OpenClaw status",
-      "# Overview\ntable:Item+Value:1",
-      "# Security audit\naudit line",
-      "# Channels\nNo channels configured",
-      "# Sessions\nNo sessions",
-      "FAQ\nNext steps:",
-    ].join("\n\n"),
-  );
+  expect(lines.at(-1)).toBe("  Need to test channels? openclaw status --deep");
 });

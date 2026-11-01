@@ -35,6 +35,22 @@ export async function inspectFaceTimeDriver(
   return readDriverStatus(result.stdout);
 }
 
+async function runDriverSetup(params: DriverSetupParams, action: "ensure" | "uninstall") {
+  const script = resolve(params.pluginRoot, "scripts", "install-driver.sh");
+  const result = await params.runCommandWithTimeout(["/bin/sh", script, `--${action}`], {
+    // The macOS administrator sheet can legitimately remain open while the
+    // operator is away. Runtime shutdown aborts the whole process tree instead.
+    killProcessTree: true,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  if (result.code !== 0) {
+    const label = action === "ensure" ? "audio driver installation" : "uninstall";
+    throw new Error(
+      `FaceTime ${label} failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
+    );
+  }
+}
+
 export async function installFaceTimeDriver(
   params: DriverSetupParams,
 ): Promise<{ changed: boolean; status: "current" }> {
@@ -42,30 +58,10 @@ export async function installFaceTimeDriver(
   if (before === "current") {
     return { changed: false, status: "current" };
   }
-  const script = resolve(params.pluginRoot, "scripts", "install-driver.sh");
-  const result = await params.runCommandWithTimeout(["/bin/sh", script, "--ensure"], {
-    // The macOS administrator sheet can legitimately remain open while the
-    // operator is away. Runtime shutdown aborts the whole process tree instead.
-    killProcessTree: true,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  if (result.code !== 0) {
-    throw new Error(
-      `FaceTime audio driver installation failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
-    );
-  }
+  await runDriverSetup(params, "ensure");
   return { changed: true, status: "current" };
 }
 
 export async function uninstallFaceTimeDriver(params: DriverSetupParams): Promise<void> {
-  const script = resolve(params.pluginRoot, "scripts", "install-driver.sh");
-  const result = await params.runCommandWithTimeout(["/bin/sh", script, "--uninstall"], {
-    killProcessTree: true,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  if (result.code !== 0) {
-    throw new Error(
-      `FaceTime uninstall failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
-    );
-  }
+  await runDriverSetup(params, "uninstall");
 }

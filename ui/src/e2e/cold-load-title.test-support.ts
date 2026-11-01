@@ -16,6 +16,9 @@ type TitleOwner = {
 
 type ColdLoadTitleTrace = {
   mark(phase: string): void;
+  holdCacheRead(): void;
+  releaseCacheRead(): void;
+  cacheReadPending: boolean;
   read(): {
     attribution: string;
     events: Array<Record<string, unknown>>;
@@ -40,6 +43,9 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
   let lastResolution: Record<string, unknown> | undefined;
   let firstLostTitleWrite: Record<string, unknown> | undefined;
   let expectedTitleSeen = false;
+  let cacheReadGate: Promise<void> | undefined;
+  let releaseCacheRead: (() => void) | undefined;
+  let cacheReadPending = false;
   const record = (kind: string, value: Record<string, unknown>): Record<string, unknown> => {
     const event = { sequence: ++sequence, atMs: performance.now(), phase, kind, ...value };
     if (events.length === 96) {
@@ -233,6 +239,41 @@ export function installColdLoadTitleTrace(input: { sessionKey: string; expectedT
   observer.observe(document, { subtree: true, childList: true, characterData: true });
   restores.push(() => observer.disconnect());
   window.coldLoadTitleTrace = {
+    holdCacheRead() {
+      ({ promise: cacheReadGate, resolve: releaseCacheRead } = Promise.withResolvers<void>());
+      const factory = window.indexedDB;
+      const open = factory.open.bind(factory);
+      preserve(factory, "open");
+      factory.open = (name, version) => {
+        const request = open(name, version);
+        if (name === "openclaw-chat-snapshots") {
+          // Gate storage before boot prewarm or the pane can consume its snapshot.
+          request.addEventListener(
+            "success",
+            (event) => {
+              if (!cacheReadGate) {
+                return;
+              }
+              event.stopImmediatePropagation();
+              cacheReadPending = true;
+              void cacheReadGate.then(() => {
+                cacheReadPending = false;
+                request.dispatchEvent(new Event("success"));
+              });
+            },
+            { once: true },
+          );
+        }
+        return request;
+      };
+    },
+    releaseCacheRead() {
+      releaseCacheRead?.();
+      cacheReadGate = undefined;
+    },
+    get cacheReadPending() {
+      return cacheReadPending;
+    },
     mark(next) {
       phase = next;
       record("phase", {});

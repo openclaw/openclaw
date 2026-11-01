@@ -17,6 +17,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { isBangCommandInput } from "./bash-command-input.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -62,7 +63,7 @@ function parseBashRequest(trimmed: string): BashRequest | null {
   let restSource;
   if (match) {
     restSource = match[1] ?? "";
-  } else if (trimmed.startsWith("!")) {
+  } else if (isBangCommandInput(trimmed)) {
     restSource = trimmed.slice(1);
     if (restSource.trimStart().startsWith(":")) {
       restSource = restSource.trimStart().slice(1);

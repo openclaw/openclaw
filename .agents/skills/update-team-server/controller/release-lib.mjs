@@ -4748,6 +4748,7 @@ try {
       result = JSON.stringify({
         suspensionId: suspensionToken(args[0], "suspension lease identity"),
         target: { pid, processInstanceId: suspensionToken(args[2], "handoff process instance") },
+        commit: true,
       });
       break;
     }
@@ -4755,14 +4756,13 @@ try {
       const response = jsonArgument(args[0]);
       suspensionObject(response, ["status", "suspensionId", "expiresAtMs"], "Gateway handoff result");
       if (
-        response.status !== "armed" ||
+        response.status !== "committed" ||
         response.suspensionId !== suspensionToken(args[1], "expected handoff suspension") ||
         !Number.isSafeInteger(response.expiresAtMs) ||
-        response.expiresAtMs !== integer(args[2], "expected handoff expiry") ||
-        response.expiresAtMs <= Date.now() + 5_000
+        response.expiresAtMs !== integer(args[2], "expected handoff expiry")
       )
-        reject("Gateway handoff did not arm the exact unexpired suspension");
-      result = "ARMED";
+        reject("Gateway handoff did not commit the exact suspension");
+      result = "COMMITTED";
       break;
     }
     case "suspension-offer": {

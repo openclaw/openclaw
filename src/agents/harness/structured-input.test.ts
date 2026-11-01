@@ -1,5 +1,9 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import type { AgentHarnessQuestionGatewayCall } from "./gateway-question-dispatch.js";
+import { claimPendingAgentQuestionAnswer } from "./gateway-question.js";
 import type { StructuredInputCompilerOptions } from "./structured-input-boundary.js";
+import { runStructuredInput } from "./structured-input-execution.js";
 import {
   compileStructuredInputForm,
   compileStructuredInputUrl,
@@ -68,18 +72,13 @@ function decodeForm(
   result: StructuredInputCompileResult,
   answers: Record<string, string[]>,
 ): Record<string, unknown> | string {
-  const plan = requireForm(result);
-  const entries: Array<[string, unknown]> = [];
-  for (const field of plan.fields) {
-    const decoded = field.decode(answers[field.question.id] ?? []);
-    if (decoded.kind === "invalid") {
-      return decoded.message;
-    }
-    if (decoded.kind === "present") {
-      entries.push(...decoded.entries);
-    }
-  }
-  return Object.fromEntries(entries);
+  const decoded = requireForm(result).fields.map((field) =>
+    field.decode(answers[field.question.id] ?? []),
+  );
+  return (
+    decoded.find((field) => field.kind === "invalid")?.message ??
+    Object.fromEntries(decoded.flatMap((field) => (field.kind === "present" ? field.entries : [])))
+  );
 }
 
 describe("structured input compiler", () => {
@@ -97,63 +96,48 @@ describe("structured input compiler", () => {
   it.each(["\u0000", "\u001b", "\u202e", "\u2066"])(
     "still rejects unsafe controls in rich display text (%j)",
     (control) => {
-      expect(
-        compileStructuredInputForm({
-          schema: { type: "object", properties: {} },
-          message: "Reference\n" + control + "hidden text",
-          fallbackMessage: "Reference",
-          options: { ...baseOptions, allowRichForms: true },
-        }).kind,
-      ).toBe("unsupported");
+      expect(compile({}, [], rich, "Reference\n" + control + "hidden text").kind).toBe(
+        "unsupported",
+      );
     },
   );
-  it("projects bounded primitive fields and decodes defaults, choices, and multi-select", () => {
+  it.each<[Record<string, unknown>, string[], unknown]>([
+    [string({ minLength: 2, maxLength: 20 }), ["Ada"], "Ada"],
+    [string({ format: "email" }), ["ada@example.com"], "ada@example.com"],
+    [{ type: "boolean" }, ["Yes"], true],
+    [{ type: "integer", minimum: 1, maximum: 9 }, ["7"], 7],
+    [
+      strings({ minItems: 1, maxItems: 2 }, string({ enum: ["Red", "Blue", "Green"] })),
+      ["Red", "Blue"],
+      ["Red", "Blue"],
+    ],
+    [{ type: "number", default: 1.5 }, [], 1.5],
+    [string(), [], undefined],
+  ])("decodes primitive field %j", (field, answer, value) => {
+    const result = compile(
+      { value: field },
+      value === undefined || answer.length === 0 ? [] : ["value"],
+    );
+    expect(decodeForm(result, { value: answer })).toEqual(value === undefined ? {} : { value });
+  });
+
+  it("projects choice labels and descriptions while decoding the underlying value", () => {
     const result = compile(
       {
-        "Display Name": string({ minLength: 2, maxLength: 20 }),
-        contact: string({ format: "email" }),
         theme: string({
           oneOf: [
             { const: "day", title: "Day" },
             { const: "night", title: "Night", description: "Use dark colors" },
           ],
         }),
-        enabled: { type: "boolean" },
-        count: { type: "integer", minimum: 1, maximum: 9 },
-        tags: strings({ minItems: 1, maxItems: 2 }, string({ enum: ["Red", "Blue", "Green"] })),
-        score: { type: "number", default: 1.5 },
-        optional: string(),
       },
-      ["Display Name", "contact", "theme", "enabled", "count", "tags"],
+      ["theme"],
     );
-    const plan = requireForm(result);
-    expect(plan.fields.map((field) => field.question.id)).toEqual(
-      "display_name contact theme enabled count tags score optional".split(" "),
-    );
-    expect(plan.fields[2]?.question.options).toEqual([
+    expect(requireForm(result).fields[0]?.question.options).toEqual([
       { label: "Day" },
       { label: "Night", description: "Use dark colors" },
     ]);
-    expect(
-      decodeForm(result, {
-        display_name: ["Ada"],
-        contact: ["ada@example.com"],
-        theme: ["Night"],
-        enabled: ["Yes"],
-        count: ["7"],
-        tags: ["Red", "Blue"],
-        score: [],
-        optional: [],
-      }),
-    ).toEqual({
-      "Display Name": "Ada",
-      contact: "ada@example.com",
-      theme: "night",
-      enabled: true,
-      count: 7,
-      tags: ["Red", "Blue"],
-      score: 1.5,
-    });
+    expect(decodeForm(result, { theme: ["Night"] })).toEqual({ theme: "night" });
   });
 
   it("normalizes colliding ids and preserves __proto__ as inert accepted content", () => {
@@ -401,6 +385,37 @@ describe("OpenAI rich forms", () => {
     ).toBe("unsupported");
   });
 
+  it("checks resource aliases once across the complete choice list", () => {
+    const resources = Array.from({ length: 64 }, (_, index) => ({
+      uri: `cad://parts/item-${index}`,
+      name: `Part ${index}`,
+    }));
+    using lowercase = vi.spyOn(String.prototype, "toLowerCase");
+
+    const result = richCompile({
+      parts: resourceFields({ type: "resource", options: resources }),
+    });
+    expect(requireForm(result).fields[0]?.question.options).toHaveLength(64);
+    expect(lowercase.mock.contexts.filter((value) => value === resources[0]!.uri)).toHaveLength(1);
+  });
+
+  it.each([
+    { uri: "cad://parts/washer", name: "Other" },
+    { uri: "cad://parts/other", name: " WASHER " },
+    { uri: "cad://parts/other", name: "CAD://PARTS/WASHER" },
+  ])("rejects cross-resource URI and title collisions: %j", (second) => {
+    const result = richCompile({
+      parts: resourceFields({
+        type: "resource",
+        options: [{ uri: "cad://parts/washer", name: "Washer" }, second],
+      }),
+    });
+    expect(result).toMatchObject({
+      kind: "unsupported",
+      message: expect.stringContaining("duplicate choice"),
+    });
+  });
+
   it("preserves all rich choices without increasing the ordinary form bound", () => {
     const values = Array.from({ length: 12 }, (_, index) => ({
       const: "value-" + index,
@@ -440,3 +455,149 @@ describe("OpenAI rich forms", () => {
     ).toBe("unsupported");
   });
 });
+
+type GatewayQuestion = { questionId: string };
+type GatewayRequest = { id: string; questions: GatewayQuestion[] };
+type Answers = Record<string, string[]>;
+
+const compileForm = (properties: Record<string, unknown>, required = Object.keys(properties)) =>
+  compile(properties, required, baseOptions, "Complete the form");
+
+function createGateway(answer: (questions: GatewayQuestion[]) => Answers | Promise<Answers>) {
+  const requested: GatewayRequest[] = [];
+  const call: AgentHarnessQuestionGatewayCall = vi.fn(async (method, _opts, rawParams) => {
+    const params = rawParams as GatewayRequest;
+    if (method === "question.request") {
+      requested.push(params);
+      return { id: params.id };
+    }
+    if (method === "question.waitAnswer") {
+      const request = requested.find(({ id }) => id === params.id);
+      if (!request) {
+        throw new Error("missing question registration");
+      }
+      return { status: "answered", answers: { answers: await answer(request.questions) } };
+    }
+    if (method === "question.resolve") {
+      return { status: "cancelled" };
+    }
+    throw new Error(`unexpected gateway method ${method}`);
+  });
+  return { call, requested };
+}
+
+function executionParams(gatewayCall: AgentHarnessQuestionGatewayCall) {
+  return {
+    sessionKey: "agent:main:structured-input",
+    agentId: "main",
+    runId: "run-1",
+    timeoutMs: 90_000,
+    gatewayCall,
+    delivery: { onBlockReply: vi.fn(async (_payload: { text?: string }) => undefined) },
+  };
+}
+
+function expectNotice(params: ReturnType<typeof executionParams>, text: string) {
+  expect(params.delivery.onBlockReply).toHaveBeenCalledWith(
+    expect.objectContaining({ text: expect.stringContaining(text) }),
+  );
+}
+
+async function claimEventually(sessionKey: string, text: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (await claimPendingAgentQuestionAnswer({ sessionKey, text })) {
+      return true;
+    }
+    await delay(0);
+  }
+  return false;
+}
+
+it("batches ordinary questions by three and isolates secret input from Gateway records", async () => {
+  const gateway = createGateway((questions) =>
+    Object.fromEntries(questions.map((question) => [question.questionId, [question.questionId]])),
+  );
+  const content = Object.fromEntries(
+    "a b c token d e f g".split(" ").map((key) => [key, key === "token" ? "private-value" : key]),
+  );
+  const input = compileForm(
+    Object.fromEntries(
+      Object.keys(content).map((key) => [key, { type: "string", isSecret: key === "token" }]),
+    ),
+  );
+  const params = executionParams(gateway.call);
+  const result = runStructuredInput({ input, ...params });
+
+  await vi.waitFor(() => expectNotice(params, "may show your reply"));
+  await expect(claimEventually(params.sessionKey, "private-value")).resolves.toBe(true);
+
+  await expect(result).resolves.toEqual({
+    status: "answered",
+    answers: Object.fromEntries(Object.entries(content).map(([key, value]) => [key, [value]])),
+    content,
+  });
+  expect(gateway.requested.map((request) => request.questions.length)).toEqual([3, 3, 1]);
+  expect(gateway.requested.flatMap((r) => r.questions.map((q) => q.questionId))).not.toContain(
+    "token",
+  );
+});
+
+it("delivers a visible unsupported outcome without creating a Gateway record", async () => {
+  const params = executionParams(vi.fn<AgentHarnessQuestionGatewayCall>());
+  const input = { kind: "unsupported", message: "Unsupported field" } as const;
+  const result = await runStructuredInput({ input, ...params });
+  expect(result).toEqual({ status: "unsupported", message: "Unsupported field" });
+  expectNotice(params, "Unsupported field");
+  expect(params.gatewayCall).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["I've completed this step", "answered"],
+  ["Decline", "declined"],
+] as const)("maps the URL choice %s to %s", async (choice, status) => {
+  const gateway = createGateway((questions) => ({ [questions[0]!.questionId]: [choice] }));
+  const input = urlInput("https://example.com/authorize");
+
+  const result = runStructuredInput({ input, ...executionParams(gateway.call) });
+  await expect(result).resolves.toMatchObject({ status });
+});
+
+it("declines decoded values outside the compiled constraint and shows the reason", async () => {
+  const gateway = createGateway((questions) => ({ [questions[0]!.questionId]: ["12"] }));
+  const params = executionParams(gateway.call);
+  const input = compileForm({ count: { type: "integer", minimum: 1, maximum: 9 } });
+
+  await expect(runStructuredInput({ input, ...params })).resolves.toMatchObject({
+    status: "declined",
+    message: expect.stringContaining("at most 9"),
+  });
+  expectNotice(params, "at most 9");
+});
+
+it.each(["populated", "empty"] as const)(
+  "fences a %s form answer when the owning turn becomes inactive before commit",
+  async (formKind) => {
+    const wait = Promise.withResolvers<string>();
+    const gateway = createGateway(async (questions) => {
+      const value = await wait.promise;
+      return Object.fromEntries(questions.map(({ questionId }) => [questionId, [value]]));
+    });
+    let active = true;
+    const result = runStructuredInput({
+      input: compileForm(formKind === "empty" ? {} : { name: { type: "string" } }),
+      ...executionParams(gateway.call),
+      isActive: () => active,
+    });
+    await vi.waitFor(() =>
+      expect(vi.mocked(gateway.call).mock.calls.map(([method]) => method)).toContain(
+        "question.waitAnswer",
+      ),
+    );
+
+    expect(gateway.requested[0]?.questions[0]?.questionId).toEqual(expect.stringMatching(/./u));
+    active = false;
+    wait.resolve("Allow");
+
+    await expect(result).resolves.toMatchObject({ status: "cancelled" });
+  },
+);

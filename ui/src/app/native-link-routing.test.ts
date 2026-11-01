@@ -7,7 +7,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
@@ -194,29 +194,22 @@ it("does not install native behavior without the WebKit bridge", async () => {
   expect(document.querySelector(menuTag)).toBeNull();
 });
 
-it.each([false, true])(
-  "routes an active hovercard after duplicate bootstrap: %s",
-  async (duplicate) => {
-    // Reevaluate only bootstrap; the scheduler and custom-element registry remain shared.
-    if (duplicate) {
-      const module = "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
-      await import(module);
-    }
-    const bridge = installBridge();
-    const anchor = await focusGitHubLink();
-    if (duplicate) {
-      const registered = customElements.get("openclaw-link-reader-hovercard-provider");
-      expect(registered).toBeDefined();
-      expect(anchor.parentElement?.constructor).toBe(registered);
-      expect(document.querySelectorAll(hovercardSelector)).toHaveLength(1);
-      expect(document.querySelector(hovercardSelector)?.textContent).toContain(previewTitle);
-    }
-    click(anchor);
-    expect(document.querySelector(hovercardSelector)).toBeNull();
-    expect(anchor.hasAttribute("aria-describedby")).toBe(false);
-    expect([bridge.messages, bridge.browserRequests]).toEqual([[], [panelRequest(githubUrl)]]);
-  },
-);
+it("routes an active hovercard after duplicate bootstrap", async () => {
+  // Reevaluate only bootstrap; the scheduler and custom-element registry remain shared.
+  const module = "../components/link-reader-hovercard-registration.ts?duplicate-bootstrap";
+  await import(module);
+  const bridge = installBridge();
+  const anchor = await focusGitHubLink();
+  const registered = customElements.get("openclaw-link-reader-hovercard-provider");
+  expect(registered).toBeDefined();
+  expect(anchor.parentElement?.constructor).toBe(registered);
+  expect(document.querySelectorAll(hovercardSelector)).toHaveLength(1);
+  expect(document.querySelector(hovercardSelector)?.textContent).toContain(previewTitle);
+  click(anchor);
+  expect(document.querySelector(hovercardSelector)).toBeNull();
+  expect(anchor.hasAttribute("aria-describedby")).toBe(false);
+  expect([bridge.messages, bridge.browserRequests]).toEqual([[], [panelRequest(githubUrl)]]);
+});
 
 it("preserves modified, local, file, download, and untrusted app-link clicks", async () => {
   const bridge = installBridge();

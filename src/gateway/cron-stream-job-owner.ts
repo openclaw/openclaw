@@ -2,11 +2,13 @@ import { StringDecoder } from "node:string_decoder";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
+import { CRON_HOST_EXECUTION_DISABLED_MESSAGE } from "../cron/service/state.js";
 import { CronStreamSourceRetirementError, cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import type { CronJobState, CronStoredJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { type getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -26,6 +28,12 @@ const MAX_CONSECUTIVE_FAILURES = 5;
 const COUNTER_MAX = 2_147_483_647;
 const STOP_SETTLE_TIMEOUT_MS = 10_000;
 const OWNER_STOP_TIMEOUT_MS = STOP_SETTLE_TIMEOUT_MS * 2;
+const DISABLED_STREAM_ERRORS: Partial<Record<CronStreamStopReason, string>> = {
+  "trust-disabled":
+    "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+  "cron-disabled": "cron is disabled",
+  "host-execution-disabled": CRON_HOST_EXECUTION_DISABLED_MESSAGE,
+};
 
 export type { CronStreamOwnerParams, CronStreamStopReason } from "./cron-stream-owner-types.js";
 
@@ -83,6 +91,7 @@ export class CronStreamJobOwner {
   constructor(
     job: CronStreamJob,
     private readonly params: CronStreamOwnerParams,
+    private readonly spawnBroker: ReturnType<typeof getSpawnBroker>,
   ) {
     this.job = job;
     this.scheduleKey = cronStreamScheduleKey(job.schedule, job.streamSandbox);
@@ -298,7 +307,8 @@ export class CronStreamJobOwner {
   private enqueue(label: string, operation: () => Promise<void>): Promise<void> {
     // The owner queue outlives whichever request submitted this operation.
     return runInDetachedAsyncContext(() => {
-      const result = this.opTail.then(operation, operation);
+      const run = () => runWithSpawnBroker(this.spawnBroker, operation);
+      const result = this.opTail.then(run, run);
       this.opTail = result.catch((error: unknown) => {
         this.params.logger.warn(
           { jobId: this.job.id, operation: label, err: formatErrorMessage(error) },
@@ -609,22 +619,16 @@ export class CronStreamJobOwner {
       throw toErrorObject(stopError, "stream source failed to stop");
     }
     this.state = "stopped";
-    const stoppedState: Partial<CronJobState> =
-      reason === "trust-disabled"
+    const disabledError = DISABLED_STREAM_ERRORS[reason];
+    const stoppedState: Partial<CronJobState> = disabledError
+      ? { streamStatus: "disabled", streamError: disabledError }
+      : (reason === "restart-exhausted" || reason === "shutdown") && this.restartExhausted
         ? {
-            streamStatus: "disabled",
-            streamError:
-              "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+            streamStatus: "error",
+            streamError: this.restartFailure,
+            streamRestartExhausted: true,
           }
-        : reason === "cron-disabled"
-          ? { streamStatus: "disabled", streamError: "cron is disabled" }
-          : (reason === "restart-exhausted" || reason === "shutdown") && this.restartExhausted
-            ? {
-                streamStatus: "error",
-                streamError: this.restartFailure,
-                streamRestartExhausted: true,
-              }
-            : { streamStatus: "stopped", streamError: undefined };
+        : { streamStatus: "stopped", streamError: undefined };
     await this.persistState({
       ...stoppedState,
       ...(!this.restartExhausted ? { streamRestartExhausted: undefined } : {}),

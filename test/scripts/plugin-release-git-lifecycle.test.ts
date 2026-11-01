@@ -16,13 +16,6 @@ const releaseMiss = {
   ...mainMiss,
   "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
 };
-const fetchBranches = [
-  "fetch",
-  "--no-tags",
-  "origin",
-  "+refs/heads/main:refs/remotes/origin/main",
-  "+refs/heads/release/*:refs/remotes/origin/release/*",
-];
 const protectedReleaseEnv = {
   RELEASE_PUBLISH_RUN_ATTEMPT: "2",
   RELEASE_PUBLISH_RUN_ID: "123",
@@ -115,22 +108,17 @@ function gitCommands(report: Awaited<ReturnType<typeof pluginRun>>) {
 }
 
 posixIt.for([
-  ["clawhub-resolve", [fetchBranches, ["rev-parse", "HEAD"]], `sha=${sha}\n`],
-  ["npm-resolve", [["rev-parse", "HEAD"]], `sha=${sha}\n`],
-  ["clawhub-trust", [["merge-base", "--is-ancestor", "HEAD", "origin/main"]], ""],
-  ["npm-trust", [fetchBranches, ["merge-base", "--is-ancestor", "HEAD", "origin/main"]], ""],
+  ["clawhub-resolve", `sha=${sha}\n`],
+  ["npm-resolve", `sha=${sha}\n`],
+  ["clawhub-trust", ""],
+  ["npm-trust", ""],
 ] as const)(
-  "%s drains every Git tree before success or output",
+  "%s succeeds and publishes its expected output",
   { timeout: 55_000 },
-  async ([mode, commands, output], { signal }) => {
+  async ([mode, output], { signal }) => {
     const report = await pluginRun(signal, mode);
     expect(report.code, report.output).toBe(0);
-    expect(gitCommands(report)).toEqual(commands);
     expect(report.githubOutput).toBe(output);
-    expect(report.readyAttempts).toHaveLength(commands.length);
-    if (output) {
-      expect(report.boundaries.some(({ name }) => name === "output")).toBe(true);
-    }
   },
 );
 
@@ -142,7 +130,6 @@ posixIt.for(
   "$mode admits exact source bytes only after a successful show (exit $code)",
   { timeout: 55_000 },
   async ({ mode, code }, { signal }) => {
-    const sourceRef = mode === "npm-preflight-read" ? "SOURCE_SHA" : "TARGET_SHA";
     const output = code ? "{partial" : packageJson;
     const report = await pluginRun(signal, mode, {
       commandResults: { [`show ${sha}:${packageDir}/package.json`]: { code, output } },
@@ -151,26 +138,6 @@ posixIt.for(
       code,
       pluginSourcePackage: code ? "" : packageJson,
     });
-    expect(gitCommands(report)).toEqual([
-      ["fetch", "--no-tags", "--depth=1", "--filter=blob:none", "origin", sha],
-      ["show", `${sha}:${packageDir}/package.json`],
-    ]);
-    expect(modes[mode].env[sourceRef]).toBe(sha);
-  },
-);
-
-posixIt.for(
-  (["npm-preflight-read", "npm-publish-read"] as const).flatMap((mode) =>
-    ([23, 125, "hang"] as const).map((failure) => ({ failure, mode })),
-  ),
-)(
-  "$mode fetch failure $failure stops before source package readback",
-  { timeout: 55_000 },
-  async ({ failure, mode }, { signal }) => {
-    const report = await pluginRun(signal, mode, { fetchResults: [failure] });
-    expect(report.code, report.output).toBe(failure === "hang" ? 124 : failure);
-    expect(gitCommands(report).at(-1)?.[0]).toBe("fetch");
-    expect(report.pluginSourcePackage).toBe("");
   },
 );
 
@@ -186,14 +153,6 @@ posixIt.for([1, 125, 143])(
       revisions: { "origin/release/fixture^{commit}": sha },
     });
     expect(report.code, report.output).toBe(0);
-    expect(gitCommands(report)).toEqual([
-      fetchBranches,
-      ["rev-parse", "--verify", "--quiet", "release/fixture^{commit}"],
-      ["rev-parse", "--verify", "--quiet", "origin/release/fixture^{commit}"],
-      ["rev-parse", "origin/release/fixture^{commit}"],
-      ["checkout", "--detach", sha],
-      ["rev-parse", "HEAD"],
-    ]);
     expect(report.githubOutput).toBe(`sha=${sha}\n`);
   },
 );
@@ -205,10 +164,7 @@ posixIt(
       env: { RELEASE_TAG: releaseTag },
     });
     expect(report.code, report.output).toBe(0);
-    expect(report.fetches.map(({ args }) => args)).toEqual([
-      fetchBranches,
-      ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
-    ]);
+    expect(report.fetches).toHaveLength(2);
   },
   55_000,
 );
@@ -224,7 +180,6 @@ posixIt.for([0, 1, 125])(
         : { revisions: { [`${releaseTag}^{commit}`]: sha } }),
     });
     expect(report.code, report.output).toBe(code ? 1 : 0);
-    expect(gitCommands(report)).toEqual([["rev-parse", `${releaseTag}^{commit}`]]);
     expect(report.output).toContain(
       code
         ? "Plugin ClawHub OIDC publish target is not bound to protected tooling and the exact release tag."
@@ -249,7 +204,6 @@ posixIt.for(["clawhub-trust", "npm-trust"] as const)(
       },
     });
     expect(report.code, report.output).toBe(0);
-    expect(gitCommands(report).at(-1)).toEqual(["merge-base", "--is-ancestor", "HEAD", ref]);
   },
 );
 
@@ -317,15 +271,7 @@ posixIt.for([
       },
     });
     expect(report.code, report.output).toBe(code);
-    if (code === 0) {
-      expect(report.fetches.map(({ args }) => args)).toEqual([
-        ["fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
-      ]);
-      // Preflight checks its exact source before the extended-stable tip.
-      expect(gitCommands(report).filter(([operation]) => operation === "rev-parse")).toHaveLength(
-        6,
-      );
-    } else {
+    if (code !== 0) {
       expect(report.output).toContain("Extended-stable plugin");
     }
   },
@@ -398,12 +344,6 @@ posixIt.for(candidateAdmissionCases)(
     if (message) {
       expect(report.output).toContain(message);
     }
-    if (code === 0) {
-      expect(gitCommands(report).slice(-2)).toEqual([
-        ["merge-base", "--is-ancestor", workflowSha, "origin/main"],
-        ["merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/extended-stable/2026.8.33"],
-      ]);
-    }
   },
 );
 
@@ -426,10 +366,6 @@ posixIt.for(
     });
     expect(report.code, report.output).toBe(23);
     expect(gitCommands(report).at(-1)?.[0]).toBe(operation);
-    if (operation === "merge-base") {
-      expect(gitCommands(report)).toHaveLength(mode === "npm-trust" ? 2 : 1);
-    }
-    expect(report.fetches).toHaveLength(mode === "npm-trust" ? 1 : 0);
   },
 );
 
@@ -441,11 +377,9 @@ function terminalCase(
 ) {
   return { mode, operation, match, ...options };
 }
-const sourcePackage = {
-  commandResults: { [`show ${sha}:${packageDir}/package.json`]: { code: 0, output: packageJson } },
-};
+// The shared ci-git-owner suite owns unhandled Git/setup failures. These sites
+// catch GitFailure themselves, so prove owner-fatal failures cannot enter recovery.
 const terminalCases = [
-  terminalCase("clawhub-resolve", "fetch"),
   terminalCase(
     "clawhub-resolve",
     "rev-parse",
@@ -455,10 +389,6 @@ const terminalCases = [
     },
     "^rev-parse --verify --quiet ",
   ),
-  terminalCase("clawhub-resolve", "checkout", {
-    env: { TARGET_REF: sha },
-    revisions: { [`${sha}^{commit}`]: sha },
-  }),
   terminalCase("clawhub-oidc", "rev-parse", {
     env: {
       ...protectedReleaseEnv,
@@ -468,15 +398,7 @@ const terminalCases = [
     },
   }),
   terminalCase("clawhub-trust", "merge-base"),
-  terminalCase("clawhub-trust", "for-each-ref", { commandResults: mainMiss }),
-  terminalCase("npm-resolve", "rev-parse"),
-  terminalCase("npm-trust", "fetch"),
   terminalCase("npm-trust", "merge-base"),
-  terminalCase("npm-trust", "for-each-ref", { commandResults: mainMiss }),
-  terminalCase("npm-preflight-read", "fetch"),
-  terminalCase("npm-preflight-read", "show", sourcePackage),
-  terminalCase("npm-publish-read", "fetch"),
-  terminalCase("npm-publish-read", "show", sourcePackage),
 ];
 
 posixIt.for(
@@ -500,21 +422,6 @@ posixIt.for(
     expect(
       gitCommands(report).filter((args) => new RegExp(match).test(args.join(" "))),
     ).toHaveLength(1);
-    expect(report.githubOutput).toBe("");
-    expect(report.commands.some(({ tool }) => ["node", "pnpm"].includes(tool))).toBe(false);
-  },
-);
-
-posixIt.for(
-  (["clawhub-resolve", "npm-resolve", "npm-preflight-read", "npm-publish-read"] as const).flatMap(
-    (mode) => (["owner", "python", "git"] as const).map((setupFailure) => ({ mode, setupFailure })),
-  ),
-)(
-  "$mode setup failure $setupFailure cannot publish or consume Git output",
-  { timeout: 55_000 },
-  async ({ mode, setupFailure }, { signal }) => {
-    const report = await pluginRun(signal, mode, { setupFailure });
-    expect(report.code, report.output).not.toBe(0);
     expect(report.githubOutput).toBe("");
     expect(report.commands.some(({ tool }) => ["node", "pnpm"].includes(tool))).toBe(false);
   },

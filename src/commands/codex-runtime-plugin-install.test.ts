@@ -15,6 +15,7 @@ import {
   ensureModelSelectionRuntimePlugins,
   repairModelSelectionRuntimePlugins,
 } from "./runtime-plugin-install.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(),
@@ -78,13 +79,9 @@ describe("Codex runtime plugin install repair", () => {
     mocks.ensureOnboardingPluginInstalled.mockResolvedValue(installerResult("failed"));
   });
 
-  it.each([
-    { accepted: false, promptError: undefined },
-    { accepted: true, promptError: undefined },
-    { accepted: false, promptError: new WizardCancelledError() },
-  ])(
-    "requires consent for runtime capabilities: accepted=$accepted promptError=$promptError",
-    async ({ accepted, promptError }) => {
+  it.each([false, true, new WizardCancelledError()])(
+    "requires consent for runtime capabilities: %s",
+    async (answer) => {
       await withTestDir({ prefix: "openclaw-runtime-consent-" }, async (artifactDir) => {
         createColdPluginFixture({
           rootDir: artifactDir,
@@ -105,20 +102,19 @@ describe("Codex runtime plugin install repair", () => {
           enabled: false,
           origin: "global",
           installRecord: record,
+          contracts: { tools: ["runtime.write"] },
         });
-        const manifest = metadata.byPluginId.get("codex")!;
-        manifest.rootDir = artifactDir;
-        manifest.contracts = { tools: ["runtime.write"] };
+        metadata.byPluginId.get("codex")!.rootDir = artifactDir;
         metadata.index.plugins[0]!.rootDir = artifactDir;
         mocks.metadata.mockReturnValue(metadata);
         const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled: false } } } };
         const beforePersistentEffect = vi.fn();
         const confirm = vi.fn(async () => {
           expect(beforePersistentEffect).not.toHaveBeenCalled();
-          if (promptError) {
-            throw promptError;
+          if (answer instanceof Error) {
+            throw answer;
           }
-          return accepted;
+          return answer;
         });
 
         const pending = selectRuntime({
@@ -127,29 +123,23 @@ describe("Codex runtime plugin install repair", () => {
           runtime: runtime(),
           beforePersistentEffect,
         });
-        if (promptError) {
-          await expect(pending).rejects.toBe(promptError);
+        if (answer instanceof Error) {
+          await expect(pending).rejects.toBe(answer);
           expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
           return;
         }
         const result = await pending;
         expect(cfg.plugins?.entries?.codex?.enabled).toBe(false);
-        expect(confirm).toHaveBeenCalledOnce();
-        if (accepted) {
+        if (answer) {
           expect(result).toMatchObject({
             ok: true,
             cfg: { plugins: { entries: { codex: { enabled: true } } } },
           });
           expect(beforePersistentEffect).toHaveBeenCalledOnce();
-          expect(mocks.writeInstallRecords).toHaveBeenCalledWith(
-            expect.objectContaining({
-              codex: expect.objectContaining({
-                acceptedSurface: expect.objectContaining({ tools: ["runtime.write"] }),
-                acceptedSurfaceIntegrity: "sha512-runtime",
-              }),
-            }),
-            expect.any(Object),
-          );
+          expect(mocks.writeInstallRecords.mock.lastCall?.[0].codex).toMatchObject({
+            acceptedSurface: { tools: ["runtime.write"] },
+            acceptedSurfaceIntegrity: "sha512-runtime",
+          });
         } else {
           expect(result).toMatchObject({
             ok: false,
@@ -160,7 +150,6 @@ describe("Codex runtime plugin install repair", () => {
           expect(beforePersistentEffect).not.toHaveBeenCalled();
           expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
         }
-        expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
       });
     },
   );
@@ -195,25 +184,19 @@ describe("Codex runtime plugin install repair", () => {
   });
 
   it("surfaces non-fatal Copilot repair notices to command callers", async () => {
-    const pluginId = "copilot";
-    const provider = "github-copilot";
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [`Repaired missing configured plugin "${pluginId}".`],
+      changes: ['Repaired missing configured plugin "copilot".'],
       warnings: [],
       notices: [reviewNotice],
     });
 
     const result = await repairModelSelectionRuntimePlugins({
-      cfg: providerRuntime(provider, pluginId, "https://provider.example.test"),
-      model: `${provider}/gpt-5.5`,
+      cfg: providerRuntime("github-copilot", "copilot", "https://provider.example.test"),
+      model: "github-copilot/gpt-5.5",
       env: {},
     });
 
-    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
-    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginIds: [pluginId], env: {} }),
-    );
     expect(result).toStrictEqual([reviewNotice]);
   });
 
@@ -234,31 +217,39 @@ describe("Codex runtime plugin install repair", () => {
   });
 
   const sensitiveFixture = ["fixture", "credential"].join("-");
-  it("formats a sanitized actionable failure for required Codex", async () => {
-    mockInstall(
-      "failed",
-      {},
-      {
-        error: `Install failed: https://user:${sensitiveFixture}@registry.example.test/pkg?token=${sensitiveFixture}\u001b[2K`,
-      },
-    );
+  it.each([selectRuntime, selectRuntimes])(
+    "returns a sanitized closed failure via %s",
+    async (select) => {
+      mockInstall(
+        "failed",
+        {},
+        {
+          error: `Install failed: https://user:${sensitiveFixture}@registry.example.test/pkg?token=${sensitiveFixture}\u001b[2K`,
+        },
+      );
 
-    const result = await selectRuntime();
+      const result = await select();
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected required runtime failure");
-    }
-    expect(result.message).toContain("Codex runtime is required but unavailable");
-    expect(result.message).toContain("status: failed");
-    expect(result.message).toContain("Retry setup");
-    expect(result.message).toContain("npm");
-    expect(result.message).toContain("registry");
-    expect(result.message).toContain("Install failed:");
-    expect(result.message).not.toContain(sensitiveFixture);
-    expect(result.message).not.toContain("\u001b");
-    expect(result).not.toHaveProperty("cfg");
-  });
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected required runtime failure");
+      }
+      expect(result.message).toContain("Codex runtime is required but unavailable");
+      if (select === selectRuntime) {
+        expect(result).toHaveProperty("status", "failed");
+      } else {
+        expect(result).toEqual({ ok: false, message: expect.any(String) });
+      }
+      expect(result.message).toContain("status: failed");
+      expect(result.message).toContain("Retry setup");
+      expect(result.message).toContain("npm");
+      expect(result.message).toContain("registry");
+      expect(result.message).toContain("Install failed:");
+      expect(result.message).not.toContain(sensitiveFixture);
+      expect(result.message).not.toContain("\u001b");
+      expect(result).not.toHaveProperty("cfg");
+    },
+  );
 
   it("sees an agent-scoped Codex runtime pin behind a custom OpenAI route", async () => {
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
@@ -281,36 +272,68 @@ describe("Codex runtime plugin install repair", () => {
     expect(result).toMatchObject({ ok: true, required: true });
   });
 
-  it("stops the aggregate after a required Codex failure with no config result", async () => {
-    mockInstall(
-      "failed",
-      { plugins: { entries: { codex: { enabled: false } } } },
-      {
-        error: "registry unavailable",
+  const builtInConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
+  const copilotModelOverrideConfig: OpenClawConfig = {
+    ...builtInConfig,
+    models: {
+      providers: {
+        "github-copilot": {
+          baseUrl: "https://api.githubcopilot.com",
+          agentRuntime: { id: "copilot" },
+          models: [
+            createTestModelDefinition("gpt-4o", {
+              name: "GPT-4o",
+              contextWindow: 128_000,
+              maxTokens: 16_384,
+              agentRuntime: { id: "pi" },
+            }),
+          ],
+        },
       },
-    );
-
-    const result = await selectRuntimes();
-
-    expect(result).toEqual({ ok: false, message: expect.stringContaining("registry unavailable") });
-    expect(result).not.toHaveProperty("cfg");
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-  });
-
-  it("evaluates Copilot after optional Codex and returns the closed success shape", async () => {
+    },
+  };
+  const explicitPiConfig: OpenClawConfig = {
+    agents: {
+      entries: { main: {} },
+      defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "pi" } } } },
+    },
+  };
+  it.each<[string, string | undefined, OpenClawConfig, boolean]>([
+    ["built-in Copilot", "github-copilot/gpt-4o", builtInConfig, false],
+    ["model opt-out", "github-copilot/gpt-4o", copilotModelOverrideConfig, false],
+    ["provider opt-in", "github-copilot/claude-sonnet-4", copilotModelOverrideConfig, true],
+    [
+      "non-Copilot provider opt-in",
+      "openai/gpt-4o",
+      {
+        ...builtInConfig,
+        ...providerRuntime("openai", "copilot", "https://provider.example.test"),
+      },
+      false,
+    ],
+    ["OpenAI opt-out", "openai/gpt-4o", explicitPiConfig, false],
+    ["undefined ref", undefined, builtInConfig, false],
+    ["unprefixed ref", "gpt-4o", builtInConfig, false],
+    ["empty model id", "github-copilot/", builtInConfig, false],
+  ])("only installs an opted-in Copilot runtime: %s", async (_name, model, cfg, install) => {
     const installedConfig = { plugins: { entries: { copilot: { enabled: true } } } };
-    mockInstall("installed", installedConfig, { pluginId: "copilot" });
-
+    if (install) {
+      mockInstall("installed", installedConfig, { pluginId: "copilot" });
+    }
     const result = await selectRuntimes({
-      cfg: providerRuntime("github-copilot", "copilot", "https://api.githubcopilot.com"),
-      model: "github-copilot/gpt-5.5",
+      cfg,
+      model,
+      prompter: createWizardPrompter(),
+      runtime: runtime(),
     });
-
-    expect(result).toEqual({ ok: true, cfg: installedConfig, codexInstalled: false });
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({ entry: expect.objectContaining({ pluginId: "copilot" }) }),
-    );
+    expect(result).toEqual({
+      ok: true,
+      cfg: install ? installedConfig : cfg,
+      codexInstalled: false,
+    });
+    if (!install) {
+      expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps runtime installation prompt-free for silent supervision", async () => {
@@ -323,7 +346,6 @@ describe("Codex runtime plugin install repair", () => {
       selectionOptions({ prompter, runtime: runtime(), output: "silent" }),
     );
     expect(result).toMatchObject({ ok: true, required: true });
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
 

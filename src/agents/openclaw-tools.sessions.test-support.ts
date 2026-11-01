@@ -12,14 +12,8 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 export const TEST_CONFIG = {
-  session: {
-    mainKey: "main",
-    scope: "per-sender",
-  },
-  tools: {
-    sessions: { visibility: "all" },
-    agentToAgent: { enabled: true },
-  },
+  session: { mainKey: "main", scope: "per-sender" },
+  tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
 } as OpenClawConfig;
 
 export function installMessagingTestRegistry() {
@@ -57,21 +51,15 @@ export function getSessionTool(
   });
 }
 
-export type GatewayCall = {
-  method?: string;
-  params?: Record<string, unknown>;
-};
+export type GatewayCall = { method?: string; params?: Record<string, unknown> };
 
 export function createSessionsSendGatewayScope() {
   const context = createContext();
   context.localEmbedded = true;
   context.getRuntimeConfig = () => TEST_CONFIG;
-  context.resolveGatewayContext = () => context;
-  return {
-    context,
-    resolveGatewayContext: context.resolveGatewayContext,
-    isWebchatConnect: () => false,
-  };
+  const resolveGatewayContext = () => context;
+  context.resolveGatewayContext = resolveGatewayContext;
+  return { context, resolveGatewayContext, isWebchatConnect: () => false };
 }
 
 /** The mocked Gateway must retain the real followup owner before acknowledging its input. */
@@ -80,8 +68,7 @@ export function mockAcceptedChildFollowup() {
     if (request.method !== "agent") {
       return {};
     }
-    const runId = request.params?.idempotencyKey;
-    const sessionKey = request.params?.sessionKey;
+    const { idempotencyKey: runId, sessionKey } = request.params ?? {};
     if (typeof runId !== "string" || typeof sessionKey !== "string") {
       throw new Error("Child followup fixture requires the dispatched run and session.");
     }

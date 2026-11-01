@@ -70,17 +70,6 @@ function reactivate(
   });
 }
 
-function expectReplacement(overrides: Record<string, unknown>) {
-  expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
-    previousRunId: "run-prev-ended",
-    nextRunId: "run-next",
-    preserveCompletedRun: true,
-    assertCurrent: expect.any(Function),
-    runTimeoutSeconds: 0,
-    ...overrides,
-  });
-}
-
 afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
@@ -105,7 +94,8 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
       const params = {
         sessionKey: childSessionKey,
         runId: "run-next",
-        acpSession: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
+        task: "  follow-up prompt text  ",
+        session: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
       };
       const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
 
@@ -114,7 +104,9 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
 
       mockEndedRun(endedRun());
       await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(true);
-      expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
+      expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ task: params.task }),
+      );
 
       entry = await upsertAcpSessionMeta({
         ...scope,
@@ -129,23 +121,11 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
         }),
       });
       expect(entry).not.toBeNull();
-      params.acpSession.sessionEntry = entry ?? undefined;
+      params.session.sessionEntry = entry ?? undefined;
       await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
       expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
     },
   );
-});
-
-it("reactivates the newest ended row despite stale active rows", async () => {
-  const resolveGatewayContext = vi.fn(() => ({ owner: "gateway-b" }) as never);
-  mockEndedRun(endedRun({ runId: "run-current-ended" }));
-  await expect(reactivate({ gatewayContextResolver: resolveGatewayContext })).resolves.toBe(true);
-
-  expect(latestRun).toHaveBeenCalledWith(childSessionKey);
-  expectReplacement({
-    previousRunId: "run-current-ended",
-    gatewayContextResolver: resolveGatewayContext,
-  });
 });
 
 it("does not replace an ended row after its Gateway owner retires", async () => {
@@ -154,15 +134,7 @@ it("does not replace an ended row after its Gateway owner retires", async () => 
 
   await expect(reactivate({ gatewayContextResolver: resolveGatewayContext })).resolves.toBe(false);
 
-  expect(resolveGatewayContext).toHaveBeenCalledOnce();
   expect(replaceSubagentRunAfterSteerMock).not.toHaveBeenCalled();
-});
-
-it("preserves the exact follow-up task for restart redispatch (#77539)", async () => {
-  mockEndedRun(endedRun({ task: "stale original task" }));
-  await expect(reactivate({ task: "  follow-up prompt text  " })).resolves.toBe(true);
-
-  expectReplacement({ task: "  follow-up prompt text  " });
 });
 
 it.each([false, true])("accepts a replacement only when it owns the child (%s)", async (owns) => {

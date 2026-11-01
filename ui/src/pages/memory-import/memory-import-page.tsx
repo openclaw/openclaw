@@ -1,14 +1,14 @@
-import { createSignal, onSettled } from "solid-js";
+import { action, createMemo, createOptimistic, onSettled } from "solid-js";
 import type {
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import type { ApplicationContext } from "../../app/context-types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -16,7 +16,9 @@ import { createPageRequest } from "../../lib/page-request.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { MemoryImportClient, MemoryImportState } from "./memory-import-state.ts";
 import type {
   SessionBackfillGatewayResult,
   SessionBackfillProgress,
@@ -24,20 +26,10 @@ import type {
 } from "./view-types.ts";
 import { MemoryImport } from "./view.tsx";
 
+registerRouteSubtitlesEnglish();
+
 const SESSION_BACKFILL_BATCH_DAYS = 14;
 const MEMORY_IMPORT_DOCS_URL = "https://docs.openclaw.ai/install/migrating";
-
-type MemoryImportClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-
-type PendingMemoryImport = {
-  providerId: string;
-  agentId: string;
-  planFingerprint: string;
-  itemIds: string[];
-  overwrite: boolean;
-  idempotencyKey: string;
-  attempted: boolean;
-};
 
 export function MemoryImportPage() {
   const context = useApplication();
@@ -45,25 +37,8 @@ export function MemoryImportPage() {
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
   let presentationScopeKey = gatewayPresentationScope(context.gateway).key;
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const publish = () => setRevision((value) => value + 1);
   // Request state stays synchronous so a second activation observes the first immediately.
-  const state: {
-    replaceExisting: boolean;
-    selectedByProvider: Record<string, string[]>;
-    applyingProviderId: string | null;
-    pendingImport: PendingMemoryImport | null;
-    applyError: string | null;
-    lastResults: Record<string, MigrationsMemoryApplyResult>;
-    backfillFrom: string;
-    backfillTo: string;
-    backfillBusy: "preview" | "apply" | "rollback" | null;
-    backfillError: string | null;
-    backfillPreview: SessionBackfillGatewayResult | null;
-    backfillProgress: SessionBackfillProgress | null;
-    backfillRollbackResult: SessionBackfillRollbackResult | null;
-    backfillRollbackTarget: { client: MemoryImportClient; agentId: string } | null;
-  } = {
+  const state: MemoryImportState = {
     replaceExisting: false,
     selectedByProvider: {},
     applyingProviderId: null,
@@ -79,6 +54,15 @@ export function MemoryImportPage() {
     backfillRollbackResult: null,
     backfillRollbackTarget: null,
   };
+  const source = projectMutableSource(state, (value) => value);
+  const publish = source.publish;
+  let presentationLifetime = Promise.withResolvers<void>();
+  let planReceipt: { promise: Promise<void> } | null = null;
+  let previewReceipt: { promise: Promise<void> } | null = null;
+  function retirePresentation() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
+  }
   let applyEpoch = 0;
   let backfillEpoch = 0;
   let planError: string | null = null;
@@ -91,7 +75,7 @@ export function MemoryImportPage() {
     plan: MigrationsMemoryPlanResult;
   } | null = null;
   const read = <K extends keyof typeof state>(key: K) => {
-    revision();
+    source.revision();
     return state[key];
   };
 
@@ -133,10 +117,15 @@ export function MemoryImportPage() {
     const overwrite = state.replaceExisting;
     planError = null;
     if (!client || !canAdmin() || !agentId) {
+      planReceipt = null;
       planRequest.reset();
       return;
     }
-    await planRequest.run({ client, agentId, overwrite, scopeKey: presentationScopeKey });
+    planReceipt = {
+      promise: planRequest.run({ client, agentId, overwrite, scopeKey: presentationScopeKey }),
+    };
+    publish();
+    await planReceipt.promise;
   }
   let previousPlanArgs:
     | readonly [MemoryImportClient | null, boolean, boolean, string | null, boolean, number]
@@ -178,6 +167,7 @@ export function MemoryImportPage() {
         workspaceAuthorized = false;
       }
       if (previous[1] !== connected) {
+        retirePresentation();
         applyEpoch += 1;
         backfillEpoch += 1;
         state.applyingProviderId = null;
@@ -192,12 +182,19 @@ export function MemoryImportPage() {
   }
   onSettled(() => {
     // Target/access receipts retire import and backfill epochs before replanning.
-    const stops = [gateway, agents, selection].map((source) => source.subscribe(syncPlan));
+    const stops = [context.gateway, context.agents, context.agentSelection].map((owner) =>
+      owner.subscribe(syncPlan),
+    );
+    stops.push(
+      context.router.subscribe(() => {
+        retirePresentation();
+        publish();
+      }),
+    );
     syncPlan();
     return () => {
-      for (const stop of stops) {
-        stop();
-      }
+      stops.forEach((stop) => stop());
+      presentationLifetime.resolve();
       applyEpoch += 1;
       backfillEpoch += 1;
       planRequest.cancel();
@@ -221,7 +218,7 @@ export function MemoryImportPage() {
   }
 
   function plan(): MigrationsMemoryPlanResult | null {
-    revision();
+    source.revision();
     gateway.read();
     const value = lastPlanValue;
     const snapshot = context.gateway.snapshot;
@@ -236,21 +233,17 @@ export function MemoryImportPage() {
   }
 
   function loading(): boolean {
-    revision();
+    source.revision();
     return planRequest.pending;
   }
   function planFailure(): string | null {
-    revision();
+    source.revision();
     return planError;
   }
 
-  function workspaceAccessible(): boolean {
-    revision();
-    gateway.read();
-    return canAdmin();
-  }
-
   function canAdmin(): boolean {
+    source.revision();
+    gateway.read();
     const snapshot = context.gateway.snapshot;
     return snapshot.phase === "connected"
       ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
@@ -258,6 +251,7 @@ export function MemoryImportPage() {
   }
 
   function resetMutationState(options: { preserveAttemptedImport?: boolean } = {}) {
+    retirePresentation();
     // An interrupted apply has an unknown outcome. Keep its key so retries can
     // recover the cached server result instead of repeating side effects.
     const pendingImport =
@@ -396,6 +390,7 @@ export function MemoryImportPage() {
   }
 
   function resetBackfillState() {
+    retirePresentation();
     backfillEpoch += 1;
     state.backfillFrom = "";
     state.backfillTo = "";
@@ -407,6 +402,7 @@ export function MemoryImportPage() {
   }
 
   function clearBackfillResults() {
+    previewReceipt = null;
     state.backfillPreview = null;
     state.backfillProgress = null;
     state.backfillRollbackResult = null;
@@ -526,6 +522,110 @@ export function MemoryImportPage() {
     }
   }
 
+  const presentationScope = createMemo(() => {
+    source.revision();
+    return presentationLifetime;
+  });
+  const presentation = createMemo(() => {
+    const retired = presentationScope().promise;
+    const [importing, setImporting] = createOptimistic<string | null>(null);
+    const [backfilling, setBackfilling] = createOptimistic<typeof state.backfillBusy>(null);
+    return { retired, importing, setImporting, backfilling, setBackfilling };
+  });
+  const admittedPlan = createMemo(() => {
+    source.revision();
+    return planReceipt;
+  });
+  const acceptedPlan = createMemo(plan);
+  const planErrorValue = createMemo(planFailure);
+  const planRead = createMemo(() => {
+    const pending = admittedPlan()?.promise;
+    const value = acceptedPlan();
+    const error = planErrorValue();
+    const retired = presentationScope().promise;
+    if (!loading()) {
+      if (!value && error) {
+        throw new Error(error);
+      }
+      return value;
+    }
+    return pending
+      ? Promise.race([pending, retired]).then(() => {
+          const result = plan();
+          if (!result && planError) {
+            throw new Error(planError);
+          }
+          return result;
+        })
+      : value;
+  });
+  const admittedPreview = createMemo(() => {
+    source.revision();
+    return previewReceipt;
+  });
+  const previewValue = createMemo(() => read("backfillPreview"));
+  const previewError = createMemo(() => read("backfillError"));
+  const previewRead = createMemo(() => {
+    const pending = admittedPreview()?.promise;
+    const value = previewValue();
+    const error = previewError();
+    const retired = presentationScope().promise;
+    if (read("backfillBusy") !== "preview") {
+      if (pending && !value && error) {
+        throw new Error(error);
+      }
+      return value;
+    }
+    return pending
+      ? Promise.race([pending, retired]).then(() => {
+          if (!state.backfillPreview && state.backfillError) {
+            throw new Error(state.backfillError);
+          }
+          return state.backfillPreview;
+        })
+      : value;
+  });
+  const presentMutation = action(function* (
+    current: ReturnType<typeof presentation>,
+    pending: Promise<void>,
+    kind: "import" | "apply" | "rollback",
+    providerId: string | null,
+  ) {
+    if (current.retired === presentationLifetime.promise) {
+      if (kind === "import") {
+        current.setImporting(providerId);
+      } else {
+        current.setBackfilling(kind);
+      }
+    }
+    // The owner records failures and settles the operation after its presentation retires.
+    yield Promise.race([pending, current.retired]);
+  });
+  async function importMemory() {
+    const current = presentation();
+    const pending = confirmImport();
+    const providerId = state.applyingProviderId;
+    if (providerId === null) {
+      return pending;
+    }
+    await Promise.resolve();
+    return presentMutation(current, pending, "import", providerId);
+  }
+  async function backfill(operation: "preview" | "apply" | "rollback") {
+    const current = presentation();
+    const pending = runBackfill(operation);
+    if (state.backfillBusy !== operation) {
+      return pending;
+    }
+    if (operation === "preview") {
+      previewReceipt = { promise: pending };
+      publish();
+      return pending;
+    }
+    await Promise.resolve();
+    return presentMutation(current, pending, operation, null);
+  }
+
   return (
     <openclaw-memory-import-page>
       <SettingsPageHeader
@@ -539,16 +639,21 @@ export function MemoryImportPage() {
       <SettingsWorkspace>
         <MemoryImport
           connected={gateway.read().snapshot.phase === "connected"}
-          canAdmin={workspaceAccessible()}
+          canAdmin={canAdmin()}
           agents={listSelectableAgents(agents.read().agentsList?.agents ?? [])}
           selectedAgentId={currentAgentId()}
           plan={plan()}
+          readPlan={planRead}
+          readPreview={previewRead}
+          readScope={presentationScope()}
           loading={loading() || agents.read().agentsLoading}
-          error={(currentAgentId() ? null : agents.read().agentsError) ?? planFailure()}
+          error={
+            (currentAgentId() ? null : agents.read().agentsError) ?? (plan() ? planFailure() : null)
+          }
           applyError={read("applyError")}
           replaceExisting={read("replaceExisting")}
           selectedByProvider={read("selectedByProvider")}
-          applyingProviderId={read("applyingProviderId")}
+          applyingProviderId={presentation().importing() ?? read("applyingProviderId")}
           pendingProviderId={
             read("pendingImport")?.agentId === currentAgentId()
               ? state.pendingImport!.providerId
@@ -561,9 +666,10 @@ export function MemoryImportPage() {
           }
           backfillFrom={read("backfillFrom")}
           backfillTo={read("backfillTo")}
-          backfillBusy={read("backfillBusy")}
-          backfillError={read("backfillError")}
-          backfillPreview={read("backfillPreview")}
+          backfillBusy={presentation().backfilling() ?? read("backfillBusy")}
+          backfillError={
+            admittedPreview() && !read("backfillPreview") ? null : read("backfillError")
+          }
           backfillProgress={read("backfillProgress")}
           backfillRollbackResult={read("backfillRollbackResult")}
           backfillRollbackPending={read("backfillRollbackTarget") !== null}
@@ -580,7 +686,7 @@ export function MemoryImportPage() {
           onRefresh={() => void refresh()}
           onToggleCollection={toggleCollection}
           onRequestImport={requestImport}
-          onConfirmImport={() => void confirmImport()}
+          onConfirmImport={() => void importMemory()}
           onCancelImport={() => {
             if (state.applyingProviderId === null) {
               state.pendingImport = null;
@@ -590,8 +696,8 @@ export function MemoryImportPage() {
           }}
           onBackfillFromChange={(value) => setBackfillDate("backfillFrom", value)}
           onBackfillToChange={(value) => setBackfillDate("backfillTo", value)}
-          onBackfillPreview={() => void runBackfill("preview")}
-          onBackfillApply={() => void runBackfill("apply")}
+          onBackfillPreview={() => void backfill("preview")}
+          onBackfillApply={() => void backfill("apply")}
           onBackfillRollbackRequest={() => {
             const snapshot = context.gateway.snapshot;
             const agentId = currentAgentId();
@@ -606,7 +712,7 @@ export function MemoryImportPage() {
               publish();
             }
           }}
-          onBackfillRollbackConfirm={() => void runBackfill("rollback")}
+          onBackfillRollbackConfirm={() => void backfill("rollback")}
           onBackfillRollbackCancel={() => {
             if (state.backfillBusy === null) {
               state.backfillRollbackTarget = null;

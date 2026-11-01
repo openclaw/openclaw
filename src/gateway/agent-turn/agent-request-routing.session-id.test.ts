@@ -4,7 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
@@ -17,103 +17,89 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
-it.each([false, true])(
-  "creates a missing session-ID target only when requested (createSessionIfMissing=%s)",
-  async (createSessionIfMissing) => {
-    await withOpenClawTestState({ label: "session-id-creation" }, async (state) => {
-      const storePath = state.statePath("sessions.json");
-      const cfg: OpenClawConfig = {
-        agents: { entries: { main: {} } },
-        session: { store: storePath },
-      };
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      await sessionAccessor.replaceSessionEntry(
-        { agentId: "main", storePath, sessionKey: "agent:main:existing" },
-        { sessionId: "existing-id", updatedAt: 1 },
-      );
-      const respond = vi.fn();
-      try {
-        const routing = await prepareAgentRequestRouting({
-          cfg,
-          request: {
-            message: "start a named session",
-            agentId: "main",
-            sessionId: "new-id",
-            createSessionIfMissing,
-            idempotencyKey: "creation",
-          },
-          runId: "creation",
-          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          respond,
-          isRawModelRun: false,
-          agentDedupeKeys: ["agent:creation"],
-          reserveDedupe: vi.fn(),
-          bindDedupeSessionTarget: vi.fn(),
-          clearDedupe: vi.fn(),
-        });
-        expect(respond).not.toHaveBeenCalled();
-        expect(routing).toMatchObject({
-          agentId: "main",
-          requestedSessionId: "new-id",
-          requestedSessionKey: createSessionIfMissing ? "agent:main:explicit:new-id" : undefined,
-        });
-      } finally {
-        clearRuntimeConfigSnapshot();
-      }
-    });
-  },
-);
+async function route(
+  cfg: OpenClawConfig,
+  request: Parameters<typeof prepareAgentRequestRouting>[0]["request"],
+) {
+  const respond = vi.fn();
+  const routing = await prepareAgentRequestRouting({
+    cfg,
+    request,
+    runId: request.idempotencyKey,
+    context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+    respond,
+    isRawModelRun: false,
+    agentDedupeKeys: [`agent:${request.idempotencyKey}`],
+    reserveDedupe: vi.fn(),
+    bindDedupeSessionTarget: vi.fn(),
+    clearDedupe: vi.fn(),
+  });
+  expect(respond).not.toHaveBeenCalled();
+  return routing;
+}
 
 it.each([
-  { caller: "Gateway", sessionKey: "global", createSessionIfMissing: false },
-  { caller: "Gateway", sessionKey: "global", createSessionIfMissing: true },
-  { caller: "embedded", sessionKey: "unknown", createSessionIfMissing: false },
+  { caller: "creation", createSessionIfMissing: false },
+  { caller: "creation", createSessionIfMissing: true },
+  { caller: "Gateway", createSessionIfMissing: false },
+  { caller: "Gateway", createSessionIfMissing: true },
+  { caller: "embedded", createSessionIfMissing: false },
 ])(
-  "resolves cold $sessionKey ownership off the main thread in $caller (createSessionIfMissing=$createSessionIfMissing)",
-  async ({ caller, sessionKey, createSessionIfMissing }) => {
-    await withOpenClawTestState({ label: "session-id-cold-inspection" }, async (state) => {
+  "routes $caller session IDs (createSessionIfMissing=$createSessionIfMissing)",
+  async ({ caller, createSessionIfMissing }) => {
+    await withOpenClawTestState({ label: "session-id-routing" }, async (state) => {
       const storePath = state.statePath("sessions.json");
       const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+        agents:
+          caller === "creation"
+            ? { entries: { main: {} } }
+            : { ownership: "explicit", entries: { main: {}, ops: {} } },
         session: { store: storePath },
       };
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      for (const agentId of ["main", "ops"]) {
-        await sessionAccessor.replaceSessionEntry(
-          { agentId, storePath, sessionKey },
-          { sessionId: `${agentId}-session`, updatedAt: 1 },
-        );
-        const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
-        await closeOpenClawAgentDatabaseByPathAsync(target.path);
-        unregisterOpenClawAgentDatabase({ agentId, path: target.path });
-        expect(isOpenClawAgentDatabaseOpen(target.path)).toBe(false);
-      }
-
-      const openDatabase = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
       try {
+        if (caller === "creation") {
+          await replaceSessionEntry(
+            { agentId: "main", storePath, sessionKey: "agent:main:existing" },
+            { sessionId: "existing-id", updatedAt: 1 },
+          );
+          expect(
+            await route(cfg, {
+              message: "start a named session",
+              agentId: "main",
+              sessionId: "new-id",
+              createSessionIfMissing,
+              idempotencyKey: "creation",
+            }),
+          ).toMatchObject({
+            agentId: "main",
+            requestedSessionId: "new-id",
+            requestedSessionKey: createSessionIfMissing ? "agent:main:explicit:new-id" : undefined,
+          });
+          return;
+        }
+        const sessionKey = caller === "embedded" ? "unknown" : "global";
+        for (const agentId of ["main", "ops"]) {
+          await replaceSessionEntry(
+            { agentId, storePath, sessionKey },
+            { sessionId: `${agentId}-session`, updatedAt: 1 },
+          );
+          const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+          await closeOpenClawAgentDatabaseByPathAsync(target.path);
+          unregisterOpenClawAgentDatabase({ agentId, path: target.path });
+          expect(isOpenClawAgentDatabaseOpen(target.path)).toBe(false);
+        }
+        const openDatabase = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
         if (caller === "Gateway") {
-          const respond = vi.fn();
-          const routing = await prepareAgentRequestRouting({
-            cfg,
-            request: {
+          expect(
+            await route(cfg, {
               message: "resume",
               sessionId: "ops-session",
               createSessionIfMissing,
               idempotencyKey: "lookup",
-            },
-            runId: "lookup",
-            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-            respond,
-            isRawModelRun: false,
-            agentDedupeKeys: ["agent:lookup"],
-            reserveDedupe: vi.fn(),
-            bindDedupeSessionTarget: vi.fn(),
-            clearDedupe: vi.fn(),
-          });
-          expect(respond).not.toHaveBeenCalled();
-          expect(routing).toMatchObject({ agentId: "ops", requestedSessionKey: sessionKey });
+            }),
+          ).toMatchObject({ agentId: "ops", requestedSessionKey: sessionKey });
         } else {
           const prepared = await prepareEmbeddedRunSession({
             config: cfg,
@@ -124,8 +110,7 @@ it.each([
             runId: "lookup",
             timeoutMs: 1000,
           });
-          expect(prepared.params.sessionKey).toBe(sessionKey);
-          expect(prepared.params.agentId).toBe("ops");
+          expect(prepared.params).toMatchObject({ sessionKey, agentId: "ops" });
         }
         expect(openDatabase).not.toHaveBeenCalled();
       } finally {

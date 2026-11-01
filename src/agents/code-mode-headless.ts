@@ -25,7 +25,7 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  resolveCodeModeHeadlessConfig,
+  resolveCodeModeConfig,
   toToolSearchConfig,
   type CodeModeFailureCode,
   type CodeModeHeadlessResult,
@@ -163,13 +163,15 @@ function headlessNamespaceFreezePrelude(descriptors: CodeModeNamespaceDescriptor
 export async function runCodeModeScriptHeadless(params: {
   ctx: ToolSearchToolContext;
   code: string;
-  overrides?: Parameters<typeof resolveCodeModeHeadlessConfig>[1];
   wallClockMs?: number;
   maxToolCalls?: number;
   extraNamespaces?: CodeModeNamespaceDescriptor[];
   signal?: AbortSignal;
 }): Promise<CodeModeHeadlessResult> {
-  const config = resolveCodeModeHeadlessConfig(params.ctx, params.overrides);
+  const config = resolveCodeModeConfig(
+    params.ctx.runtimeConfig ?? params.ctx.config,
+    params.ctx.agentId,
+  );
   const wallClockMs = clampNumber(
     asPositiveInteger(params.wallClockMs) ?? DEFAULT_HEADLESS_WALL_CLOCK_MS,
     1,

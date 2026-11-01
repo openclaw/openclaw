@@ -21,13 +21,13 @@ import {
   aliasedSessionStoreMigrationWarning,
   canonicalizeSessionStore,
   distinctSessionStoreAliasWarning,
-  isAmbiguousSharedStoreKey,
   normalizeSessionEntry,
   removeDirIfEmpty,
   saveSessionStoreStrict,
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
 import {
+  isAmbiguousSharedStoreKey,
   isLegacyDefaultMainAliasKey,
   type PreparedLegacySessionSurfaces,
 } from "./state-migrations.session-surfaces.js";

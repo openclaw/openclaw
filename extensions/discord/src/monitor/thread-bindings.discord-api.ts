@@ -1,11 +1,15 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRestClient } from "../client.js";
-import { createChannelWebhook, getChannel } from "../internal/discord.js";
+import { getChannel, Routes } from "../internal/discord.js";
 import { withDiscordRequestAuthority } from "../internal/request-authority.js";
+import { DiscordError } from "../internal/rest.js";
 import { canFallbackDiscordWebhookSend } from "../retry.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
@@ -52,48 +56,23 @@ export function normalizeDiscordBindingChannelId(raw?: string | null): string | 
 }
 
 export function summarizeDiscordError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
   if (
-    typeof err === "string" ||
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint" ||
-    typeof err === "symbol"
+    err instanceof Error ||
+    (err != null && typeof err !== "object" && typeof err !== "function")
   ) {
-    return String(err);
+    return coerceErrorMessage(err);
   }
   return "error";
 }
 
 export function isDiscordThreadGoneError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const candidate = err as {
-    status?: unknown;
-    statusCode?: unknown;
-    code?: unknown;
-    rawError?: { code?: unknown };
-    body?: { code?: unknown };
-    response?: { status?: unknown; body?: { code?: unknown }; data?: { code?: unknown } };
-  };
-  const code =
-    parseStrictNonNegativeInteger(candidate.code) ??
-    parseStrictNonNegativeInteger(candidate.rawError?.code) ??
-    parseStrictNonNegativeInteger(candidate.body?.code) ??
-    parseStrictNonNegativeInteger(candidate.response?.body?.code) ??
-    parseStrictNonNegativeInteger(candidate.response?.data?.code);
-  if (code === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE) {
-    return true;
-  }
-  const status =
-    parseStrictNonNegativeInteger(candidate.status) ??
-    parseStrictNonNegativeInteger(candidate.statusCode) ??
-    parseStrictNonNegativeInteger(candidate.response?.status);
   // 404: deleted/unknown channel. 403: bot no longer has access.
-  return status === 404 || status === 403;
+  return (
+    err instanceof DiscordError &&
+    (err.discordCode === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE ||
+      err.status === 404 ||
+      err.status === 403)
+  );
 }
 
 export async function maybeSendBindingMessage(params: {
@@ -164,16 +143,17 @@ export async function createWebhookForChannel(params: {
       accountId: params.accountId,
       token: params.token,
     }).rest;
-    const created = await withDiscordRequestAuthority(assertCreateAllowed, () => {
+    const rawCreated = await withDiscordRequestAuthority(assertCreateAllowed, () => {
       assertCreateAllowed?.();
-      return createChannelWebhook(rest, params.channelId, {
+      return rest.post(Routes.channelWebhooks(params.channelId), {
         body: {
           name: "OpenClaw Agents",
         },
       });
     });
-    const webhookId = normalizeOptionalString(created?.id) ?? "";
-    const webhookToken = normalizeOptionalString(created?.token) ?? "";
+    const created = asNonArrayRecord(rawCreated);
+    const webhookId = normalizeOptionalString(created.id) ?? "";
+    const webhookToken = normalizeOptionalString(created.token) ?? "";
     if (!webhookId || !webhookToken) {
       return {};
     }

@@ -9,9 +9,11 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { getFeishuRuntime } from "./runtime.js";
 
 const FEISHU_INGRESS_PAYLOAD_VERSION = 1;
@@ -33,7 +35,6 @@ type FeishuIngressPayload = {
 
 type FeishuIngressFacts = {
   eventId: string;
-  eventType: string;
   laneKey: string;
 };
 
@@ -139,33 +140,27 @@ function inspectFeishuIngressEnvelope(
     );
   }
   const event = nestedEvent ?? envelope;
+  const missingLane = (message: string): FeishuIngressFacts => {
+    if (allowInvalidLane) {
+      return { eventId, laneKey: `invalid:${eventType}:${eventId}` };
+    }
+    throw new FeishuIngressPermanentError("invalid-event", message);
+  };
   if (eventType === "im.message.receive_v1") {
     const message = isRecord(event.message) ? event.message : null;
     const chatId = normalizeNullableString(message?.chat_id);
     if (!chatId) {
-      if (allowInvalidLane) {
-        return { eventId, eventType, laneKey: `invalid:${eventType}:${eventId}` };
-      }
-      throw new FeishuIngressPermanentError(
-        "invalid-event",
-        "Feishu message ingress envelope is missing event.message.chat_id.",
-      );
+      return missingLane("Feishu message ingress envelope is missing event.message.chat_id.");
     }
-    return { eventId, eventType, laneKey: `chat:${chatId}` };
+    return { eventId, laneKey: `chat:${chatId}` };
   }
   const noticeMeta = isRecord(event.notice_meta) ? event.notice_meta : null;
   const fileType = normalizeNullableString(noticeMeta?.file_type);
   const documentId = normalizeNullableString(noticeMeta?.file_token);
   if (!fileType || !documentId) {
-    if (allowInvalidLane) {
-      return { eventId, eventType, laneKey: `invalid:${eventType}:${eventId}` };
-    }
-    throw new FeishuIngressPermanentError(
-      "invalid-event",
-      "Feishu comment ingress envelope is missing its document identity.",
-    );
+    return missingLane("Feishu comment ingress envelope is missing its document identity.");
   }
-  return { eventId, eventType, laneKey: `comment-doc:${fileType}:${documentId}` };
+  return { eventId, laneKey: `comment-doc:${fileType}:${documentId}` };
 }
 
 function resolveFeishuIngressNonRetryableFailure(error: unknown) {
@@ -304,14 +299,8 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         getFeishuRuntime().state.openChannelIngressQueue<FeishuIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEnvelope, context) => {
-      const facts = inspectFeishuIngressEnvelope(
-        rawEnvelope,
-        options.encryptKey,
-        context.phase === "admission",
-      );
-      return facts ? { eventId: facts.eventId, laneKey: facts.laneKey } : null;
-    },
+    inspect: (rawEnvelope, context) =>
+      inspectFeishuIngressEnvelope(rawEnvelope, options.encryptKey, context.phase === "admission"),
     payload: {
       version: FEISHU_INGRESS_PAYLOAD_VERSION,
       serialize: (rawEnvelope, { receivedAt }) => ({ receivedAt, rawEnvelope }),
@@ -330,14 +319,30 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
         ),
     },
     deliver: async (rawEnvelope, lifecycle, claim) => {
+      const handoff = createDeferred();
       // The message debounce owner releases its logical claim before transport abandonment.
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
+        onDeferred: () => {
+          lifecycle.onDeferred();
+          handoff.resolve();
+        },
+        onAdopted: async () => {
+          try {
+            await lifecycle.onAdopted();
+          } finally {
+            handoff.resolve();
+          }
+        },
         onAbandoned: async () => {
-          await Promise.resolve()
-            .then(() => wrappedLifecycle.onBeforeAbandon?.())
-            .catch(() => undefined);
-          await lifecycle.onAbandoned();
+          try {
+            await Promise.resolve()
+              .then(() => wrappedLifecycle.onBeforeAbandon?.())
+              .catch(() => undefined);
+            await lifecycle.onAbandoned();
+          } finally {
+            handoff.resolve();
+          }
         },
       };
       activeLifecycles.set(claim.id, wrappedLifecycle);
@@ -349,6 +354,14 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
           return undefined;
         }
         if (result.kind === "deferred") {
+          // Buffering is not reply-lane admission. Keep its chat lane until the
+          // real lifecycle handoff; queued followups then release only the lane.
+          try {
+            await racePromiseWithAbortSignal(handoff.promise, lifecycle.abortSignal);
+          } catch (error) {
+            await wrappedLifecycle.onAbandoned();
+            throw error;
+          }
           return { kind: "deferred" };
         }
         if (result.kind === "completed") {
@@ -371,6 +384,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
     pollIntervalMs: options.pollIntervalMs ?? FEISHU_INGRESS_POLL_INTERVAL_MS,
     retention: "standard",
     drain: {
+      deferredLaneOccupancy: "release",
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
       resolveNonRetryableFailure: resolveFeishuIngressNonRetryableFailure,
       onLog: (message) => options.runtime.error?.(`feishu ingress: ${message}`),
@@ -407,9 +421,7 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
       };
     }
     try {
-      await monitor.admit(rawEnvelope, {
-        facts: { eventId: facts.eventId, laneKey: facts.laneKey },
-      });
+      await monitor.admit(rawEnvelope, { facts });
     } catch (error) {
       socketTerminator?.();
       throw error;

@@ -8,6 +8,10 @@ import {
 } from "../plugins/setup-registry.js";
 import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "./provider-auth-aliases.js";
 
 export type ResolvedCliBackend = Pick<
   CliBackendPlugin,
@@ -31,6 +35,8 @@ export type ResolvedCliBackend = Pick<
   | "parseJsonlLifecycleEvent"
   | "toolAvailabilityEnforcement"
   | "projectNativeToolAuthority"
+  | "resolveManagedNativeTools"
+  | "nativeToolSearch"
   | "nativeToolMode"
   | "hostOwnedTools"
   | "sideQuestionToolMode"
@@ -52,6 +58,48 @@ type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
 };
+
+/** Match a profile's declared provider to a CLI binding without reading credential stores. */
+export function resolveCliRuntimeProfileAlias(params: {
+  cfg?: OpenClawConfig;
+  metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
+  provider: string;
+  profileProvider: string | undefined;
+}): string | undefined {
+  const provider = normalizeProviderId(params.provider);
+  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
+  if (!provider || !profileProvider || profileProvider === provider) {
+    return undefined;
+  }
+  const authParams = { config: params.cfg, metadataSnapshot: params.metadataSnapshot };
+  if (
+    resolveProviderIdForAuth(provider, authParams) !==
+    resolveProviderIdForAuth(profileProvider, { ...authParams, storedCredential: true })
+  ) {
+    return undefined;
+  }
+  return resolveCliRuntimeModelBackendBinding({
+    config: params.cfg,
+    provider,
+    runtime: profileProvider,
+  })?.runtime;
+}
+
+/** Exact caps require both a selectable tool surface and its declared execution adapter. */
+export function cliBackendSupportsExactToolAvailability(
+  backend: Pick<
+    CliBackendPlugin,
+    "nativeToolMode" | "toolAvailabilityEnforcement" | "resolveExecutionArgs" | "prepareExecution"
+  >,
+): boolean {
+  return (
+    backend.nativeToolMode === "selectable" &&
+    ((backend.toolAvailabilityEnforcement === "execution-args" &&
+      backend.resolveExecutionArgs !== undefined) ||
+      (backend.toolAvailabilityEnforcement === "prepare-execution" &&
+        backend.prepareExecution !== undefined))
+  );
+}
 
 function resolveCliBackendModelProvider(
   backend: Pick<CliBackendPlugin, "modelProvider">,
@@ -108,11 +156,15 @@ export function listCliRuntimeProviderIds(
     includeSetupRegistry?: boolean;
   } = {},
 ): string[] {
-  // Only CLI backends with a canonical modelProvider are runtime aliases that
-  // should be hidden from model-provider pickers. Standalone CLI backends own
-  // direct refs such as acme-cli/model and must remain selectable.
+  // A runtime is hidden when it aliases a different canonical provider.
+  // A backend bound to its own id owns direct refs such as
+  // antigravity-cli/model and stays selectable.
   return [
-    ...new Set(listCliRuntimeModelBackendBindings(params).map((binding) => binding.runtime)),
+    ...new Set(
+      listCliRuntimeModelBackendBindings(params)
+        .filter((binding) => binding.runtime !== binding.provider)
+        .map((binding) => binding.runtime),
+    ),
   ].toSorted();
 }
 
@@ -259,6 +311,8 @@ export function resolveCliBackendConfig(
     parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
+    resolveManagedNativeTools: backend.resolveManagedNativeTools,
+    nativeToolSearch: backend.nativeToolSearch,
     nativeToolMode: backend.nativeToolMode,
     hostOwnedTools: backend.hostOwnedTools,
     sideQuestionToolMode: backend.sideQuestionToolMode,

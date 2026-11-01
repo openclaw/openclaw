@@ -13,8 +13,7 @@ export type SqliteCleanCloseSealRefusal =
   | "file-mismatch"
   | "journal-present"
   | "identity-mismatch"
-  | "runtime-mismatch"
-  | "sqlite-mismatch"
+  | "feature-mismatch"
   | "schema-mismatch"
   | "policy-mismatch";
 

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type {
   SessionsProcessesListResult,
@@ -27,6 +28,7 @@ import {
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { NODE_PORTAL_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE,
   NodeWorkerBundleInstallError,
@@ -57,12 +59,14 @@ import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
   NodeWorkerWorkspaceTransferError,
 } from "../worker/node-workspace-transfer-protocol.js";
+import { decodeWorkerRequest } from "../worker/protocol-record.js";
 import {
   parseWorkerConnectionEndpoint,
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
 import { parseNodeWorkerProcessInput } from "../worker/worker-process-observation.js";
 import { invokeNodeWorkerDesktopStream } from "./desktop-stream-command.js";
+import { runNodeStreamTransport } from "./node-stream-transport.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import {
@@ -70,7 +74,6 @@ import {
   type NodeWorkerSupervisorControl,
 } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
-import { invokeNodeWorkerPortalStream } from "./portal-stream-command.js";
 
 const WORKSPACE_TRANSFER_DIAGNOSTIC_MAX_CHARS = 1_024;
 const WORKSPACE_DIAGNOSTIC_MAX_CHARS = 500;
@@ -375,4 +378,46 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     );
     return { handled: true as const, ok: false as const, code, message };
   }
+}
+
+const REQUEST_MAX_BYTES = 16 * 1024;
+const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
+
+function parseNodeWorkerPortalStreamInput(raw?: string | null) {
+  const value = decodeWorkerRequest(raw, REQUEST_MAX_BYTES, "node worker portal stream");
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 3 ||
+    typeof value.ticket !== "string" ||
+    !TICKET_PATTERN.test(value.ticket) ||
+    value.attachPath !== `${NODE_PORTAL_ATTACH_PATH}?ticket=${value.ticket}` ||
+    typeof value.port !== "number" ||
+    !Number.isSafeInteger(value.port) ||
+    value.port < 1 ||
+    value.port > 65_535
+  ) {
+    throw new Error("INVALID_REQUEST: invalid node worker portal stream request");
+  }
+  return { ticket: value.ticket, attachPath: value.attachPath, port: value.port };
+}
+
+/** Runs a private worker portal stream against its exact enrolled Gateway owner. */
+async function invokeNodeWorkerPortalStream(
+  params: Parameters<typeof invokeNodeWorkerDesktopStream>[0],
+): Promise<void> {
+  if (!params.gatewayUrl || !params.signal) {
+    throw new Error("node worker portal gateway connection is unavailable");
+  }
+  const command = parseNodeWorkerPortalStreamInput(params.paramsJSON);
+  await runNodeStreamTransport({
+    gatewayUrl: params.gatewayUrl,
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+    attachPath: command.attachPath,
+    expectedAttachPath: NODE_PORTAL_ATTACH_PATH,
+    target: { port: command.port },
+    metadata: { ok: true },
+    streamName: "portal",
+    signal: params.signal,
+  });
 }

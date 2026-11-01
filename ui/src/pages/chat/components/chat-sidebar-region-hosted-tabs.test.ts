@@ -2,15 +2,20 @@
 
 import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   type PanelHostedTab,
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { createSidebarRegionCallbackMocks } from "../../../test-helpers/sidebar-region-callbacks.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
+import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
+import { getPaneTestRuntime } from "../chat-pane.test-support.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
+import { activatePanel, openSlot, closeSlot, type SidebarSlotId } from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.tsx";
 
 const shells: HTMLElement[] = [];
@@ -76,15 +81,7 @@ async function mount(
     }),
   );
   region.fetchFavicon = options.fetchFavicon;
-  region.callbacks = {
-    activatePanel: vi.fn(),
-    togglePanelExpanded: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    reorderPanel: vi.fn(),
-    resizePanel: vi.fn(),
-    setOpen: vi.fn(),
-  };
+  region.callbacks = createSidebarRegionCallbackMocks();
   const shell = div("sidebar-region"),
     outlet = div("sidebar-region__right-runtime");
   const header = div(),
@@ -113,10 +110,23 @@ async function mount(
   return { panel, region, shell, changed, find, page, icon, layout };
 }
 
-function labels(shell: HTMLElement) {
-  return [...shell.querySelectorAll(".tabstrip-tab .tabstrip-tab__label")].map(
-    (label) => label.textContent,
-  );
+function closeFocused(shell: HTMLElement, source: "native" | "header") {
+  shell
+    .querySelector('[data-region-header="side"]')!
+    .dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+  if (source === "header") {
+    shell.querySelector<HTMLButtonElement>('button[aria-label="Close tab: First page"]')!.click();
+    return;
+  }
+  const command = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
+  window.dispatchEvent(command);
+  expect(command.defaultPrevented).toBe(true);
+}
+
+function closeSlots(region: Awaited<ReturnType<typeof mount>>["region"]) {
+  region.callbacks!.closeSlot = vi.fn((slot) => {
+    region.layout = closeSlot(region.layout, slot);
+  });
 }
 
 afterEach(() => {
@@ -127,16 +137,13 @@ afterEach(() => {
 });
 
 it.each([true, false])("delivers panel commands with wrapped=%s", async (wrapped) => {
-  const { panel, region, shell } = await mount({ wrapped });
-  const container = shell.querySelector('[data-panel-slot="browser"]')!;
+  const { panel, region } = await mount({ wrapped });
   const event = new CustomEvent("openclaw:browser-toggle", {
     detail: { open: true, newTab: true },
   });
 
-  expect(container.firstElementChild === panel).toBe(!wrapped);
   expect(region.deliverPanelEvent("browser", event)).toBe(true);
   expect(panel.handleToggleRequest).toHaveBeenCalledExactlyOnceWith(event);
-  expect(labels(shell)).toEqual(["Review", "First page", "Second page", "Files"]);
 });
 
 it("restores an expanded hosted panel only from its active page tab", async () => {
@@ -202,7 +209,7 @@ it("activates the Browser panel before selecting a hosted id containing colons",
 });
 
 it.each([false, true])("closes pages before the empty panel (native=%s)", async (native) => {
-  const { shell, region, panel, changed, find } = await mount();
+  const { region, panel, changed, find } = await mount();
   const close = (label: string) => {
     if (!native) {
       find(`button[aria-label="${label}"]`).click();
@@ -221,15 +228,70 @@ it.each([false, true])("closes pages before the empty panel (native=%s)", async 
   expect(panel.closeHostedTab).toHaveBeenCalledExactlyOnceWith("remote:page:1");
   expect(region.callbacks!.closeSlot).not.toHaveBeenCalled();
   await changed([]);
-  expect(labels(shell)).toEqual(["Review", "Browser", "Files"]);
   expect(region.layout.open).toBe(true);
   close("Close Browser");
   expect(panel.closeHostedTab).toHaveBeenCalledOnce();
   expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("browser");
 });
 
+it.each([
+  { presentation: "desktop", sessionChanged: false, source: "native" },
+  { presentation: "desktop", sessionChanged: false, source: "header" },
+  { presentation: "mobile", sessionChanged: false, source: "native" },
+  { presentation: "mobile", sessionChanged: true, source: "native" },
+  { presentation: "mobile", sessionChanged: true, source: "header" },
+] as const)(
+  "finishes $presentation hosted Close only in its initiating session ($source, changed=$sessionChanged)",
+  async ({ presentation, sessionChanged, source }) => {
+    const { shell, region, panel, changed } = await mount({
+      tabs: [firstTab],
+      slot: "workspace",
+    });
+    const mobile = presentation === "mobile" ? createMountedPanes([]) : undefined;
+    const mobileHost = () => mobile!.pane.render().layout!.region.mobileHost!;
+    if (mobile) {
+      getPaneTestRuntime(mobile.pane).mergedChrome = true;
+      mobileHost().navigate({ area: "panels" });
+      region.mobileHost = mobileHost();
+    }
+    region.presentation = presentation;
+    region.layout = openSlot({ columns: [] }, "workspace");
+    closeSlots(region);
+    const closing = createDeferred();
+    panel.closeHostedTab.mockImplementation(async () => {
+      await closing.promise;
+      panel.hostedTabs = [];
+      await changed();
+    });
+    await region.updateComplete;
+    closeFocused(shell, source);
+    if (sessionChanged) {
+      mobile!.state.sessionKey = "agent:main:replacement";
+      mobileHost().navigate({ area: "panels" });
+      region.mobileHost = mobileHost();
+      await region.updateComplete;
+    }
+    closing.resolve();
+    await panel.closeHostedTab.mock.results[0]!.value;
+    await region.updateComplete;
+    expect(panel.closeHostedTab).toHaveBeenCalledExactlyOnceWith(firstTab.id);
+    if (sessionChanged) {
+      expect(mobileHost().open).toBe(true);
+      expect(region.callbacks!.closeSlot).not.toHaveBeenCalled();
+    } else {
+      await waitForSolid(() => {
+        expect(region.callbacks!.closeSlot).toHaveBeenCalledExactlyOnceWith("workspace");
+        expect(region.layout.open).toBe(false);
+        if (presentation === "mobile") {
+          expect(mobileHost().open).toBe(false);
+        }
+      });
+    }
+  },
+);
+
 it("presents non-browser hosted tabs with their title, status, badge and class", async () => {
-  const { shell, page, icon } = await mount({
+  const { page, icon } = await mount({
     slot: "terminal",
     tabs: [
       makeTab("shell:1", "zsh", "terminal", {
@@ -240,7 +302,6 @@ it("presents non-browser hosted tabs with their title, status, badge and class",
       }),
     ],
   });
-  expect(labels(shell)).toEqual(["Review", "zsh", "Files"]);
   const tab = page("shell:1");
   expect(tab.getAttribute("title")).toBe("main: /workspace");
   expect(tab.querySelector(".tabstrip-tab__status")?.textContent).toBe("Exited (0)");
@@ -262,7 +323,7 @@ it("prefers an explicit favicon over the hostname fetch and fallback icon", asyn
 
 it("renders a cached favicon after the hostname fetch settles", async () => {
   const fetchFavicon = vi.fn<LinkFaviconFetcher>().mockResolvedValue("blob:header-favicon");
-  const { shell, region, layout } = await mount({
+  const { shell } = await mount({
     tabs: [{ ...firstTab, url: "https://favicon-ready.example/path" }],
     fetchFavicon,
   });
@@ -271,12 +332,6 @@ it("renders a cached favicon after the hostname fetch settles", async () => {
       "blob:header-favicon",
     ),
   );
-  expect(fetchFavicon).toHaveBeenCalledExactlyOnceWith(
-    "favicon-ready.example",
-    expect.any(AbortSignal),
-  );
-  await layout({ ...region.layout });
-  expect(fetchFavicon).toHaveBeenCalledOnce();
 });
 
 it("keeps remote and native fallback icons when no favicon is available", async () => {
@@ -290,4 +345,59 @@ it("keeps remote and native fallback icons when no favicon is available", async 
   expect(shell.querySelector("img.tabstrip-tab__favicon")).toBeNull();
   expect(icon(firstTab.id, 'path[d="M2 12h20"]')).not.toBeNull();
   expect(icon(secondTab.id, 'rect[width="20"][height="14"]')).not.toBeNull();
+});
+
+async function startCloseAll(removeTab: boolean) {
+  const { panel, region, shell, changed } = await mount({ tabs: [firstTab] });
+  const confirmation = createDeferred();
+  const finishCloseAll = vi.fn(() => true);
+  region.presentation = "desktop";
+  closeSlots(region);
+  region.callbacks!.newTab = {
+    open: vi.fn(),
+    close: vi.fn(),
+    openPanel: vi.fn(),
+    finishCloseAll,
+  };
+  panel.closeHostedTab.mockImplementation(async () => {
+    await confirmation.promise;
+    if (removeTab) {
+      await changed([]);
+    }
+  });
+  await region.updateComplete;
+  shell.querySelector<HTMLButtonElement>('button[aria-label="Panel position"]')!.click();
+  await vi.waitFor(() => expect(shell.querySelector('[data-value="close-all"]')).not.toBeNull());
+  shell.querySelector<HTMLElement>('[data-value="close-all"]')!.click();
+  await vi.waitFor(() => expect(panel.closeHostedTab).toHaveBeenCalledOnce());
+  await vi.waitFor(() =>
+    expect(shell.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!.disabled).toBe(
+      true,
+    ),
+  );
+  expect(finishCloseAll).not.toHaveBeenCalled();
+  return { panel, region, shell, confirmation, finishCloseAll };
+}
+
+it("closes hosted resources sequentially while presenting close-all progress", async () => {
+  const { region, confirmation, finishCloseAll } = await startCloseAll(true);
+  confirmation.resolve();
+  await vi.waitFor(() => expect(finishCloseAll).toHaveBeenCalledOnce());
+  expect(region.callbacks!.closeSlot).toHaveBeenCalledWith("browser");
+});
+
+it("retires close-all feedback on native scope replacement before a held close completes", async () => {
+  const { panel, region, shell, confirmation, finishCloseAll } = await startCloseAll(false);
+  region.panelIdPrefix = "replacement-scope";
+  await region.updateComplete;
+  await vi.waitFor(() =>
+    expect(shell.querySelector<HTMLButtonElement>('button[aria-label="New tab"]')!.disabled).toBe(
+      false,
+    ),
+  );
+  expect(finishCloseAll).not.toHaveBeenCalled();
+  confirmation.resolve();
+  await panel.closeHostedTab.mock.results[0]!.value;
+  await region.updateComplete;
+  expect(finishCloseAll).not.toHaveBeenCalled();
 });

@@ -18,6 +18,11 @@ type RuntimeUserTurnTranscriptContext = {
   recorder: UserTurnTranscriptRecorder;
 };
 
+type RuntimeUserTurnMessage = AgentMessage & {
+  [RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT]?: RuntimeUserTurnTranscriptContext;
+  [RUNTIME_USER_TURN_TRANSCRIPT_RECORDER]?: UserTurnTranscriptRecorder;
+};
+
 export async function withCurrentUserTurnInput<T>(
   recorder: UserTurnTranscriptRecorder | undefined,
   run: () => T,
@@ -71,11 +76,9 @@ export function attachRuntimeUserTurnTranscriptContext(
 
 /** Consumes the transient queued-turn context before the message is serialized. */
 export function takeRuntimeUserTurnTranscriptContext(
-  runtimeMessage: AgentMessage,
+  runtimeMessage: RuntimeUserTurnMessage,
 ): RuntimeUserTurnTranscriptContext | undefined {
-  const context = Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT) as
-    | RuntimeUserTurnTranscriptContext
-    | undefined;
+  const context = runtimeMessage[RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT];
   if (context) {
     Reflect.deleteProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_CONTEXT);
   }
@@ -95,11 +98,9 @@ export function attachRuntimeUserTurnTranscriptRecorder(
 }
 
 function readRuntimeUserTurnTranscriptRecorder(
-  runtimeMessage: AgentMessage,
+  runtimeMessage: RuntimeUserTurnMessage,
 ): UserTurnTranscriptRecorder | undefined {
-  return Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER) as
-    | UserTurnTranscriptRecorder
-    | undefined;
+  return runtimeMessage[RUNTIME_USER_TURN_TRANSCRIPT_RECORDER];
 }
 
 /** A steered message retains its own live custody while another turn owns the runtime. */
@@ -132,7 +133,7 @@ export async function withCurrentRuntimeUserTurnTranscriptRecorder<T>(
 }
 
 export function takeRuntimeUserTurnTranscriptRecorder(
-  runtimeMessage: AgentMessage,
+  runtimeMessage: RuntimeUserTurnMessage,
 ): UserTurnTranscriptRecorder | undefined {
   const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
   if (recorder) {

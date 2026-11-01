@@ -112,7 +112,7 @@ function parseResolvedLocaleModuleId(id: string): { locale: string; namespace?: 
     : null;
 }
 
-export function controlUiLocaleModulesPlugin(): Plugin {
+export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin {
   let sourceAliases: Alias[] = [];
   // Both modules must share one materialization. Replacing the cache object
   // fences resolved and rejected work from an invalidated build generation.
@@ -136,88 +136,96 @@ export function controlUiLocaleModulesPlugin(): Plugin {
     watchChange() {
       invalidateCatalogs();
     },
-    resolveId(id) {
-      if (parseResolvedLocaleModuleId(`\0${id}`)) {
-        return `\0${id}`;
-      }
-      return null;
-    },
-    async load(id) {
-      const request = parseResolvedLocaleModuleId(id);
-      if (!request) {
+    resolveId: {
+      filter: { id: /^virtual:openclaw-control-ui-locale(?:-config-hints|-namespace)?\// },
+      handler(id) {
+        if (parseResolvedLocaleModuleId(`\0${id}`)) {
+          return `\0${id}`;
+        }
         return null;
-      }
-      const memoryPath = path.join(i18nAssetsDir, `${request.locale}.tm.jsonl`);
-      while (true) {
-        const activeCache = catalogCache;
-        activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog(sourceAliases).catch(
-          (error: unknown) => {
-            // A later request can retry a corrected source without a watched-file change.
-            activeCache.sourceCatalogLoad = null;
-            throw error;
-          },
-        );
-        let sourceCatalogResult: Awaited<ReturnType<typeof loadCurrentSourceCatalog>>;
-        try {
-          sourceCatalogResult = await activeCache.sourceCatalogLoad;
-        } catch (error) {
-          if (activeCache !== catalogCache) {
-            continue;
-          }
-          throw error;
+      },
+    },
+    load: {
+      filter: { id: /^\0virtual:openclaw-control-ui-locale(?:-config-hints|-namespace)?\// },
+      async handler(id) {
+        const request = parseResolvedLocaleModuleId(id);
+        if (!request) {
+          return null;
         }
-        if (activeCache !== catalogCache) {
-          continue;
-        }
-        for (const watchFile of sourceCatalogResult.watchFiles) {
-          this.addWatchFile(watchFile);
-        }
-        // Vite turns watched files into imports during dev transforms. A source-only
-        // locale has no memory file yet, so importing that path would fail.
-        if (existsSync(memoryPath)) {
-          this.addWatchFile(memoryPath);
-        }
-        let partitionLoad = activeCache.partitionLoads.get(request.locale);
-        if (!partitionLoad) {
-          partitionLoad = loadControlUiLocaleCatalogPartition(
-            request.locale,
-            sourceCatalogResult.catalog,
-            sourceCatalogResult.startupKeys,
-            memoryPath,
+        const memoryPath = path.join(i18nAssetsDir, `${request.locale}.tm.jsonl`);
+        while (true) {
+          const activeCache = catalogCache;
+          activeCache.sourceCatalogLoad ??= loadCurrentSourceCatalog(sourceAliases).catch(
+            (error: unknown) => {
+              // A later request can retry a corrected source without a watched-file change.
+              activeCache.sourceCatalogLoad = null;
+              throw error;
+            },
           );
-          activeCache.partitionLoads.set(request.locale, partitionLoad);
-        }
-        let partition: ControlUiLocaleCatalogPartition;
-        try {
-          partition = await partitionLoad;
-        } catch (error) {
+          let sourceCatalogResult: Awaited<ReturnType<typeof loadCurrentSourceCatalog>>;
+          try {
+            sourceCatalogResult = await activeCache.sourceCatalogLoad;
+          } catch (error) {
+            if (activeCache !== catalogCache) {
+              continue;
+            }
+            throw error;
+          }
           if (activeCache !== catalogCache) {
             continue;
           }
-          throw error;
-        }
-        if (activeCache !== catalogCache) {
-          continue;
-        }
-        if (request.namespace === "configHints") {
-          return `export default ${JSON.stringify(partition.configHints)};`;
-        }
-        if (request.namespace) {
-          return `export default ${JSON.stringify(partition.namespaces[request.namespace] ?? {})};`;
-        }
-        const loaders = [
-          ["configHints", `${localeConfigHintsModulePrefix}${request.locale}`],
-          ...Object.keys(partition.namespaces).map((namespace) => [
-            namespace,
-            `${localeNamespaceModulePrefix}${request.locale}/${namespace}`,
-          ]),
-        ].map(
-          ([namespace, specifier]) =>
-            `${JSON.stringify(namespace)}: () => import(${JSON.stringify(specifier)})`,
-        );
-        return `import { createLazyLocaleCatalog } from ${JSON.stringify(path.join(repoRoot, "ui/src/i18n/lib/lazy-catalog.ts"))};
+          for (const watchFile of sourceCatalogResult.watchFiles) {
+            this.addWatchFile(watchFile);
+            buildInputs?.add(watchFile);
+          }
+          // Vite turns watched files into imports during dev transforms. A source-only
+          // locale has no memory file yet, so importing that path would fail.
+          if (existsSync(memoryPath)) {
+            this.addWatchFile(memoryPath);
+            buildInputs?.add(memoryPath);
+          }
+          let partitionLoad = activeCache.partitionLoads.get(request.locale);
+          if (!partitionLoad) {
+            partitionLoad = loadControlUiLocaleCatalogPartition(
+              request.locale,
+              sourceCatalogResult.catalog,
+              sourceCatalogResult.startupKeys,
+              memoryPath,
+            );
+            activeCache.partitionLoads.set(request.locale, partitionLoad);
+          }
+          let partition: ControlUiLocaleCatalogPartition;
+          try {
+            partition = await partitionLoad;
+          } catch (error) {
+            if (activeCache !== catalogCache) {
+              continue;
+            }
+            throw error;
+          }
+          if (activeCache !== catalogCache) {
+            continue;
+          }
+          if (request.namespace === "configHints") {
+            return `export default ${JSON.stringify(partition.configHints)};`;
+          }
+          if (request.namespace) {
+            return `export default ${JSON.stringify(partition.namespaces[request.namespace] ?? {})};`;
+          }
+          const loaders = [
+            ["configHints", `${localeConfigHintsModulePrefix}${request.locale}`],
+            ...Object.keys(partition.namespaces).map((namespace) => [
+              namespace,
+              `${localeNamespaceModulePrefix}${request.locale}/${namespace}`,
+            ]),
+          ].map(
+            ([namespace, specifier]) =>
+              `${JSON.stringify(namespace)}: () => import(${JSON.stringify(specifier)})`,
+          );
+          return `import { createLazyLocaleCatalog } from ${JSON.stringify(path.join(repoRoot, "ui/src/i18n/lib/lazy-catalog.ts"))};
 export default createLazyLocaleCatalog(${JSON.stringify(partition.base)}, {${loaders.join(",")}});`;
-      }
+        }
+      },
     },
   };
 }

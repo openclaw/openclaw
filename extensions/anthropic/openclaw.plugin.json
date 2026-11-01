@@ -37,6 +37,7 @@
         "baseUrl": "https://api.anthropic.com",
         "api": "anthropic-messages",
         "defaultUtilityModel": "claude-haiku-5-5",
+        "family": "anthropic",
         "models": [
           {
             "id": "claude-haiku-5-5",
@@ -396,7 +397,7 @@
       "id": "native-sessions",
       "title": "Native sessions",
       "order": 10,
-      "properties": ["sessionCatalog"]
+      "properties": ["sessionCatalog", "historyRecovery"]
     }
   ],
   "configSchema": {
@@ -409,6 +410,32 @@
         "properties": {
           "enabled": { "type": "boolean", "default": true }
         }
+      },
+      "historyRecovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "attestNativeLogin": { "type": "boolean", "default": false }
+        }
+      },
+      "managedNativeTools": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "enum": ["Agent", "Workflow"] }
+          },
+          "agents": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "enum": ["Agent", "Workflow"] }
+            }
+          }
+        }
       }
     }
   },
@@ -420,6 +447,26 @@
     "sessionCatalog.enabled": {
       "label": "Discover Claude Code Sessions",
       "help": "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
+    "historyRecovery": {
+      "label": "Claude CLI History Recovery",
+      "help": "Controls whether a fresh Claude CLI session that runs on the native Claude login can receive the conversation's saved OpenClaw history."
+    },
+    "managedNativeTools": {
+      "label": "Claude Code Native Tools on Managed Turns",
+      "help": "Off by default. Keeps selected Claude Code orchestration tools on OpenClaw-managed claude-cli turns, which otherwise expose only OpenClaw tools. Descendant agents inherit the managed turn's tool list and isolation: no user settings, Claude plugins, auto-memory, slash commands, or Chrome. Applies to ordinary and subagent-completion turns alike so the cached prompt prefix stays stable; restricted senders, delegated runs, explicit tool caps, and tools.fs.workspaceOnly keep no native tools."
+    },
+    "managedNativeTools.default": {
+      "label": "Default Native Tools",
+      "help": "Claude Code tools kept for every agent without its own entry: Agent (subagents) and Workflow (scripted multi-agent orchestration)."
+    },
+    "managedNativeTools.agents": {
+      "label": "Per-Agent Native Tools",
+      "help": "Agent id to its own list, replacing the default. An empty list opts that agent out."
+    },
+    "historyRecovery.attestNativeLogin": {
+      "label": "Attest Native Claude Login",
+      "help": "Off by default. When on, OpenClaw reads the access token of the native Claude login on this Gateway and sends it only to https://api.anthropic.com/api/oauth/profile to learn which account owns it, so saved history is replayed only to that same account. When off, history recovery never reads or sends that token, and fresh native-login sessions get no saved history."
     }
   }
 }

@@ -1,11 +1,15 @@
-import { createMemo, createSignal, onSettled } from "solid-js";
+import { action, createMemo, createOptimisticStore, createSignal, onSettled } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import {
+  createChannelCapability,
+  resolveChannelPairingAuthSignature,
+} from "../../lib/channels/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -14,15 +18,20 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { showToast } from "../../lib/toast.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelsProps } from "./view.types.ts";
 import { createChannelSetup } from "./wizard-setup.ts";
 
+registerRouteSubtitlesEnglish();
+
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
-function createChannelsPage(context: ApplicationContext) {
+export function ChannelsPage() {
+  const context = useApplication();
+  const channelCapability = context.acquireChannels(createChannelCapability);
   const [selectedChannel, setSelectedChannel] = createSignal<string | null>(null);
   const [pairingChannelFilter, setPairingChannelFilter] = createSignal<string | null>(null);
   const [pairingAccountFilter, setPairingAccountFilter] = createSignal<string | null>(null);
@@ -42,7 +51,7 @@ function createChannelsPage(context: ApplicationContext) {
   const pairingPoll = useVisiblePoll(CHANNEL_PAIRING_POLL_INTERVAL_MS, pollPairing);
   let pairingRoot: HTMLElement | undefined;
   const gatewayProjection = projectGateway(context.gateway);
-  const channelsProjection = projectChannels(context.channels);
+  const channelsProjection = projectChannels(channelCapability);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   const settings = projectSource(context.theme, {
     read: () => loadSettings().showAdvancedSettings === true,
@@ -53,7 +62,7 @@ function createChannelsPage(context: ApplicationContext) {
 
   const pluginPresentation = createChannelPluginPresentation({
     getContext: () => context,
-    getProps: viewProps,
+    getProps: () => ({ ...viewProps(), mutationBusy: presentation().busy }),
     getConnection: () => connection,
     getChannelIds: () => resolveChannelOrder(channelsProjection.read().channelsSnapshot),
     isConnected: () => active && context.gateway.snapshot.phase === "connected",
@@ -61,7 +70,14 @@ function createChannelsPage(context: ApplicationContext) {
 
   const wizardHost = createChannelSetup({
     getContext: () => context,
+    channels: channelCapability,
     clearSelection: () => setSelectedChannel(null),
+    presentWizard: (pending) => runMutation("wizard", pending),
+    retire: () => {
+      retireMutation("wizard");
+      retireMutation("whatsapp");
+    },
+    startWhatsApp,
   });
 
   let schemaLoadStarted = false;
@@ -72,15 +88,83 @@ function createChannelsPage(context: ApplicationContext) {
     getGateway: () => context.gateway,
     onSnapshot: handleGatewaySnapshot,
   });
+  // Presents admitted work without changing its owner's write or settlement policy.
+  const epoch = createMemo(() => {
+    gatewayProjection.read();
+    return connection.epoch;
+  });
+  const presentation = createMemo(() => {
+    const currentEpoch = epoch();
+    const [busy, setBusy] = createOptimisticStore({
+      config: false,
+      pairing: false,
+      whatsapp: false,
+      wizard: false,
+    });
+    return { epoch: currentEpoch, busy, setBusy };
+  });
+  const lifetimes = {
+    config: Promise.withResolvers<void>(),
+    pairing: Promise.withResolvers<void>(),
+    whatsapp: Promise.withResolvers<void>(),
+    wizard: Promise.withResolvers<void>(),
+  };
+  const isCurrent = (view: ReturnType<typeof presentation>) =>
+    active && view.epoch === connection.epoch;
+  const present = action(function* (
+    view: ReturnType<typeof presentation>,
+    kind: ChannelMutation,
+    pending: Promise<unknown>,
+    retired: Promise<void>,
+  ) {
+    try {
+      if (isCurrent(view)) {
+        view.setBusy((busy) => {
+          busy[kind] = true;
+        });
+      }
+      // Leaving the presentation never cancels an already admitted write.
+      yield Promise.race([pending, retired]);
+    } catch (error) {
+      if (isCurrent(view)) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
+  });
+
+  function retireMutation(kind?: ChannelMutation) {
+    for (const key of kind ? [kind] : (["config", "pairing", "whatsapp", "wizard"] as const)) {
+      lifetimes[key].resolve();
+      lifetimes[key] = Promise.withResolvers<void>();
+    }
+  }
+
+  async function runMutation(kind: ChannelMutation, pending: Promise<unknown>) {
+    const view = presentation();
+    const retired = lifetimes[kind].promise;
+    // Let owner publication and any newly opened modal mount before joining the action.
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
+    return present(view, kind, pending, retired);
+  }
 
   function handleGatewaySnapshot(change: GatewayPageChange) {
     const { snapshot, initial, identityChanged } = change;
     const transportChanged = change.clientChanged || change.connectionChanged;
+    if (identityChanged || transportChanged) {
+      retireMutation();
+    }
     const connected = snapshot.phase === "connected";
     const pairingAccess = connected
       ? hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
       : canManagePairing;
     const adminAccess = connected ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null) : canAdmin;
+    if (!adminAccess) {
+      retireMutation("config");
+      retireMutation("whatsapp");
+      retireMutation("wizard");
+    }
     const pairingAuthSignature = connected
       ? resolveChannelPairingAuthSignature(snapshot)
       : gatewayPairingAuthSignature;
@@ -91,6 +175,7 @@ function createChannelsPage(context: ApplicationContext) {
       pluginPresentation.invalidateRequests();
     }
     if (identityChanged || pairingAuthChanged || (connected && !pairingAccess)) {
+      retireMutation("pairing");
       updateOperations({ prompt: null });
       setPairingFilter(null, null);
       setPairingNotice(null);
@@ -109,14 +194,14 @@ function createChannelsPage(context: ApplicationContext) {
         ensureInitialData();
       }
       if (!initial && (identityChanged || transportChanged)) {
-        void context.channels.refresh(false);
+        void channelCapability.refresh(false);
       }
       if (
         !initial &&
         (identityChanged || transportChanged || pairingAuthChanged) &&
         pairingAccess
       ) {
-        void context.channels.refreshPairing();
+        void channelCapability.refreshPairing();
       }
     } else {
       schemaLoadStarted = false;
@@ -132,17 +217,17 @@ function createChannelsPage(context: ApplicationContext) {
 
     pluginPresentation.ensure(client);
 
-    const channels = context.channels.state;
+    const channels = channelCapability.state;
     const config = context.runtimeConfig.state;
     if (!channels.channelsSnapshot && !channels.channelsLoading) {
-      void context.channels.refresh(false);
+      void channelCapability.refresh(false);
     }
     if (
       hasOperatorPairingAccess(gateway.hello?.auth ?? null) &&
       !channels.pairingSnapshot &&
       !channels.pairingLoading
     ) {
-      void context.channels.refreshPairing();
+      void channelCapability.refreshPairing();
     }
     if (!config.configSnapshot && !config.configLoading) {
       void context.runtimeConfig.ensureLoaded();
@@ -160,7 +245,7 @@ function createChannelsPage(context: ApplicationContext) {
       snapshot.phase === "connected" &&
       hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
     ) {
-      void context.channels.refreshPairing();
+      void channelCapability.refreshPairing();
     }
   }
 
@@ -171,13 +256,13 @@ function createChannelsPage(context: ApplicationContext) {
 
   async function saveChannelConfig() {
     if (await context.runtimeConfig.save()) {
-      await context.channels.refresh(true);
+      await channelCapability.refresh(true);
     }
   }
 
   async function reloadChannelConfig() {
     await context.runtimeConfig.discardDraft({ reloadOnly: true });
-    await context.channels.refresh(true);
+    await channelCapability.refresh(true);
   }
 
   function reconcilePairingFilter(snapshot: ChannelsPairingListResult | null) {
@@ -218,7 +303,7 @@ function createChannelsPage(context: ApplicationContext) {
   }
 
   function openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
-    if (context.channels.state.pairingBusyRequestId) {
+    if (channelCapability.state.pairingBusyRequestId) {
       return;
     }
     setPairingNotice(null);
@@ -252,7 +337,7 @@ function createChannelsPage(context: ApplicationContext) {
       requestId: prompt.request.requestId,
     };
     if (prompt.kind === "dismiss") {
-      const dismissed = await context.channels.dismissPairing(target);
+      const dismissed = await channelCapability.dismissPairing(target);
       if (dismissed && operations.prompt === prompt) {
         updateOperations({ prompt: null });
         setPairingNotice(t("channels.pairing.dismissedNotice"));
@@ -260,7 +345,7 @@ function createChannelsPage(context: ApplicationContext) {
       return;
     }
 
-    const result = await context.channels.approvePairing({
+    const result = await channelCapability.approvePairing({
       ...target,
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
@@ -284,6 +369,18 @@ function createChannelsPage(context: ApplicationContext) {
     );
   }
 
+  function presentWhatsApp(pending: Promise<void>) {
+    void runMutation("whatsapp", pending).then(() => {
+      // Plugin views receive imperative snapshots, including the settled saving flag.
+      onSettled(() => pluginPresentation.details.sync());
+    });
+    return pending;
+  }
+
+  function startWhatsApp(force: boolean, accountId = wizardHost.whatsappAccountId()) {
+    return presentWhatsApp(channelCapability.startWhatsApp(force, accountId));
+  }
+
   function viewProps(): ChannelsProps {
     operationState.read();
     gatewayProjection.read();
@@ -305,28 +402,40 @@ function createChannelsPage(context: ApplicationContext) {
         pairingRoot = element;
       },
       selectedChannel: selectedChannel(),
-      onShowDetail: setSelectedChannel,
-      onCloseDetail: () => setSelectedChannel(null),
+      onShowDetail: (channel) => {
+        retireMutation("config");
+        retireMutation("whatsapp");
+        setSelectedChannel(channel);
+      },
+      onCloseDetail: () => {
+        retireMutation("config");
+        retireMutation("whatsapp");
+        setSelectedChannel(null);
+      },
       onStartSetup: (channelId) => {
         if (canAdmin && context.gateway.snapshot.phase === "connected") {
           wizardHost.startSetup(channelId);
         }
       },
-      onRefresh: (probe) => void context.channels.refresh(probe),
-      onPairingRefresh: () => void context.channels.refreshPairing(),
+      onRefresh: (probe) => void channelCapability.refresh(probe),
+      onPairingRefresh: () => void channelCapability.refreshPairing(),
       onPairingFilterChange: setPairingFilter,
       onPairingReviewAccount: reviewPairingAccount,
       onPairingApprove: (request) => openPairingPrompt("approve", request),
       onPairingDismiss: (request) => openPairingPrompt("dismiss", request),
       onPairingPromptChange: patchPairingPrompt,
-      onPairingPromptCancel: () => updateOperations({ prompt: null }),
-      onPairingPromptConfirm: () => void confirmPairingPrompt(),
-      onWhatsAppStart: (force) =>
-        void context.channels.startWhatsApp(force, wizardHost.whatsappAccountId()),
-      onWhatsAppWait: () => void context.channels.waitWhatsApp(wizardHost.whatsappAccountId()),
+      onPairingPromptCancel: () => {
+        retireMutation("pairing");
+        updateOperations({ prompt: null });
+      },
+      onPairingPromptConfirm: () => void runMutation("pairing", confirmPairingPrompt()),
+      onWhatsAppStart: startWhatsApp,
+      onWhatsAppWait: () =>
+        presentWhatsApp(channelCapability.waitWhatsApp(wizardHost.whatsappAccountId())),
+      onWhatsAppLogout: (accountId) => presentWhatsApp(channelCapability.logoutWhatsApp(accountId)),
       onShowAdvancedSettings: setShowAdvancedSettings,
       onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
-      onConfigSave: () => void saveChannelConfig(),
+      onConfigSave: () => void runMutation("config", saveChannelConfig()),
       onConfigReload: () => void reloadChannelConfig(),
     };
   }
@@ -334,9 +443,10 @@ function createChannelsPage(context: ApplicationContext) {
   onSettled(() => {
     // Gateway receipts retire plugin operations and pairing prompts synchronously.
     connection.connect();
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     const applyChannels = () => {
       pluginPresentation.details.sync();
-      reconcilePairingFilter(context.channels.state.pairingSnapshot);
+      reconcilePairingFilter(channelCapability.state.pairingSnapshot);
       pluginPresentation.ensure(context.gateway.snapshot.client);
     };
     // Channel receipts reconcile pairing selections and start presentation loads as channel identities arrive.
@@ -349,18 +459,24 @@ function createChannelsPage(context: ApplicationContext) {
     // Configuration completion receipts drive the initial channel and schema loading state machine.
     const stopConfig = configProjection.subscribe(applyConfig);
     applyConfig();
+    let location = context.router.getState().location;
+    // Navigation intent releases presentation before Solid parks the departing page.
+    const stopNavigation = context.router.subscribe((state) => {
+      if (state.location !== location) {
+        location = state.location;
+        retireMutation();
+      }
+    });
     return () => {
       active = false;
+      retireMutation();
+      stopNavigation();
       stopChannels();
       stopConfig();
       connection.dispose();
     };
   });
-  return viewProps;
-}
-
-export function ChannelsPage() {
-  const viewProps = createMemo(createChannelsPage(useApplication()));
+  const presentedProps = createMemo(viewProps);
   return (
     <openclaw-channels-page>
       <SettingsPageHeader
@@ -372,8 +488,10 @@ export function ChannelsPage() {
         }
       />
       <SettingsWorkspace>
-        <ChannelsView {...viewProps()} />
+        <ChannelsView {...presentedProps()} mutationBusy={presentation().busy} />
       </SettingsWorkspace>
     </openclaw-channels-page>
   );
 }
+
+type ChannelMutation = keyof NonNullable<ChannelsProps["mutationBusy"]>;

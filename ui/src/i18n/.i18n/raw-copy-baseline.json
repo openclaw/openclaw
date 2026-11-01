@@ -5,55 +5,6 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "approval page"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "browser panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "command palette"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "dashboard document"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "desktop panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "login screen"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "terminal panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
       "path": "ui/src/app/typography.ts",
       "text": "Atkinson Hyperlegible"
     },
@@ -303,20 +254,6 @@
       "text": "Online person"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view-diary.tsx",
-      "text": "memory-wiki"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view-diary.tsx",
-      "text": "plugins.entries.memory-wiki.enabled = true"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -334,6 +271,20 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/agents/memory/view.tsx",
+      "text": "memory-wiki"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/agents/memory/view.tsx",
+      "text": "plugins.entries.memory-wiki.enabled = true"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-stream-view.tsx",
       "text": "Assistant"
     },
@@ -343,13 +294,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp-view.tsx",
       "text": "% ctx"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
-      "text": "Open in editor"
     },
     {
       "count": 1,
@@ -404,7 +348,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/updates.tsx",
+      "path": "ui/src/pages/config/updates-recorded-attempt.tsx",
       "text": "openclaw triage"
     },
     {
@@ -523,14 +467,14 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/plugins/security-audit.tsx",
+      "path": "ui/src/pages/plugins/overview.tsx",
       "text": "Clean"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/plugins/security-audit.tsx",
+      "path": "ui/src/pages/plugins/overview.tsx",
       "text": "Review"
     },
     {
@@ -542,8 +486,8 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/pages/skills/library-view.tsx",
       "text": "SKILL.md"
     },

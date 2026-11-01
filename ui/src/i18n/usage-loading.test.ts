@@ -34,7 +34,10 @@ describe("Usage English loading", () => {
       common: { health: "Gesundheit" },
       usage: { presets: { today: "Heute" } },
     }));
+    const details = en.usage.details;
     expect(manager.t("usage.heatmap.title")).toBe("Token Activity");
+    expect(manager.t("usage.details.collapse")).toBe("Collapse");
+    expect(manager.t("usage.details.noUsageData")).toBe("usage.details.noUsageData");
     expect(manager.t("usage.scope.instance")).toBe("usage.scope.instance");
     expect(manager.t("usage.export.label")).toBe("usage.export.label");
 
@@ -43,6 +46,9 @@ describe("Usage English loading", () => {
 
     expect(manager.t("common.health")).toBe("Gesundheit");
     expect(manager.t("usage.presets.today")).toBe("Heute");
+    expect(en.usage.details).toBe(details);
+    expect(manager.t("usage.details.collapse")).toBe("Collapse");
+    expect(manager.t("usage.details.noUsageData")).toBe("No usage data for this session.");
     expect(manager.t("usage.presets.last30d")).toBe("30d");
     expect(manager.t("usage.scope.instance")).toBe("Current instance");
     expect(manager.t("usage.scope.familyIncluded", { count: "2" })).toBe(

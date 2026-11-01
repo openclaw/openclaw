@@ -3,7 +3,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
-import type { BrowserOpenResult, BrowserTabOwnership } from "./browser/client.types.js";
+import type { BrowserTabOwnership } from "./browser/client.types.js";
 import { resolveBrowserSessionKey } from "./browser/session-tab-identity.js";
 import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
@@ -13,12 +13,7 @@ type SessionTabRegistry = Pick<
   "trackSessionBrowserTab" | "touchSessionBrowserTab" | "untrackSessionBrowserTab"
 >;
 
-function readOpenedTab(result: unknown): {
-  targetId?: string;
-  aliases: string[];
-  profile?: string;
-  ownership?: BrowserTabOwnership;
-} {
+function readOpenedTab(result: unknown) {
   const opened = asNullableRecord(result);
   if (!opened) {
     return { aliases: [] };
@@ -39,11 +34,6 @@ function readOpenedTab(result: unknown): {
   // cannot prove which configured profile owns the tab, so keep that tab volatile.
   const ownership = rawOwnership?.status === "durable" && !profile ? undefined : rawOwnership;
   return { targetId, aliases: [...new Set(aliases)], profile, ownership };
-}
-
-export function stripBrowserOpenInternalMetadata(value: BrowserOpenResult) {
-  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = value;
-  return agentVisible;
 }
 
 export function createBrowserToolSessionTabs(params: {

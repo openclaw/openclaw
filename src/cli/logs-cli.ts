@@ -38,6 +38,7 @@ import { formatTimestamp } from "../logging/timestamps.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
+import { throwExpectedCliError } from "./failure-output.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
@@ -93,34 +94,6 @@ const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
 const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
 
-function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
-  const sourceKind = payload.sourceKind ?? (payload.file ? "file" : undefined);
-  if (!sourceKind && !payload.file && !payload.source) {
-    return undefined;
-  }
-  return JSON.stringify({
-    file: payload.file,
-    source: payload.source,
-    sourceKind,
-    servicePid: payload.service?.pid,
-    serviceUnit: payload.service?.unit,
-    localFallback: payload.localFallback === true ? true : undefined,
-  });
-}
-
-function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
-  return {
-    type: "meta",
-    file: payload.file,
-    source: payload.source,
-    sourceKind: payload.sourceKind ?? (payload.file ? "file" : undefined),
-    service: payload.service,
-    cursor: payload.cursor,
-    size: payload.size,
-    localFallback: payload.localFallback === true ? true : undefined,
-  };
-}
-
 async function fetchGatewayLogs(
   opts: LogsRequestOptions,
   gatewayCursor: number | undefined,
@@ -128,7 +101,15 @@ async function fetchGatewayLogs(
   params: { limit: number; maxBytes: number; signal?: AbortSignal },
 ): Promise<LogsTailPayload> {
   params.signal?.throwIfAborted();
-  const gatewayExtra = buildLogsTailGatewayExtra(opts, showProgress);
+  const gatewayExtra =
+    opts.url?.trim() || !isImplicitLoopbackGatewayConnection(opts.connection)
+      ? { progress: showProgress }
+      : {
+          progress: showProgress,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          deviceIdentity: null,
+        };
   const payload = await callGatewayFromCli(
     "logs.tail",
     opts,
@@ -152,19 +133,6 @@ function shouldUseLocalLogsFallback(opts: LogsRequestOptions, error: unknown): b
   }
   const connection = isGatewayTransportError(error) ? error.connectionDetails : opts.connection;
   return isImplicitLoopbackGatewayConnection(connection);
-}
-
-function buildLogsTailGatewayExtra(opts: LogsRequestOptions, showProgress: boolean) {
-  const base = { progress: showProgress };
-  if (opts.url?.trim() || !isImplicitLoopbackGatewayConnection(opts.connection)) {
-    return base;
-  }
-  return {
-    ...base,
-    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    deviceIdentity: null,
-  };
 }
 
 function isImplicitLoopbackGatewayConnection(connection: GatewayConnectionDetails): boolean {
@@ -252,8 +220,19 @@ async function readSystemdJournalFallback(params: {
       ? ""
       : result.stdout.slice(firstNewline + 1)
     : result.stdout;
-  const parsed = parseJournalctlOutput(output);
-  const lines = parsed.lines.length > limit ? parsed.lines.slice(-limit) : parsed.lines;
+  const journalLines: string[] = [];
+  let journalCursor: string | undefined;
+  for (const rawLine of output.split(/\r?\n/u)) {
+    if (!rawLine) {
+      continue;
+    }
+    if (rawLine.startsWith(JOURNAL_CURSOR_PREFIX)) {
+      journalCursor = rawLine.slice(JOURNAL_CURSOR_PREFIX.length).trim() || journalCursor;
+      continue;
+    }
+    journalLines.push(rawLine);
+  }
+  const lines = journalLines.length > limit ? journalLines.slice(-limit) : journalLines;
   const redaction = resolveRedactOptions();
   return {
     source,
@@ -262,9 +241,9 @@ async function readSystemdJournalFallback(params: {
       pid: service.pid,
       unit: unitName,
     },
-    cursor: parsed.cursor ?? params.cursor,
+    cursor: journalCursor ?? params.cursor,
     lines: redactSensitiveLines(lines, redaction),
-    truncated: result.truncated || parsed.lines.length > limit,
+    truncated: result.truncated || journalLines.length > limit,
     localFallback: true,
   };
 }
@@ -273,22 +252,6 @@ function formatLogResetNotice(skippedBytes: number | undefined): string {
   return skippedBytes !== undefined && skippedBytes > 0
     ? `Log cursor re-anchored (skipped ${skippedBytes} bytes).`
     : "Log cursor reset (file rotated).";
-}
-
-function parseJournalctlOutput(output: string): { lines: string[]; cursor?: string } {
-  const lines: string[] = [];
-  let cursor: string | undefined;
-  for (const rawLine of output.split(/\r?\n/u)) {
-    if (!rawLine) {
-      continue;
-    }
-    if (rawLine.startsWith(JOURNAL_CURSOR_PREFIX)) {
-      cursor = rawLine.slice(JOURNAL_CURSOR_PREFIX.length).trim() || cursor;
-      continue;
-    }
-    lines.push(rawLine);
-  }
-  return { lines, cursor };
 }
 
 const MAX_FOLLOW_RETRIES = 8;
@@ -312,28 +275,6 @@ function isTransientFollowError(error: unknown): boolean {
     return false;
   }
   return isPlainGatewayRequestUnavailableError(message);
-}
-
-function createLogWriters(onOutputClosed?: () => void) {
-  const writer = createSafeStreamWriter((err, stream) => {
-    onOutputClosed?.();
-    const code = err.code ?? "EPIPE";
-    const target = stream === process.stdout ? "stdout" : "stderr";
-    const message = `openclaw logs: output ${target} closed (${code}). Stopping tail.`;
-    try {
-      clearActiveProgressLine();
-      process.stderr.write(`${message}\n`);
-    } catch {
-      // ignore secondary failures while reporting the broken pipe
-    }
-  });
-
-  return {
-    logLine: (text: string) => writer.writeLine(process.stdout, text),
-    errorLine: (text: string) => writer.writeLine(process.stderr, text),
-    emitJsonLine: (payload: Record<string, unknown>, toStdErr = false) =>
-      writer.write(toStdErr ? process.stderr : process.stdout, `${JSON.stringify(payload)}\n`),
-  };
 }
 
 export function registerLogsCli(program: Command) {
@@ -386,9 +327,22 @@ export function registerLogsCli(program: Command) {
       }
       return undefined;
     };
-    const { logLine, errorLine, emitJsonLine } = createLogWriters(() => {
+    const writer = createSafeStreamWriter((err, stream) => {
       void abortGatewayRecoveryProbe();
+      const code = err.code ?? "EPIPE";
+      const target = stream === process.stdout ? "stdout" : "stderr";
+      const message = `openclaw logs: output ${target} closed (${code}). Stopping tail.`;
+      try {
+        clearActiveProgressLine();
+        process.stderr.write(`${message}\n`);
+      } catch {
+        // ignore secondary failures while reporting the broken pipe
+      }
     });
+    const logLine = (text: string) => writer.writeLine(process.stdout, text);
+    const errorLine = (text: string) => writer.writeLine(process.stderr, text);
+    const emitJsonLine = (payload: Record<string, unknown>, toStdErr = false) =>
+      writer.write(toStdErr ? process.stderr : process.stdout, `${JSON.stringify(payload)}\n`);
     const interval = resolvePositiveTimerTimeoutMs(
       parseLogsPositiveInt(opts.interval, 1000, "--interval"),
       1000,
@@ -407,6 +361,9 @@ export function registerLogsCli(program: Command) {
       jsonMode ? emitJsonLine({ type: "notice", message }) : errorLine(message);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false && !opts.plain;
+    if (opts.localTime && opts.utc) {
+      throwExpectedCliError("Pass only one of --local-time or --utc.");
+    }
     const localTime = !opts.utc;
     const formatLogLine = (raw: string): string => {
       const parsed = parseLogLine(raw);
@@ -638,13 +595,35 @@ export function registerLogsCli(program: Command) {
           return;
         }
         followRetryAttempt = 0;
-        const sourceIdentity = buildLogSourceIdentity(payload);
+        const sourceKind = payload.sourceKind ?? (payload.file ? "file" : undefined);
+        let sourceIdentity: string | undefined;
+        if (sourceKind || payload.file || payload.source) {
+          sourceIdentity = JSON.stringify({
+            file: payload.file,
+            source: payload.source,
+            sourceKind,
+            servicePid: payload.service?.pid,
+            serviceUnit: payload.service?.unit,
+            localFallback: payload.localFallback === true ? true : undefined,
+          });
+        }
         const sourceChanged = sourceIdentity !== undefined && sourceIdentity !== lastSourceIdentity;
         const shouldEmitSourceMetadata = first || sourceChanged;
         const lines = Array.isArray(payload.lines) ? payload.lines : [];
         if (jsonMode) {
           if (shouldEmitSourceMetadata) {
-            if (!emitJsonLine(buildLogMetaRecord(payload))) {
+            if (
+              !emitJsonLine({
+                type: "meta",
+                file: payload.file,
+                source: payload.source,
+                sourceKind: payload.sourceKind ?? (payload.file ? "file" : undefined),
+                service: payload.service,
+                cursor: payload.cursor,
+                size: payload.size,
+                localFallback: payload.localFallback === true ? true : undefined,
+              })
+            ) {
               return;
             }
           }

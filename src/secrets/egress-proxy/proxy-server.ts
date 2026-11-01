@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual, X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer as createHttpServer,
@@ -243,12 +243,23 @@ export async function startSecretEgressProxyServer(params: {
 }): Promise<SecretEgressProxyHandle> {
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
+  // Adopt the released emSign ECC G3 root removal for PEM consumers too:
+  // https://github.com/rustls/webpki-roots/releases/tag/v%2F1.0.10
+  // Runtime verifier blocks do not survive exporting tls.rootCertificates.
+  const trustedCertificates = [
+    ...rootCertificates.filter(
+      (pem) =>
+        new X509Certificate(pem).fingerprint256 !==
+        "86:A1:EC:BA:08:9C:4A:8D:3B:BE:27:34:C6:12:BA:34:1D:81:3E:04:3C:F9:E8:A8:62:CD:5C:57:A3:6B:BE:6B",
+    ),
+    caPem,
+  ];
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
-  fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
+  fs.writeFileSync(trustBundlePath, trustedCertificates.join("\n"), { mode: 0o644 });
   // The CA set is immutable for this proxy lifetime. A new proxy owns new trust;
   // leaf renewal does not change it. Share only parsed CAs across process grants.
   const upstreamTlsOptions = {
-    secureContext: createSecureContext({ ca: [...rootCertificates, caPem] }),
+    secureContext: createSecureContext({ ca: trustedCertificates }),
     keepAlive: true,
     maxSockets: 64,
     maxTotalSockets: 64,

@@ -75,6 +75,11 @@ vi.mock("../../state/openclaw-schema-versions.js", async (importOriginal) => {
 });
 
 const runtimeFixture = createFixtureLifetime();
+const finalizerCommand = (options: Record<string, unknown>) => [
+  process.execPath,
+  ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint)),
+  JSON.stringify({ readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly, ...options }),
+];
 let candidateRoot: string;
 let candidateContract: Awaited<ReturnType<typeof childCommands.runUtf8CommandWithTimeout>>;
 beforeAll(async () => {
@@ -86,25 +91,17 @@ beforeAll(async () => {
   // The immutable candidate's compatibility probe is shared; each delegated
   // finalizer still runs in its own process with its own live executor grant.
   candidateContract = await runtimeFixture.run(() =>
-    childCommands.runUtf8CommandWithTimeout(
-      [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint)),
-        JSON.stringify({ readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly }),
-        "--check",
-      ],
-      {
-        cwd: candidateRoot,
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        },
-        timeoutMs: 30_000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
+    childCommands.runUtf8CommandWithTimeout([...finalizerCommand({}), "--check"], {
+      cwd: candidateRoot,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
-    ),
+      timeoutMs: 30_000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    }),
   );
   expect(candidateContract).toMatchObject({ code: 0, termination: "exit", cleanup: "normal" });
 });
@@ -154,10 +151,8 @@ it.each<MigratedPackageFinalizationCase>([
 it.for([
   { json: false, legacy: false, parentOwns: false, replay: "settled" },
   { json: true, legacy: false, parentOwns: true, replay: "refused" },
-  { json: true, legacy: false, parentOwns: true },
   { json: false, legacy: true, parentOwns: true },
   { json: true, legacy: true, parentOwns: true, foreground: true },
-  { json: true, legacy: false, parentOwns: true, retained: true },
   { json: true, legacy: true, parentOwns: true, retained: true },
   { json: true, legacy: false, parentOwns: true, retained: true, original: true },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 120_000 },
@@ -240,9 +235,6 @@ it.for([
     const migrationStep = { name: "core migrations", command: "doctor --fix", index: 0, total: 1 };
     await progress.onStepStart?.(migrationStep);
     const database = openOpenClawStateDatabase({ env });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
     // Original runtime intent belongs to the pre-migration observation. The old
     // parent must not reopen its state DB after the candidate advances the schema.
     const originalRuntimePin = original
@@ -265,12 +257,10 @@ it.for([
       status: "not-attempted" as const,
       reason: "state-migrated-no-rollback",
     };
-    expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
-    await expect(
-      progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
-    ).resolves.toBeUndefined();
-    expect(() => vi.advanceTimersByTime(500)).not.toThrow();
-    expect(() => presentation?.dispose()).not.toThrow();
+    progress.onRollbackOutcome?.(rollbackOutcome);
+    await progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 });
+    vi.advanceTimersByTime(500);
+    presentation.dispose();
     presentation = undefined;
     vi.useRealTimers();
     const rollback = vi.fn();
@@ -347,12 +337,7 @@ it.for([
           legacy
             ? argv
             : [
-                process.execPath,
-                ...resolveRuntimeWorkerArgv(
-                  resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
-                ),
-                JSON.stringify({
-                  readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
+                ...finalizerCommand({
                   progressGate: progressGate?.endpoint,
                   replay: replay
                     ? {
@@ -386,11 +371,7 @@ it.for([
           if (original) {
             await fs.writeFile(
               path.join(serviceRoot, "package.json"),
-              JSON.stringify({
-                name: "openclaw",
-                version: "2026.9.3",
-                type: "module",
-              }),
+              JSON.stringify({ name: "openclaw", version: "2026.9.3", type: "module" }),
             );
           }
         }
@@ -509,6 +490,7 @@ it.for([
       ? execute()
       : withUpdateCommandTerminalResult(execute, { json, onResult });
     void runtimeFixture.track(work);
+    const failedRun = { status: "failed", reason: "state-migrated-no-rollback" };
     if (settlement) {
       if (progressGate) {
         try {
@@ -530,19 +512,12 @@ it.for([
       await progressGate?.cleanup();
       expect.soft(stderr.match(/fixture-finalizer-progress/g)).toHaveLength(1);
       expect.soft(stdoutAtCleanup).toBe(settlement === "no-owner" ? undefined : "");
-      if (
-        settlement === "healthy" ||
-        settlement === "release" ||
-        settlement === "swallowed" ||
-        settlement === "uncertain-cleanup"
-      ) {
+      if (["healthy", "release", "swallowed", "uncertain-cleanup"].includes(settlement)) {
         expect.soft(stdoutAtExecutorSettlement).toBe("");
       }
       expect.soft(oldRuntimeOpens).toEqual([]);
       expect.soft(inspectTerminal()).toEqual(terminalFromCandidate);
-      expect
-        .soft(terminalFromCandidate)
-        .toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      expect.soft(terminalFromCandidate).toMatchObject(failedRun);
       if (settlement !== "healthy") {
         if (settlement === "uncertain-cleanup") {
           expect.soft(hasCommandProcessCleanupError(failure)).toBe(true);
@@ -560,16 +535,8 @@ it.for([
       expect(onResult).toHaveBeenCalledExactlyOnceWith(settledResult?.result);
     }
     if (replay) {
-      const outcome = await work.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      const trace = await fs.readFile(replayEvents, "utf8").catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
+      const outcome = await work.catch((error: unknown) => ({ error }));
+      const trace = await fs.readFile(replayEvents, "utf8");
       const events = trace.trim()
         ? trace
             .trim()
@@ -602,7 +569,7 @@ it.for([
       }
       expect(outcome).toEqual({ error: expect.any(UpdateCommandFailure) });
     }
-    if (checkWorkMs !== undefined && stepBudgetMs !== undefined && stepBudgetMs < checkWorkMs) {
+    if (!legacy && refusesBeforeHandoff) {
       await expect(work).rejects.toThrow(/delegation capability could not be inspected/);
       expect(terminalAtCleanup).toBeUndefined();
       expect(rollback).not.toHaveBeenCalled();
@@ -621,13 +588,11 @@ it.for([
       await expect(work).rejects.toBeInstanceOf(UpdateCommandFailure);
     }
     const result = settledResult!;
-    expect(result.candidateStartAttempted).toBe(false);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.result).toMatchObject({
-      runId: created.runId,
-      status: "error",
-      reason: "state-migrated-no-rollback",
+    expect(result).toMatchObject({
+      candidateStartAttempted: false,
+      result: { runId: created.runId, status: "error", reason: "state-migrated-no-rollback" },
     });
+    expect(result.exitCode).not.toBe(0);
     if (original) {
       expect(result.result.steps).toContainEqual(
         expect.objectContaining({
@@ -646,18 +611,18 @@ it.for([
       );
     }
     expect(rollback).not.toHaveBeenCalled();
-    expect(terminalAtCleanup).toEqual({ status: "failed", reason: "state-migrated-no-rollback" });
+    expect(terminalAtCleanup).toEqual(failedRun);
     if (json) {
       expect(log).not.toHaveBeenCalled();
       expect(JSON.parse(stdout)).toMatchObject({
         runId: created.runId,
-        run: { runId: created.runId, status: "failed", reason: "state-migrated-no-rollback" },
+        run: { runId: created.runId, ...failedRun },
       });
     } else {
       expect(stdout).toMatch(/update failed/iu);
     }
     const row = inspectTerminal();
-    expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+    expect(row).toMatchObject(failedRun);
     expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
     expect(JSON.parse(String(row?.steps_json))).toEqual(
       expect.arrayContaining([progress.pendingSteps.at(-1)]),

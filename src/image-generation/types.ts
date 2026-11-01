@@ -2,15 +2,7 @@ import type { MediaNormalizationEntry } from "../../packages/media-generation-co
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-
-/** Non-empty binary image asset returned by an image-generation provider. */
-export type GeneratedImageAsset = {
-  buffer: Buffer;
-  mimeType: string;
-  fileName?: string;
-  revisedPrompt?: string;
-  metadata?: Record<string, unknown>;
-};
+import type { GeneratedImageAsset, ImageGenerationSourceImage } from "./asset-types.js";
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
@@ -33,20 +25,10 @@ export type ImageGenerationProviderOptions = Record<string, unknown> & {
   openai?: ImageGenerationOpenAIOptions;
 };
 
-type ImageGenerationIgnoredOverrideKey =
-  | "size"
-  | "aspectRatio"
-  | "resolution"
-  | "quality"
-  | "outputFormat"
-  | "background";
-
 export type ImageGenerationIgnoredOverride = {
-  key: ImageGenerationIgnoredOverrideKey;
+  key: "size" | "aspectRatio" | "resolution" | "quality" | "outputFormat" | "background";
   value: string;
 };
-
-export type ImageGenerationSourceImage = Omit<GeneratedImageAsset, "revisedPrompt">;
 
 export type ImageGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
@@ -62,6 +44,8 @@ export type ImageGenerationRequest = {
   agentDir?: string;
   authStore?: AuthProfileStore;
   timeoutMs?: number;
+  /** Cancels image generation and any result downloads owned by this request. */
+  signal?: AbortSignal;
   count?: number;
   size?: string;
   aspectRatio?: string;
@@ -87,31 +71,6 @@ type ImageGenerationModeCapabilities = {
   supportsResolution?: boolean;
 };
 
-type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
-  enabled: boolean;
-  maxInputImages?: number;
-  maxInputImagesByModel?: Readonly<Record<string, number>>;
-  maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
-};
-
-type ImageGenerationGeometryCapabilities = {
-  sizes?: string[];
-  sizesByModel?: Record<string, string[]>;
-  aspectRatios?: string[];
-  aspectRatiosByModel?: Record<string, string[]>;
-  resolutions?: ImageGenerationResolution[];
-  resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
-};
-
-type ImageGenerationOutputCapabilities = {
-  qualities?: ImageGenerationQuality[];
-  qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
-  formats?: ImageGenerationOutputFormat[];
-  formatsByModel?: Record<string, ImageGenerationOutputFormat[]>;
-  backgrounds?: ImageGenerationBackground[];
-  backgroundsByModel?: Record<string, ImageGenerationBackground[]>;
-};
-
 export type ImageGenerationNormalization = {
   size?: MediaNormalizationEntry<string>;
   aspectRatio?: MediaNormalizationEntry<string>;
@@ -120,9 +79,28 @@ export type ImageGenerationNormalization = {
 
 export type ImageGenerationProviderCapabilities = {
   generate: ImageGenerationModeCapabilities;
-  edit: ImageGenerationEditCapabilities;
-  geometry?: ImageGenerationGeometryCapabilities;
-  output?: ImageGenerationOutputCapabilities;
+  edit: ImageGenerationModeCapabilities & {
+    enabled: boolean;
+    maxInputImages?: number;
+    maxInputImagesByModel?: Readonly<Record<string, number>>;
+    maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
+  };
+  geometry?: {
+    sizes?: string[];
+    sizesByModel?: Record<string, string[]>;
+    aspectRatios?: string[];
+    aspectRatiosByModel?: Record<string, string[]>;
+    resolutions?: ImageGenerationResolution[];
+    resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
+  };
+  output?: {
+    qualities?: ImageGenerationQuality[];
+    qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
+    formats?: ImageGenerationOutputFormat[];
+    formatsByModel?: Record<string, ImageGenerationOutputFormat[]>;
+    backgrounds?: ImageGenerationBackground[];
+    backgroundsByModel?: Record<string, ImageGenerationBackground[]>;
+  };
 };
 
 export type ImageGenerationProvider = {

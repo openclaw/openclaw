@@ -32,24 +32,23 @@ describe("macOS directory watch host", () => {
       const nativeWatch = vi.spyOn(fs, "watch");
       expect(() => watchDirectory(path.join(root, "missing"), () => {})).toThrow();
 
-      const events: Array<PromiseWithResolvers<[string, string | undefined]>> = [
-        Promise.withResolvers(),
-        Promise.withResolvers(),
-      ];
-      let received = 0;
+      let expected: PromiseWithResolvers<[string, string | undefined]> & { filename?: string };
+      const nextEvent = (filename?: string) => {
+        expected = { ...Promise.withResolvers(), filename };
+        return expected.promise;
+      };
+      // Registration is asynchronous, so the live watch first invalidates the whole directory.
+      const registered = nextEvent();
       const watch = watchDirectory(
         watched,
         (event, filename) => {
-          if (received++ === 0) {
-            events[0]!.resolve([event, filename]);
-          } else if (filename === path.join("nested", "profiles")) {
-            events[1]!.resolve([event, filename]);
+          if (filename === expected.filename) {
+            expected.resolve([event, filename]);
           }
         },
         true,
       );
-      // Registration is asynchronous, so the live watch first invalidates the whole directory.
-      await expect(events[0]!.promise).resolves.toEqual(["change", undefined]);
+      await expect(registered).resolves.toEqual(["change", undefined]);
       const lost = Promise.withResolvers<void>();
       const open = fs.openSync;
       // Retire after caller admission, before helper registration. Deleting a live
@@ -62,11 +61,30 @@ describe("macOS directory watch host", () => {
       watchDirectory(retired, () => {}).on("error", () => lost.resolve());
       await lost.promise;
 
+      const created = nextEvent(path.join("nested", "profiles"));
       fs.writeFileSync(path.join(watched, "nested", "profiles"), "after");
-      await expect(events[1]!.promise).resolves.toEqual([
-        "rename",
-        path.join("nested", "profiles"),
-      ]);
+      await expect(created).resolves.toEqual(["rename", path.join("nested", "profiles")]);
+
+      // Closes only retire native watches; enough of them move the live watch to a
+      // fresh helper, which invalidates it once and keeps forwarding its events.
+      const siblings = await Promise.all(
+        Array.from({ length: 64 }, async (_, index) => {
+          const sibling = path.join(root, `sibling-${index}`);
+          fs.mkdirSync(sibling);
+          const live = Promise.withResolvers<void>();
+          const siblingWatch = watchDirectory(sibling, () => live.resolve());
+          await live.promise;
+          return siblingWatch;
+        }),
+      );
+      const handoff = nextEvent();
+      for (const sibling of siblings) {
+        sibling.close();
+      }
+      await expect(handoff).resolves.toEqual(["change", undefined]);
+      const moved = nextEvent(path.join("nested", "moved"));
+      fs.writeFileSync(path.join(watched, "nested", "moved"), "after");
+      await expect(moved).resolves.toEqual(["rename", path.join("nested", "moved")]);
       watch.close();
       expect(nativeWatch).not.toHaveBeenCalled();
     },

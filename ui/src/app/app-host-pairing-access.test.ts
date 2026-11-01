@@ -2,21 +2,20 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "@solidjs/web";
-import { createComponent, onSettled } from "solid-js";
+import { createComponent, createMemo, onSettled, Show } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
-import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
+import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  persistChatComposerState,
-} from "../pages/chat/composer-persistence.ts";
+import { persistChatComposerState } from "../pages/chat/composer-draft-storage.ts";
+import { admitStoredChatComposerQueueItemResult } from "../pages/chat/composer-queue-persistence.ts";
+import * as pairingView from "../pages/devices/view-pairing.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
@@ -27,6 +26,7 @@ import {
   createApplicationContextProvider,
   createNavigationPreferencesFixture,
 } from "../test-helpers/application-context.ts";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
 import "../components/app-sidebar.tsx";
 // A preceding shard file can register the palette before the pairing shell mounts.
@@ -40,10 +40,7 @@ import {
   refreshShellView,
 } from "./app-host-solid.test-support.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
-import { createLazyRenderer } from "./lazy-renderer.ts";
 import { ShellLayoutBoundary } from "./shell-layout-traits-solid.tsx";
-
-type PairingSidebar = AppSidebarElement;
 
 type PairingAuth = { role: string; scopes?: string[] };
 const operator = (...scopes: string[]): PairingAuth => ({ role: "operator", scopes });
@@ -61,12 +58,21 @@ function outboxes(sessionKey: string, total: number, draft: boolean) {
   };
 }
 
-function deferredRenderer<Renderer>(shell: object, property: string) {
-  const loading = createDeferred<Renderer>();
-  const retrying = createDeferred<Renderer>();
+function deferredRenderer() {
+  const loading = createDeferred();
+  const retrying = createDeferred();
   const load = vi.fn(() => retrying.promise).mockImplementationOnce(() => loading.promise);
-  Object.defineProperty(shell, property, { value: createLazyRenderer(load) });
-  return { loading, retrying, load };
+  const view = () => {
+    const ready = createMemo(load);
+    return createComponent(Show, {
+      get when() {
+        ready();
+        return true;
+      },
+      children: (_ready) => document.createTextNode("Lazy view ready"),
+    });
+  };
+  return { loading, retrying, load, view };
 }
 
 setupSidebarTest();
@@ -111,12 +117,6 @@ function createPairingShell(params: {
           },
         }
       : { phase: "selection" as const, access },
-    devicePairPendingCount: 0,
-    updateAvailable: null,
-    updateRunning: false,
-    updateStatusBanner: null,
-    recordedUpdateAttempt: null,
-    controlUiRefreshRequired: false,
   };
   const router = createApplicationRouter();
   const context = {
@@ -180,8 +180,9 @@ function createPairingShell(params: {
 
   const renderSidebar = async () => {
     await refresh();
+    await vi.dynamicImportSettled();
     return expectDefined(
-      container.querySelector<PairingSidebar>("openclaw-app-sidebar"),
+      container.querySelector<AppSidebarElement>("openclaw-app-sidebar"),
       "shell sidebar",
     );
   };
@@ -237,13 +238,17 @@ describe("application shell pairing access", () => {
     };
     expect(persistChatComposerState(host)).toBe(true);
     expect(
-      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
-        id: "failed",
-        text: "private queued input",
-        createdAt: 1,
-        sendState: "failed",
-      }),
-    ).toBe(true);
+      admitStoredChatComposerQueueItemResult(
+        host,
+        captureChatOutboxAdmission(host, host.sessionKey),
+        {
+          id: "failed",
+          text: "private queued input",
+          createdAt: 1,
+          sendState: "failed",
+        },
+      ),
+    ).toBe("admitted");
     shell.outboxStoreRuntime = createStoredChatOutboxReader();
     const first = (await renderSidebar()).storedOutboxes!;
     expect(first.total).toBe(1);
@@ -267,90 +272,68 @@ describe("application shell pairing access", () => {
     expect((await renderSidebar()).storedOutboxes!.total).toBe(1);
   });
 
-  it.each([false, true])(
-    "retains navigation chrome for unrelated shell updates (outbox runtime: %s)",
-    async (withOutboxes) => {
-      vi.useFakeTimers();
-      const sessionKey = "agent:main:queued";
-      const { shell, context, renderSidebar, container, overlaySnapshot, refresh } =
-        createPairingShell({
-          auth: admin,
-          sessionKeys: [sessionKey],
-        });
-      let storedOutboxes = outboxes(sessionKey, 1, true);
-      if (withOutboxes) {
-        shell.outboxStoreRuntime = {
-          read: () => storedOutboxes,
-          subscribe: () => () => undefined,
-          invalidate: () => undefined,
-        };
-      }
-      const sidebar = await renderSidebar();
-      const topbar = container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
-      const provider = createApplicationContextProvider(context);
-      provider.append(sidebar, topbar);
-      document.body.append(provider);
-      await settleLitElements([sidebar, topbar]);
-      await vi.dynamicImportSettled();
-      await settleLitElements([sidebar, topbar]);
-      const conversation = () =>
-        sidebar.querySelector<HTMLElement>(
-          `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
-        );
-      await waitForSolid(() => expect(conversation()).not.toBeNull());
-      if (withOutboxes) {
-        expect(
-          conversation()?.querySelector(".session-row-badge--attention")?.textContent,
-        ).toContain("1");
-        expect(conversation()?.querySelector(".session-row-badge--draft")).not.toBeNull();
-      }
-      const sidebarFrame = sidebar.querySelector("aside");
-      const conversationRow = conversation();
-      const sidebarText = sidebar.textContent;
-      const topbarText = topbar.textContent;
-      const sidebarUpdates: MutationRecord[] = [];
-      const observer = new MutationObserver((records) => sidebarUpdates.push(...records));
-      observer.observe(sidebar, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        characterData: true,
+  it("retains navigation chrome for unrelated shell updates and refreshes changed outboxes", async () => {
+    // No stylesheet is loaded: row estimates must settle before CSS is available.
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:queued";
+    const { shell, context, renderSidebar, container, overlaySnapshot, refresh } =
+      createPairingShell({
+        auth: admin,
+        sessionKeys: [sessionKey],
       });
-      onTestFinished(() => observer.disconnect());
-      const topbarFrame = topbar.querySelector(".topbar");
-      const topbarToggle = topbar.querySelector(".topbar-nav-toggle");
-      expect(topbarFrame).not.toBeNull();
-      expect(topbarToggle).not.toBeNull();
-
-      overlaySnapshot.approvalBusy = true;
-      await refresh();
-      await settleLitElements([sidebar, topbar]);
-      flush();
-
-      expect([...sidebarUpdates, ...observer.takeRecords()]).toHaveLength(0);
-      expect(sidebar.querySelector("aside")).toBe(sidebarFrame);
-      expect(conversation()).toBe(conversationRow);
-      expect(topbar.querySelector(".topbar")).toBe(topbarFrame);
-      expect(topbar.querySelector(".topbar-nav-toggle")).toBe(topbarToggle);
-      expect(sidebar.textContent).toBe(sidebarText);
-      expect(topbar.textContent).toBe(topbarText);
-      expect(sidebar.storedOutboxes?.attentionCountForSession(sessionKey) ?? 0).toBe(
-        withOutboxes ? 1 : 0,
+    let storedOutboxes = outboxes(sessionKey, 1, true);
+    shell.outboxStoreRuntime = {
+      read: () => storedOutboxes,
+      subscribe: () => () => undefined,
+      invalidate: () => undefined,
+    };
+    const sidebar = await renderSidebar();
+    const topbar = container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+    const provider = createApplicationContextProvider(context);
+    provider.append(sidebar, topbar);
+    document.body.append(provider);
+    await settleLitElements([sidebar, topbar]);
+    await vi.dynamicImportSettled();
+    await settleLitElements([sidebar, topbar]);
+    const conversation = () =>
+      sidebar.querySelector<HTMLElement>(
+        `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
       );
-      expect(sidebar.storedOutboxes?.hasSessionDraft(sessionKey) ?? false).toBe(withOutboxes);
-      if (withOutboxes) {
-        storedOutboxes = outboxes(sessionKey, 2, false);
-        await refresh();
-        await settleLitElements([sidebar, topbar]);
-        await waitForSolid(() =>
-          expect(
-            conversation()?.querySelector(".session-row-badge--attention")?.textContent,
-          ).toContain("2"),
-        );
-        expect(conversation()?.querySelector(".session-row-badge--draft")).toBeNull();
-      }
-    },
-  );
+    await waitForSolid(() => expect(conversation()).not.toBeNull());
+    expect(conversation()?.querySelector(".session-row-badge--attention")?.textContent).toContain(
+      "1",
+    );
+    expect(conversation()?.querySelector(".session-row-badge--draft")).not.toBeNull();
+    const conversationRow = conversation();
+    const topbarText = topbar.textContent;
+    const sidebarUpdates: MutationRecord[] = [];
+    const observer = new MutationObserver((records) => sidebarUpdates.push(...records));
+    observer.observe(sidebar, allMutationObserverOptions());
+    onTestFinished(() => observer.disconnect());
+    const topbarChrome = () =>
+      [".topbar", ".topbar-nav-toggle"].map((selector) => topbar.querySelector(selector));
+    const residentChrome = topbarChrome();
+    expect(residentChrome).not.toContain(null);
+
+    overlaySnapshot.approvalBusy = true;
+    await refresh();
+    await settleLitElements([sidebar, topbar]);
+    flush();
+
+    expect([...sidebarUpdates, ...observer.takeRecords()]).toHaveLength(0);
+    expect(conversation()).toBe(conversationRow);
+    topbarChrome().forEach((element, index) => expect(element).toBe(residentChrome[index]));
+    expect(topbar.textContent).toBe(topbarText);
+    storedOutboxes = outboxes(sessionKey, 2, false);
+    await refresh();
+    await settleLitElements([sidebar, topbar]);
+    await waitForSolid(() =>
+      expect(conversation()?.querySelector(".session-row-badge--attention")?.textContent).toContain(
+        "2",
+      ),
+    );
+    expect(conversation()?.querySelector(".session-row-badge--draft")).toBeNull();
+  });
 
   it("keeps resident navigation actions bound to current context and permission", async () => {
     const { shell, renderSidebar, openDevicePairSetup } = createPairingShell({ auth: admin });
@@ -367,16 +350,16 @@ describe("application shell pairing access", () => {
       ...replacement.snapshot.hello,
       features: { methods: ["sessions.create"], events: [] },
     } as ApplicationGatewaySnapshot["hello"];
-    const connect = vi.fn();
-    const update = vi.fn();
     const stopGateway = vi.fn();
     const stopOverlays = vi.fn();
-    replacement.context.gateway.connect = connect;
+    replacement.context.gateway.connect = vi.fn();
     replacement.context.gateway.subscribe = vi.fn(() => stopGateway);
-    replacement.context.navigation.update = update;
+    replacement.context.navigation.update = vi.fn();
     replacement.context.overlays.subscribe = vi.fn(() => stopOverlays);
     shell.runtime = { ...shell.runtime!, context: replacement.context };
-    const openNewSession = vi.spyOn(shell, "openNewSession").mockImplementation(() => undefined);
+    const openNewSession = vi
+      .spyOn(shell.shellNavigation, "openNewSession")
+      .mockImplementation(() => undefined);
 
     onPairMobile?.();
     onRetryConnect?.();
@@ -387,8 +370,10 @@ describe("application shell pairing access", () => {
 
     expect(openDevicePairSetup).not.toHaveBeenCalled();
     expect(replacement.openDevicePairSetup).toHaveBeenCalledOnce();
-    expect(connect).toHaveBeenCalledOnce();
-    expect(update).toHaveBeenCalledWith({ sidebarEntries: ["chat", "activity"] });
+    expect(replacement.context.gateway.connect).toHaveBeenCalledOnce();
+    expect(replacement.context.navigation.update).toHaveBeenCalledWith({
+      sidebarEntries: ["chat", "activity"],
+    });
     expect(openNewSession).toHaveBeenCalledExactlyOnceWith("main", undefined);
     expect(progress).toHaveBeenCalledWith(expect.objectContaining({ connected: true }));
     stopProgress?.();
@@ -418,19 +403,16 @@ describe("application shell pairing access", () => {
     };
     document.body.append(shell.element, shell.navigationSidebar);
     shell.connect();
-    try {
-      await settleLitElements([shell.navigationSidebar as PairingSidebar]);
-      const update = vi.spyOn(shell, "invalidate");
-
-      publish?.();
-
-      expect(update).toHaveBeenCalledOnce();
-      flush();
-    } finally {
-      shell.disconnect();
+    onTestFinished(() => {
       shell.element.remove();
       shell.navigationSidebar.remove();
-    }
+    });
+    await settleLitElements([shell.navigationSidebar as AppSidebarElement]);
+    const update = vi.spyOn(shell, "invalidate");
+    publish?.();
+    expect(update).toHaveBeenCalledOnce();
+    flush();
+    shell.disconnect();
     expect(publish).toBeUndefined();
   });
 
@@ -468,13 +450,15 @@ describe("application shell pairing access", () => {
     ["settings", true],
   ] as const)("keeps lazy %s visible (failed: %s)", async (surface, failed) => {
     const settings = surface === "settings";
-    const { shell, container, refresh, renderSidebar } = createPairingShell({
+    const { shell, container, overlaySnapshot, refresh, renderSidebar } = createPairingShell({
       auth: settings ? { role: "operator" } : admin,
       setupCode: settings ? undefined : "pair-mobile-secret",
     });
-    const property = settings ? "settingsSidebar" : "devicePairSetup";
-    type Renderer = NonNullable<ReturnType<(typeof shell)[typeof property]["renderer"]>>;
-    const { loading, retrying, load } = deferredRenderer<Renderer>(shell, property);
+    const { loading, retrying, load, view } = deferredRenderer();
+    const renderer = settings
+      ? vi.spyOn(settingsSidebar, "ShellSettingsSidebar").mockImplementation(view)
+      : vi.spyOn(pairingView, "DevicePairSetup").mockImplementation(view);
+    onTestFinished(() => renderer.mockRestore());
     if (settings) {
       shell.routeState = {
         routeId: "profile",
@@ -482,61 +466,49 @@ describe("application shell pairing access", () => {
       };
       await refresh();
     } else {
+      overlaySnapshot.devicePairSetupOpen = false;
       await renderSidebar();
+      await vi.dynamicImportSettled();
+      expect(load).not.toHaveBeenCalled();
+      overlaySnapshot.devicePairSetupOpen = true;
+      await refresh();
     }
+    await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
     const message = settings
       ? "Settings navigation could not load."
       : "Could not load the pairing dialog";
+    const target = () =>
+      container.querySelector<HTMLElement>(settings ? ".settings-sidebar" : ".device-pair-setup");
+    expect(target()?.getAttribute("aria-busy")).toBe("true");
+    if (settings) {
+      const skeleton = target()?.querySelector<HTMLElement>(
+        '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+      );
+      expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
+      expect(skeleton?.querySelector(".settings-sidebar__loading-item")).not.toBeNull();
+    } else {
+      expect(target()?.textContent).toContain("Loading…");
+    }
     if (failed) {
       loading.reject(new Error(`${surface} chunk unavailable`));
-      await waitForSolid(() => expect(container.textContent).toContain(message));
-    }
-    const target = container.querySelector<HTMLElement>(
-      settings ? ".settings-sidebar" : ".device-pair-setup",
-    );
-    if (failed) {
-      expect(target?.textContent).toContain(message);
+      await waitForSolid(() => expect(target()?.textContent).toContain(message));
       if (settings) {
-        expect(target?.getAttribute("aria-busy")).toBeNull();
+        expect(target()?.getAttribute("aria-busy")).toBeNull();
       }
       const actions = [
-        ...(target?.querySelectorAll<HTMLButtonElement>(
+        ...(target()?.querySelectorAll<HTMLButtonElement>(
           settings ? "button" : ".device-pair-setup__footer button",
         ) ?? []),
       ];
       if (!settings) {
-        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
+        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Close", "Retry"]);
       }
       actions.find((button) => button.textContent?.trim() === "Retry")?.click();
-      await waitForSolid(() => expect(target?.getAttribute("aria-busy")).toBe("true"));
-    } else {
-      expect(target?.getAttribute("aria-busy")).toBe("true");
-      if (settings) {
-        const skeleton = target?.querySelector<HTMLElement>(
-          '.settings-sidebar__loading[role="status"][aria-busy="true"]',
-        );
-        expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
-        const expectedItems = visibleSettingsNavigationGroups(true).reduce(
-          (count, group) => count + group.routes.length,
-          0,
-        );
-        for (const selector of [
-          ".settings-sidebar__loading-item",
-          ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
-        ]) {
-          expect(skeleton?.querySelectorAll(selector)).toHaveLength(expectedItems);
-        }
-      } else {
-        expect(target?.textContent).toContain("Loading…");
-        expect(load).toHaveBeenCalledOnce();
-      }
+      await waitForSolid(() => expect(target()?.getAttribute("aria-busy")).toBe("true"));
     }
-    if (settings) {
-      expect(load).toHaveBeenCalledTimes(failed ? 2 : 1);
-      (failed ? retrying : loading).resolve(() => document.createTextNode("Settings ready"));
-      await waitForSolid(() => expect(container.textContent).toContain("Settings ready"));
-      expect(container.querySelector(".settings-sidebar__loading")).toBeNull();
-    }
+    (failed ? retrying : loading).resolve();
+    await waitForSolid(() => expect(container.textContent).toContain("Lazy view ready"));
+    expect(target()).toBeNull();
   });
 
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {

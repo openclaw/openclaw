@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
@@ -85,19 +85,17 @@ it.each(["transition", "complete"] as const)(
       });
       let hook: Promise<void> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           acknowledged.promise,
-          publication.then(() => {
-            throw new Error("Requester wake returned before its held acknowledgement");
-          }),
-        ]);
+          publication,
+          "Requester wake returned before its held acknowledgement",
+        );
         hook = cleanup.emitSubagentEndedHookForRun({ entry: input.subagent });
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           hookReached.promise,
-          hook.then(() => {
-            throw new Error("Ended hook returned before reaching its producer");
-          }),
-        ]);
+          hook,
+          "Ended hook returned before reaching its producer",
+        );
         expect.soft(input.subagent.endedHookEmittedAt).toBeUndefined();
         releaseAcknowledgement.resolve();
         await expect(publication).resolves.toEqual({ applied: true, publication: "published" });

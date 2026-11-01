@@ -33,7 +33,7 @@ import {
   SLACK_USER_NAME_KIND,
 } from "./ingress-identity.js";
 import { getOrCreateWeakOwnerMap } from "./lru-map-cache.js";
-import { isTransientSlackThreadLookupError } from "./thread-resolution.js";
+import { isTransientSlackApiError } from "./transient-api-error.js";
 
 type SlackChannelMembersCacheEntry = {
   expiresAtMs: number;
@@ -385,28 +385,23 @@ export async function authorizeSlackSystemEventSender(params: {
     : null;
   const channelUsersAllowlistConfigured = (channelConfig?.users?.length ?? 0) > 0;
   const decision = await (async (): Promise<ChannelIngressDecision> => {
-    const systemIngressCtx = params.ctx;
-    const systemIngressTeamId = params.eventScope?.teamId ?? params.ctx.teamId;
-    const systemIngressSenderName = senderInfo?.name;
-    const systemIngressChannelUsers = channelConfig?.users;
     const systemInteractiveEvent = params.interactiveEvent === true;
     const systemRetryNameLookup = params.retryNameLookup && params.ctx.allowNameMatching;
-    const systemEventScope = params.eventScope;
     const isDirectMessage = ingressChannelType === "im";
     const isGroupDm = ingressChannelType === "mpim";
-    const teamId = systemIngressTeamId ?? systemIngressCtx.teamId;
+    const teamId = params.eventScope?.teamId ?? params.ctx.teamId;
     const normalizedOwnerAllowFromLower = resolveSlackUserAllowListForTeam({
       allowList: allowFromLower,
       teamId,
     });
     const normalizedChannelUsers = resolveSlackUserAllowListForTeam({
-      allowList: systemIngressChannelUsers,
+      allowList: channelConfig?.users,
       teamId,
     });
     const normalizedChannelUsersConfigured =
       !isDirectMessage &&
       !isGroupDm &&
-      normalizeStringEntriesLower(systemIngressChannelUsers).length > 0;
+      normalizeStringEntriesLower(channelConfig?.users).length > 0;
     const ownerAllowFrom =
       systemInteractiveEvent && normalizedChannelUsersConfigured
         ? normalizedOwnerAllowFromLower.filter((entry) => entry !== "*")
@@ -433,9 +428,9 @@ export async function authorizeSlackSystemEventSender(params: {
         senderName,
         teamId,
       });
-    const resolver = createSlackIngressResolver(systemIngressCtx);
+    const resolver = createSlackIngressResolver(params.ctx);
     const input: Parameters<typeof resolver.message>[0] = {
-      subject: subject(systemIngressSenderName),
+      subject: subject(senderInfo?.name),
       conversation: {
         kind: resolveSlackChatType(ingressChannelType),
         id: channelId ?? "slack-system",
@@ -456,7 +451,7 @@ export async function authorizeSlackSystemEventSender(params: {
             : "open",
       policy: {
         groupAllowFromFallbackToAllowFrom: false,
-        mutableIdentifierMatching: systemIngressCtx.allowNameMatching ? "enabled" : "disabled",
+        mutableIdentifierMatching: params.ctx.allowNameMatching ? "enabled" : "disabled",
       },
       allowFrom: isDirectMessage ? wildcardWhenOpen(normalizedOwnerAllowFromLower) : ownerAllowFrom,
       groupAllowFrom,
@@ -478,8 +473,8 @@ export async function authorizeSlackSystemEventSender(params: {
         (entry) => entry.kind === SLACK_USER_NAME_KIND,
       )
     ) {
-      const lookup = await systemIngressCtx.resolveUserName(senderId, systemEventScope);
-      if (lookup.error && isTransientSlackThreadLookupError(lookup.error)) {
+      const lookup = await params.ctx.resolveUserName(senderId, params.eventScope);
+      if (lookup.error && isTransientSlackApiError(lookup.error)) {
         throw new SlackSystemEventAuthRetryError(formatErrorMessage(lookup.error));
       }
       if (lookup.name) {

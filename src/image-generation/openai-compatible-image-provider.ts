@@ -16,6 +16,7 @@ import {
   isProviderApiKeyConfigured,
   isProviderApiKeyConfiguredAsync,
 } from "../plugins/provider-auth-availability.js";
+import type { ImageGenerationSourceImage } from "./asset-types.js";
 import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
@@ -26,7 +27,6 @@ import type {
   ImageGenerationProviderCapabilities,
   ImageGenerationRequest,
   ImageGenerationResult,
-  ImageGenerationSourceImage,
 } from "./types.js";
 
 // Match the guarded HTTP default, including when no request timeout is supplied.
@@ -138,6 +138,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
+        signal: req.signal,
       });
       if (!auth.apiKey) {
         throw new Error(options.missingApiKeyError ?? `${options.label} API key missing`);
@@ -207,6 +208,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
         url: `${baseUrl.replace(/\/+$/u, "")}/images/${mode === "edit" ? "edits" : "generations"}`,
         headers: new Headers(headers),
         timeoutMs,
+        signal: req.signal,
         fetchFn: fetch,
         allowPrivateNetwork: resolvedAllowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
@@ -245,6 +247,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
           maxDownloads: maxImages,
           maxBytes,
           timeoutMs: remainingTimeoutMs,
+          signal: req.signal,
           // A loopback API endpoint does not authorize arbitrary private image hosts.
           allowPrivateNetwork: configuredRequest?.allowPrivateNetwork,
           ssrfPolicy: req.ssrfPolicy,

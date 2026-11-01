@@ -26,6 +26,11 @@ import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
 import type { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
+import {
+  CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL,
+  readCodexNativeSubagentSubmissionAcknowledgement,
+  type CodexNativeSubagentSubmissionAcknowledgement,
+} from "./native-subagent-submission.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
@@ -212,10 +217,15 @@ export function createCodexNativeHookRelay(params: {
   assertCurrentAsync?: () => Promise<void>;
   retainExecutionPolicy?: () => () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
+  onNativeSubagentSubmission?: (
+    receipt: CodexNativeSubagentSubmissionAcknowledgement,
+    assertCurrent: () => void,
+  ) => Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
     return undefined;
   }
+  const onNativeSubagentSubmission = params.onNativeSubagentSubmission;
   const modelInputTools: CodexNativeModelInputTools = params.nativeModelAdmission?.tools ?? [
     "multi_agent_v1send_input",
   ];
@@ -270,6 +280,16 @@ export function createCodexNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
+    postToolUse: onNativeSubagentSubmission
+      ? {
+          toolNames: [CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL],
+          observe: (invocation, assertCurrent) =>
+            onNativeSubagentSubmission(
+              readCodexNativeSubagentSubmissionAcknowledgement(invocation.rawPayload),
+              assertCurrent,
+            ),
+        }
+      : undefined,
     executionAdmission:
       params.nativeProcessAuthority ||
       params.nativeModelAdmission ||

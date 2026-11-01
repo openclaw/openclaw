@@ -30,7 +30,8 @@ import {
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
+import { createDoctorWriteAuthority } from "./doctor-policy-custody.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
@@ -126,11 +127,10 @@ it.each(["configured-owner", "profile"] as const)(
         await closeOpenClawStateDatabaseAsync();
         // Keep the initial liveness control outside the maintenance admission budget.
         authorityWorkerLaunches.clear();
-        const maintenance = await beginDoctorMaintenance({
-          root: null,
-          options: { repair: true, nonInteractive: true },
-          runtime: { log() {}, error() {}, exit() {} },
+        const policy = createDoctorWriteAuthority({ inputHash: "", assertCurrent });
+        const maintenance = await beginDoctorRepair({
           assertCurrent,
+          lendPolicyCustody: policy.lendPolicyCustody,
           beforeStateMutation: () => expectNoSidecars(databasePath),
         });
         expect(maintenance).toBeDefined();
@@ -189,6 +189,9 @@ it.each(["configured-owner", "profile"] as const)(
           expect(authorityWorkerLaunches.size).toBe(admissionWorkerLaunches);
           // Lease admission rechecks authority after acquisition inside the held scope.
           expect(admissionWorkerLaunches).toBeLessThanOrEqual(9);
+          // Child custody and post-repair work check outside the scope (#178291);
+          // the held owner lends custody to the delegated check.
+          expect(policy.assertCurrent).not.toThrow();
           // The Doctor flow leaves runChecks before its post-repair cleanup.
           // Draining those readers requires fresh admission before restoration.
           await maintenance!.cleanupRetainedRuntimes();
@@ -199,6 +202,7 @@ it.each(["configured-owner", "profile"] as const)(
               await state.writeConfig({ ...config, commands: { ownerAllowFrom: ["other"] } });
             }
           });
+          expect(policy.assertCurrent).toThrow(UpdateRequesterRevokedError);
           const revoked = await fs.readFile(state.configPath, "utf8");
           await expect(
             captureUpdateDoctorConfigWrites(

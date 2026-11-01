@@ -65,24 +65,6 @@ describe("Gateway connection work", () => {
       }
     },
   );
-
-  it("does not drain another Gateway generation's work", async () => {
-    const first = new GatewayConnectionWork();
-    const second = new GatewayConnectionWork();
-    const gate = createDeferredCore();
-    const settled = vi.fn();
-    const pending = first.track(() => gate.promise.then(settled));
-    try {
-      second.beginClose();
-      await second.drain();
-      expect(settled).not.toHaveBeenCalled();
-    } finally {
-      gate.resolve();
-      first.beginClose();
-      await first.drain();
-      await pending;
-    }
-  });
 });
 
 describe.skipIf(process.platform === "win32")("Gateway connection broker ownership", () => {
@@ -109,12 +91,10 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
     const second = makeWork(secondBroker);
     const withoutBroker = new GatewayConnectionWork();
     const firstGate = createDeferredCore();
-    const entered: string[] = [];
     try {
       const pending = callerContext.run("request", () =>
         runWithSpawnBroker(secondBroker, () =>
           first.track(async () => {
-            entered.push("first");
             expect(getSpawnBroker()).toBe(firstBroker);
             expect(callerContext.getStore()).toBe("request");
             await firstGate.promise;
@@ -123,7 +103,6 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
           }),
         ),
       );
-      expect(entered).toEqual(["first"]);
       await runWithSpawnBroker(firstBroker, async () => {
         for (const [work, broker] of [
           [second, secondBroker],

@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
@@ -26,6 +27,7 @@ import {
   getOperatorApprovalResolutionKey,
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
 } from "./operator-approval-store.rows.js";
+import { createExecApprovalPresentation } from "./operator-approval-store.test-support.js";
 import * as nativeTransitions from "./operator-approval-store.transitions.worker.js";
 import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 
@@ -53,16 +55,7 @@ function approval(id: string): Parameters<typeof store.insertOperatorApproval>[0
     source: { agentId: "main", sessionKey: "agent:main:synthetic" },
     reviewerDeviceIds: ["reviewer"],
     audienceSessionKeys: ["agent:main:synthetic"],
-    presentation: {
-      kind: "exec",
-      commandText: "printf 'héllo  world'",
-      commandPreview: "printf 'héllo  world'",
-      warningText: null,
-      host: "gateway",
-      nodeId: null,
-      agentId: "main",
-      allowedDecisions: ["allow-once", "deny"],
-    },
+    presentation: createExecApprovalPresentation("printf 'héllo  world'", ["allow-once", "deny"]),
   };
 }
 
@@ -630,4 +623,19 @@ it("commits verdicts during a terminal history read and rejects revoked read aut
     signal.removeEventListener("abort", unblock);
     await Promise.allSettled([earlier, result]);
   }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  openOpenClawStateDatabase(databaseOptions);
+  using contention = probe.writerLock(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    contention.observe(request.stage);
+    admit(request, grant);
+  });
+  await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+  expect(await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions })).toEqual([
+    expect.objectContaining({ id: "contention" }),
+  ]);
 });

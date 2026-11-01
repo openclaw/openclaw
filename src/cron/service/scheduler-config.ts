@@ -1,5 +1,6 @@
 import { listAgentDatabaseAdmissionRefusals } from "../../state/agent-database-admission.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { currentPluginCommandHostProcessId } from "../plugin-command-schedule.js";
 import type { CronSchedulerSnapshot } from "../store/scheduler-actor.types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -32,6 +33,8 @@ export async function captureCronSchedulerSnapshot(
       maxMissedJobsPerRestart: state.deps.maxMissedJobsPerRestart,
       missedJobStaggerMs: state.deps.missedJobStaggerMs,
       startupDeferredMissedAgentJobDelayMs: state.deps.startupDeferredMissedAgentJobDelayMs,
+      hostProcessId: currentPluginCommandHostProcessId(),
+      pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),
     },
   };
 }

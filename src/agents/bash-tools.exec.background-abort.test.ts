@@ -28,12 +28,12 @@ vi.mock("../process/supervisor/index.js", async (importOriginal) => {
   return {
     ...actual,
     getProcessSupervisor: () => ({
-      spawn: async (input: { runId?: string; timeoutMs?: number }) => {
+      spawn: async (input: { runId?: string }) => {
         supervisorMockState.onSpawn?.();
         const runId = input.runId ?? `mock-run-${++counter}`;
         const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
         const completion = createDeferredCore<RunExit>();
-        const settle = (reason: "manual-cancel" | "overall-timeout" | "exit") => {
+        const settle = (reason: "manual-cancel" | "exit") => {
           if (activity.resultSettled) {
             return;
           }
@@ -42,15 +42,10 @@ vi.mock("../process/supervisor/index.js", async (importOriginal) => {
             createRunExit({
               reason,
               exitCode: reason === "exit" ? 0 : null,
-              durationMs: input.timeoutMs ?? 0,
-              timedOut: reason === "overall-timeout",
             }),
           );
         };
         supervisorMockState.finish.set(runId, () => settle("exit"));
-        if (input.timeoutMs !== undefined) {
-          setTimeout(() => settle("overall-timeout"), Math.max(50, input.timeoutMs));
-        }
         return {
           activity,
           runId,
@@ -87,21 +82,20 @@ vi.mock("./bash-tools.exec-host-node.js", async (importOriginal) => ({
   }),
 }));
 
-const BACKGROUND_HOLD_CMD =
-  process.platform === "win32" ? 'node -e "setTimeout(() => {}, 1000)"' : "exec sleep 1";
-const TEST_EXEC_DEFAULTS = {
-  host: "gateway",
-  security: "full",
-  ask: "off",
-  allowBackground: true,
-  notifyOnExit: false,
-} as const;
-const command = { command: BACKGROUND_HOLD_CMD, timeoutSeconds: 60 };
+const command = { command: "fixture-command", timeoutSeconds: 60 };
 function identity(runId: string, sessionKey: string, sessionId: string) {
   return { runId, sessionKey, sessionId, agentId: "main" };
 }
 const makeTool = (owner: Partial<ReturnType<typeof identity>>, scopeKey: string) =>
-  createLazyExecTool({ ...TEST_EXEC_DEFAULTS, ...owner, scopeKey });
+  createLazyExecTool({
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    allowBackground: true,
+    notifyOnExit: false,
+    ...owner,
+    scopeKey,
+  });
 
 async function finishProcesses() {
   for (const finish of supervisorMockState.finish.values()) {
@@ -221,20 +215,15 @@ test.each([false, true])(
     const toolLifetime = new AbortController();
     async function launch(runId: string, independent = false) {
       const owner = identity(runId, sessionKey, "request-stop-session");
-      return withExecRequestTurn(
-        {
-          identity: owner,
-          abortSignal: source.signal,
-        },
-        () =>
-          yieldExec(
-            makeTool(owner, sessionKey),
-            runId,
-            { ...command, ...(independent ? { background: true } : { yieldMs: 10 }) },
-            toolLifetime.signal,
-            codeMode,
-            sessionKey,
-          ),
+      return withExecRequestTurn({ identity: owner, abortSignal: source.signal }, () =>
+        yieldExec(
+          makeTool(owner, sessionKey),
+          runId,
+          { ...command, ...(independent ? { background: true } : { yieldMs: 10 }) },
+          toolLifetime.signal,
+          codeMode,
+          sessionKey,
+        ),
       );
     }
     const ordinary = await launch("original");
@@ -243,8 +232,6 @@ test.each([false, true])(
       identity("original", sessionKey, "request-stop-session"),
     );
     const next = await launch("new-human-request");
-    // All foreground calls and the original turn have finished successfully.
-    // Disposing their tool generation is not an explicit request cancellation.
     toolLifetime.abort();
     expect(supervisorMockState.cancelled).toEqual([]);
     try {

@@ -18,6 +18,7 @@ const routeState = vi.hoisted(() => ({
       name: "openclaw",
       cdpUrl: "http://127.0.0.1:18800",
       cdpIsLoopback: true,
+      headless: false,
     },
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "7",
@@ -29,6 +30,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdp = vi.hoisted(() => ({
+  captureScreenshot: vi.fn(),
   getDocumentIdentitiesViaCdp: vi.fn<
     (_opts?: unknown) => Promise<{ mainFrame?: string; frameTree?: string }>
   >(async () => ({ mainFrame: "cdp:test-document", frameTree: "cdp:test-tree" })),
@@ -45,6 +47,22 @@ const playwright = vi.hoisted(() => ({
   module: null as null | Record<string, ReturnType<typeof vi.fn>>,
 }));
 
+const browserRuntime = vi.hoisted(() => ({
+  profiles: new Map<
+    string,
+    {
+      running: { headless?: boolean; headlessSource?: string } | null;
+      externalBrowserMode?: { browserWebSocketUrl: string; headless: Promise<boolean | undefined> };
+    }
+  >(),
+}));
+const pwMocks = vi.hoisted(() => ({
+  screenshot: false,
+  connected: false,
+  hasCachedPlaywrightBrowserConnection: vi.fn(() => pwMocks.connected),
+  takeScreenshotViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("owned screenshot") })),
+}));
+
 const navigation = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(async (): Promise<void> => {}),
@@ -54,12 +72,11 @@ const navigation = vi.hoisted(() => ({
 // mock-isolation: Supply this suite's synthetic Playwright module without process-wide browser state.
 vi.mock("../pw-ai-module.js", () => ({
   getPwAiModule: vi.fn(async () => playwright.module),
-  getLoadedPwAiModule: () => null,
+  getLoadedPwAiModule: () => (pwMocks.screenshot ? pwMocks : null),
 }));
 
 // mock-isolation: Keep managed snapshot capture in the synthetic CDP fixture, not a live browser.
 vi.mock("../cdp.js", () => ({
-  captureScreenshot: vi.fn(),
   ...cdp,
 }));
 
@@ -73,6 +90,7 @@ vi.mock("../chrome-mcp.js", () => ({
 // mock-isolation: Observe navigation policy checks without resolving or connecting fixture URLs.
 vi.mock("../navigation-guard.js", () => navigation);
 
+// mock-isolation: Supply synthetic profile and tab ownership without starting a browser service.
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({
     ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
@@ -85,10 +103,28 @@ vi.mock("./agent.shared.js", () => ({
     },
   ),
   readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
-  requirePwAi: vi.fn(async () => null),
+  requirePwAi: vi.fn(async () => (pwMocks.screenshot ? pwMocks : null)),
   resolveProfileContext: vi.fn(() => routeState.profileCtx),
   withPlaywrightRouteContext: vi.fn(),
-  withRouteTabContext: vi.fn(),
+  withRouteTabContext: vi.fn(
+    async (params: {
+      run: (ctx: {
+        profileCtx: typeof routeState.profileCtx;
+        tab: { targetId: string; url: string; wsUrl: string; wsLookup: typeof tabLookup };
+        cdpUrl: string;
+      }) => Promise<void>;
+    }) =>
+      await params.run({
+        profileCtx: routeState.profileCtx,
+        tab: {
+          targetId: "tab-1",
+          url: "https://example.com",
+          wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+          wsLookup: tabLookup,
+        },
+        cdpUrl: "http://127.0.0.1:18800",
+      }),
+  ),
 }));
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
@@ -135,6 +171,7 @@ function createPwModule(overrides: Record<string, ReturnType<typeof vi.fn>> = {}
 describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pwMocks.screenshot = false;
     cdp.getDocumentIdentitiesViaCdp.mockReset();
     cdp.snapshotRoleViaCdp.mockReset();
     playwright.module = null;
@@ -330,5 +367,70 @@ describe("captureBrowserOperationTarget", () => {
     });
     expect(await resolveRelayTarget?.()).toBeUndefined();
     expect(await outcome("unrelated-999")).toBe("old-123");
+  });
+});
+
+async function screenshot(body: Record<string, unknown> = {}) {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { extraArgs: [] }, profiles: browserRuntime.profiles }),
+  } as never);
+  return await runRoute(postHandlers.get("/screenshot"), { body: { type: "png", ...body } });
+}
+
+describe("browser agent snapshot timeout routing", () => {
+  beforeEach(() => {
+    pwMocks.screenshot = true;
+    cdp.captureScreenshot.mockReset();
+    routeState.profileCtx.profile.headless = false;
+    browserRuntime.profiles.clear();
+    pwMocks.connected = false;
+    pwMocks.takeScreenshotViaPlaywright.mockClear();
+  });
+
+  it("uses the existing Playwright viewport owner even when the tab has a CDP URL", async () => {
+    pwMocks.connected = true;
+    cdp.captureScreenshot.mockRejectedValueOnce(new Error("fresh CDP loses the viewport"));
+    const response = await screenshot({ timeoutMs: 4321 });
+    expect(response.statusCode).toBe(200);
+    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: "http://127.0.0.1:18800",
+        targetId: "tab-1",
+        timeoutMs: 4321,
+      }),
+    );
+    expect(cdp.captureScreenshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "headed launched browser", running: { headless: false, headlessSource: "request" } },
+    { name: "observed headed external browser", running: null },
+  ])("passes the actual launch mode for $name", async ({ running }) => {
+    routeState.profileCtx.profile.headless = true;
+    browserRuntime.profiles.set(routeState.profileCtx.profile.name, {
+      running,
+      ...(running === null
+        ? {
+            externalBrowserMode: {
+              browserWebSocketUrl: "ws://127.0.0.1:18800/devtools/browser/test-browser",
+              headless: Promise.resolve(false),
+            },
+          }
+        : {}),
+    });
+    cdp.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+    const response = await screenshot();
+    expect(response.statusCode).toBe(200);
+    expect(cdp.captureScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({ headless: false }),
+    );
+  });
+
+  it("rejects loose screenshot timeoutMs values before dispatching", async () => {
+    const response = await screenshot({ timeoutMs: "1e3" });
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: "timeoutMs must be a positive integer." });
+    expect(cdp.captureScreenshot).not.toHaveBeenCalled();
   });
 });

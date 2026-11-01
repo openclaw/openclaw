@@ -6,7 +6,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { row } from "./chat-outbox-recovery.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
-import { handleAbortChat, hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { handleAbortChat } from "./run-lifecycle.ts";
 
 beforeEach(installOutboxBrowserStorage);
 
@@ -131,17 +131,4 @@ it.each([
     expect(host.chatMessage).toBe("draft");
     expect(host.request).not.toHaveBeenCalled();
   }
-});
-
-it.each([
-  ["ignores stale active-run flags once the current session is terminal", true, "done"],
-  ["ignores stale running status once the gateway reports no active run", false, "running"],
-] as const)("%s", (_name, hasActiveRun, status) => {
-  const host = makeChatHost({
-    sessionsResult: sessionListFixture([
-      row("agent:main", { hasActiveRun, status }),
-      row("agent:other", { hasActiveRun: true, status: "running" }),
-    ]),
-  });
-  expect(hasAbortableSessionRun(host)).toBe(false);
 });

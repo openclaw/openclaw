@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
-import { normalizeGroupActivation } from "./group-activation.runtime.js";
 
 export async function resolveGroupActivationFor(params: {
   cfg: OpenClawConfig;

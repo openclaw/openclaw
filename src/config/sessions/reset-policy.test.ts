@@ -47,38 +47,19 @@ it.each`
   },
 );
 
-it("preserves the daily fallback when a type override above a disabled base omits mode", () => {
-  expect(
-    resolveSessionResetPolicy({
-      sessionCfg: { reset: { mode: "none" }, resetByType: { group: { atHour: 6 } } },
-      resetType: "group",
-    }),
-  ).toMatchObject({ mode: "daily", atHour: 6 });
-});
-
-it("inherits an active base mode for partial type overrides", () => {
-  expect(
-    resolveSessionResetPolicy({
-      sessionCfg: {
-        reset: { mode: "idle", idleMinutes: 60 },
-        resetByType: { group: { idleMinutes: 30 } },
-      },
-      resetType: "group",
-    }),
-  ).toMatchObject({ mode: "idle", idleMinutes: 30 });
-});
-
-it("expires an explicit idle policy after inactivity", () => {
-  const now = 10 * HOUR_MS;
-  const lastInteractionAt = now - 31 * 60_000;
-  const policy = resolveSessionResetPolicy({
-    sessionCfg: { reset: { mode: "idle", idleMinutes: 30 } },
-    resetType: "direct",
-  });
-
-  expect(
-    evaluateSessionFreshness({ updatedAt: now, lastInteractionAt, now, policy }),
-  ).toMatchObject({ fresh: false, staleReason: "idle" });
+it.each([
+  [
+    "falls back to daily above a disabled base",
+    { reset: { mode: "none" }, resetByType: { group: { atHour: 6 } } },
+    { mode: "daily", atHour: 6 },
+  ],
+  [
+    "inherits an active base mode",
+    { reset: { mode: "idle", idleMinutes: 60 }, resetByType: { group: { idleMinutes: 30 } } },
+    { mode: "idle", idleMinutes: 30 },
+  ],
+] as const)("partial type override %s", (_name, sessionCfg, expected) => {
+  expect(resolveSessionResetPolicy({ sessionCfg, resetType: "group" })).toMatchObject(expected);
 });
 
 it.each([

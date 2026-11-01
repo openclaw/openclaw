@@ -7,18 +7,17 @@ import {
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import {
-  formatBillingErrorMessage,
-  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-  renderHeartbeatRunFailureCopy,
-} from "../../agents/failover/user-copy.js";
-import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+  MISSING_REPLY_NOTICE_TEXT,
+  MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+} from "../../agents/reply-completion.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-projection.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import {
   markGatewayRestartDraining,
@@ -32,8 +31,6 @@ import {
   GENERIC_RUN_FAILURE_TEXT,
   createRunAgentTurnParams,
   createFollowupRun,
-  createMockReplyOperation,
-  requireMockCall,
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
   type EmbeddedAgentParams,
@@ -71,6 +68,40 @@ async function finalPayload(params: Parameters<typeof runTurn>[0] = {}) {
   assert(result.kind === "final");
   return result.payload;
 }
+
+it.each([
+  { message: MISSING_REPLY_NOTICE_TEXT, expected: MISSING_REPLY_NOTICE_TEXT },
+  {
+    message: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+    expected: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+  },
+  { message: "private provider detail", expected: "Agent run failed" },
+])(
+  "egresses only host missing-reply copy from an incomplete turn",
+  async ({ message, expected }) => {
+    state.runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads: [],
+        meta: {
+          error: { kind: "incomplete_turn", message, fallbackSafe: false },
+          terminalReply: { disposition: "empty" },
+          terminalReplyExpectation: "result-required",
+        },
+      },
+      provider: "openai",
+      model: "test-model",
+      attempts: [],
+    });
+
+    const result = await runRawTurn(createRunAgentTurnParams(createFollowupRun()));
+
+    expect(terminalEvents(result.runId)).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", error: expected }),
+      }),
+    ]);
+  },
+);
 
 it("preserves disabled retry exhaustion through returned provider payloads", async () => {
   const rawError = "429 rate limit exceeded. Please try again in 221ms.";
@@ -166,22 +197,21 @@ it("keeps the provider reset hint when the chain summary exceeds the length guar
   expect(rendered).not.toContain("API rate limit reached. Please try again later.");
 });
 
-it("surfaces restart text when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
-  const { replyOperation, failMock } = createMockReplyOperation();
-  state.runWithModelFallbackMock.mockRejectedValueOnce(
-    exhausted(new GatewayDrainingError(), "gateway draining"),
-  );
-
-  const payload = await finalPayload({
-    ...createRunAgentTurnParams(createFollowupRun()),
-    replyOperation,
-    opts: {},
+it("ends quietly when fallback exhaustion wraps a drain error", async () => {
+  const replyOperation = runningOperation("wrapped-drain-error");
+  state.runWithModelFallbackMock.mockImplementationOnce(async () => {
+    markGatewayRestartDraining();
+    throw exhausted(new GatewayDrainingError(), "gateway draining");
   });
 
-  expect(payload.text).toBe("⚠️ Gateway is restarting. Please wait a few seconds and try again.");
-  const failCall = requireMockCall(failMock, 0, "reply operation fail");
-  expect(failCall[0]).toBe("gateway_draining");
-  expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
+  try {
+    const result = await runRawTurn({ replyOperation });
+    expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+    expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+  } finally {
+    resetGatewayWorkAdmission();
+    replyOperation.complete();
+  }
 });
 
 it("preserves controller restart cancellation when fallback exhaustion wraps its abort", async () => {
@@ -203,7 +233,7 @@ it("preserves controller restart cancellation when fallback exhaustion wraps its
   }
 });
 
-it("retains automatic recovery when restart admission refuses an active turn", async () => {
+it("quietly cancels when restart admission refuses an active turn", async () => {
   const replyOperation = runningOperation("restart-refusal");
   state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
     await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
@@ -232,7 +262,12 @@ it("retains automatic recovery when restart admission refuses an active turn", a
         entry: { updatedAt: 1, startedAt: 1 },
         event: { ...terminals[0]!, ts: 2 },
       }),
-    ).toMatchObject({ status: "interrupted", abortedLastRun: true });
+    ).toMatchObject({
+      status: "killed",
+      abortedLastRun: true,
+      suppressErrorNotice: true,
+      lastRunError: undefined,
+    });
   } finally {
     resetGatewayWorkAdmission();
     replyOperation.complete();
@@ -327,7 +362,6 @@ it.each([
       const result = await runRawTurn({
         replyOperation,
         opts: { abortSignal: upstreamAbort.signal },
-        isRestartRecoveryArmed: async () => true,
       });
 
       expect(result.outcome).toEqual({ kind: "aborted", reason });
@@ -414,47 +448,6 @@ it.for([false, true])(
   },
 );
 
-it("settles a completed result after awaiting restart recovery", async () => {
-  const result = {
-    payloads: [{ text: "completed before the restart marker was observed" }],
-    meta: {},
-  };
-  const runId = "armed-restart-settled-result";
-  const { replyOperation, failMock } = createMockReplyOperation();
-  let operationResult: typeof replyOperation.result = null;
-  const abortForRestart = vi.fn(() => {
-    operationResult = { kind: "aborted", code: "aborted_for_restart" };
-    return true;
-  });
-  const complete = vi.fn(() => {
-    operationResult ??= { kind: "completed" };
-  });
-  const restartReplyOperation = {
-    ...replyOperation,
-    get result() {
-      return operationResult;
-    },
-    abortForRestart,
-    complete,
-  } satisfies typeof replyOperation;
-  state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-
-  const execution = await runRawTurn({
-    replyOperation: restartReplyOperation,
-    opts: { runId },
-    isRestartRecoveryArmed: async () => true,
-  });
-
-  expect(execution).toEqual({
-    runId,
-    outcome: { kind: "aborted", reason: "restart" },
-  });
-  expect(abortForRestart).toHaveBeenCalledOnce();
-  expect(complete).not.toHaveBeenCalled();
-  expect(restartReplyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-  expect(failMock).not.toHaveBeenCalled();
-});
-
 it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
   const recoveryText =
     "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
@@ -478,31 +471,6 @@ it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
 
   expect(payload).toMatchObject({ isError: true, text: recoveryText });
   expect(payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-});
-
-it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
-  state.runEmbeddedAgentMock.mockRejectedValueOnce(
-    new Error('Command lane "main" task timed out after 120000ms'),
-  );
-
-  const payload = await finalPayload({ isHeartbeat: true });
-
-  expect(payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
-  expect(payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-  expect(payload.text).not.toContain("/new");
-});
-
-it("includes heartbeat preflight reasons in terminal failure replies", async () => {
-  const message =
-    "Codex session became active in another runner; wait for it to finish before continuing";
-  state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
-
-  const payload = await finalPayload({ isHeartbeat: true });
-
-  expect(payload.text).toBe(renderHeartbeatRunFailureCopy(message));
-  expect(payload.text).toContain(`\n\nDetails: ${message}.\n`);
-  expect(payload.isError).toBe(true);
-  expect(payload.text).not.toContain("/new");
 });
 
 it("warns that interrupted CLI background work may have completed", () => {

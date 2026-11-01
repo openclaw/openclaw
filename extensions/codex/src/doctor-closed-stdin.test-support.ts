@@ -9,23 +9,17 @@ import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { registerCodexManagedAppServerDoctorChecks } from "./doctor.js";
 
 const command = process.argv[2];
-const cfg: OpenClawConfig = JSON.parse(process.argv[3]);
+const configJson = process.argv[3];
+if (!command || !configJson) {
+  throw new Error("Missing Codex fixture command or config");
+}
+const cfg: OpenClawConfig = JSON.parse(configJson);
 const checks: HealthCheck[] = [];
-registerCodexManagedAppServerDoctorChecks(
-  {
-    pluginRoot: path.dirname(command),
-    getHealthCheck: () => undefined,
-    registerHealthCheck: (check) => checks.push(check),
-  },
-  {
-    resolveStartOptions: async (start) => ({
-      ...start,
-      command,
-      commandSource: "resolved-managed",
-    }),
-    resolveNativeCommand: () => command,
-  },
-);
+registerCodexManagedAppServerDoctorChecks({
+  pluginRoot: path.dirname(command),
+  getHealthCheck: () => undefined,
+  registerHealthCheck: (check) => checks.push(check),
+});
 const result = await runDoctorLintChecks(
   { mode: "lint", runtime: createNonExitingRuntime(), cfg, env: process.env },
   { checks, onlyIds: ["codex/managed-app-server"] },

@@ -178,10 +178,8 @@ function prepareRetainedGrant(
 export function createPlacementStandingGrantRuntime(params: {
   runtimeEpoch: string;
   databaseOptions?: OpenClawStateDatabaseOptions;
-  now?: () => number;
 }): Required<PlacementStandingGrantRuntime> {
   const grants = new Map<string, PlacementStandingGrantRecord>();
-  const now = params.now ?? Date.now;
   const databasePath = resolveDatabasePath(params.databaseOptions);
   const validatedReceipts = new WeakMap<PlacementStandingGrantRecord, string>();
   const readAsync = (input: PlacementGrantReadInput) =>
@@ -197,7 +195,7 @@ export function createPlacementStandingGrantRuntime(params: {
       return { outcome: "no-grant" };
     }
     const outcome =
-      grant.expiresAtMs <= now()
+      grant.expiresAtMs <= Date.now()
         ? "expired"
         : grant.nodeId !== binding.nodeId
           ? "node-changed"

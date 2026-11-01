@@ -23,7 +23,6 @@ import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/
 import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
-import type { FailoverReason } from "../../agents/failover/signal.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
@@ -36,6 +35,7 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { prepareLocalCapabilityAccountSecrets } from "../../cli/capability-cli/local-account-secrets.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
@@ -128,15 +128,6 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
   });
 }
 
-export type AuthProbeSummary = {
-  startedAt: number;
-  finishedAt: number;
-  durationMs: number;
-  totalTargets: number;
-  options: Omit<AuthProbeOptions, "includeDirectKeys">;
-  results: AuthProbeResult[];
-};
-
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -145,12 +136,6 @@ export type AuthProbeOptions = {
   concurrency: number;
   maxTokens: number;
 };
-
-export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
-  return reason
-    ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
-    : "unknown";
-}
 
 const ELIGIBILITY_PROBE_ERRORS = {
   expired: "token credentials are expired.",
@@ -184,11 +169,6 @@ function resolveProbeSecretRef(profile: ProfileEntry, cfg: OpenClawConfig) {
       .ref;
   }
   return null;
-}
-
-function formatUnresolvedRefProbeError(refLabel: string): string {
-  const legacyLine = "Auth profile credentials are missing or expired.";
-  return `${legacyLine}\n↳ Auth reason [unresolved_ref]: could not resolve SecretRef "${refLabel}".`;
 }
 
 function createProbeConfig(cfg: OpenClawConfig, target: AuthProbeTarget): OpenClawConfig {
@@ -230,59 +210,6 @@ function createProbeConfig(cfg: OpenClawConfig, target: AuthProbeTarget): OpenCl
     copyConfigResolutionFacts(cfg, next);
   }
   return next;
-}
-
-async function resolveConfiguredProbeCredential(params: {
-  cfg: OpenClawConfig;
-  input: unknown;
-  path: string;
-  cache: SecretRefResolveCache;
-}): Promise<string | null> {
-  const ref = resolveConfigSecretRef({
-    config: params.cfg,
-    path: params.path,
-    value: params.input,
-    defaults: params.cfg.secrets?.defaults,
-  });
-  if (!ref) {
-    return normalizeSecretInputString(params.input) ?? null;
-  }
-  try {
-    return await resolveSecretRefString(ref, {
-      config: params.cfg,
-      env: process.env,
-      cache: params.cache,
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function maybeResolveUnresolvedRefIssue(params: {
-  cfg: OpenClawConfig;
-  profile?: ProfileEntry;
-  cache: SecretRefResolveCache;
-}): Promise<{ reasonCode: "unresolved_ref"; error: string } | null> {
-  if (!params.profile) {
-    return null;
-  }
-  const ref = resolveProbeSecretRef(params.profile, params.cfg);
-  if (!ref) {
-    return null;
-  }
-  try {
-    await resolveSecretRefString(ref, {
-      config: params.cfg,
-      env: process.env,
-      cache: params.cache,
-    });
-    return null;
-  } catch {
-    return {
-      reasonCode: "unresolved_ref",
-      error: formatUnresolvedRefProbeError(`${ref.source}:${ref.provider}:${ref.id}`),
-    };
-  }
 }
 
 export async function buildProbeTargets(params: {
@@ -396,12 +323,28 @@ export async function buildProbeTargets(params: {
               provider: providerKey,
               env: process.env,
             })?.apiKey ?? null)
-          : await resolveConfiguredProbeCredential({
-              cfg,
-              input: configuredProvider?.apiKey,
-              path: `${appendConfigPathSegment("models.providers", configuredProviderEntry.providerKey)}.apiKey`,
-              cache: refResolveCache,
-            })
+          : await (async (): Promise<string | null> => {
+              const input = configuredProvider?.apiKey;
+              const configPath = `${appendConfigPathSegment("models.providers", configuredProviderEntry.providerKey)}.apiKey`;
+              const ref = resolveConfigSecretRef({
+                config: cfg,
+                path: configPath,
+                value: input,
+                defaults: cfg.secrets?.defaults,
+              });
+              if (!ref) {
+                return normalizeSecretInputString(input) ?? null;
+              }
+              try {
+                return await resolveSecretRefString(ref, {
+                  config: cfg,
+                  env: process.env,
+                  cache: refResolveCache,
+                });
+              } catch {
+                return null;
+              }
+            })()
         : null;
     const configuredMode =
       configuredProvider?.auth === "oauth" || configuredProvider?.auth === "token"
@@ -482,7 +425,33 @@ export async function buildProbeTargets(params: {
           error: `Auth profile credentials are missing or expired.\n↳ Auth reason [${reasonCode}]: ${ELIGIBILITY_PROBE_ERRORS[reasonCode]}`,
         };
       } else {
-        issue = await maybeResolveUnresolvedRefIssue({ cfg, profile, cache: refResolveCache });
+        issue = await (async (): Promise<{
+          reasonCode: "unresolved_ref";
+          error: string;
+        } | null> => {
+          if (!profile) {
+            return null;
+          }
+          const ref = resolveProbeSecretRef(profile, cfg);
+          if (!ref) {
+            return null;
+          }
+          try {
+            await resolveSecretRefString(ref, {
+              config: cfg,
+              env: process.env,
+              cache: refResolveCache,
+            });
+            return null;
+          } catch {
+            const refLabel = `${ref.source}:${ref.provider}:${ref.id}`;
+            const legacyLine = "Auth profile credentials are missing or expired.";
+            return {
+              reasonCode: "unresolved_ref",
+              error: `${legacyLine}\n↳ Auth reason [unresolved_ref]: could not resolve SecretRef "${refLabel}".`,
+            };
+          }
+        })();
       }
       if (issue) {
         results.push(buildProbeResult(target, { status: "unknown", ...issue }));
@@ -655,7 +624,7 @@ export async function runAuthProbes(
     onProgress?: (update: { completed: number; total: number; label?: string }) => void;
     stateOwnership?: AuthProbeStateOwnership;
   },
-): Promise<AuthProbeSummary> {
+) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
     const plan = await buildProbeTargets(params);
@@ -678,6 +647,10 @@ export async function runAuthProbes(
       const agentId = suppliedAgentId ?? resolveDefaultAgentId(cfg);
       const agentDir = suppliedAgentDir ?? resolveAgentDir(cfg, agentId);
       const workspaceDir = suppliedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+
+      if (params.stateOwnership) {
+        await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+      }
 
       await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -788,7 +761,9 @@ export async function runAuthProbes(
             } catch (err) {
               const described = describeFailoverError(err);
               return buildResult(
-                mapFailoverReasonToProbeStatus(described.reason),
+                described.reason
+                  ? (PROBE_STATUS_BY_FAILOVER_REASON[described.reason] ?? "unknown")
+                  : "unknown",
                 redactAuthProbeError(described.message),
               );
             } finally {
@@ -836,7 +811,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
-export function describeProbeSummary(summary: AuthProbeSummary): string {
+export function describeProbeSummary(summary: Awaited<ReturnType<typeof runAuthProbes>>): string {
   if (summary.totalTargets === 0) {
     return "No check targets.";
   }

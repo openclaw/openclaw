@@ -10,6 +10,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isProcessAlive } from "../../test/scripts/live-process-fixture.test-support.js";
 import {
   buildNativeHookRelayCommand,
   registerOwnedNativeHookRelay,
@@ -21,6 +22,7 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { writeCliPluginFixture, writeFixtureJson } from "./cli-fixtures.test-support.js";
+import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -111,7 +113,6 @@ async function createTimeoutOwnershipFixture() {
   const nodeWrapperPath = path.join(root, "node-with-tsx");
   const pidLogPath = path.join(root, "pids");
   const preloadPath = path.join(root, "track-relay-pid.mjs");
-  const readyMarkerPath = path.join(root, "ready");
   const stateDir = path.join(root, "state");
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(
@@ -121,8 +122,7 @@ async function createTimeoutOwnershipFixture() {
       "fs.appendFileSync(process.env.RELAY_PID_LOG, `${process.pid}\\n`);",
       "const originalAsyncIterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);",
       "process.stdin[Symbol.asyncIterator] = function () {",
-      "  fs.writeFileSync(process.env.RELAY_READY_MARKER, `${process.pid}\\n`);",
-      '  process.stdout.write("relay-ready\\n");',
+      "  process.stdout.write(`relay-ready:${process.pid}\\n`);",
       "  return originalAsyncIterator();",
       "};",
       "",
@@ -133,7 +133,7 @@ async function createTimeoutOwnershipFixture() {
     ["#!/bin/sh", 'exec "$OPENCLAW_TEST_NODE" --import tsx "$@"', ""].join("\n"),
   );
   await fs.chmod(nodeWrapperPath, 0o755);
-  return { nodeWrapperPath, pidLogPath, preloadPath, readyMarkerPath, stateDir };
+  return { nodeWrapperPath, pidLogPath, preloadPath, stateDir };
 }
 
 async function readPidFile(filePath: string): Promise<number[]> {
@@ -155,13 +155,18 @@ function relayEnv(fixture: Awaited<ReturnType<typeof createRelayPreloadFixture>>
   };
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+function relayArgs(relayId: string, ...args: string[]) {
+  return [
+    "hooks",
+    "relay",
+    "--provider",
+    "codex",
+    "--relay-id",
+    relayId,
+    "--event",
+    "post_tool_use",
+    ...args,
+  ];
 }
 
 async function runHooksCli(params: {
@@ -174,82 +179,48 @@ async function runHooksCli(params: {
   nodeExecutable?: string;
   stdin?: string;
 }) {
-  const child = spawn(
-    params.nodeExecutable ?? process.execPath,
-    [
-      ...(params.entryArgv ?? ["--import", "tsx", params.entryPath ?? "src/entry.ts"]),
-      ...params.args,
-    ],
-    {
-      cwd: path.resolve("."),
-      env: {
-        ...process.env,
-        NODE_ENV: undefined,
-        VITEST: undefined,
-        ...params.env,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    },
-  );
-  activeChildren.add(child);
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdin.end(params.stdin ?? "");
-
-  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => resolve({ code, signal }));
-    },
-  );
+  const gate = createDeferred();
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let outputObserved = false;
-  const processState = () => ({
-    outputObserved,
-    exitCode: child.exitCode,
-    signalCode: child.signalCode,
-    stdoutClosed: child.stdout.closed,
-    stderrClosed: child.stderr.closed,
-  });
-  let timeoutState: ReturnType<typeof processState> | undefined;
-  const onTimeout = () => {
-    timeoutState ??= processState();
-    child.kill("SIGKILL");
+  let timedOut = false;
+  const arm = (ms: number, milestone: string) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      gate.reject(new Error(`${params.label} did not ${milestone} within ${ms}ms`));
+    }, ms);
   };
-  // Silent relays need an exit deadline; output-producing commands must release handles after output.
-  let timer = setTimeout(
-    onTimeout,
-    params.completion === "exit" ? exitOnlyTimeoutMs : outputTimeoutMs,
-  );
-  child.stdout.on("data", (chunk: string) => {
-    stdout += chunk;
-    if (!timeoutState && params.completion !== "exit" && !outputObserved) {
-      outputObserved = true;
-      clearTimeout(timer);
-      timer = setTimeout(onTimeout, exitAfterOutputTimeoutMs);
-    }
-  });
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
   try {
-    const exit = await closed;
-    if (timeoutState) {
-      const timeoutMessage =
+    return await runCliProcessChild({
+      nodeExecutable: params.nodeExecutable,
+      nodeArgsPolicy: "caller",
+      nodeArgs: [
+        ...(params.entryArgv ?? ["--import", "tsx", params.entryPath ?? "src/entry.ts"]),
+        ...params.args,
+      ],
+      env: { ...process.env, NODE_ENV: undefined, VITEST: undefined, ...params.env },
+      timeoutMs:
         params.completion === "exit"
-          ? `${params.label} did not exit within ${exitOnlyTimeoutMs}ms`
-          : timeoutState.outputObserved
-            ? `${params.label} did not exit within ${exitAfterOutputTimeoutMs}ms after emitting output`
-            : `${params.label} did not emit output within ${outputTimeoutMs}ms`;
-      throw new Error(
-        `${timeoutMessage}\nprocess: ${JSON.stringify({ beforeKill: timeoutState, atClose: processState() })}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-      );
-    }
-    return { ...exit, stderr, stdout };
+          ? exitOnlyTimeoutMs
+          : outputTimeoutMs + exitAfterOutputTimeoutMs,
+      interact(child) {
+        arm(
+          params.completion === "exit" ? exitOnlyTimeoutMs : outputTimeoutMs,
+          params.completion === "exit" ? "exit" : "emit output",
+        );
+        child.once("close", () => gate.resolve());
+        child.stdin.end(params.stdin ?? "");
+        return gate.promise;
+      },
+      onStdout() {
+        if (!timedOut && params.completion !== "exit" && !outputObserved) {
+          outputObserved = true;
+          arm(exitAfterOutputTimeoutMs, "exit after emitting output");
+        }
+      },
+    });
   } finally {
     clearTimeout(timer);
-    activeChildren.delete(child);
   }
 }
 
@@ -258,16 +229,7 @@ describe("hooks CLI process lifecycle", () => {
     {
       name: "invalid JSON",
       preloadMode: "natural-exit" as const,
-      args: [
-        "hooks",
-        "relay",
-        "--provider",
-        "codex",
-        "--relay-id",
-        "ordinary-input",
-        "--event",
-        "post_tool_use",
-      ],
+      args: relayArgs("ordinary-input"),
       stdin: "{",
       diagnostic: "failed to read native hook input",
     },
@@ -324,19 +286,19 @@ describe("hooks CLI process lifecycle", () => {
           OPENCLAW_STATE_DIR: fixture.stateDir,
           OPENCLAW_TEST_NODE: resolveTestNodeExecPath(),
           RELAY_PID_LOG: fixture.pidLogPath,
-          RELAY_READY_MARKER: fixture.readyMarkerPath,
         },
         stdio: ["pipe", "pipe", "pipe"],
       });
       activeChildren.add(child);
       const closed = once(child, "close");
-      const ready = createDeferred();
+      const ready = createDeferred<number>();
       let stdout = "";
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
         stdout += chunk;
-        if (stdout.includes("relay-ready\n")) {
-          ready.resolve();
+        const pid = /relay-ready:(\d+)\n/.exec(stdout)?.[1];
+        if (pid) {
+          ready.resolve(Number(pid));
         }
       });
       child.once("close", () => activeChildren.delete(child));
@@ -346,7 +308,7 @@ describe("hooks CLI process lifecycle", () => {
       }
 
       try {
-        await withinTest(
+        const readyPid = await withinTest(
           awaitGateBeforeSettlement(
             ready.promise,
             closed,
@@ -354,7 +316,7 @@ describe("hooks CLI process lifecycle", () => {
           ),
           signal,
         );
-        expect((await readPidFile(fixture.readyMarkerPath))[0]).toBe(timeoutOwnedPid);
+        expect(readyPid).toBe(timeoutOwnedPid);
         expect(new Set(await readPidFile(fixture.pidLogPath))).toEqual(new Set([timeoutOwnedPid]));
 
         expect(child.kill("SIGKILL")).toBe(true);
@@ -394,22 +356,15 @@ describe("hooks CLI process lifecycle", () => {
       const fixture = await createRelayPreloadFixture();
       const result = await runHooksCli({
         entryPath,
-        args: [
-          "hooks",
-          "relay",
-          "--provider",
-          "codex",
-          "--relay-id",
+        args: relayArgs(
           relay.relayId,
           "--state-db",
           resolveOpenClawStateSqlitePath(),
           "--generation",
           relay.generation,
-          "--event",
-          "post_tool_use",
           "--timeout",
           "5000",
-        ],
+        ),
         completion: "exit",
         label: "hooks relay explicit state database",
         nodeExecutable: resolveTestNodeExecPath(),

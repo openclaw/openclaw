@@ -8,6 +8,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   assertPublishedOpenClawStateDatabaseLifecycle,
@@ -110,14 +111,7 @@ export async function createWorkerEnvironmentStore(
     }
     return reply.facts;
   }
-  function track<T>(operation: Promise<T>): Promise<T> {
-    operations.add(operation);
-    void operation.then(
-      () => operations.delete(operation),
-      () => operations.delete(operation),
-    );
-    return operation;
-  }
+  const track = createPendingPromiseTracker(operations);
   function mutate<Key extends keyof Operations>(
     type: Key,
     input: Omit<Operations[Key]["input"], "publicationIncarnation">,
@@ -449,6 +443,21 @@ export async function createWorkerEnvironmentStore(
     },
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
       mutate("workerEnvironments.createIntent", { input }, assertCurrent),
+    recordResourceReceipt({ assertCurrent, ...input }: Input<"recordResourceReceipt">) {
+      return mutate("workerEnvironments.recordResourceReceipt", { input }, assertCurrent);
+    },
+    beginRetentionOperation({ assertCurrent, ...input }: Input<"beginRetentionOperation">) {
+      return mutate("workerEnvironments.beginRetentionOperation", { input }, assertCurrent);
+    },
+    recordRetentionObservation({ assertCurrent, ...input }: Input<"recordRetentionObservation">) {
+      return mutate("workerEnvironments.recordRetentionObservation", { input }, assertCurrent);
+    },
+    setRetentionRuntimeAdmission({
+      assertCurrent,
+      ...input
+    }: Input<"setRetentionRuntimeAdmission">) {
+      return mutate("workerEnvironments.setRetentionRuntimeAdmission", { input }, assertCurrent);
+    },
     ensureNodeEnrollment: (input: string) =>
       mutate("workerEnvironments.ensureNodeEnrollment", { input }),
     async revokeEnvironmentCredential(

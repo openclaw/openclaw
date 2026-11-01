@@ -2,8 +2,10 @@
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { expect, it, vi } from "vitest";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { registerBoardDocumentEnglish } from "../locales/en-board-document.ts";
 import { registerBoardWebsiteEnglish } from "../locales/en-board-website.ts";
 import { registerBoardEnglish } from "../locales/en-board.ts";
+import { registerChatSessionEnglish } from "../locales/en-chat-session.ts";
 import { en } from "../locales/en.ts";
 import { loadLazyLocaleTranslation } from "./registry.ts";
 import { captureI18nStateForTesting } from "./translate.test-support.ts";
@@ -11,7 +13,48 @@ import { i18n } from "./translate.ts";
 
 vi.hoisted(() => vi.resetModules());
 
+it("registers shared session copy before optional copy while preserving namespace identities", async () => {
+  const restoreI18n = captureI18nStateForTesting();
+  const details = en.chat.sessionDetails;
+  const diff = en.chat.sessionDiff;
+  const agentUpdate = en.chat.pendingInputs.agentUpdate;
+  const suggestionState = en.chat.sessionSuggestions.state;
+  try {
+    await i18n.setLocale("en");
+    expect(t("chat.sessionDetails.progressOptions")).toBe("Task progress options");
+    expect(t("chat.sessionDiff.title")).toBe("Changes");
+    expect(t("chat.activityPills.label")).toBe("chat.activityPills.label");
+
+    registerEnglishCatalog(registerChatSessionEnglish);
+    expect(t("chat.savedConversation", { status: "Reconnecting…" })).toBe(
+      "Saved conversation · Reconnecting…",
+    );
+    expect(en).toMatchObject(registerChatSessionEnglish.catalog);
+    expect(t("chat.activityPills.label")).toBe("chat.activityPills.label");
+    expect(t("chat.sessionDiff.modeUnified")).toBe("chat.sessionDiff.modeUnified");
+    expect(t("chat.workspaceFiles.showFiles")).toBe("Show session files");
+    const { registerChatSessionOptionalEnglish } =
+      await import("../locales/en-chat-session-optional.ts");
+    registerEnglishCatalog(registerChatSessionOptionalEnglish);
+    expect(t("chat.activityPills.label")).toBe("Session activity");
+    expect(t("chat.sessionDiff.modeUnified")).toBe("Unified");
+    expect(en.chat.sessionDetails).toBe(details);
+    expect(en.chat.sessionDiff).toBe(diff);
+    expect(en.chat.pendingInputs.agentUpdate).toBe(agentUpdate);
+    expect(en.chat.sessionSuggestions.state).toBe(suggestionState);
+  } finally {
+    await restoreI18n();
+  }
+});
+
 it.each([
+  {
+    register: registerBoardDocumentEnglish,
+    activeKey: "kindWebsite",
+    activeText: "Webseite",
+    fallbackKey: "kindReport",
+    fallbackText: "Report",
+  },
   {
     register: registerBoardWebsiteEnglish,
     activeKey: "websiteOpen",
@@ -29,10 +72,10 @@ it.each([
 ])(
   "invalidates public t for lazy $activeKey fallback without replacing active translations",
   async ({ register, activeKey, activeText, fallbackKey, fallbackText }) => {
+    const install = vi.fn(register);
     const restoreI18n = captureI18nStateForTesting();
     const originalGerman = await loadLazyLocaleTranslation("de");
     const widget = en.board.widget;
-    const originalWidget = { ...widget };
     const labels: (readonly string[])[] = [];
     let dispose = () => {};
     try {
@@ -50,22 +93,17 @@ it.each([
       flush();
       expect(labels).toEqual([[activeText, `board.widget.${fallbackKey}`]]);
 
-      registerEnglishCatalog<ReturnType<typeof register>>(register);
+      registerEnglishCatalog(install);
       flush();
       expect(labels.at(-1)).toEqual([activeText, fallbackText]);
       expect(en.board.widget).toBe(widget);
       const count = labels.length;
-      registerEnglishCatalog<ReturnType<typeof register>>(register);
+      registerEnglishCatalog(install);
       flush();
       expect(labels).toHaveLength(count);
+      expect(install).toHaveBeenCalledTimes(1);
     } finally {
       dispose();
-      for (const key of Object.keys(widget)) {
-        if (!Object.hasOwn(originalWidget, key)) {
-          Reflect.deleteProperty(widget, key);
-        }
-      }
-      Object.assign(widget, originalWidget);
       if (originalGerman) {
         i18n.registerTranslation("de", originalGerman);
       }

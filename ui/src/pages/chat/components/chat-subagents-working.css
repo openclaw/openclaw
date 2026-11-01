@@ -1,0 +1,7 @@
+/* The Working label sizes to its text so the sweep crosses the word, not the row. */
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .chat-details-subagents:not(.chat-details-subagents--mobile) .chat-details-subagents__working,
+  .subagents-desktop__working {
+    display: inline-block;
+  }
+}

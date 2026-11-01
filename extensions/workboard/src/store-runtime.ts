@@ -12,6 +12,7 @@ import type {
 } from "./persistence-types.js";
 
 export class WorkboardStoreRuntime {
+  protected boardList: Promise<{ boards: WorkboardBoardSummary[] }> | undefined;
   protected readonly cardLists = new Map<
     string | undefined,
     Promise<
@@ -94,6 +95,7 @@ export class WorkboardStoreRuntime {
           await Promise.allSettled(this.operations);
         }
         this.cardLists.clear();
+        this.boardList = undefined;
         this.operationScope.disable();
         await this.closePersistence?.();
       })
@@ -232,6 +234,7 @@ export class WorkboardStoreRuntime {
     // Every list includes all board summaries, so even a board-scoped payload
     // depends on the whole store revision published by the owning writer.
     this.cardLists.clear();
+    this.boardList = undefined;
     this.cardsRevision = { ...this.cardsRevision, revision: this.cardsRevision.revision + 1 };
   }
 

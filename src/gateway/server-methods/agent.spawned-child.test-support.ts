@@ -57,6 +57,10 @@ import {
   useTestStateDir,
 } from "./agent.test-harness.js";
 
+function findChildRun(childSessionKey: string) {
+  return getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey);
+}
+
 export const confirmedAcpMeta: SessionAcpMeta = {
   backend: "acpx",
   agent: "codex",
@@ -72,6 +76,19 @@ export function mockGlobalSessionAgentRoster() {
   mocks.loadConfigReturn = {
     agents: { entries: { main: {}, work: {} } },
     session: { scope: "global" },
+  };
+}
+
+export function pluginSubagentClient(
+  baseClient: NonNullable<AgentHandlerArgs["client"]>,
+): NonNullable<AgentHandlerArgs["client"]> {
+  return {
+    connect: baseClient.connect,
+    internal: {
+      ...baseClient.internal,
+      agentRunTracking: "plugin_subagent",
+      pluginRuntimeOwnerId: "memory-core",
+    },
   };
 }
 
@@ -122,11 +139,20 @@ export function createPluginSubagentTestLifetime(params: {
   };
 }
 
-/** Seed the paused owner's durable row and published projection together. */
-export async function seedPersistedSubagentRunForAgentTest(
-  overrides: Parameters<typeof addSubagentRunForTests>[0],
+export { addSubagentRunForTests as seedPersistedSubagentRunForAgentTest };
+
+function pluginInvoker(
+  work: AsyncWorkScope,
+  client: AgentHandlerArgs["client"],
+  runId: string,
+  sessionKey: string,
 ) {
-  await addSubagentRunForTests(overrides);
+  const context = makeContext();
+  context.trackExecution = (run) => work.track(run);
+  return (message: string, reqId?: string) =>
+    work.track(() =>
+      invokeAgent({ message, sessionKey, idempotencyKey: runId }, { context, client, reqId }),
+    );
 }
 
 // Shared by spawned-child handler fixtures; real transcript reads stay in the fixture root.
@@ -143,6 +169,16 @@ export function mockSpawnedChildSessionEntry(childSessionKey: string, root: stri
     payloads: [{ text: "ok" }],
     meta: { durationMs: 100 },
   });
+}
+
+async function preparePluginChild(root: string, childSessionKey: string) {
+  await writeSubagentSessionEntry({
+    stateDir: root,
+    agentId: "main",
+    sessionKey: childSessionKey,
+    defaultSessionId: "spawned-child-session",
+  });
+  mockSpawnedChildSessionEntry(childSessionKey, root);
 }
 
 /** Join native registry completions before retiring temporary state and database owners. */
@@ -234,72 +270,55 @@ export function registerPluginSubagentToolForwardingTests() {
         pluginId: "workboard",
         toolNames: ["workboard_heartbeat", "workboard_complete"],
       },
-      pluginSubagentToolsAllow: undefined,
     },
     {
       label: "an exact empty tool cap",
       runId: "plugin-tools-disabled",
       pluginRuntimeOwnerId: "memory-core",
-      runtimePluginToolGrant: undefined,
       pluginSubagentToolsAllow: [],
     },
-  ])("forwards $label for tracked plugin subagent runs", async (scenario) => {
-    await withPluginSubagentTestState(
-      "openclaw-plugin-tool-forwarding-",
-      async ({ stateDir: root }) => {
-        const childSessionKey = `agent:main:subagent:${scenario.runId}`;
-        await writeSubagentSessionEntry({
-          stateDir: root,
-          agentId: "main",
-          sessionKey: childSessionKey,
-          defaultSessionId: "spawned-child-session",
-        });
-        mockSpawnedChildSessionEntry(childSessionKey, root);
-        await using fixture = createPluginSubagentTestLifetime({
-          root,
-          runId: scenario.runId,
-          childSessionKey,
-        });
-        const context = makeContext();
-        context.trackExecution = (run) => fixture.work.track(run);
-        await fixture.work.track(() =>
-          invokeAgent(
-            {
-              message: "Complete the plugin task",
-              sessionKey: childSessionKey,
-              idempotencyKey: scenario.runId,
-            },
-            {
-              context,
-              client: createSyntheticPluginRuntimeClient({
-                agentRunTracking: "plugin_subagent",
-                pluginRuntimeOwnerId: scenario.pluginRuntimeOwnerId,
-                ...(scenario.runtimePluginToolGrant
-                  ? { runtimePluginToolGrant: scenario.runtimePluginToolGrant }
-                  : {}),
-                ...(scenario.pluginSubagentToolsAllow
-                  ? { pluginSubagentToolsAllow: scenario.pluginSubagentToolsAllow }
-                  : {}),
-              }),
-            },
-          ),
-        );
-        const call = await waitForAgentCommandCall<{
-          runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
-          toolsAllow?: string[];
-        }>();
-        if (scenario.runtimePluginToolGrant) {
-          expect(call.runtimePluginToolGrant).toEqual({
-            pluginId: "workboard",
-            toolNames: ["workboard_heartbeat", "workboard_complete"],
+  ])(
+    "forwards $label for tracked plugin subagent runs",
+    async ({ runId, pluginRuntimeOwnerId, runtimePluginToolGrant, pluginSubagentToolsAllow }) => {
+      await withPluginSubagentTestState(
+        "openclaw-plugin-tool-forwarding-",
+        async ({ stateDir: root }) => {
+          const childSessionKey = `agent:main:subagent:${runId}`;
+          await preparePluginChild(root, childSessionKey);
+          await using fixture = createPluginSubagentTestLifetime({
+            root,
+            runId,
+            childSessionKey,
           });
-        } else {
-          expect(call.toolsAllow).toEqual([]);
-        }
-        await fixture.cleanupCompleted;
-      },
-    );
-  });
+          const invoke = pluginInvoker(
+            fixture.work,
+            createSyntheticPluginRuntimeClient({
+              agentRunTracking: "plugin_subagent",
+              pluginRuntimeOwnerId,
+              runtimePluginToolGrant,
+              pluginSubagentToolsAllow,
+            }),
+            runId,
+            childSessionKey,
+          );
+          await invoke("Complete the plugin task");
+          const call = await waitForAgentCommandCall<{
+            runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
+            toolsAllow?: string[];
+          }>();
+          if (runtimePluginToolGrant) {
+            expect(call.runtimePluginToolGrant).toEqual({
+              pluginId: "workboard",
+              toolNames: ["workboard_heartbeat", "workboard_complete"],
+            });
+          } else {
+            expect(call.toolsAllow).toEqual([]);
+          }
+          await fixture.cleanupCompleted;
+        },
+      );
+    },
+  );
 }
 
 export function registerPluginSubagentAdmissionTests() {
@@ -322,14 +341,13 @@ export function registerPluginSubagentAdmissionTests() {
         await resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:work:subagent:plugin-helper";
         await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });
+        const model = "anthropic/claude-sonnet-4-6";
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
           agents: {
             defaults: {
-              model: { primary: "anthropic/claude-sonnet-4-6" },
-              models: {
-                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-              },
+              model: { primary: model },
+              models: { [model]: { agentRuntime: { id: "claude-cli" } } },
             },
             entries: { main: {}, work: {} },
           },
@@ -359,17 +377,8 @@ export function registerPluginSubagentAdmissionTests() {
           payloads: [{ text: "ok" }],
           meta: { durationMs: 100 },
         });
-        const context = makeContext();
-        context.trackExecution = (run) => fixture.work.track(run);
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
-        const pluginClient: AgentHandlerArgs["client"] = {
-          connect: baseClient.connect,
-          internal: {
-            ...baseClient.internal,
-            agentRunTracking: "plugin_subagent",
-            pluginRuntimeOwnerId: "memory-core",
-          },
-        };
+        const pluginClient: AgentHandlerArgs["client"] = pluginSubagentClient(baseClient);
         const initialCommandCallCount = mocks.agentCommand.mock.calls.length;
         if (inputFailure) {
           mocks.stageSessionPendingInput.mockRejectedValueOnce(
@@ -377,20 +386,9 @@ export function registerPluginSubagentAdmissionTests() {
           );
         }
 
-        const respond = await fixture.work.track(() =>
-          invokeAgent(
-            {
-              message: "background plugin subagent task",
-              sessionKey: childSessionKey,
-              idempotencyKey: runId,
-            },
-            {
-              context,
-              reqId: runId,
-              client: pluginClient,
-            },
-          ),
-        );
+        const invoke = pluginInvoker(fixture.work, pluginClient, runId, childSessionKey);
+        const task = "background plugin subagent task";
+        const respond = await invoke(task, runId);
         if (inputFailure) {
           expectRespondError(respond, {
             code: ErrorCodes.UNAVAILABLE,
@@ -398,21 +396,15 @@ export function registerPluginSubagentAdmissionTests() {
           });
           expect(mocks.agentCommand).toHaveBeenCalledTimes(initialCommandCallCount);
           expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-          expect(getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey)).toBeNull();
+          expect(findChildRun(childSessionKey)).toBeNull();
           expect(rpcSourceTesting.has(runId)).toBe(false);
           return;
         }
         await waitForAgentCommandCallAfter(initialCommandCallCount);
 
-        const acceptedPayload = respond.mock.calls.find(
-          ([ok, payload]) =>
-            ok === true &&
-            typeof payload === "object" &&
-            payload !== null &&
-            "status" in payload &&
-            payload.status === "accepted",
-        )?.[1];
-        expect(acceptedPayload).toMatchObject({
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({
+          status: "accepted",
           runtime: {
             harness: "claude-cli",
             provider: "anthropic",
@@ -422,14 +414,9 @@ export function registerPluginSubagentAdmissionTests() {
 
         await fixture.cleanupCompleted;
 
-        expectRecordFields(getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey), {
-          cleanupCompletedAt: expect.any(Number),
-        });
-        const run = requireValue(
-          getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey),
-          "expected subagent registry run",
-        );
+        const run = requireValue(findChildRun(childSessionKey), "expected subagent registry run");
         expectRecordFields(run, {
+          cleanupCompletedAt: expect.any(Number),
           runId,
           childSessionKey,
           controllerSessionKey: "agent:work:main",
@@ -444,26 +431,11 @@ export function registerPluginSubagentAdmissionTests() {
 
         const commandCallCount = mocks.agentCommand.mock.calls.length;
         const createdAt = run.createdAt;
-        await fixture.work.track(() =>
-          invokeAgent(
-            {
-              message: "background plugin subagent task",
-              sessionKey: childSessionKey,
-              idempotencyKey: runId,
-            },
-            {
-              context,
-              reqId: `${runId}-retry`,
-              client: pluginClient,
-            },
-          ),
-        );
+        await invoke(task, `${runId}-retry`);
 
         await fixture.work.runWhenIdle(() => {
           expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-          expect(
-            getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey)?.createdAt,
-          ).toBe(createdAt);
+          expect(findChildRun(childSessionKey)?.createdAt).toBe(createdAt);
         });
       });
     },
@@ -479,7 +451,7 @@ export function registerPluginSubagentAdmissionTests() {
           const registry = await vi.importActual<
             typeof import("../../infra/agent-run-registry.js")
           >("../../infra/agent-run-registry.js");
-          const previousContextMocks = {
+          const previous = {
             lifecycleGeneration: mocks.lifecycleGeneration,
             register: mocks.registerAgentRunContext.getMockImplementation(),
             clear: mocks.clearAgentRunContext.getMockImplementation(),
@@ -488,16 +460,12 @@ export function registerPluginSubagentAdmissionTests() {
           using _ = {
             [Symbol.dispose]() {
               registry.clearAgentRunContext(runId);
-              mocks.lifecycleGeneration = previousContextMocks.lifecycleGeneration;
+              mocks.lifecycleGeneration = previous.lifecycleGeneration;
               mocks.registerAgentRunContext.mockImplementation(
-                previousContextMocks.register ?? (() => undefined),
+                previous.register ?? (() => undefined),
               );
-              mocks.clearAgentRunContext.mockImplementation(
-                previousContextMocks.clear ?? (() => undefined),
-              );
-              vi.mocked(getAgentRunContext).mockImplementation(
-                previousContextMocks.get ?? (() => undefined),
-              );
+              mocks.clearAgentRunContext.mockImplementation(previous.clear ?? (() => undefined));
+              vi.mocked(getAgentRunContext).mockImplementation(previous.get ?? (() => undefined));
             },
           };
           mocks.lifecycleGeneration = registry.getAgentRunLifecycleGeneration();
@@ -517,7 +485,7 @@ export function registerPluginSubagentAdmissionTests() {
           mocks.registryAnnounce.mockResolvedValue("delivered");
           mocks.registryWake.mockResolvedValue(false);
           if (kind !== "fresh") {
-            await seedPersistedSubagentRunForAgentTest({
+            await addSubagentRunForTests({
               runId: previousRunId,
               childSessionKey,
               requesterSessionKey,
@@ -535,13 +503,7 @@ export function registerPluginSubagentAdmissionTests() {
               },
             });
           }
-          await writeSubagentSessionEntry({
-            stateDir: root,
-            agentId: "main",
-            sessionKey: childSessionKey,
-            defaultSessionId: "spawned-child-session",
-          });
-          mockSpawnedChildSessionEntry(childSessionKey, root);
+          await preparePluginChild(root, childSessionKey);
           const context = makeContext();
           const baseClient = requireValue(backendGatewayClient(), "backend fixture client");
           const commandCallCount = mocks.agentCommand.mock.calls.length;
@@ -551,7 +513,7 @@ export function registerPluginSubagentAdmissionTests() {
           let replacementContext: ReturnType<typeof getAgentRunContext>;
           let replacementController: ReturnType<typeof registerChatAbortController> | undefined;
           const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-            const entry = getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey);
+            const entry = findChildRun(childSessionKey);
             if (entry?.runId === runId && entry.cleanupCompletedAt !== undefined) {
               cleanupCompleted.resolve();
             }
@@ -617,9 +579,7 @@ export function registerPluginSubagentAdmissionTests() {
               expect(replacementPersisted?.has(runId)).toBe(true);
               expect(replacementContext).toBeDefined();
               expect(replacementController?.registered).toBe(true);
-              expect(
-                getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey),
-              ).toEqual(replacement);
+              expect(findChildRun(childSessionKey)).toEqual(replacement);
               expect(persisted.get(runId)).toEqual(replacementPersisted?.get(runId));
               expect(getAgentRunContext(runId)).toBe(replacementContext);
               expect(rpcSourceTesting.get(runId)).toBe(replacementController?.entry);
@@ -635,9 +595,9 @@ export function registerPluginSubagentAdmissionTests() {
                 cleanupCompletedAt: expect.any(Number),
                 execution: { status: "terminal", outcome: { status: "error" } },
               });
-              expect(
-                getSubagentRunByChildSessionKeyFromRuns(subagentRuns, childSessionKey)?.execution,
-              ).toEqual(persisted.get(runId)?.execution);
+              expect(findChildRun(childSessionKey)?.execution).toEqual(
+                persisted.get(runId)?.execution,
+              );
               expect(rpcSourceTesting.has(runId)).toBe(false);
               expect(getAgentRunContext(runId)).toBeUndefined();
             }

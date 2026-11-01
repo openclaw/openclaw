@@ -11,14 +11,12 @@ import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts"
 function project(rows: GatewaySessionRow[], statusFilter: SidebarSessionStatusFilter, now = 100) {
   return projectSidebarArchiveVisibility({
     sessionData: {
-      sessionsAgentId: "main",
-      sessionsResult: sessionsResult(rows, now),
-      sessionResultsByAgent: {},
       childSessionRowsByParent: {},
       loadedChildSessionKeys: new Set(),
       loadingChildSessionKeys: new Set(),
       childSessionErrorsByParent: new Map(),
     },
+    sourceRows: rows,
     selectedAgentId: "main",
     statusFilter,
     now,

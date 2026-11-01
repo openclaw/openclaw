@@ -14,9 +14,11 @@ import { hasExplicitCronDeliveryTarget } from "./delivery-target-validation.js";
 import type { CronDeliveryTargetContext } from "./isolated-agent/delivery-target-context.js";
 import {
   prepareCronDeliveryTargetContexts,
+  prepareCronDeliverySourceGenerations,
   resolveDeliveryTarget,
   requiresExternalCronDelivery,
   type DeliveryTargetResolution,
+  type CronDeliverySourceGeneration,
 } from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import {
@@ -109,6 +111,7 @@ async function resolvePreparedCronDeliveryPreview(
   cfg: OpenClawConfig,
   prepared: ReturnType<typeof prepareCronDeliveryPreview>,
   sessionContext?: Result<CronDeliveryTargetContext, unknown>,
+  sourceGeneration?: CronDeliverySourceGeneration,
 ): Promise<CronDeliveryPreviewResolution> {
   if (prepared.preview) {
     return prepared.preview;
@@ -129,7 +132,11 @@ async function resolvePreparedCronDeliveryPreview(
         sourceConversation,
         sessionKey: deliverySessionKey,
       },
-      { dryRun: true, ...(sessionContext ? { sessionContext: sessionContext.value } : {}) },
+      {
+        dryRun: true,
+        sourceGeneration,
+        ...(sessionContext ? { sessionContext: sessionContext.value } : {}),
+      },
     );
   } catch (error) {
     if (!(error instanceof SessionMetadataUnavailableError)) {
@@ -155,7 +162,7 @@ async function resolvePreparedCronDeliveryPreview(
     const detail =
       plan.mode === "none"
         ? `message tool target unresolved: ${resolved.error.message}`
-        : `${requestedChannel === "last" ? "last -> no route, will be blocked: " : ""}${resolved.error.message}`;
+        : `${plan.target === "owner" ? "owner has no route: " : requestedChannel === "last" ? "last -> no route, will be blocked: " : ""}${resolved.error.message}`;
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
@@ -170,11 +177,13 @@ async function resolvePreparedCronDeliveryPreview(
     detail:
       plan.mode === "announce"
         ? "commits to the destination conversation; sends one external notification"
-        : requestedChannel !== "last"
-          ? "explicit"
-          : deliverySessionKey
-            ? `resolved from last, session ${deliverySessionKey}`
-            : "resolved from last, main session",
+        : plan.target === "owner"
+          ? "resolved from configured owner"
+          : requestedChannel !== "last"
+            ? "explicit"
+            : deliverySessionKey
+              ? `resolved from last, session ${deliverySessionKey}`
+              : "resolved from last, main session",
   };
 }
 
@@ -214,16 +223,44 @@ export async function resolveCronDeliveryPreviews(params: {
   );
   const contexts = await prepareCronDeliveryTargetContexts(params.cfg, targets);
   const contextByIndex = new Map(targets.map((target, index) => [target.index, contexts[index]!]));
-  const entries = await Promise.all(
-    params.jobs.map(async (job, index) => {
-      const context = contextByIndex.get(index);
-      const { failed: _failed, ...preview } = await resolvePreparedCronDeliveryPreview(
-        params.cfg,
-        prepared[index]!,
-        context,
-      );
-      return [job.id, preview] as const;
-    }),
+  const sources = prepared.flatMap((preview, index) =>
+    !preview.preview &&
+    preview.sourceConversation &&
+    !hasExplicitCronDeliveryTarget(preview.plan) &&
+    contextByIndex.get(index)?.ok
+      ? [{ index, agentId: preview.agentId, sourceConversation: preview.sourceConversation }]
+      : [],
   );
-  return Object.fromEntries(entries);
+  const generations = await prepareCronDeliverySourceGenerations(params.cfg, sources);
+  const generationByIndex = new Map(
+    sources.map((source, index) => [source.index, generations[index]!]),
+  );
+  try {
+    const entries = await Promise.allSettled(
+      params.jobs.map(async (job, index) => {
+        const context = contextByIndex.get(index);
+        const { failed: _failed, ...preview } = await resolvePreparedCronDeliveryPreview(
+          params.cfg,
+          prepared[index]!,
+          context,
+          generationByIndex.get(index),
+        );
+        return [job.id, preview] as const;
+      }),
+    );
+    return Object.fromEntries(
+      entries.map((entry) => {
+        if (entry.status === "rejected") {
+          throw entry.reason;
+        }
+        return entry.value;
+      }),
+    );
+  } finally {
+    for (const generation of generations) {
+      if (generation.ok) {
+        generation.value.release();
+      }
+    }
+  }
 }

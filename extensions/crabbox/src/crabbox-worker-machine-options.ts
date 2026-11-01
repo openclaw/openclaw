@@ -11,6 +11,7 @@ import {
   type CrabboxOperatingSystem,
   CRABBOX_ENROLLABLE_TARGETS,
   CRABBOX_OS_LABELS,
+  isCrabboxSetupTargetCompatible,
   listCrabboxMachineOptions,
   parseCrabboxProfile,
 } from "./crabbox-worker-profile.js";
@@ -130,14 +131,19 @@ export function createCrabboxMachineOptionsResolver(
   return {
     async listMachineOptions(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
-      return listCrabboxMachineOptions(parsed.class, catalog?.machines);
+      return listCrabboxMachineOptions(
+        parsed.class,
+        catalog?.machines.filter(({ os }) => isCrabboxSetupTargetCompatible(parsed, os)),
+      );
     },
     async listOperatingSystems(profile) {
       const { parsed, catalog } = await resolveCatalog(profile);
-      return (catalog?.operatingSystems ?? []).map((id) => {
-        const label = CRABBOX_OS_LABELS[id];
-        return id === parsed.target ? { id, label, default: true } : { id, label };
-      });
+      return (catalog?.operatingSystems ?? [])
+        .filter((id) => isCrabboxSetupTargetCompatible(parsed, id))
+        .map((id) => {
+          const label = CRABBOX_OS_LABELS[id];
+          return id === parsed.target ? { id, label, default: true } : { id, label };
+        });
     },
   };
 }

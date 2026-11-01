@@ -4,11 +4,6 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type ModelsJsonReadyResult = {
-  agentDir: string;
-  wrote: boolean;
-};
-
 export type ModelKeyNormalizer = (provider: string, model: string) => string;
 
 type ModelsJsonCostCache = {
@@ -17,7 +12,7 @@ type ModelsJsonCostCache = {
 
 type ModelsJsonState = {
   writeQueue: KeyedAsyncQueue;
-  readyCache: Map<string, Promise<ModelsJsonReadyResult>>;
+  readyCache: Map<string, Promise<void>>;
   costCache: Map<string, ModelsJsonCostCache>;
 };
 

@@ -147,7 +147,6 @@ export async function exportTrajectoryCommand(
   }
   let summary;
   try {
-    const outputPath = resolvedOpts.output;
     const exportTarget = {
       agentId: sessionTarget.agentId ?? targetAgentId,
       sessionId: sessionTarget.sessionId,
@@ -168,7 +167,7 @@ export async function exportTrajectoryCommand(
       throw prepared.diagnostic ?? new Error(prepared.error);
     }
     const baseDir = path.join(workspaceDir, relativeBase);
-    const raw = outputPath?.trim();
+    const raw = readNonBlankString(resolvedOpts.output);
     let outputDir: string;
     if (!raw) {
       const defaultDir = resolveDefaultTrajectoryExportDir({ workspaceDir, sessionId });

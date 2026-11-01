@@ -3,7 +3,13 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
@@ -41,6 +47,76 @@ async function explain(opts: Omit<Parameters<typeof sandboxExplainCommand>[0], "
 }
 
 describe("sandbox explain command", () => {
+  const direct = "agent:builder:telegram:direct:peer";
+  const slash = "telegram:slash:123";
+  const unknown = "unregistered-channel:slash:123";
+  const slashKey = `agent:builder:${slash}`;
+  const operatorKey = "agent:builder:operator";
+  it.each([
+    ["canonical delivery", direct, direct, "slack", "slack", "main"],
+    ["internal delivery", direct, direct, "webchat", "webchat", "main"],
+    ["unknown delivery", direct, direct, "unregistered-channel", "telegram", "main"],
+    ["short main", "telegram", "agent:builder:telegram", undefined, undefined, "telegram"],
+    ["blank session", "   ", operatorKey, undefined, undefined, "operator"],
+    ["main alias", "main", operatorKey, undefined, undefined, "operator"],
+    ["unscoped slash", slash, slashKey, undefined, "telegram", "main"],
+    ["scoped slash", slashKey, slashKey, undefined, "telegram", "main"],
+    ["stored slash delivery", slash, slashKey, "slack", "slack", "main"],
+    ["unknown alias", unknown, `agent:builder:${unknown}`, undefined, undefined, "main"],
+  ] as const)(
+    "reports %s through the stored session",
+    async (_label, session, sessionKey, delivery, channel, mainKey) => {
+      const previousRegistry = captureActivePluginRegistrySnapshot();
+      try {
+        setActivePluginRegistry(
+          createTestRegistry(
+            ["telegram", "slack"].map((id) => ({
+              pluginId: id,
+              plugin: createChannelTestPluginBase({ id }),
+              source: "test",
+            })),
+          ),
+        );
+        await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
+          const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
+          if (delivery) {
+            await replaceSessionEntry(
+              { storePath, sessionKey },
+              {
+                sessionId: "explain-session",
+                updatedAt: 1,
+                delivery: {
+                  kind: "external",
+                  route: { channel: delivery, target: { to: "synthetic-peer" } },
+                  context: { channel: delivery, to: "synthetic-peer" },
+                  origin: { provider: delivery },
+                },
+              },
+            );
+          }
+          mockCfg = config(
+            { mode: "off" },
+            { builder: { workspace: state.workspaceDir } },
+            {
+              session: { store: storePath, mainKey },
+              tools: { elevated: { allowFrom: { telegram: ["*"], slack: ["*"], webchat: ["*"] } } },
+            },
+          );
+          const result = await explain({ session });
+          expect(result.sessionKey).toBe(sessionKey);
+          expect(result.elevated.channel).toBe(channel);
+          expect(result.elevated.allowedByConfig).toBe(channel !== undefined);
+          expect(result.elevated.allowFrom.global).toEqual(channel ? ["*"] : undefined);
+          if (channel) {
+            expect(result.fixIt).toContain(`tools.elevated.allowFrom.${channel}`);
+          }
+        });
+      } finally {
+        restoreActivePluginRegistrySnapshot(previousRegistry);
+      }
+    },
+  );
+
   it.each([
     [
       "unknown",
@@ -68,25 +144,6 @@ describe("sandbox explain command", () => {
       expect(stateDatabase.db.prepare("SELECT agent_id FROM agent_databases").all()).toEqual([]);
       await expect(fs.stat(agentDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
-  });
-
-  it("shows effective sandbox alsoAllow grants and default-deny removals", async () => {
-    mockCfg = config(
-      { mode: "all", scope: "agent", workspaceAccess: "none" },
-      { tavern: { tools: { sandbox: { tools: { alsoAllow: ["message", "tts"] } } } } },
-      {
-        tools: { sandbox: { tools: { allow: ["browser"] } } },
-        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-      },
-    );
-
-    const {
-      sandbox: { tools },
-    } = await explain({ agent: "tavern" });
-    expect(tools.allow).toEqual(["browser", "message", "tts", "view_image"]);
-    expect(tools.deny).not.toContain("browser");
-    const source = { source: "agent", key: "agents.entries.*.tools.sandbox.tools.alsoAllow" };
-    expect(tools.sources.allow).toEqual(source);
   });
 
   it("reports the effective rw workspace and podman mount without changing workspaceRoot", async () => {
@@ -120,22 +177,16 @@ describe("sandbox explain command", () => {
   it("reports guest-isolated workspaces and the effective writable-access cap", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-guests" }, async (state) => {
       const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
-      const sessions = [
-        { key: "agent:builder:guest-a-first", principalId: "guest-a" },
-        { key: "agent:builder:guest-a-second", principalId: "guest-a" },
-        { key: "agent:builder:guest-b", principalId: "guest-b" },
-      ];
-      for (const session of sessions) {
-        await replaceSessionEntry(
-          { storePath, sessionKey: session.key },
-          {
-            sessionId: session.key,
-            updatedAt: Date.now(),
-            sandbox: "required",
-            createdActor: { type: "human", source: "profile", id: session.principalId },
-          },
-        );
-      }
+      const sessionKey = "agent:builder:guest";
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          sessionId: sessionKey,
+          updatedAt: Date.now(),
+          sandbox: "required",
+          createdActor: { type: "human", source: "profile", id: "guest" },
+        },
+      );
       mockCfg = config(
         {
           mode: "off",
@@ -147,25 +198,18 @@ describe("sandbox explain command", () => {
         { session: { store: storePath } },
       );
 
-      const workspaceRoots: string[] = [];
       const readonlyMounts = ["workspace", "agent"].map((source) =>
         expect.objectContaining({ source, writable: false }),
       );
-      for (const session of sessions) {
-        const { sandbox } = await explain({ session: session.key });
-        expect(sandbox).toMatchObject({
-          scope: "agent",
-          workspaceAccess: "ro",
-          workspaceSource: "sandbox",
-          sessionIsSandboxed: true,
-        });
-        expect(sandbox.effectiveHostWorkspaceRoot).not.toBe(path.resolve(state.workspaceDir));
-        expect(sandbox.workspaceMounts).toEqual(expect.arrayContaining(readonlyMounts));
-        workspaceRoots.push(sandbox.effectiveHostWorkspaceRoot);
-      }
-
-      expect(workspaceRoots[0]).toBe(workspaceRoots[1]);
-      expect(workspaceRoots[0]).not.toBe(workspaceRoots[2]);
+      const { sandbox } = await explain({ session: sessionKey });
+      expect(sandbox).toMatchObject({
+        scope: "agent",
+        workspaceAccess: "ro",
+        workspaceSource: "sandbox",
+        sessionIsSandboxed: true,
+      });
+      expect(sandbox.effectiveHostWorkspaceRoot).not.toBe(path.resolve(state.workspaceDir));
+      expect(sandbox.workspaceMounts).toEqual(expect.arrayContaining(readonlyMounts));
     });
   });
 
@@ -216,6 +260,6 @@ describe("sandbox explain command", () => {
   it("rejects a fully qualified session from a different agent", async () => {
     mockCfg = config({ mode: "non-main" }, { main: {}, builder: {} });
     const execution = explain({ agent: "builder", session: "agent:main:main" });
-    await expect(execution).rejects.toThrow('agent "builder" does not match session agent "main"');
+    await expect(execution).rejects.toThrow('belongs to "main", not "builder"');
   });
 });

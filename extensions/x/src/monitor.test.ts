@@ -6,9 +6,9 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openXAllowlist } from "./allowlist.js";
-import { createXApiClient } from "./api.js";
 import { openXGuestUsage } from "./guest-usage.js";
 import { sendXDelivery } from "./send.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
 import {
   client,
   config,

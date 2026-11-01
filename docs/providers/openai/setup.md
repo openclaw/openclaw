@@ -257,6 +257,35 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix
     profile ids and order entries before relying on profile ordering.
 
+    ### Advanced Account Security recovery
+
+    OpenAI's [Advanced Account Security](https://help.openai.com/en/articles/20001221-advanced-account-security)
+    enrollment signs you out of all devices and shortens active sessions.
+    If OpenClaw's OAuth credential stops working, sign in again with your
+    enrolled passkey or security key for the agent and profile that own the
+    failing route. Stop the Gateway through its service owner before these
+    commands, then restart it afterward:
+
+    ```bash
+    openclaw models auth login --agent <id> --provider openai --method oauth --profile-id <profileId>
+    openclaw models status --agent <id> --probe --probe-provider openai --probe-profile <profileId>
+    ```
+
+    Login's `--profile-id` requires offline login and bypasses importing an
+    existing native credential; the probe's selector is `--probe-profile`.
+    A standalone `codex login`
+    does not itself replace an OpenClaw-managed profile; see the
+    [Codex authentication reference](/plugins/codex-harness-reference/auth#auth-and-environment-isolation)
+    for the separate native user-home mode.
+
+    Verify the intended model with a real request. A model listing or completed
+    browser callback alone does not prove model access. If fresh sign-in still
+    fails, report the sanitized error and failure stage: browser/security key,
+    localhost callback, token exchange, refresh, or model request. Reauthentication
+    does not guarantee model authorization or a fixed token lifetime. Do not
+    disable Advanced Account Security, delete credential stores, share tokens,
+    or switch to API-key billing as a generic recovery step.
+
     ### Status indicator
 
     Chat `/status` shows which model runtime is active for the current

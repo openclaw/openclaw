@@ -12,20 +12,6 @@ const EXEC_APPROVAL_OVERSIZED_MARKER =
 const EXEC_APPROVAL_WARNING_OVERSIZED_MARKER =
   "[exec approval warning exceeds display size limit; full text suppressed]";
 
-function formatCodePointEscape(char: string): string {
-  return `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`;
-}
-
-function normalizeDisplayLineBreaks(text: string): string {
-  return text.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
-}
-
-function escapeInvisibles(text: string, options?: { preserveLineBreaks?: boolean }): string {
-  return text.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, (char) =>
-    options?.preserveLineBreaks && char === "\n" ? "\n" : formatCodePointEscape(char),
-  );
-}
-
 /** Sanitized approval text plus size-cap status for callers that need UI affordances. */
 export type SanitizedExecApprovalDisplayText = {
   /** Spoof-resistant command or warning text for an approval prompt. */
@@ -35,17 +21,6 @@ export type SanitizedExecApprovalDisplayText = {
   /** True when raw input exceeded the hard cap and was replaced with a fixed marker. */
   oversized: boolean;
 };
-
-function truncateForDisplay(text: string): SanitizedExecApprovalDisplayText {
-  if (text.length <= EXEC_APPROVAL_MAX_OUTPUT) {
-    return { text, truncated: false, oversized: false };
-  }
-  return {
-    text: truncateUtf16Safe(text, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER,
-    truncated: true,
-    oversized: false,
-  };
-}
 
 function sanitizeExecApprovalDisplayTextInternal(
   commandText: string,
@@ -58,7 +33,19 @@ function sanitizeExecApprovalDisplayTextInternal(
       oversized: true,
     };
   }
-  return truncateForDisplay(escapeInvisibles(commandText, options));
+  const text = commandText.replace(EXEC_APPROVAL_INVISIBLE_CHAR_REGEX, (char) =>
+    options?.preserveLineBreaks && char === "\n"
+      ? "\n"
+      : `\\u{${char.codePointAt(0)?.toString(16).toUpperCase() ?? "FFFD"}}`,
+  );
+  if (text.length <= EXEC_APPROVAL_MAX_OUTPUT) {
+    return { text, truncated: false, oversized: false };
+  }
+  return {
+    text: truncateUtf16Safe(text, EXEC_APPROVAL_MAX_OUTPUT) + EXEC_APPROVAL_TRUNCATION_MARKER,
+    truncated: true,
+    oversized: false,
+  };
 }
 
 /** Sanitizes exec command text for approval UI without exposing status metadata. */
@@ -86,10 +73,10 @@ export function sanitizeExecApprovalWarningText(warningText: string): string {
 export function sanitizeExecApprovalWarningTextWithStatus(
   warningText: string,
 ): SanitizedExecApprovalDisplayText {
-  return sanitizeExecApprovalDisplayTextInternal(normalizeDisplayLineBreaks(warningText), {
-    preserveLineBreaks: true,
-    oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER,
-  });
+  return sanitizeExecApprovalDisplayTextInternal(
+    warningText.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n"),
+    { preserveLineBreaks: true, oversizedMarker: EXEC_APPROVAL_WARNING_OVERSIZED_MARKER },
+  );
 }
 
 /** Checks the existing approval code-point cap without materializing every character. */

@@ -4,18 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Client } from "pg";
-import {
-  exportPostgresBackup,
-  restorePostgresBackup,
-} from "../../snapshot/database-backup-core.worker.js";
+import * as backups from "../../snapshot/database-backup-core.worker.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { openEngineStore } from "./open.js";
-import {
-  admitDatabasePortDescriptor,
-  type PortDescriptor,
-  type PortEndpoint,
-} from "./port-descriptor.js";
+import { admitDatabasePortDescriptor } from "./port-descriptor.js";
+import type { PortDescriptor, PortEndpoint } from "./port-types.js";
 import { inspectDatabasePort, materializeDatabasePort } from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
@@ -43,13 +37,11 @@ export function openPortStore(
   anchor: DatabaseSync,
   schema: Parameters<typeof openEngineStore>[0]["schema"],
   input: Parameters<typeof openEngineStore>[0]["input"],
-  existingOnly = false,
 ) {
   return openEngineStore({
     anchor,
     schema,
     input,
-    existingOnly,
     prepareAnchor() {},
     openSqlite() {
       throw new Error("Ported PostgreSQL store must not open SQLite data");
@@ -72,10 +64,8 @@ export function writePortAnchor(file: string, storeId: string, namespace: string
   using db = openNodeSqliteDatabase(file);
   db.exec(`CREATE TABLE openclaw_engine_anchor (
     store_id TEXT NOT NULL, engine TEXT NOT NULL ${checked ? "CHECK (engine = 'postgres')" : ""}, schema TEXT NOT NULL)`);
-  db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(
-    storeId,
-    namespace,
-  );
+  const insert = db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)");
+  insert.run(storeId, namespace);
 }
 
 export function portBackupFixture(client: Client, directory: string, descriptor: PortDescriptor) {
@@ -105,15 +95,18 @@ export function portBackupFixture(client: Client, directory: string, descriptor:
     async export(sourcePath: string) {
       await fs.mkdir(backup.directory);
       writePortAnchor(file("backup/anchor.sqlite"), storeId, namespace);
-      return exportPostgresBackup({
+      return backups.exportPostgresBackup({
         ...backup,
         descriptor: await admitDatabasePortDescriptor(postgres, descriptor),
         anchor: { engine: "postgres", storeId, namespace },
         sourcePath,
       });
     },
-    async restore(manifest: Awaited<ReturnType<typeof exportPostgresBackup>>, anchorPath: string) {
-      const restored = await restorePostgresBackup({ ...backup, manifest, anchorPath });
+    async restore(
+      manifest: Awaited<ReturnType<typeof backups.exportPostgresBackup>>,
+      anchorPath: string,
+    ) {
+      const restored = await backups.restorePostgresBackup({ ...backup, manifest, anchorPath });
       namespaces.add(restored.namespace);
       return restored;
     },

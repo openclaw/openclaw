@@ -61,7 +61,6 @@ export function withTarball(
     emptyDirectories?: string[];
     filesOnlyArchive?: boolean;
     includeLifecycleMarker?: boolean;
-    includeShrinkwrap?: boolean;
     includeWorkspaceTemplates?: boolean;
     inventoryBody?: string | null;
     packageJson?: Record<string, unknown>;
@@ -140,22 +139,10 @@ export function withTarball(
             [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH]: "pending\n",
             [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
           };
-    const shrinkwrapFile =
-      (options.includeShrinkwrap ?? declaredFiles.includes("npm-shrinkwrap.json"))
-        ? {
-            "npm-shrinkwrap.json": `${JSON.stringify({
-              name: "openclaw",
-              version,
-              lockfileVersion: 3,
-              packages: { "": { name: "openclaw", version } },
-            })}\n`,
-          }
-        : {};
     const tarFiles = {
       ...workspaceTemplates,
       ...controlUiFiles,
       ...lifecycleMarkerFile,
-      ...shrinkwrapFile,
       ...(includeCodeModeWorker ? { [CODE_MODE_WORKER_PATH]: "export {};\n" } : {}),
       ...files,
     };

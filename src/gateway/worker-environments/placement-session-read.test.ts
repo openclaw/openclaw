@@ -14,6 +14,17 @@ import {
   stagePlacementWorkspaceResultWorkerPublication,
 } from "./placement-turn-authority.js";
 
+function withoutHostSql<T>(read: () => T): T {
+  const sql = observeHostDataSql();
+  try {
+    const result = read();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+
 it("retains SQL-free placement facts through bookkeeping, claims, dispatch, retirement and uncertain writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawStateDatabase();
@@ -24,18 +35,16 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
       sessionId: "retained-placement",
     };
     const read = await store.prepareSessionPlacement(session.sessionId);
-    const current = () => {
-      const sql = observeHostDataSql();
-      try {
-        const placement = read.current();
-        expect(sql.queries).toEqual([]);
-        return placement;
-      } finally {
-        sql.restore();
-      }
-    };
+    const current = () => withoutHostSql(() => read.current());
     try {
       expect(current()).toBeUndefined();
+      {
+        using keys = vi.spyOn(Object, "keys");
+        const warm = await store.prepareSessionPlacement(session.sessionId);
+        expect(warm.current()).toBeUndefined();
+        warm.release();
+        expect(keys.mock.calls.filter(([source]) => source === process.env)).toHaveLength(0);
+      }
       const claim = await store.claimTurn({
         ...session,
         owner: { kind: "local" },
@@ -48,16 +57,15 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
         state: "local",
         turnClaim: { claimId: claim.claimId },
       };
-      const fetched = (await store.getAsync(session.sessionId))!;
-      fetched.agentId = "caller-mutated-agent";
-      fetched.turnClaim!.claimId = "caller-mutated-claim";
-      expect(current()).toMatchObject(expectedLocal);
-      const listed = (await store.listAsync()).find(
-        (placement) => placement.sessionId === session.sessionId,
-      )!;
-      listed.agentId = "caller-mutated-agent";
-      listed.turnClaim!.claimId = "caller-mutated-claim";
-      expect(current()).toMatchObject(expectedLocal);
+      for (const fetch of [
+        () => store.getAsync(session.sessionId),
+        async () => (await store.listAsync()).find((row) => row.sessionId === session.sessionId),
+      ]) {
+        const fetched = (await fetch())!;
+        fetched.agentId = "caller-mutated-agent";
+        fetched.turnClaim!.claimId = "caller-mutated-claim";
+        expect(current()).toMatchObject(expectedLocal);
+      }
       expect(store.validateTurnClaim(claim)).toBe(true);
       const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
       const beforeResult = current()!;
@@ -140,30 +148,9 @@ it("installs the committed placement when acquisition overlaps its writer receip
     });
     const retained = await store.prepareSessionPlacement(session.sessionId);
     try {
-      const sql = observeHostDataSql();
-      try {
-        expect(retained.current()).toEqual(committed);
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      expect(withoutHostSql(() => retained.current())).toEqual(committed);
     } finally {
       retained.release();
-    }
-  });
-});
-
-it("retains a cold async placement read for SQL-free synchronous compatibility access", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const store = createWorkerSessionPlacementStore();
-    const sessionIds = ["cold-placement-absence"];
-    expect(await store.getManyAsync(sessionIds)).toEqual(new Map());
-    const sql = observeHostDataSql();
-    try {
-      expect(store.getMany(sessionIds)).toEqual(new Map());
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
     }
   });
 });
@@ -177,6 +164,8 @@ it("keeps cold async worker placement results independent of retained placement 
       sessionKey: "agent:main:caller-owned-placement",
       sessionId: "caller-owned-placement",
     };
+    expect(await store.getManyAsync([session.sessionId])).toEqual(new Map());
+    expect(withoutHostSql(() => store.getMany([session.sessionId]))).toEqual(new Map());
     const environment = { environmentId: "caller-owned-environment", ownerEpoch: 7 };
     await advancePlacementFixtureToActive(store, database, session, environment);
     await store.claimTurn({

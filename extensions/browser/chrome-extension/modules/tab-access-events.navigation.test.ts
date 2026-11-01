@@ -1,21 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { chromeEvent } from "./browser.test-support.js";
+import { OPENCLAW_TAB_GROUP_TITLE } from "./relay-core.js";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import { createTabAccessPolicy, type TabAccessEpoch, type TabAccessMode } from "./tab-access.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
 
-function chromeEvent<Args extends unknown[]>() {
-  let listener: (...args: Args) => void = () => {
-    throw new Error("Chrome event listener was not registered");
-  };
-  return {
-    addListener(next: (...args: Args) => void) {
-      listener = next;
-    },
-    emit(...args: Args) {
-      listener(...args);
-    },
-  };
-}
+afterEach(() => vi.unstubAllGlobals());
 
 const navigationEvents = [
   { method: "Network.responseReceived", params: { requestId: "navigation-1" } },
@@ -51,6 +41,10 @@ async function createNavigationHarness(
       onReplaced: chromeEvent<[number, number]>(),
     },
     tabGroups: {
+      get: vi.fn(async (requestedGroupId: number) => ({
+        id: requestedGroupId,
+        title: requestedGroupId === 11 ? OPENCLAW_TAB_GROUP_TITLE : "Other",
+      })),
       onUpdated: chromeEvent<[group?: { id: number; title?: string }]>(),
       onRemoved: chromeEvent<[group?: { id: number; title?: string }]>(),
     },
@@ -59,10 +53,8 @@ async function createNavigationHarness(
       onDetach: chromeEvent<[{ tabId?: number }, string]>(),
     },
   };
-  const policy = createTabAccessPolicy({
-    chromeApi,
-    isSelectedTab: async (candidate) => candidate.groupId === 11,
-  });
+  vi.stubGlobal("chrome", chromeApi);
+  const policy = createTabAccessPolicy({});
   await policy.initialize(mode, true);
   const attachmentEpoch = policy.capture(7);
   await policy.requireTab(7, attachmentEpoch);
@@ -72,7 +64,6 @@ async function createNavigationHarness(
     attachments.delete(tabId);
   });
   registerTabAccessEvents({
-    chromeApi,
     accessReady: Promise.resolve(),
     policy,
     attachments,
@@ -126,10 +117,7 @@ async function createNavigationHarness(
       }
     },
     deferLookup() {
-      let release = (_value: BrowserTabSnapshot) => {};
-      const pending = new Promise<BrowserTabSnapshot>((resolve) => {
-        release = resolve;
-      });
+      const { promise: pending, resolve: release } = Promise.withResolvers<BrowserTabSnapshot>();
       chromeApi.tabs.get.mockImplementation(async () => await pending);
       return async () => {
         release(tab);
@@ -215,14 +203,8 @@ describe("Chrome navigation event access", () => {
     const harness = await createNavigationHarness("selected");
     await harness.controlBlank();
     const stale = await harness.chromeApi.tabs.query();
-    let release = (_tabs: BrowserTabSnapshot[]) => {};
-    const lookup = new Promise<BrowserTabSnapshot[]>((resolve) => {
-      release = resolve;
-    });
-    let queried = () => {};
-    const started = new Promise<void>((resolve) => {
-      queried = resolve;
-    });
+    const { promise: lookup, resolve: release } = Promise.withResolvers<BrowserTabSnapshot[]>();
+    const { promise: started, resolve: queried } = Promise.withResolvers<void>();
     harness.chromeApi.tabs.query.mockImplementationOnce(() => {
       queried();
       return lookup;
@@ -343,14 +325,8 @@ describe("Chrome navigation event access", () => {
 
   it("preserves commands admitted after a newer tab event when an older group lookup completes", async () => {
     const harness = await createNavigationHarness("selected");
-    let release = () => {};
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let observed = () => {};
-    const started = new Promise<void>((resolve) => {
-      observed = resolve;
-    });
+    const { promise: pending, resolve: release } = Promise.withResolvers<void>();
+    const { promise: started, resolve: observed } = Promise.withResolvers<void>();
     const get = harness.chromeApi.tabs.get.getMockImplementation()!;
     harness.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
       observed();

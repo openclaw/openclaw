@@ -2,14 +2,17 @@ import { createMemo, For, Show } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import {
   presenceActivityLabel,
   presenceViewerActivity,
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SessionActivityFilters } from "./session-activity.ts";
+
+registerEnglishCatalog(registerActivityEnglish);
 
 type ActivityPerson = PresenceViewer & {
   count: number;

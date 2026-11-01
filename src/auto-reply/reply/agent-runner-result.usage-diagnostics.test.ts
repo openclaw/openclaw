@@ -37,12 +37,10 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
   const diagnostics: DiagnosticEventPayload[] = [];
   const unsubscribe = onInternalDiagnosticEvent((event) => diagnostics.push(event));
   const context = createTestFinalizationContext(followupRun, replyOperation);
-  context.isHeartbeat = true;
   context.runId = "silent-usage-run";
   context.typingSignals = createTypingSignaler({
     typing: createMockTypingController(),
     mode: "never",
-    isHeartbeat: true,
   });
   context.execution.result = {
     payloads: [],

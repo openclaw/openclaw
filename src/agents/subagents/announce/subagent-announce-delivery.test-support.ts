@@ -1,8 +1,6 @@
 export * from "./subagent-announce-delivery.js";
 
 import { expect, it, vi } from "vitest";
-import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { mockCallArg } from "../../subagent-test-fixtures.test-helpers.js";
 import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
@@ -31,11 +29,11 @@ export function registerDescendantWakeCurrencyTests({
   it.each(["current", "changed", "unavailable"] as const)(
     "settles descendant wakes under restrictive gateway roles with %s currency",
     async (currency) => {
+      const runId = "descendant-wake-run";
+      const childSessionKey = "agent:main:subagent:nested-parent";
       const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
-        runId: "descendant-wake-run",
+        runId,
       });
-      const resolveGatewayContext: GatewayContextResolver = () => undefined;
-      const signal = new AbortController().signal;
       const replaceSubagentRunAfterSteer = vi.fn(async () => true);
       let accepted = false;
       const dispatch = vi.mocked(dispatchGatewayMethodInProcess);
@@ -45,10 +43,7 @@ export function registerDescendantWakeCurrencyTests({
         accepted = true;
         return response;
       });
-      const callGateway = createGatewayMock({
-        aborted: true,
-        runIds: ["descendant-wake-run"],
-      });
+      const callGateway = createGatewayMock({ aborted: true, runIds: [runId] });
       testing.setDepsForTest({
         callGateway,
         dispatchGatewayMethodInProcess,
@@ -58,7 +53,7 @@ export function registerDescendantWakeCurrencyTests({
 
       const woke = await runDescendantWake({
         runId: "nested-parent-run",
-        childSessionKey: "agent:main:subagent:nested-parent",
+        childSessionKey,
         taskLabel: "collect descendant findings",
         findings: "The descendant completed successfully.",
         announceId: "descendant-completion",
@@ -69,23 +64,16 @@ export function registerDescendantWakeCurrencyTests({
           return !accepted || currency === "current";
         },
         isChildSessionEffectsAllowed: () => true,
-        resolveGatewayContext,
-        signal,
         replaceSubagentRunAfterSteer,
       });
 
       expect(woke).toBe(currency === "current");
-      expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
-        cancelOnDeadline: true,
-        resolveGatewayContext,
-        signal,
-      });
       if (currency === "current") {
         expect(callGateway).not.toHaveBeenCalled();
         expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
           expect.objectContaining({
             previousRunId: "nested-parent-run",
-            nextRunId: "descendant-wake-run",
+            nextRunId: runId,
           }),
         );
       } else {
@@ -93,10 +81,7 @@ export function registerDescendantWakeCurrencyTests({
         expect(callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
             method: "chat.abort",
-            params: {
-              sessionKey: "agent:main:subagent:nested-parent",
-              runId: "descendant-wake-run",
-            },
+            params: { sessionKey: childSessionKey, runId },
           }),
         );
       }

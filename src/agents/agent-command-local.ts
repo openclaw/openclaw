@@ -6,15 +6,16 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
+import { withPluginRetentionOwner } from "../plugins/plugin-retention-diagnostics.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandExecution,
@@ -31,7 +32,7 @@ import { measureAgentStartup } from "./startup-timing.js";
 
 type ResolvedAgentCommandDeps = Awaited<ReturnType<typeof resolveAgentCommandDeps>>;
 
-/** Runs a local command under one request, recovery, and plugin-registry generation. */
+/** Runs a local command under one request and plugin-registry generation. */
 export async function runLocalAgentCommand<TResult>(params: {
   opts: AgentCommandOpts;
   runtime: RuntimeEnv;
@@ -49,7 +50,7 @@ export async function runLocalAgentCommand<TResult>(params: {
   if (!existingHost) {
     host.bindScheduler(scheduler);
   }
-  const [outcome] = await Promise.allSettled([
+  return settleWithCleanup(
     host.run(async () => {
       const resolvedDeps = await measureAgentStartup("command-dependencies", () =>
         resolveAgentCommandDeps(params.deps),
@@ -58,38 +59,37 @@ export async function runLocalAgentCommand<TResult>(params: {
         params.opts.lifecycleGeneration ??
         captureAgentRunLifecycleGeneration(params.opts.runId ?? "");
       return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-        withLocalGatewayRequestScope(
-          { deps: resolvedDeps, getRuntimeConfig },
-          async () =>
-            await runWithAgentCommandRecoveryOwner({
-              lifecycleGeneration,
-              mode: "reject_uncoordinated",
-              opts: {
-                ...params.opts,
-                lifecycleGeneration,
-                senderIsOwner: params.opts.senderIsOwner ?? true,
-                allowModelOverride: params.opts.allowModelOverride ?? true,
-                // Standalone commands cannot retain transports after their idle scheduler closes.
-                cleanupBundleMcpOnRunEnd: existingHost
-                  ? params.opts.cleanupBundleMcpOnRunEnd
-                  : true,
-              },
-              prepare: async (preparedOpts) =>
-                await measureAgentStartup("command-prepare", () =>
-                  prepareAgentCommandExecution(preparedOpts, params.runtime),
-                ),
-              run: async (prepared) => {
-                const capability =
-                  params.operatorAuthority && prepared.opts.senderIsOwner === true
-                    ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
-                    : undefined;
-                const admittedPrepared = capability
-                  ? {
-                      ...prepared,
-                      opts: { ...prepared.opts, cronCreatorAuthorityCapability: capability },
-                    }
-                  : prepared;
-                const run = async () => {
+        withLocalGatewayRequestScope({ deps: resolvedDeps, getRuntimeConfig }, async () => {
+          const opts = {
+            ...params.opts,
+            lifecycleGeneration,
+            senderIsOwner: params.opts.senderIsOwner ?? true,
+            allowModelOverride: params.opts.allowModelOverride ?? true,
+            // Standalone commands cannot retain transports after their idle scheduler closes.
+            cleanupBundleMcpOnRunEnd: existingHost ? params.opts.cleanupBundleMcpOnRunEnd : true,
+          };
+          const prepared = await measureAgentStartup("command-prepare", () =>
+            prepareAgentCommandExecution(opts, params.runtime),
+          );
+          try {
+            const capability =
+              params.operatorAuthority && prepared.opts.senderIsOwner === true
+                ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
+                : undefined;
+            const admittedPrepared = capability
+              ? {
+                  ...prepared,
+                  opts: { ...prepared.opts, cronCreatorAuthorityCapability: capability },
+                }
+              : prepared;
+            const run = () =>
+              withPluginRetentionOwner(
+                {
+                  agentId: prepared.sessionAgentId,
+                  sessionKey: prepared.sessionKey,
+                  runId: prepared.runId,
+                },
+                async () => {
                   // Preparation owns registry selection and physical resources. Do not load
                   // an intermediate discovery registry just to select that same generation.
                   await using lease = scopePreparedModelRuntimeLease(
@@ -119,37 +119,27 @@ export async function runLocalAgentCommand<TResult>(params: {
                       ),
                     ),
                   );
-                };
-                return capability
-                  ? await runWithCronCreatorAuthorityCapability(
-                      capability,
-                      run,
-                      admittedPrepared.opts.abortSignal,
-                    )
-                  : await run();
-              },
-            }),
-        ),
+                },
+              );
+            return capability
+              ? await runWithCronCreatorAuthorityCapability(
+                  capability,
+                  run,
+                  admittedPrepared.opts.abortSignal,
+                )
+              : await run();
+          } finally {
+            await prepared.runLease?.release();
+          }
+        }),
       );
     }),
-  ]);
-  try {
-    if (!existingHost) {
-      await scheduler.stop();
-      await host.close();
-    }
-  } catch (error) {
-    if (outcome.status === "rejected") {
-      throw new AggregateError(
-        [outcome.reason, error],
-        "Local agent command and resource cleanup failed.",
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  if (outcome.status === "rejected") {
-    throw outcome.reason;
-  }
-  return outcome.value;
+    async () => {
+      if (!existingHost) {
+        await scheduler.stop();
+        await host.close();
+      }
+    },
+    "Local agent command and resource cleanup failed.",
+  );
 }

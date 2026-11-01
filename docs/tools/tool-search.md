@@ -64,6 +64,11 @@ one selected tool when it needs the exact schema, and calls that tool through
 OpenClaw. Direct-only tools remain model-visible and are not added to the
 catalog.
 
+Claude CLI runs use Claude's native `ToolSearch` for deferred MCP definitions.
+OpenClaw keeps the same authorized tools and maps the enabled/disabled setting to
+native deferral. The native tool does not use OpenClaw's search modes, limits, or
+include/exclude selectors. See [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
+
 Codex harness runs do not receive these experimental OpenClaw Tool Search
 controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
 Codex owns the stable native code mode, native tool search, deferred dynamic
@@ -78,8 +83,9 @@ run:
 2. List eligible OpenClaw and plugin tools.
 3. List eligible MCP tools through the session MCP runtime.
 4. Add eligible client tools supplied for the current run.
-5. Keep core coding primitives and direct-only tools model-visible and index
-   compact descriptors for the remaining catalog-eligible tools.
+5. Apply optional include/exclude selectors to the eligible catalog. Keep
+   unselected and excluded tools, core coding primitives, and direct-only tools
+   model-visible; index compact descriptors for selected eligible tools.
 6. Add a size-limited capability directory selected by fixed rules and filtered by policy to the
    cache-stable system-prompt prefix.
 7. Expose the structured search, describe, and call tools or the compact
@@ -119,9 +125,69 @@ Compaction is not always cheaper: small catalogs can gain schema overhead, and
 additional discovery turns can offset initial payload savings. Set
 `tools.toolSearch: false` when direct schemas suit your workload better.
 
-There is no separate source-selection config. When Tool Search is enabled, the
-catalog includes catalog-eligible OpenClaw, MCP, and client tools after normal
-policy filtering; direct-only tools are retained separately.
+## Select which tools to defer
+
+Use `include` and `exclude` to defer only part of the authorized tool inventory.
+For example, defer MCP tools but keep the frequently used read tools of an MCP
+server configured as `github` directly callable:
+
+```json
+{
+  "tools": {
+    "toolSearch": {
+      "mode": "tools",
+      "include": [{ "source": "mcp" }],
+      "exclude": [{ "source": "mcp", "name": "github__read_*" }]
+    }
+  }
+}
+```
+
+Core tools, non-MCP plugin tools, client tools, and matching MCP GitHub read
+tools keep their schemas and remain directly callable. Other eligible MCP tools
+are searchable, describable, and callable through Tool Search. Use the
+**registered tool name**, which can differ from the name advertised by the MCP
+server. Tools from servers configured under `mcp.servers` register as
+`<safe-server>__<safe-tool>`, so this server's `read_file` tool is
+`github__read_file`. Unsupported characters become `-`, names that do not
+start with a letter get an `mcp-` or `tool-` prefix, and long or colliding
+names are shortened or get a numeric suffix. `openclaw mcp probe --json`
+previews these names, but collision suffixes can differ at run time.
+
+Each selector must contain `source`, `name`, or both. Empty selectors, blank
+names, unsupported sources, and unknown fields are rejected.
+
+| Field    | Matching                                                                                                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `source` | `openclaw` (core and non-MCP plugins), `mcp` (registered MCP provenance), or `client` (client-supplied tools). MCP origin is not inferred from a name prefix.                                                                  |
+| `name`   | Registered name with existing tool-policy normalization: trim whitespace, lowercase, and normalize aliases such as `bash` to `exec`. `*` matches any sequence of characters. No regex support or implicit `group:*` expansion. |
+
+Fields within one selector are **ANDed**; selectors within a list are **ORed**.
+Exclusion always wins over inclusion. A name-only selector intentionally matches
+across all sources; add `source` to avoid matching an MCP or client lookalike.
+
+Omitted `include` preserves existing catalog eligibility; `include: []` defers
+nothing. Omitted or empty `exclude` excludes nothing. Selectors do not enable an
+explicitly disabled Tool Search configuration, introduce a tool-count threshold,
+or change the automatic defaults.
+
+These are presentation controls, **not authorization**. Allow/deny, sandbox,
+provider, and session restrictions still apply before catalog selection.
+Direct-only tools stay outside the catalog. Core coding primitives and
+runtime-required trusted direct tools retain their existing mode-specific
+visibility even if selected.
+
+If selectors split same-named tools between the direct and deferred surfaces,
+use the deferred tool's exact catalog ID. Its bare name is not listed as uniquely
+callable, and name-only catalog calls are rejected rather than selecting a
+different owner.
+
+Both Tool Search modes support selectors. In `directory` mode, client tools
+still stay direct regardless of selectors; the Copilot harness retains its
+documented mapping of `directory` to `tools`. Engaged independent
+[Code Mode](/tools/code-mode) ignores these selectors, and Codex-native Tool
+Search is unchanged. Selectors do not change MCP server activation or connection
+behavior.
 
 ## Why this exists
 
@@ -202,7 +268,7 @@ including the exact input schema and the trusted full `outputSchema` when the
 tool declares one.
 
 ```json
-{ "id": "mcp:calendar:create_event" }
+{ "id": "mcp:calendar:calendar__create_event" }
 ```
 
 ### Call
@@ -218,6 +284,12 @@ If a trusted tool also declares `outputSchema`, OpenClaw compiles that schema
 before execution and validates final `details` after normal tool hooks before
 returning the catalog call. MCP and client-owned schemas remain deferred to
 their owning execution boundary.
+
+Host-owned execution refusals do not have to match the target's success schema.
+Turn-authority gates preserve their refusal text without running the target;
+Code Mode also includes that guidance in the returned value's `message` field.
+This exemption uses private runtime provenance, not tool-authored `gated` or
+`status` fields.
 
 If `dispatch_action` names a direct-only tool declared for the current turn, it returns
 guidance to call that tool directly by its declared name and parameters. It does
@@ -238,7 +310,7 @@ for runtime consumers. Use `tool_describe` for full tool metadata.
 
 ```json
 {
-  "id": "mcp:calendar:create_event",
+  "id": "mcp:calendar:calendar__create_event",
   "args": {
     "summary": "Planning",
     "start": "2026-05-09T14:00:00Z"

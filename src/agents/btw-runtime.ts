@@ -533,12 +533,7 @@ export async function runCliBtwSideQuestion(params: {
       sessionFile: params.sessionFile,
       workspaceDir: params.workspaceDir,
       config: params.cfg,
-      prompt: buildBtwCliPrompt({
-        messages: params.messages,
-        question: params.question,
-        imageCount: params.imageCount,
-        inFlightPrompt: params.inFlightPrompt,
-      }),
+      prompt: buildBtwCliPrompt(params),
       extraSystemPrompt: buildBtwSystemPrompt(),
       executionMode: "side-question",
       provider: params.cliProvider,
@@ -578,9 +573,11 @@ export async function withBtwPreparedRuntime(
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
     onAcquired({ release: () => lease[Symbol.asyncDispose]() });
-    return withPluginRuntimeGenerationScope(lease.snapshot, () => {
-      captureWorkContext();
-      return run(lease.snapshot);
-    });
+    return lease.run(() =>
+      withPluginRuntimeGenerationScope(lease.snapshot, () => {
+        captureWorkContext();
+        return run(lease.snapshot);
+      }),
+    );
   });
 }

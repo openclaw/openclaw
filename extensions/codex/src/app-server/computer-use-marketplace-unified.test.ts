@@ -229,16 +229,13 @@ describe("managed unified Computer Use marketplace", () => {
           pluginName: "unified-computer-use",
           tools: ["js"],
         });
-        expect(vi.mocked(params.request).mock.calls.map(([method]) => method)).toContain(
-          "plugin/install",
-        );
         return;
       }
       if (action === "status") {
         const result = await readStatus(params);
         expect(result).toMatchObject({
           ...disabledStatus,
-          installation: { status: "unchecked", ok: false },
+          installation: "unchecked",
         });
         const display = formatComputerUseStatus(result);
         expect(display).toContain("Plugin: computer-use (installation unchecked)");

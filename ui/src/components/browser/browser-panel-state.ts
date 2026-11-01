@@ -12,6 +12,7 @@ export type BrowserPanelState = {
   view: BrowserPanelView | null;
   loading: boolean;
   errorText: string | null;
+  errorRetry: (() => Promise<unknown>) | null;
   noticeText: string | null;
   mode: BrowserPanelMode;
   strokes: AnnotationStroke[];

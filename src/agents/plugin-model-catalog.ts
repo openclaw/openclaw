@@ -5,10 +5,11 @@
  * catalogs without loading runtimes or creating parallel state files.
  */
 import { randomUUID } from "node:crypto";
-import { linkSync, readFileSync, readdirSync, renameSync, unlinkSync, type Dirent } from "node:fs";
+import { linkSync, readdirSync, renameSync, unlinkSync, type Dirent } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
@@ -30,6 +32,14 @@ import {
   withPluginModelCatalogWorker,
 } from "./plugin-model-catalog-execution.js";
 import {
+  readLegacyPluginModelCatalog,
+  PLUGIN_MODEL_CATALOG_FILE,
+  isPluginModelCatalogMigrationFile,
+  decodePluginModelCatalogRelativePathPluginId,
+  recordCatalogMigrationIssue,
+  type PluginModelCatalogMigrationIssue,
+} from "./plugin-model-catalog-legacy-source.js";
+import {
   isGeneratedPluginModelCatalog,
   repairPluginModelCatalogTransportMetadata,
 } from "./plugin-model-catalog-repair.js";
@@ -42,21 +52,15 @@ import {
   type PluginModelCatalogReplacement,
 } from "./plugin-model-catalog.kernel.js";
 
+export {
+  encodePluginModelCatalogRelativePath,
+  decodePluginModelCatalogRelativePathPluginId,
+} from "./plugin-model-catalog-legacy-source.js";
+export type { PluginModelCatalogMigrationIssue } from "./plugin-model-catalog-legacy-source.js";
+
 export { isGeneratedPluginModelCatalog };
 export { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog-repair.js";
 export type { PersistedPluginModelCatalog } from "./plugin-model-catalog.kernel.js";
-
-// The in-memory planning key retains the established owner encoding; generated
-// payloads themselves are persisted only in the agent SQLite cache.
-const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
-
-/** Recognizes canonical catalogs and recoverable atomic migration claims. */
-function isPluginModelCatalogMigrationFile(filename: string): boolean {
-  return (
-    filename === PLUGIN_MODEL_CATALOG_FILE ||
-    filename.startsWith(`${PLUGIN_MODEL_CATALOG_FILE}.doctor-importing-`)
-  );
-}
 
 type PluginModelCatalogDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -67,11 +71,16 @@ function pluginModelCatalogDatabaseOptions(agentDir: string) {
   };
 }
 
-function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
-  return readPluginModelCatalogEntries(
+function readPersistedPluginModelCatalogEntries(
+  agentDir: string,
+  scope: string,
+  pluginIds?: readonly string[],
+): PersistedPluginModelCatalog[] {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) => readPluginModelCatalogEntries(db, scope, pluginIds),
     pluginModelCatalogDatabaseOptions(agentDir),
-    PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   );
+  return result.found ? result.value : [];
 }
 
 /** Native Doctor inspection and the public synchronous ModelRegistry SDK contract. */
@@ -82,8 +91,8 @@ export function loadPersistedPluginModelCatalogsReadOnly(
   if (pluginIds?.length === 0) {
     return [];
   }
-  return readPluginModelCatalogEntries(
-    pluginModelCatalogDatabaseOptions(agentDir),
+  return readPersistedPluginModelCatalogEntries(
+    agentDir,
     PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
     pluginIds,
   );
@@ -144,10 +153,9 @@ function readPersistedPluginModelCatalogMigrationPayloads(
   agentDir: string,
 ): ReadonlyMap<string, string> {
   return new Map(
-    readPluginModelCatalogEntries(
-      pluginModelCatalogDatabaseOptions(agentDir),
-      PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
-    ).map((catalog) => [catalog.pluginId, catalog.contents]),
+    readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE).map(
+      (catalog) => [catalog.pluginId, catalog.contents],
+    ),
   );
 }
 
@@ -174,25 +182,15 @@ function replacePersistedPluginModelCatalogEntries(
 type PluginModelCatalogMigrationResult = {
   migrated: number;
   warnings: string[];
+  issues: PluginModelCatalogMigrationIssue[];
 };
-
-function readLegacyPluginModelCatalog(pathname: string): string | null {
-  try {
-    return readFileSync(pathname, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
 
 function hasCommittedExpectedPluginModelCatalogs(
   agentDir: string,
   expectedContents: ReadonlyMap<string, string>,
 ): boolean {
   const committed = new Map(
-    readPersistedPluginModelCatalogs(agentDir).map((catalog) => [
+    loadPersistedPluginModelCatalogsReadOnly(agentDir).map((catalog) => [
       catalog.pluginId,
       catalog.contents,
     ]),
@@ -211,7 +209,7 @@ function hasCommittedMigratedPluginModelCatalog(
   pluginId: string,
   contents: string,
 ): boolean {
-  const committed = readPersistedPluginModelCatalogs(agentDir).find(
+  const committed = loadPersistedPluginModelCatalogsReadOnly(agentDir).find(
     (catalog) => catalog.pluginId === pluginId,
   );
   return (
@@ -284,6 +282,7 @@ function retireOrphanedPluginModelCatalogMigrations(params: {
 export function inspectLegacyPluginModelCatalogs(agentDir: string): {
   catalogs: Array<{ pluginId: string; pathname: string; contents: string }>;
   warnings: string[];
+  issues: PluginModelCatalogMigrationIssue[];
   protectedPluginIds: ReadonlySet<string>;
   directoryError?: unknown;
 } {
@@ -298,11 +297,22 @@ export function inspectLegacyPluginModelCatalogs(agentDir: string): {
         (error as NodeJS.ErrnoException).code === "ENOENT"
           ? []
           : [`Could not inspect legacy provider catalogs: ${pluginsDir}`],
+      issues:
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+          ? []
+          : [
+              {
+                kind: "inspection-failed",
+                pathname: pluginsDir,
+                message: `Could not inspect legacy provider catalogs: ${pluginsDir}`,
+              },
+            ],
       protectedPluginIds: new Set(),
       directoryError: error,
     };
   }
   const warnings: string[] = [];
+  const issues: PluginModelCatalogMigrationIssue[] = [];
   const legacyCatalogs: Array<{ pluginId: string; pathname: string; contents: string }> = [];
   const protectedMigrationPluginIds = new Set<string>();
   for (const pluginDir of pluginDirs) {
@@ -322,7 +332,13 @@ export function inspectLegacyPluginModelCatalogs(agentDir: string): {
       // An uninspected owner may still contain the source for a recovery row.
       // Never retire its credential backup based on an incomplete scan.
       protectedMigrationPluginIds.add(pluginId);
-      warnings.push(`Could not inspect legacy provider catalogs: ${pluginPath}`);
+      recordCatalogMigrationIssue(
+        warnings,
+        issues,
+        "inspection-failed",
+        pluginPath,
+        `Could not inspect legacy provider catalogs: ${pluginPath}`,
+      );
       continue;
     }
     const sourceFiles = catalogFiles
@@ -352,11 +368,23 @@ export function inspectLegacyPluginModelCatalogs(agentDir: string): {
         contents = readLegacyPluginModelCatalog(pathname);
       } catch {
         hasUnreadableCatalog = true;
-        warnings.push(`Could not read legacy provider catalog: ${pathname}`);
+        recordCatalogMigrationIssue(
+          warnings,
+          issues,
+          "inspection-failed",
+          pathname,
+          `Could not read legacy provider catalog: ${pathname}`,
+        );
         continue;
       }
       if (contents === null) {
-        warnings.push(`Legacy provider catalog disappeared before migration: ${pathname}`);
+        recordCatalogMigrationIssue(
+          warnings,
+          issues,
+          "source-disappeared",
+          pathname,
+          `Legacy provider catalog disappeared before migration: ${pathname}`,
+        );
         continue;
       }
       let parsed: unknown;
@@ -382,13 +410,24 @@ export function inspectLegacyPluginModelCatalogs(agentDir: string): {
     ) {
       // Random claim names carry no generation order. Preserve every divergent
       // credential until Doctor or its operator can select an authoritative source.
-      warnings.push(`Conflicting retained legacy provider catalogs: ${pluginPath}`);
+      recordCatalogMigrationIssue(
+        warnings,
+        issues,
+        "conflicting-sources",
+        pluginPath,
+        `Conflicting retained legacy provider catalogs: ${pluginPath}`,
+      );
       continue;
     }
     legacyCatalogs.push(...pluginLegacyCatalogs);
   }
 
-  return { catalogs: legacyCatalogs, warnings, protectedPluginIds: protectedMigrationPluginIds };
+  return {
+    catalogs: legacyCatalogs,
+    warnings,
+    issues,
+    protectedPluginIds: protectedMigrationPluginIds,
+  };
 }
 
 /** Doctor-owned import of released sidecars into canonical agent SQLite state. */
@@ -401,6 +440,7 @@ export function migrateLegacyPluginModelCatalogs(params: {
   const {
     catalogs: legacyCatalogs,
     warnings,
+    issues,
     protectedPluginIds: protectedMigrationPluginIds,
     directoryError,
   } = inspectLegacyPluginModelCatalogs(agentDir);
@@ -414,7 +454,7 @@ export function migrateLegacyPluginModelCatalogs(params: {
           cause: directoryError,
         });
       }
-      return { migrated: 0, warnings };
+      return { migrated: 0, warnings, issues };
     }
     if (
       params.expectedContents &&
@@ -426,7 +466,7 @@ export function migrateLegacyPluginModelCatalogs(params: {
       });
     }
     retireOrphanedPluginModelCatalogMigrations({ agentDir });
-    return { migrated: 0, warnings: [] };
+    return { migrated: 0, warnings: [], issues: [] };
   }
 
   retireOrphanedPluginModelCatalogMigrations({
@@ -454,7 +494,7 @@ export function migrateLegacyPluginModelCatalogs(params: {
   }
 
   if (legacyCatalogs.length === 0) {
-    return { migrated: 0, warnings };
+    return { migrated: 0, warnings, issues };
   }
 
   let migrated = 0;
@@ -464,7 +504,13 @@ export function migrateLegacyPluginModelCatalogs(params: {
         catalog.contents &&
       !hasCommittedMigratedPluginModelCatalog(agentDir, catalog.pluginId, catalog.contents)
     ) {
-      warnings.push(`Left superseded legacy provider catalog in place: ${catalog.pathname}`);
+      recordCatalogMigrationIssue(
+        warnings,
+        issues,
+        "superseded-source",
+        catalog.pathname,
+        `Left superseded legacy provider catalog in place: ${catalog.pathname}`,
+      );
       continue;
     }
     params.beforeLegacyCatalogClaim?.(catalog.pathname);
@@ -483,21 +529,33 @@ export function migrateLegacyPluginModelCatalogs(params: {
         ) {
           migrated += 1;
         } else {
-          warnings.push(
+          recordCatalogMigrationIssue(
+            warnings,
+            issues,
+            "claim-uncommitted",
+            catalog.pathname,
             `Legacy provider catalog was claimed before its migration was committed: ${catalog.pathname}`,
           );
         }
       } else {
+        let published = false;
         try {
           if (readLegacyPluginModelCatalog(catalog.pathname) === catalog.contents) {
             // A directory can permit reads while forbidding rename. Publish the
             // verified credential, retain its source, and retry cleanup later.
             replacePersistedPluginModelCatalogEntries(agentDir, catalog);
+            published = true;
           }
         } catch {
           // Preserve the original source and surface its migration warning.
         }
-        warnings.push(`Could not remove migrated legacy provider catalog: ${catalog.pathname}`);
+        recordCatalogMigrationIssue(
+          warnings,
+          issues,
+          published ? "cleanup-failed" : "import-failed",
+          catalog.pathname,
+          `Could not remove migrated legacy provider catalog: ${catalog.pathname}`,
+        );
       }
       continue;
     }
@@ -524,7 +582,13 @@ export function migrateLegacyPluginModelCatalogs(params: {
       } catch {
         // Either canonical or claimed bytes remain available for Doctor repair.
       }
-      warnings.push(`Left changed legacy provider catalog in place: ${retainedPath}`);
+      recordCatalogMigrationIssue(
+        warnings,
+        issues,
+        "source-changed",
+        retainedPath,
+        `Left changed legacy provider catalog in place: ${retainedPath}`,
+      );
       continue;
     }
     // Retire the temporary secret only when the same SQLite transaction proves
@@ -536,7 +600,7 @@ export function migrateLegacyPluginModelCatalogs(params: {
     });
     migrated += 1;
   }
-  return { migrated, warnings };
+  return { migrated, warnings, issues };
 }
 
 /** Replaces rebuildable provider catalogs in the existing per-agent SQLite cache. */
@@ -628,35 +692,6 @@ export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "o
   normalizePluginId?: (pluginId: string) => string;
 };
 
-/** Encodes the profile-relative path for a plugin-owned generated model catalog. */
-export function encodePluginModelCatalogRelativePath(pluginId: string): string {
-  return `plugins/${encodeURIComponent(pluginId)}/${PLUGIN_MODEL_CATALOG_FILE}`;
-}
-
-/** Decodes the plugin id from a canonical generated catalog path. */
-export function decodePluginModelCatalogRelativePathPluginId(
-  relativePath: string,
-): string | undefined {
-  const parts = relativePath.split(/[\\/]/);
-  const encodedPluginId = parts[1];
-  if (
-    path.isAbsolute(relativePath) ||
-    parts.length !== 3 ||
-    parts[0] !== "plugins" ||
-    !encodedPluginId ||
-    encodedPluginId === "." ||
-    encodedPluginId === ".." ||
-    parts[2] !== PLUGIN_MODEL_CATALOG_FILE
-  ) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(encodedPluginId);
-  } catch {
-    return undefined;
-  }
-}
-
 /** Resolves the sole enabled plugin that owns a provider's model catalog. */
 export function resolvePluginModelCatalogOwnerPluginId(params: {
   providerId: string;
@@ -709,7 +744,7 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
   );
   const providers = Object.fromEntries(
     Object.entries(params.providers).filter(
-      ([providerId]) =>
+      ([providerId, provider]) =>
         resolvePluginModelCatalogOwnerPluginId({
           providerId,
           pluginMetadataSnapshot: params.pluginMetadataSnapshot,
@@ -718,16 +753,14 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
           provider: providerId,
           config: params.config,
           plugin,
+          sourceBaseUrl: asOptionalRecord(provider)?.baseUrl,
         }),
     ),
   );
   // Captured auth, not the retained catalog's credentials, admits deferred inventory.
-  if (
-    plugin?.activation?.onStartup === false &&
+  return plugin?.activation?.onStartup === false &&
     params.isProviderAvailable &&
     !Object.keys(providers).some(params.isProviderAvailable)
-  ) {
-    return {};
-  }
-  return providers;
+    ? {}
+    : providers;
 }

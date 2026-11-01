@@ -60,6 +60,7 @@ export function createConfigWriteCoordinator({
   let autoSaveRequiresExplicitSubmit = false;
   // Discard drains writes without resaving the draft it is about to remove.
   let suppressAutoSave = 0;
+  let draftRevision = 0;
   // Disconnect must release drains even when the orphaned transport never settles.
   let connectionWake = createDeferredCore();
   // Config writes and restarts must wait for the app updater to settle.
@@ -326,7 +327,7 @@ export function createConfigWriteCoordinator({
             ? currentConfigRead(state)
             : null;
         if (reconnectRead) {
-          await Promise.race([reconnectRead.completion.promise, reconnectRead.invalidated.promise]);
+          await reconnectRead.settled;
         }
         // The updater can claim suspension while the preceding write drains.
         const connected = client && isCurrentConfigConnection(state, client, connectionEpoch);
@@ -480,6 +481,7 @@ export function createConfigWriteCoordinator({
     },
   });
   const mutateDraft = (mutation: () => void, path?: Array<string | number>) => {
+    draftRevision++;
     fieldDiscard.invalidate(path);
     mutate(mutation);
     reconcileAutoSaveDraftConnection();
@@ -534,9 +536,13 @@ export function createConfigWriteCoordinator({
     removeFormValue: (path) => mutateDraft(() => removeConfigFormValue(state, path), path),
     setRaw: (value) =>
       mutateDraft(() => updateConfigRawValue(state, value, hasUnacknowledgedDraftWrite())),
-    discardFormValue: fieldDiscard.discard,
+    discardFormValue: (path) => {
+      draftRevision++;
+      return fieldDiscard.discard(path);
+    },
     discardDraft: createConfigDraftDiscard({
       state,
+      currentDraftRevision: () => draftRevision,
       invalidateFieldDiscards: fieldDiscard.invalidate,
       hasInFlightWrite: () => inFlight !== null,
       holdAutoSave,
@@ -602,6 +608,7 @@ export function createConfigWriteCoordinator({
         return false;
       }
       fieldDiscard.invalidate(["agents"]);
+      draftRevision++;
       const changed = stageDefaultAgentConfigEntry(state, agentId);
       publish();
       reconcileAutoSaveDraftConnection();

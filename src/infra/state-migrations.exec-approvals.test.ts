@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -24,12 +24,13 @@ import { loadExecApprovals } from "./exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
 import { resolveExecApprovalsLocked } from "./exec-approvals.js";
 import { requestExecHostViaSocket } from "./exec-host.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
 } from "./state-migrations.exec-approvals.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
+import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
 
 type MigrationDatabase = Pick<OpenClawStateKyselyDatabase, "migration_runs" | "migration_sources">;
 const denyPolicy = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
@@ -43,6 +44,7 @@ const nullUsagePolicy = {
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     execApprovalsStoreTesting.reset();
     envSnapshot.restore();
@@ -397,11 +399,13 @@ it("repairs an invalid canonical row from validated legacy policy", async () => 
 
 it("preserves changed source bytes before claim and writes no receipt", async () => {
   await writeLegacy({ version: 1, agents: {} });
-  const result = await migrate({
-    beforeVerify: () => {
-      fs.writeFileSync(sourcePath, serializeExecApprovals(denyPolicy));
-    },
+  const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
+  verify.mockImplementationOnce(function (this: LegacyMigrationSourceClaim, ...args) {
+    verify.mockRestore();
+    fs.writeFileSync(sourcePath, serializeExecApprovals(denyPolicy));
+    return this.verify(...args);
   });
+  const result = await migrate();
   expect(result.warnings[0]).toContain("changed after migration loaded");
   expect(fs.existsSync(sourcePath)).toBe(true);
   expect(receipt()).toBeUndefined();
@@ -412,11 +416,10 @@ it.each([
   { name: "empty stub retirement", value: emptyStub },
 ])("retains $name claim after cleanup failure and converges on retry", async ({ value }) => {
   await writeLegacy(value);
-  const first = await migrate({
-    removeSource: () => {
-      throw new Error("forced cleanup failure");
-    },
-  });
+  vi.spyOn(LegacyMigrationSourceClaim.prototype, "remove").mockRejectedValueOnce(
+    new Error("forced cleanup failure"),
+  );
+  const first = await migrate();
   expect(first.warnings[0]).toContain("cleanup failed");
   expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
   expect(receipt()).toMatchObject({ removed_source: 0 });
@@ -428,22 +431,7 @@ it.each([
 
 it("requires exclusive state ownership and prints the stop-Gateway warning", async () => {
   await writeLegacy({ version: 1, agents: {} });
-  const gatewayLock = await acquireGatewayLock({
-    allowInTests: true,
-    env,
-    pollIntervalMs: 10,
-    port: 18_791,
-    timeoutMs: 100,
-  });
-  if (!gatewayLock) {
-    throw new Error("expected test Gateway lock");
-  }
-  let result: Awaited<ReturnType<typeof migrateLegacyExecApprovals>>;
-  try {
-    result = await migrate();
-  } finally {
-    await gatewayLock.release();
-  }
+  const result = await withGatewayLockHeld(env, 18_791, () => migrate());
   expect(result.warnings[0]).toContain("Stop the Gateway");
   expect(fs.existsSync(sourcePath)).toBe(true);
   expect(receipt()).toBeUndefined();

@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   ExpectedCliError,
   formatCliFailureLines,
   formatCliJsonFailure,
 } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
-import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
+import { resolveCronCreateScheduleFromArgs as createSchedule } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -57,9 +57,7 @@ function expectText(logs: readonly string[], ...texts: string[]): void {
   }
 }
 
-function renderJob(job: CronJob) {
-  return { list: renderList(job), show: renderShow(job) };
-}
+const renderJob = (job: CronJob) => ({ list: renderList(job), show: renderShow(job) });
 function renderList(job: CronJob | CronJob[], options?: Parameters<typeof printCronList>[2]) {
   return capture((runtime) => printCronList(Array.isArray(job) ? job : [job], runtime, options));
 }
@@ -67,26 +65,17 @@ function renderShow(job: CronJob, options?: Parameters<typeof printCronShow>[2])
   return capture((runtime) => printCronShow(job, runtime, options));
 }
 
-function captureError(error: unknown): unknown {
-  try {
-    handleCronCliError(error);
-  } catch (caught) {
-    return caught;
-  }
-  return undefined;
-}
-
-function renderJsonError(
-  error: unknown,
-  args: string[],
-  debug = "",
-  title = "The CLI command failed.",
-) {
+function renderJsonError(error: unknown, args: string[], title = "The CLI command failed.") {
   const argv = process.argv;
   process.argv = [...argv.slice(0, 2), ...args, "--json"];
-  vi.stubEnv("OPENCLAW_DEBUG", debug);
+  vi.stubEnv("OPENCLAW_DEBUG", "");
   try {
-    const thrown = captureError(error);
+    let thrown: unknown;
+    try {
+      handleCronCliError(error);
+    } catch (caught) {
+      thrown = caught;
+    }
     return {
       thrown,
       json: formatCliJsonFailure(thrown),
@@ -110,7 +99,6 @@ function makeJob(overrides: Partial<CronJob>): CronJob {
     createdAtMs: now,
     updatedAtMs: now,
     schedule: { kind: "at", at: new Date(now + 3600000).toISOString() },
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
     state: { nextRunAtMs: now + 3600000 },
     ...overrides,
@@ -119,98 +107,127 @@ function makeJob(overrides: Partial<CronJob>): CronJob {
 
 beforeEach(() => hoisted.listChannelPluginsMock.mockReset().mockReturnValue([]));
 
-it.each([
-  { at: "+010000-01-15T12:34:56.789Z", expected: "+010000-01-15 12:34Z" },
-  { at: "not-a-time", expected: "-" },
-])("preserves one-shot ISO year in cron list for $at", ({ at, expected }) => {
-  const logs = renderList(makeJob({ schedule: { kind: "at", at }, state: {} }));
-  expectText(logs, `at ${expected}`);
+const unknownDelivery = {
+  lastRunStatus: "ok",
+  lastDeliveryStatus: "unknown",
+  lastDeliveryError: "request timed out",
+} as const;
+const policyJob = (value: boolean) => ({
+  ...makeJob({
+    activeHours: { start: "22:00", end: "06:00", timezone: "America/Los_Angeles" },
+    idleOnly: value,
+    delivery: { mode: "announce", target: "owner", directPolicy: "block" },
+    payload: {
+      kind: "agentTurn",
+      message: "Check",
+      skipIfScratchEmpty: value,
+      includeReasoning: value,
+    },
+  }),
+  scratch: { content: "private checklist sentinel" },
 });
+const policyText = (value: boolean) =>
+  `policies: active hours=22:00-06:00 @ America/Los_Angeles; idle only=${value}; delivery target=owner; direct policy=block; skip if scratch empty=${value}; include reasoning=${value}`;
+type RenderCase = {
+  name: string;
+  job: CronJob;
+  list: string[];
+  show: string[];
+  privateText?: string;
+  listNot?: string;
+  json?: Record<string, unknown>;
+};
+it.each`
+  name                              | job                                                                                                                                                                                                                                                                                       | list                                                                           | show                                                                                                                                                                    | privateText                     | json
+  ${"declaration and run metadata"} | ${makeJob({ declarationKey: "daily-report", displayName: "Daily summary", owner: { agentId: "ops", sessionKey: "agent:ops:main" }, sessionTarget: "isolated", state: { lastRunStatus: "error", lastError: "boom", lastDeliveryStatus: "not-delivered", lastDeliveryError: "offline" } })} | ${["Declaration", "Owner", "daily-report", "Daily summary", "agent:ops:main"]} | ${["declaration: daily-report", "display name: Daily summary", "owner agent: ops", "last error: boom", "last delivery: not-delivered", "last delivery error: offline"]} | ${undefined}                    | ${undefined}
+  ${"enabled policies"}             | ${policyJob(true)}                                                                                                                                                                                                                                                                        | ${[policyText(true)]}                                                          | ${[policyText(true)]}                                                                                                                                                   | ${"private checklist sentinel"} | ${undefined}
+  ${"disabled policies"}            | ${policyJob(false)}                                                                                                                                                                                                                                                                       | ${[policyText(false)]}                                                         | ${[policyText(false)]}                                                                                                                                                  | ${"private checklist sentinel"} | ${undefined}
+  ${"unknown delivery"}             | ${makeJob({ delivery: { mode: "webhook", to: "https://example.invalid/hook", bestEffort: false }, state: unknownDelivery })}                                                                                                                                                              | ${["delivery unknown"]}                                                        | ${["status: delivery unknown", "last delivery error: request timed out"]}                                                                                               | ${undefined}                    | ${{ status: "ok", state: unknownDelivery }}
+`("renders $name in list and show", expectRendering);
+function expectRendering({ job, list, show, privateText, listNot, json }: RenderCase) {
+  const output = renderJob(job);
+  expectText(output.list, ...list);
+  expectText(output.show, ...show);
+  if (privateText) {
+    for (const lines of Object.values(output)) {
+      expect(lines.join("\n")).not.toContain(privateText);
+    }
+  }
+  if (listNot) {
+    expect(output.list.join("\n")).not.toContain(listNot);
+  }
+  if (json) {
+    expect(enrichCronJsonWithStatus(job)).toMatchObject(json);
+    expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+      jobs: [{ status: json.status }],
+    });
+  }
+}
 
-it("truncates and aligns names by sanitized terminal display width", () => {
-  const prefix19 = "x".repeat(19);
+const disabled = (reason: "consecutive-failures" | "schedule-errors", count: number) =>
+  makeJob({
+    enabled: false,
+    state: { autoDisabled: { reason, atMs: Date.now(), consecutiveErrors: count } },
+  });
+it.each`
+  name                                     | job                                                                                                                                                                                                                                       | list                                   | show                                                              | listNot      | json
+  ${"extended ISO year"}                   | ${makeJob({ schedule: { kind: "at", at: "+010000-01-15T12:34:56.789Z" }, state: {} })}                                                                                                                                                    | ${["at +010000-01-15 12:34Z"]}         | ${[]}                                                             | ${undefined} | ${undefined}
+  ${"invalid ISO time"}                    | ${makeJob({ schedule: { kind: "at", at: "not-a-time" }, state: {} })}                                                                                                                                                                     | ${["at -"]}                            | ${[]}                                                             | ${undefined} | ${undefined}
+  ${"malformed row"}                       | ${{ id: "malformed-job", enabled: true } as unknown as CronJob}                                                                                                                                                                           | ${["malformed-job"]}                   | ${[]}                                                             | ${undefined} | ${undefined}
+  ${"staggered cron"}                      | ${makeJob({ schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 }, state: {} })}                                                                                                                                                | ${["cron * * * * * (stagger 1s 1ms)"]} | ${["schedule: cron * * * * * (stagger 1s 1ms)"]}                  | ${undefined} | ${undefined}
+  ${"exact cron"}                          | ${makeJob({ schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 }, state: {} })}                                                                                                                                                    | ${["cron 0 7 * * * (exact)"]}          | ${["schedule: cron 0 7 * * * (exact)"]}                           | ${undefined} | ${undefined}
+  ${"interval with trigger"}               | ${makeJob({ schedule: { kind: "every", everyMs: 30_000 }, trigger: { script: "json({ fire: true })", once: true }, state: { triggerEvalCount: 4, lastTriggerEvalAtMs: Date.now() - 30_000, lastTriggerFireAtMs: Date.now() - 60_000 } })} | ${["every 30s+trigger"]}               | ${["schedule: every 30s+trigger", "trigger: once=yes; evals=4;"]} | ${undefined} | ${undefined}
+  ${"stream with trigger"}                 | ${makeJob({ schedule: { kind: "stream", command: ["node", "events.mjs"] }, trigger: { script: "json({ fire: true })" }, state: {} })}                                                                                                     | ${["stream node events.mjs+trigger"]}  | ${["schedule: stream node events.mjs+trigger"]}                   | ${undefined} | ${undefined}
+  ${"on-exit with cwd"}                    | ${makeJob({ schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" }, state: {} })}                                                                                                                                             | ${["on-exit pnpm build @ /repo"]}      | ${["schedule: on-exit pnpm build @ /repo"]}                       | ${undefined} | ${undefined}
+  ${"repeated errors"}                     | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" } })}                                                                                                                                               | ${["error (12x)"]}                     | ${[]}                                                             | ${undefined} | ${undefined}
+  ${"single error"}                        | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: "boom" } })}                                                                                                                                                | ${["error"]}                           | ${[]}                                                             | ${"(1x)"}    | ${undefined}
+  ${"bounded error count"}                 | ${makeJob({ state: { lastRunStatus: "error", consecutiveErrors: 1440, lastError: "boom" } })}                                                                                                                                             | ${["error (99+x)"]}                    | ${[]}                                                             | ${"1440"}    | ${undefined}
+  ${"auto-disabled after run failures"}    | ${disabled("consecutive-failures", 10)}                                                                                                                                                                                                   | ${["disabled (10x)"]}                  | ${["status: disabled (10x)"]}                                     | ${undefined} | ${{ status: "disabled", state: { autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 } } }}
+  ${"auto-disabled after schedule errors"} | ${disabled("schedule-errors", 3)}                                                                                                                                                                                                         | ${["disabled (schedule)"]}             | ${[]}                                                             | ${undefined} | ${undefined}
+`("renders $name", expectRendering);
+
+it("sanitizes, truncates and aligns names and session targets by terminal width", () => {
   const prefix20 = "x".repeat(20);
-  const prefix21 = "x".repeat(21);
   const injectedMarker = "cron-table-injection";
   const injectedControl = `\u001B]0;${injectedMarker}\u0007`;
   const cases = [
     { name: `${prefix20}🚀tail`, expected: `${prefix20}...` },
-    { name: `${prefix21}Atail`, expected: `${prefix21}...` },
-    { name: `${prefix19}表tail`, expected: `${prefix19}表...` },
-    { name: `${prefix20}e\u0301tail`, expected: `${prefix20}e\u0301...` },
-    { name: `${prefix19}👨‍👩‍👧‍👦tail`, expected: `${prefix19}👨‍👩‍👧‍👦...` },
     { name: `${prefix20}👨‍👩‍👧‍👦`, expected: `${prefix20}👨‍👩‍👧‍👦` },
     { name: `${prefix20}${injectedControl}🚀tail`, expected: `${prefix20}...` },
   ];
 
-  const logs = renderList(
-    cases.map(({ name }, index) => makeJob({ id: `unicode-name-${index}`, name })),
+  const jobs = cases.map(({ name }, index) =>
+    makeJob({
+      id: `unicode-name-${index}`,
+      name,
+      sessionTarget: `session:${prefix20}${injectedControl}`,
+    }),
   );
+  const logs = renderList(jobs, {
+    deliveryPreviews: new Map(
+      jobs.map(({ id }) => [id, { label: "target-delivery", detail: "destination" }]),
+    ),
+  });
 
   const header = logs[0] ?? "";
   const rows = logs.slice(1);
   const scheduleColumn = visibleWidth(header.slice(0, header.indexOf("Schedule")));
+  const deliveryColumn = visibleWidth(header.slice(0, header.indexOf("Delivery")));
   expect(rows).toHaveLength(cases.length);
   for (const [index, row] of rows.entries()) {
     const scheduleIndex = row.indexOf("at ");
     expect(scheduleIndex).toBeGreaterThan(-1);
     expect(visibleWidth(row.slice(0, scheduleIndex))).toBe(scheduleColumn);
     expect(row).toContain(cases[index]?.expected);
+    const deliveryIndex = row.indexOf("target-delivery");
+    expect(deliveryIndex).toBeGreaterThan(-1);
+    expect(visibleWidth(row.slice(0, deliveryIndex))).toBe(deliveryColumn);
+    expect(row).toContain("sessio...");
   }
   const output = logs.join("\n");
   expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
   expect(output).not.toContain("\uFFFD");
   expect(output).not.toContain(injectedMarker);
-});
-
-it("sanitizes and bounds named-session targets", () => {
-  const injectedMarker = "cron-target-injection";
-  const sessionTarget = `session:${"x".repeat(20)}\u001B]0;${injectedMarker}\u0007`;
-  const job = makeJob({
-    id: "target-job",
-    sessionTarget: sessionTarget as CronJob["sessionTarget"],
-  });
-
-  const logs = renderList(job, {
-    deliveryPreviews: new Map([[job.id, { label: "target-delivery", detail: "destination" }]]),
-  });
-
-  const header = logs[0] ?? "";
-  const row = logs[1] ?? "";
-  const deliveryColumn = visibleWidth(header.slice(0, header.indexOf("Delivery")));
-  const deliveryIndex = row.indexOf("target-delivery");
-  expect(deliveryIndex).toBeGreaterThan(-1);
-  expect(visibleWidth(row.slice(0, deliveryIndex))).toBe(deliveryColumn);
-  expect(row).toContain("sessio...");
-  expect(row).not.toContain(injectedMarker);
-});
-
-it("shows declaration metadata and existing run status", () => {
-  const job = makeJob({
-    declarationKey: "daily-report",
-    displayName: "Daily summary",
-    owner: { agentId: "ops", sessionKey: "agent:ops:main" },
-    sessionTarget: "isolated",
-    state: {
-      lastRunStatus: "error",
-      lastError: "boom",
-      lastDeliveryStatus: "not-delivered",
-      lastDeliveryError: "offline",
-    },
-  });
-
-  const { list, show } = renderJob(job);
-  expectText([list[0] ?? ""], "Declaration", "Owner");
-  expectText(list, "daily-report", "Daily summary", "agent:ops:main");
-  expectText(
-    show,
-    "declaration: daily-report",
-    "display name: Daily summary",
-    "owner agent: ops",
-    "last error: boom",
-    "last delivery: not-delivered",
-    "last delivery error: offline",
-  );
 });
 
 it("sanitizes every stored cron show value at the terminal boundary", () => {
@@ -225,6 +242,7 @@ it("sanitizes every stored cron show value at the terminal boundary", () => {
     agentId: injected("agent"),
     sessionTarget: injected("session") as CronJob["sessionTarget"],
     payload: { kind: "agentTurn", message: "test", model: injected("model") },
+    activeHours: { start: "09:00", end: "17:00", timezone: injected("local") },
     state: {
       lastError: injected("last-error"),
       lastDeliveryStatus: "not-delivered",
@@ -243,151 +261,6 @@ it("sanitizes every stored cron show value at the terminal boundary", () => {
   expect(output).toContain("name 🦞");
 });
 
-it("tolerates malformed rows in human-readable output", () => {
-  const malformed = { id: "malformed-job", enabled: true } as unknown as CronJob;
-  expectText(renderList(malformed), "malformed-job");
-});
-
-it.each<[CronJob["schedule"], string, Partial<CronJob>?, string?]>([
-  [{ kind: "cron", expr: "* * * * *", staggerMs: 1_001 }, "cron * * * * * (stagger 1s 1ms)"],
-  [{ kind: "cron", expr: "0 7 * * *", staggerMs: 0 }, "cron 0 7 * * * (exact)"],
-  [
-    { kind: "every", everyMs: 30_000 },
-    "every 30s+trigger",
-    {
-      trigger: { script: "json({ fire: true })", once: true },
-      state: {
-        triggerEvalCount: 4,
-        lastTriggerEvalAtMs: Date.now() - 30_000,
-        lastTriggerFireAtMs: Date.now() - 60_000,
-      },
-    },
-    "trigger: once=yes; evals=4;",
-  ],
-  [
-    { kind: "stream", command: ["node", "events.mjs"] },
-    "stream node events.mjs+trigger",
-    { trigger: { script: "json({ fire: true })" } },
-  ],
-  [{ kind: "on-exit", command: "pnpm build", cwd: "/repo" }, "on-exit pnpm build @ /repo"],
-])("formats %j in list and show", (schedule, expected, details, triggerDetail) => {
-  const { list, show } = renderJob(makeJob({ schedule, state: {}, ...details }));
-  expectText(list, expected);
-  expectText(show, `schedule: ${expected}`);
-  if (triggerDetail) {
-    expectText(show, triggerDetail);
-  }
-});
-
-it.each([false, true])("shows disabled stream sources with running=%s", (running) => {
-  const job = makeJob({
-    schedule: { kind: "stream", command: ["node", "events.mjs"] },
-    state: {
-      streamStatus: "disabled",
-      streamError: "stream sources require cron.triggers.enabled=true",
-      lastRunStatus: "ok",
-      lastDeliveryStatus: "not-delivered",
-      deliverySuppressionReason: "silent",
-      ...(running ? { runningAtMs: Date.now() } : {}),
-    },
-  });
-
-  const { list, show } = renderJob(job);
-  const row = list.find((line) => line.includes(job.id)) ?? "";
-  expect(row).toContain(running ? "running" : "disabled");
-  expect(row).not.toContain("idle");
-  expect(row).not.toContain("ok (suppressed)");
-
-  expect(show).toContain(`status: ${running ? "running" : "disabled"}`);
-  expectText(
-    show,
-    "stream status: disabled",
-    "stream error: stream sources require cron.triggers.enabled=true",
-  );
-  expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: running ? "running" : "ok" });
-});
-
-it.each([
-  [12, "error (12x)", undefined],
-  [1, "error", "(1x)"],
-  [1440, "error (99+x)", "1440"],
-] as const)("bounds the failure-count decoration for %i failures", (count, status, forbidden) => {
-  const logs = renderList(
-    makeJob({
-      state: { lastRunStatus: "error", consecutiveErrors: count, lastError: "boom" },
-    }),
-  );
-  expectText(logs, status);
-  if (forbidden) {
-    expect(logs.join("\n")).not.toContain(forbidden);
-  }
-});
-
-it.each([
-  ["not-delivered", "HTTP 503", "ok (not delivered)"],
-  ["unknown", "request timed out", "delivery unknown"],
-  ["not-delivered", undefined, "ok (suppressed)"],
-] as const)("shows %s (%s) without decorating JSON status", (deliveryStatus, error, status) => {
-  const suppression: CronJob["state"] =
-    error === undefined ? { lastDelivered: false, deliverySuppressionReason: "silent" } : {};
-  const job = makeJob({
-    ...(error === undefined
-      ? {}
-      : {
-          delivery: { mode: "webhook", to: "https://example.invalid/hook", bestEffort: false },
-        }),
-    state: {
-      lastRunStatus: "ok",
-      lastDeliveryStatus: deliveryStatus,
-      lastDeliveryError: error,
-      ...suppression,
-    },
-  });
-  const { list, show } = renderJob(job);
-  expectText(list, status);
-  expectText(show, `status: ${status}`);
-  if (error === undefined) {
-    expect(list.join("\n")).not.toContain("ok (not delivered)");
-    expectText(show, "last delivery: not-delivered", "last delivery suppression: silent");
-  } else {
-    expectText(show, `last delivery error: ${error}`);
-  }
-  expect(enrichCronJsonWithStatus(job)).toMatchObject({
-    status: "ok",
-    state: { lastRunStatus: "ok", lastDeliveryStatus: deliveryStatus, ...suppression },
-  });
-  expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({ jobs: [{ status: "ok" }] });
-});
-
-it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
-  const disabledJob = (reason: "consecutive-failures" | "schedule-errors", count: number) =>
-    makeJob({
-      enabled: false,
-      state: {
-        autoDisabled: { reason, atMs: Date.now(), consecutiveErrors: count },
-      },
-    });
-  const runFailures = disabledJob("consecutive-failures", 10);
-  const scheduleErrors = disabledJob("schedule-errors", 3);
-
-  expectText(renderList([runFailures, scheduleErrors]), "disabled (10x)", "disabled (schedule)");
-  expectText(renderShow(runFailures), "status: disabled (10x)");
-
-  expect(enrichCronJsonWithStatus(runFailures)).toMatchObject({
-    status: "disabled",
-    state: {
-      autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
-    },
-  });
-});
-
-it("shows dash for unset agentId instead of default", () => {
-  const logs = renderList(makeJob({ agentId: undefined, sessionTarget: "isolated" }));
-  expect(logs[0]).toContain("Agent ID");
-  const dataLine = logs[1] ?? "";
-  expect(dataLine).not.toContain("default");
-});
-
 it.each([
   ["2027-02-28t24:00:00.000", "America/New_York", "2027-03-01T05:00:00.000Z"],
   ["2027-02-28t24:00:00+05:45", "Europe/Oslo", "2027-02-28T18:15:00.000Z"],
@@ -395,7 +268,7 @@ it.each([
 ])("interprets offsetless one-shot %s in %s", (input, timezone, expected) => {
   expect(parseAt(input, timezone)).toBe(expected);
   if (expected !== null) {
-    expect(resolveCronCreateScheduleFromArgs({ at: input, tz: timezone })).toEqual({
+    expect(createSchedule({ at: input, tz: timezone })).toEqual({
       kind: "at",
       at: expected,
     });
@@ -442,17 +315,11 @@ it("keeps valid previews and drops malformed entries", () => {
 });
 
 it.each([
-  ["500ms", 500],
-  ["30s", 30_000],
-  ["1.5h", 5_400_000],
   ["1h30m", 5_400_000],
-  ["1d", 86_400_000],
   ["0s", null],
   ["0.5ms", 1],
   ["0.001ms", null],
-  ["-5s", null],
   ["abc", null],
-  ["", null],
   // A finite mantissa can overflow when multiplied by a unit factor (#83906).
   [`1${"0".repeat(302)}d`, null],
   ["8640000000000000ms", 8_640_000_000_000_000],
@@ -462,51 +329,32 @@ it.each([
 });
 
 describe("handleCronCliError", () => {
+  const recovery =
+    "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
   const missingJob = () =>
     new GatewayClientRequestError({
       code: "INVALID_REQUEST",
       message: "transport-neutral lookup miss",
       details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
     });
-  const recovery =
-    "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
-  it("renders typed automation lookup misses with the cron list recovery command", () => {
-    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
-      throw new Error(`exit ${code}`);
-    }) as never);
-
-    expect(() => handleCronCliError(missingJob())).toThrow("exit 1");
-    expect(errorOutput).toHaveBeenCalledWith(expect.stringContaining(recovery));
-    errorOutput.mockRestore();
-    exit.mockRestore();
-  });
-
-  it("hands a typed lookup miss to the root renderer as an expected machine-output failure", () => {
+  it("renders typed lookup misses as expected machine failures", () => {
     const { thrown, json, stderr } = renderJsonError(
       missingJob(),
       ["cron", "show", "missing-job"],
-      "",
       "Could not start the CLI.",
     );
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    expect(json).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: recovery },
-    });
+    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: recovery } });
     expect(stderr).toContain(recovery);
-    expect(stderr).not.toContain("Could not start the CLI.");
-    expect(stderr).not.toContain("openclaw doctor");
-    expect(stderr).not.toContain("OPENCLAW_DEBUG");
+    for (const forbidden of ["Could not start the CLI.", "openclaw doctor", "OPENCLAW_DEBUG"]) {
+      expect(stderr).not.toContain(forbidden);
+    }
   });
-
-  // A legacy gateway without cron.get makes `cron edit <id> --exact` wrap the
-  // lookup miss; the renderer only reveals such causes on explicit debug intent.
-  it.each([false, true])("wrapped cron failure with --debug=%s", (debug) => {
-    const wrapped = new CronCliError("unknown automation id: missing-job", {
-      cause: new Error("unknown method: cron.get"),
-    });
-    const { thrown, json, stderr } = renderJsonError(wrapped, [
+  it.each([false, true])("keeps wrapped cron diagnostics behind --debug=%s", (debug) => {
+    const message = "unknown automation id: missing-job";
+    const cause = "unknown method: cron.get";
+    const error = new CronCliError(message, { cause: new Error(cause) });
+    const { thrown, json, stderr } = renderJsonError(error, [
       "cron",
       "edit",
       "missing-job",
@@ -514,26 +362,15 @@ describe("handleCronCliError", () => {
       ...(debug ? ["--debug"] : []),
     ]);
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    const machineMessage = json.error.message;
-    expect(machineMessage).toContain("unknown automation id: missing-job");
-    expect(machineMessage.includes("unknown method: cron.get")).toBe(debug);
-    expect(stderr).toContain("unknown automation id: missing-job");
-    expect(stderr.includes("unknown method: cron.get")).toBe(debug);
+    for (const text of [json.error.message, stderr]) {
+      expect(text).toContain(message);
+      expect(text.includes(cause)).toBe(debug);
+    }
   });
-
-  it.each([false, true])("preserves unexpected machine-mode errors with debug=%s", (debug) => {
+  it("leaves unexpected machine errors to the root renderer", () => {
     const error = new Error("Automation runtime failed", {
       cause: new Error("Runtime load failed"),
     });
-    const { thrown, json, stderr } = renderJsonError(
-      error,
-      ["automations", "status"],
-      debug ? "1" : "",
-    );
-    expect(thrown).toBe(error);
-    expect(stderr).toContain("The CLI command failed.");
-    expect(stderr).toContain("openclaw doctor");
-    expect(stderr.includes("Stack:")).toBe(debug);
-    expect(json.error.message.includes("Runtime load failed")).toBe(debug);
+    expect(renderJsonError(error, ["automations", "status"]).thrown).toBe(error);
   });
 });

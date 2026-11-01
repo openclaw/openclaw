@@ -4,6 +4,7 @@ import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.te
 import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
+  collectPluginSchemaMetadataCore,
 } from "./channel-config-metadata.js";
 
 const manifestRegistry = (
@@ -30,6 +31,48 @@ function deepSchema() {
   }
   return schema;
 }
+
+describe("collectPluginSchemaMetadataCore", () => {
+  it("preserves provider ownership and order independently of plugin origin selection", () => {
+    const shared = { family: "shared" };
+    const later = { family: "later" };
+    const prototypeNamed = { family: "prototype-named" };
+    const registry = manifestRegistry(
+      {
+        id: "z-first",
+        providerRequest: { providers: { shared: { family: "superseded" } } },
+      },
+      {
+        id: "a-last",
+        origin: "config",
+        name: "Selected origin",
+        providerRequest: {
+          providers: { later, shared, ["__proto__"]: prototypeNamed },
+        },
+      },
+      {
+        id: "a-last",
+        origin: "bundled",
+        name: "Shadowed origin",
+        providerRequest: { providers: { shadowOnly: { family: "shadow" } } },
+      },
+      { id: "plain" },
+    );
+    const before = structuredClone(registry);
+    const metadata = collectPluginSchemaMetadataCore(registry);
+    expect(metadata.map(({ id }) => id)).toEqual(["a-last", "plain", "z-first"]);
+    expect(metadata[0]?.name).toBe("Selected origin");
+    const providers = metadata[0]?.providerRequest?.providers;
+    expect(Object.keys(providers!)).toEqual(["shared", "later", "__proto__"]);
+    expect(providers?.shared).toBe(shared);
+    expect(providers?.later).toBe(later);
+    expect(Object.getOwnPropertyDescriptor(providers, "__proto__")?.value).toBe(prototypeNamed);
+    expect(Object.getPrototypeOf(providers)).toBe(Object.prototype);
+    expect(metadata[1]?.providerRequest).toBeUndefined();
+    expect(metadata[2]?.providerRequest).toEqual({ providers: {} });
+    expect(registry).toEqual(before);
+  });
+});
 
 describe("collectChannelSchemaMetadataWithOwnership", () => {
   it.each(
@@ -97,18 +140,15 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   );
 
   // The producer's traversal bound must not depend on the runtime stack limit.
-  it.each(["feishu", "qqbot"])(
-    "surfaces the raw deeply nested %s schema after bounded traversal",
-    (channelId) => {
-      const schema = deepSchema();
+  it("surfaces the raw deeply nested external schema after bounded traversal", () => {
+    const schema = deepSchema();
 
-      const entries = collectChannelSchemaMetadataWithOwnership(
-        createChannelSchemaRegistry(channelId, schema),
-      );
-      expect(entries[0]).toMatchObject({ id: channelId });
-      expect(entries[0]?.configSchema).toBe(schema);
-    },
-  );
+    const entries = collectChannelSchemaMetadataWithOwnership(
+      createChannelSchemaRegistry("qqbot", schema),
+    );
+    expect(entries[0]).toMatchObject({ id: "qqbot" });
+    expect(entries[0]?.configSchema).toBe(schema);
+  });
 
   it("keeps bundled schema preparation failures on the throwing path", () => {
     expect(() =>

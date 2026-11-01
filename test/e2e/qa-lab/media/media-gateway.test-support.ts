@@ -60,6 +60,7 @@ export function useMediaGateway() {
       const gateway = await owner.start({
         repoRoot: REPO_ROOT,
         command: createQaPreparedRepoCliCommand(REPO_ROOT),
+        initializeCurrentRuntimeState: true,
         providerBaseUrl: `${mock.baseUrl}/v1`,
         providerMode: "mock-openai",
         transport,

@@ -3,18 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   TRANSCRIPT_EXPORT_FILE_NAMES,
   TRANSCRIPT_PATH_SEGMENT_MAX_BYTES,
 } from "../transcripts/store-artifacts.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { openSqliteReadOnlyDatabase } from "./sqlite-snapshot-source.js";
 import {
   hasMatchingRecordedTranscriptArtifact,
   isRecordedCanonicalTranscriptExport,
 } from "./state-migrations.meeting-transcripts-files.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 type MeetingTranscriptExportOwnership = {
   selector: string;
@@ -74,7 +78,7 @@ export function resolveMeetingTranscriptExportOwnership(params: {
       if (stat.isSymbolicLink() || !stat.isFile()) {
         return undefined;
       }
-      const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+      const metadata = JSON.parse(decodeUtf8Input(fs.readFileSync(metadataPath), metadataPath)) as {
         sessionId?: unknown;
         startedAt?: unknown;
       };
@@ -190,19 +194,11 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
     pendingImportCount: 0,
     hasOversizedSessionSlugs: false,
   });
-  const read = ({ db: database }: { db: import("./sql-connection.js").SqlConnection }) => {
-    const tables = new Set(
-      database
-        .prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name IN ('meeting_transcript_sessions', 'migration_sources')",
-        )
-        .all()
-        .map((row) => String(row.name)),
-    );
+  const read = ({ db: database }: { db: EngineConnection }) => {
     const exportOwnership = new Map<string, MeetingTranscriptExportOwnership>();
     const exportOwnershipByFoldedSelector = new Map<string, MeetingTranscriptExportOwnership[]>();
     let hasOversizedSessionSlugs = false;
-    if (tables.has("meeting_transcript_sessions")) {
+    if (tableExists(database, "meeting_transcript_sessions")) {
       const rows = database
         .prepare(
           "SELECT session_id, started_at, selector, session_slug, export_manifest_json, export_pending_json FROM meeting_transcript_sessions",
@@ -229,7 +225,7 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
         }
       }
     }
-    const pendingRow = tables.has("migration_sources")
+    const pendingRow = tableExists(database, "migration_sources")
       ? (database
           .prepare(
             "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ? AND status = ? AND removed_source = 0",
@@ -244,7 +240,11 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
     };
   };
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
-  if (params.artifactPreservingReadOnly || isArtifactPreservingStateRead("shared", databasePath)) {
+  if (
+    isStatePostgres() ||
+    params.artifactPreservingReadOnly ||
+    isArtifactPreservingStateRead("shared", databasePath)
+  ) {
     return (
       withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, { env: params.env }) ??
       empty()

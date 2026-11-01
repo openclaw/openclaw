@@ -25,7 +25,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
-// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/unicode/unicode.mjs
 function CodePointCount(value) {
   let result = 0,
     index = 0,
@@ -36,22 +35,17 @@ function CodePointCount(value) {
   }
   return result;
 }
-
-// <stdin>
-var isBoardSnapshot = /* @__PURE__ */ (() => {
+var isBoardSnapshot = (() => {
   let External = [
-      new RegExp("^[a-z0-9-]{1,40}$", "u"),
-      new RegExp(
-        "(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)",
-        "u",
-      ),
-      new RegExp("^[a-z0-9][a-z0-9._-]{0,63}$", "u"),
-      new RegExp("^[a-z0-9-]{1,40}$", "u"),
-      new RegExp("^[a-z][a-z0-9-]{0,31}$", "u"),
-      new RegExp("^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$", "u"),
-      new RegExp("^.*$", "u"),
-      new RegExp("(^netOrigins$|^tools$)", "u"),
-      new RegExp("^[a-f0-9]{32}$", "u"),
+      /^[a-z0-9-]{1,40}$/u,
+      /(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)/u,
+      /^[a-z0-9][a-z0-9._-]{0,63}$/u,
+      /^[a-z0-9-]{1,40}$/u,
+      /^[a-z][a-z0-9-]{0,31}$/u,
+      /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/u,
+      /^.*$/u,
+      /(^netOrigins$|^tools$)/u,
+      /^[a-f0-9]{32}$/u,
     ],
     check_0 = (value) =>
       typeof value == "object" &&
@@ -70,185 +64,187 @@ var isBoardSnapshot = /* @__PURE__ */ (() => {
         value.revision >= 0) &&
       Array.isArray(value.tabs) &&
       value.tabs.every(
-        (element, index) =>
-          typeof element == "object" &&
-          element !== null &&
-          !Array.isArray(element) &&
-          "tabId" in element &&
-          "title" in element &&
-          "position" in element &&
-          "chatDock" in element &&
-          Object.getOwnPropertyNames(element).length === 4 &&
-          typeof element.tabId == "string" &&
-          External[0].test(element.tabId) &&
-          typeof element.title == "string" &&
-          (element.title.length >= 2 ||
-            (element.title.length >= 1 && CodePointCount(element.title) >= 1)) &&
-          (element.title.length <= 80 ||
-            (element.title.length <= 160 && CodePointCount(element.title) <= 80)) &&
-          Number.isInteger(element.position) &&
-          (!(Number.isFinite(element.position) || typeof element.position == "bigint") ||
-            element.position >= 0) &&
-          ((typeof element.chatDock == "string" && element.chatDock === "left") ||
-            (typeof element.chatDock == "string" && element.chatDock === "right") ||
-            (typeof element.chatDock == "string" && element.chatDock === "bottom") ||
-            (typeof element.chatDock == "string" && element.chatDock === "hidden")),
+        (unique_0, index) =>
+          typeof unique_0 == "object" &&
+          unique_0 !== null &&
+          !Array.isArray(unique_0) &&
+          "tabId" in unique_0 &&
+          "title" in unique_0 &&
+          "position" in unique_0 &&
+          "chatDock" in unique_0 &&
+          Object.getOwnPropertyNames(unique_0).length === 4 &&
+          typeof unique_0.tabId == "string" &&
+          External[0].test(unique_0.tabId) &&
+          typeof unique_0.title == "string" &&
+          (unique_0.title.length >= 2 ||
+            (unique_0.title.length >= 1 && CodePointCount(unique_0.title) >= 1)) &&
+          (unique_0.title.length <= 80 ||
+            (unique_0.title.length <= 160 && CodePointCount(unique_0.title) <= 80)) &&
+          Number.isInteger(unique_0.position) &&
+          (!(Number.isFinite(unique_0.position) || typeof unique_0.position == "bigint") ||
+            unique_0.position >= 0) &&
+          ((typeof unique_0.chatDock == "string" && unique_0.chatDock === "left") ||
+            (typeof unique_0.chatDock == "string" && unique_0.chatDock === "right") ||
+            (typeof unique_0.chatDock == "string" && unique_0.chatDock === "bottom") ||
+            (typeof unique_0.chatDock == "string" && unique_0.chatDock === "hidden")),
       ) &&
       Array.isArray(value.widgets) &&
       value.widgets.every(
-        (element, index) =>
-          typeof element == "object" &&
-          element !== null &&
-          !Array.isArray(element) &&
-          "name" in element &&
-          "tabId" in element &&
-          "contentKind" in element &&
-          "sizeW" in element &&
-          "sizeH" in element &&
-          "position" in element &&
-          "grantState" in element &&
-          "revision" in element &&
-          Object.getOwnPropertyNames(element).every(
-            (var_169, var_170) => External[1].test(var_169) || !1,
+        (unique_1, index) =>
+          typeof unique_1 == "object" &&
+          unique_1 !== null &&
+          !Array.isArray(unique_1) &&
+          "name" in unique_1 &&
+          "tabId" in unique_1 &&
+          "contentKind" in unique_1 &&
+          "sizeW" in unique_1 &&
+          "sizeH" in unique_1 &&
+          "position" in unique_1 &&
+          "grantState" in unique_1 &&
+          "revision" in unique_1 &&
+          Object.getOwnPropertyNames(unique_1).every(
+            (unique_2, unique_3) => External[1].test(unique_2) || !1,
           ) &&
-          typeof element.name == "string" &&
-          External[2].test(element.name) &&
-          typeof element.tabId == "string" &&
-          External[3].test(element.tabId) &&
-          (element.title === void 0 ||
-            !("title" in element) ||
-            (typeof element.title == "string" &&
-              (element.title.length >= 2 ||
-                (element.title.length >= 1 && CodePointCount(element.title) >= 1)) &&
-              (element.title.length <= 80 ||
-                (element.title.length <= 160 && CodePointCount(element.title) <= 80)))) &&
-          ((typeof element.contentKind == "string" && element.contentKind === "html") ||
-            (typeof element.contentKind == "string" && element.contentKind === "mcp-app") ||
-            (typeof element.contentKind == "string" && element.contentKind === "plugin")) &&
-          (element.contentOwner === void 0 ||
-            !("contentOwner" in element) ||
-            (typeof element.contentOwner == "string" &&
-              (element.contentOwner === "html" ||
-                element.contentOwner === "mcp-app" ||
-                element.contentOwner === "plugin" ||
-                element.contentOwner === "registered"))) &&
-          (element.registeredContentKind === void 0 ||
-            !("registeredContentKind" in element) ||
-            (typeof element.registeredContentKind == "string" &&
-              External[4].test(element.registeredContentKind))) &&
-          (element.pluginKind === void 0 ||
-            !("pluginKind" in element) ||
-            (typeof element.pluginKind == "string" && External[5].test(element.pluginKind))) &&
-          (element.props === void 0 ||
-            !("props" in element) ||
-            (typeof element.props == "object" &&
-              element.props !== null &&
-              !Array.isArray(element.props) &&
-              Object.entries(element.props).every(
-                ([var_171, var_172], _) => !External[6].test(var_171) || !0,
+          typeof unique_1.name == "string" &&
+          External[2].test(unique_1.name) &&
+          typeof unique_1.tabId == "string" &&
+          External[3].test(unique_1.tabId) &&
+          (unique_1.title === void 0 ||
+            !("title" in unique_1) ||
+            (typeof unique_1.title == "string" &&
+              (unique_1.title.length >= 2 ||
+                (unique_1.title.length >= 1 && CodePointCount(unique_1.title) >= 1)) &&
+              (unique_1.title.length <= 80 ||
+                (unique_1.title.length <= 160 && CodePointCount(unique_1.title) <= 80)))) &&
+          ((typeof unique_1.contentKind == "string" && unique_1.contentKind === "html") ||
+            (typeof unique_1.contentKind == "string" && unique_1.contentKind === "mcp-app") ||
+            (typeof unique_1.contentKind == "string" && unique_1.contentKind === "plugin")) &&
+          (unique_1.contentOwner === void 0 ||
+            !("contentOwner" in unique_1) ||
+            (typeof unique_1.contentOwner == "string" &&
+              (unique_1.contentOwner === "html" ||
+                unique_1.contentOwner === "mcp-app" ||
+                unique_1.contentOwner === "plugin" ||
+                unique_1.contentOwner === "registered"))) &&
+          (unique_1.registeredContentKind === void 0 ||
+            !("registeredContentKind" in unique_1) ||
+            (typeof unique_1.registeredContentKind == "string" &&
+              External[4].test(unique_1.registeredContentKind))) &&
+          (unique_1.pluginKind === void 0 ||
+            !("pluginKind" in unique_1) ||
+            (typeof unique_1.pluginKind == "string" && External[5].test(unique_1.pluginKind))) &&
+          (unique_1.props === void 0 ||
+            !("props" in unique_1) ||
+            (typeof unique_1.props == "object" &&
+              unique_1.props !== null &&
+              !Array.isArray(unique_1.props) &&
+              Object.entries(unique_1.props).every(
+                ([unique_4, unique_5], _) => !External[6].test(unique_4) || !0,
               ))) &&
-          (element.presentation === void 0 ||
-            !("presentation" in element) ||
-            (typeof element.presentation == "string" && element.presentation === "card") ||
-            (typeof element.presentation == "string" && element.presentation === "full-bleed") ||
-            (typeof element.presentation == "string" && element.presentation === "frameless")) &&
-          (element.heightMode === void 0 ||
-            !("heightMode" in element) ||
-            (typeof element.heightMode == "string" && element.heightMode === "auto") ||
-            (typeof element.heightMode == "string" && element.heightMode === "fixed")) &&
-          Number.isInteger(element.sizeW) &&
-          (!(Number.isFinite(element.sizeW) || typeof element.sizeW == "bigint") ||
-            (element.sizeW >= 1 && element.sizeW <= 12)) &&
-          Number.isInteger(element.sizeH) &&
-          (!(Number.isFinite(element.sizeH) || typeof element.sizeH == "bigint") ||
-            (element.sizeH >= 1 && element.sizeH <= 20)) &&
-          Number.isInteger(element.position) &&
-          (!(Number.isFinite(element.position) || typeof element.position == "bigint") ||
-            element.position >= 0) &&
-          ((typeof element.grantState == "string" && element.grantState === "none") ||
-            (typeof element.grantState == "string" && element.grantState === "pending") ||
-            (typeof element.grantState == "string" && element.grantState === "granted") ||
-            (typeof element.grantState == "string" && element.grantState === "rejected")) &&
-          Number.isInteger(element.revision) &&
-          (!(Number.isFinite(element.revision) || typeof element.revision == "bigint") ||
-            element.revision >= 1) &&
-          (element.instanceId === void 0 ||
-            !("instanceId" in element) ||
-            (typeof element.instanceId == "string" &&
-              (element.instanceId.length >= 2 ||
-                (element.instanceId.length >= 1 && CodePointCount(element.instanceId) >= 1)))) &&
-          (element.declaredSummary === void 0 ||
-            !("declaredSummary" in element) ||
-            (Array.isArray(element.declaredSummary) &&
-              element.declaredSummary.every((element2, index2) => typeof element2 == "string"))) &&
-          (element.declared === void 0 ||
-            !("declared" in element) ||
-            (typeof element.declared == "object" &&
-              element.declared !== null &&
-              !Array.isArray(element.declared) &&
-              Object.getOwnPropertyNames(element.declared).every(
-                (var_173, var_174) => External[7].test(var_173) || !1,
+          (unique_1.presentation === void 0 ||
+            !("presentation" in unique_1) ||
+            (typeof unique_1.presentation == "string" && unique_1.presentation === "card") ||
+            (typeof unique_1.presentation == "string" && unique_1.presentation === "full-bleed") ||
+            (typeof unique_1.presentation == "string" && unique_1.presentation === "frameless")) &&
+          (unique_1.heightMode === void 0 ||
+            !("heightMode" in unique_1) ||
+            (typeof unique_1.heightMode == "string" && unique_1.heightMode === "auto") ||
+            (typeof unique_1.heightMode == "string" && unique_1.heightMode === "fixed")) &&
+          Number.isInteger(unique_1.sizeW) &&
+          (!(Number.isFinite(unique_1.sizeW) || typeof unique_1.sizeW == "bigint") ||
+            (unique_1.sizeW >= 1 && unique_1.sizeW <= 12)) &&
+          Number.isInteger(unique_1.sizeH) &&
+          (!(Number.isFinite(unique_1.sizeH) || typeof unique_1.sizeH == "bigint") ||
+            (unique_1.sizeH >= 1 && unique_1.sizeH <= 20)) &&
+          Number.isInteger(unique_1.position) &&
+          (!(Number.isFinite(unique_1.position) || typeof unique_1.position == "bigint") ||
+            unique_1.position >= 0) &&
+          ((typeof unique_1.grantState == "string" && unique_1.grantState === "none") ||
+            (typeof unique_1.grantState == "string" && unique_1.grantState === "pending") ||
+            (typeof unique_1.grantState == "string" && unique_1.grantState === "granted") ||
+            (typeof unique_1.grantState == "string" && unique_1.grantState === "rejected")) &&
+          Number.isInteger(unique_1.revision) &&
+          (!(Number.isFinite(unique_1.revision) || typeof unique_1.revision == "bigint") ||
+            unique_1.revision >= 1) &&
+          (unique_1.instanceId === void 0 ||
+            !("instanceId" in unique_1) ||
+            (typeof unique_1.instanceId == "string" &&
+              (unique_1.instanceId.length >= 2 ||
+                (unique_1.instanceId.length >= 1 && CodePointCount(unique_1.instanceId) >= 1)))) &&
+          (unique_1.declaredSummary === void 0 ||
+            !("declaredSummary" in unique_1) ||
+            (Array.isArray(unique_1.declaredSummary) &&
+              unique_1.declaredSummary.every((unique_6, index2) => typeof unique_6 == "string"))) &&
+          (unique_1.declared === void 0 ||
+            !("declared" in unique_1) ||
+            (typeof unique_1.declared == "object" &&
+              unique_1.declared !== null &&
+              !Array.isArray(unique_1.declared) &&
+              Object.getOwnPropertyNames(unique_1.declared).every(
+                (unique_7, unique_8) => External[7].test(unique_7) || !1,
               ) &&
-              (element.declared.netOrigins === void 0 ||
-                !("netOrigins" in element.declared) ||
-                (Array.isArray(element.declared.netOrigins) &&
-                  element.declared.netOrigins.every(
-                    (element2, index2) =>
-                      typeof element2 == "string" &&
-                      (element2.length >= 2 ||
-                        (element2.length >= 1 && CodePointCount(element2) >= 1)) &&
-                      (element2.length <= 2048 ||
-                        (element2.length <= 4096 && CodePointCount(element2) <= 2048)),
+              (unique_1.declared.netOrigins === void 0 ||
+                !("netOrigins" in unique_1.declared) ||
+                (Array.isArray(unique_1.declared.netOrigins) &&
+                  unique_1.declared.netOrigins.every(
+                    (unique_9, index2) =>
+                      typeof unique_9 == "string" &&
+                      (unique_9.length >= 2 ||
+                        (unique_9.length >= 1 && CodePointCount(unique_9) >= 1)) &&
+                      (unique_9.length <= 2048 ||
+                        (unique_9.length <= 4096 && CodePointCount(unique_9) <= 2048)),
                   ) &&
-                  element.declared.netOrigins.length <= 32)) &&
-              (element.declared.tools === void 0 ||
-                !("tools" in element.declared) ||
-                (Array.isArray(element.declared.tools) &&
-                  element.declared.tools.every(
-                    (element2, index2) =>
-                      typeof element2 == "string" &&
-                      (element2.length >= 2 ||
-                        (element2.length >= 1 && CodePointCount(element2) >= 1)) &&
-                      (element2.length <= 269 ||
-                        (element2.length <= 538 && CodePointCount(element2) <= 269)),
+                  unique_1.declared.netOrigins.length <= 32)) &&
+              (unique_1.declared.tools === void 0 ||
+                !("tools" in unique_1.declared) ||
+                (Array.isArray(unique_1.declared.tools) &&
+                  unique_1.declared.tools.every(
+                    (unique_10, index2) =>
+                      typeof unique_10 == "string" &&
+                      (unique_10.length >= 2 ||
+                        (unique_10.length >= 1 && CodePointCount(unique_10) >= 1)) &&
+                      (unique_10.length <= 269 ||
+                        (unique_10.length <= 538 && CodePointCount(unique_10) <= 269)),
                   ) &&
-                  element.declared.tools.length <= 64)))) &&
-          (element.frameUrl === void 0 ||
-            !("frameUrl" in element) ||
-            typeof element.frameUrl == "string") &&
-          (element.viewTicket === void 0 ||
-            !("viewTicket" in element) ||
-            typeof element.viewTicket == "string") &&
-          (element.viewTicketTtlMs === void 0 ||
-            !("viewTicketTtlMs" in element) ||
-            (Number.isInteger(element.viewTicketTtlMs) &&
+                  unique_1.declared.tools.length <= 64)))) &&
+          (unique_1.frameUrl === void 0 ||
+            !("frameUrl" in unique_1) ||
+            typeof unique_1.frameUrl == "string") &&
+          (unique_1.viewTicket === void 0 ||
+            !("viewTicket" in unique_1) ||
+            typeof unique_1.viewTicket == "string") &&
+          (unique_1.viewTicketTtlMs === void 0 ||
+            !("viewTicketTtlMs" in unique_1) ||
+            (Number.isInteger(unique_1.viewTicketTtlMs) &&
               (!(
-                Number.isFinite(element.viewTicketTtlMs) ||
-                typeof element.viewTicketTtlMs == "bigint"
+                Number.isFinite(unique_1.viewTicketTtlMs) ||
+                typeof unique_1.viewTicketTtlMs == "bigint"
               ) ||
-                element.viewTicketTtlMs >= 1))) &&
-          (element.viewGeneration === void 0 ||
-            !("viewGeneration" in element) ||
-            (typeof element.viewGeneration == "string" &&
-              External[8].test(element.viewGeneration))) &&
-          (element.sandboxUrl === void 0 ||
-            !("sandboxUrl" in element) ||
-            typeof element.sandboxUrl == "string") &&
-          (element.sandboxPort === void 0 ||
-            !("sandboxPort" in element) ||
-            (Number.isInteger(element.sandboxPort) &&
-              (!(Number.isFinite(element.sandboxPort) || typeof element.sandboxPort == "bigint") ||
-                (element.sandboxPort >= 1 && element.sandboxPort <= 65535)))) &&
-          (element.sandboxOrigin === void 0 ||
-            !("sandboxOrigin" in element) ||
-            typeof element.sandboxOrigin == "string") &&
-          (element.kindLabel === void 0 ||
-            !("kindLabel" in element) ||
-            (typeof element.kindLabel == "string" &&
-              (element.kindLabel.length >= 2 ||
-                (element.kindLabel.length >= 1 && CodePointCount(element.kindLabel) >= 1)) &&
-              (element.kindLabel.length <= 80 ||
-                (element.kindLabel.length <= 160 && CodePointCount(element.kindLabel) <= 80)))),
+                unique_1.viewTicketTtlMs >= 1))) &&
+          (unique_1.viewGeneration === void 0 ||
+            !("viewGeneration" in unique_1) ||
+            (typeof unique_1.viewGeneration == "string" &&
+              External[8].test(unique_1.viewGeneration))) &&
+          (unique_1.sandboxUrl === void 0 ||
+            !("sandboxUrl" in unique_1) ||
+            typeof unique_1.sandboxUrl == "string") &&
+          (unique_1.sandboxPort === void 0 ||
+            !("sandboxPort" in unique_1) ||
+            (Number.isInteger(unique_1.sandboxPort) &&
+              (!(
+                Number.isFinite(unique_1.sandboxPort) || typeof unique_1.sandboxPort == "bigint"
+              ) ||
+                (unique_1.sandboxPort >= 1 && unique_1.sandboxPort <= 65535)))) &&
+          (unique_1.sandboxOrigin === void 0 ||
+            !("sandboxOrigin" in unique_1) ||
+            typeof unique_1.sandboxOrigin == "string") &&
+          (unique_1.kindLabel === void 0 ||
+            !("kindLabel" in unique_1) ||
+            (typeof unique_1.kindLabel == "string" &&
+              (unique_1.kindLabel.length >= 2 ||
+                (unique_1.kindLabel.length >= 1 && CodePointCount(unique_1.kindLabel) >= 1)) &&
+              (unique_1.kindLabel.length <= 80 ||
+                (unique_1.kindLabel.length <= 160 && CodePointCount(unique_1.kindLabel) <= 80)))),
       );
   return (value) => check_0(value);
 })();

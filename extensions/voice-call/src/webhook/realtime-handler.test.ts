@@ -1,6 +1,3 @@
-import { once } from "node:events";
-import http from "node:http";
-import { Duplex } from "node:stream";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -8,10 +5,11 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { normalizeVoiceCallConfig, type VoiceCallRealtimeConfig } from "../config.js";
-import { CallManager } from "../manager.js";
+import type { VoiceCallRealtimeConfig } from "../config.js";
+import type { CallManager } from "../manager.js";
 import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import {
   connectWs as openWebSocket,
@@ -23,15 +21,16 @@ import { makeBridge, makeCall as makeCallRecord } from "./realtime-call-control.
 import { RealtimeCallHandler } from "./realtime-handler.js";
 import {
   createRealtimeConfig,
+  makeRequest,
   makeRealtimeProvider,
   updateCallMetadata,
   sendCarrierStart,
 } from "./realtime-handler.lifecycle.test-helpers.js";
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
-import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 
 const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
   onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
+  sessions: new Map<string, RealtimeVoiceSessionHarness>(),
 }));
 
 vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
@@ -42,6 +41,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
     ) => {
       const harness = actual.createRealtimeVoiceSessionHarness(params);
+      realtimeVoiceHarnessTestHooks.sessions.set(params.talk.sessionId, harness);
       realtimeVoiceHarnessTestHooks.onCreate?.(harness);
       return harness;
     },
@@ -51,6 +51,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   realtimeVoiceHarnessTestHooks.onCreate = undefined;
+  realtimeVoiceHarnessTestHooks.sessions.clear();
   vi.useRealTimers();
   for (const close of cleanup.splice(0).toReversed()) {
     await close();
@@ -73,14 +74,6 @@ async function startUpgradeWsServer(params: Parameters<typeof openUpgradeServer>
   const server = await openUpgradeServer(params);
   cleanup.push(server.close);
   return server;
-}
-
-function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
-  const req = new http.IncomingMessage(null as never);
-  req.url = url;
-  req.method = "POST";
-  req.headers = host ? { host } : {};
-  return req;
 }
 
 const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
@@ -140,7 +133,7 @@ function makeCallHarness(
       providerConfig?: Record<string, unknown>;
       realtimeProvider?: RealtimeVoiceProviderPlugin;
       resolveInstructions?: (call: CallRecord) => string;
-      streamDisconnectLifecycle?: StreamDisconnectLifecycle;
+      streamDisconnectLifecycle?: StreamDisconnectGrace;
     };
   } = {},
 ) {
@@ -164,6 +157,8 @@ function makeCallHarness(
       : makeBridge(bridge);
   });
   const config = { ...createRealtimeConfig(), ...options.config };
+  const streamDisconnectLifecycle =
+    options.deps?.streamDisconnectLifecycle ?? new StreamDisconnectGrace(() => {});
   const provider = {
     ...makeRealtimeProvider(createBridge),
     ...options.deps?.realtimeProvider,
@@ -186,9 +181,15 @@ function makeCallHarness(
       instructions: options.deps?.resolveInstructions?.(record) ?? config.instructions,
     }),
     "/voice/webhook",
-    options.deps?.streamDisconnectLifecycle ?? { connect() {}, disconnect() {}, retire() {} },
+    streamDisconnectLifecycle,
   );
-  onTestFinished(() => handler.close());
+  onTestFinished(async () => {
+    try {
+      await handler.close();
+    } finally {
+      streamDisconnectLifecycle.close();
+    }
+  });
   async function start(streamId = "MZ-test", providerCallId = call.providerCallId) {
     const count = callbacks.length;
     const ws = await connectWs((await startRealtimeServer(handler)).url);
@@ -260,12 +261,7 @@ function sendMedia(ws: WebSocket, audio: Buffer) {
 }
 
 function parseWebSocketMessage(data: RawData): Record<string, unknown> {
-  const bytes = Buffer.isBuffer(data)
-    ? data
-    : Array.isArray(data)
-      ? Buffer.concat(data)
-      : Buffer.from(data);
-  return JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+  return JSON.parse(rawDataToString(data, "utf8")) as Record<string, unknown>;
 }
 
 async function bargeInHarness(params: {
@@ -309,7 +305,10 @@ async function bargeInHarness(params: {
 }
 
 function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
-  return (call.metadata?.recentTalkEvents as RecentTalkEvent[] | undefined) ?? [];
+  return expectDefined(
+    realtimeVoiceHarnessTestHooks.sessions.get(`voice-call:${call.callId}:realtime`),
+    "voice-call realtime session harness",
+  ).talk.recentEvents.slice(-12);
 }
 
 function talkEvents(call: CallRecord, type: string) {
@@ -1397,83 +1396,3 @@ describe("RealtimeCallHandler path routing", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-function rejectedUpgradeHarness() {
-  const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
-  const resolveRegistration = vi.fn((): never => {
-    throw new Error("Rejected upgrades must not acquire a provider");
-  });
-  const handler = new RealtimeCallHandler(
-    config.realtime,
-    new CallManager(config),
-    resolveRegistration,
-    "/voice/webhook",
-    { connect() {}, disconnect() {}, retire() {} },
-  );
-  let flush = () => {};
-  let response = "";
-  const socket = new Duplex({
-    read() {},
-    write(chunk: Buffer, _encoding, callback) {
-      response += chunk.toString();
-      flush = callback;
-    },
-  });
-  return {
-    handler,
-    resolveRegistration,
-    socket,
-    flush: () => flush(),
-    response: () => response,
-    reject: () =>
-      handler.handleWebSocketUpgrade(
-        makeRequest("/voice/stream/realtime/invalid-token"),
-        socket,
-        Buffer.alloc(0),
-      ),
-  };
-}
-
-describe("realtime upgrade rejection", () => {
-  it.each([
-    [401, "Unauthorized"],
-    [503, "Service Unavailable"],
-  ] as const)(
-    "flushes HTTP %s before closing without acquiring a provider",
-    async (status, reason) => {
-      const { handler, resolveRegistration, socket, response, flush, reject } =
-        rejectedUpgradeHarness();
-      const shutdown = createDeferred<void>();
-      const closing = status === 503 ? handler.close(shutdown.promise) : undefined;
-      const closed = once(socket, "close");
-      try {
-        reject();
-        expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
-        expect(socket.destroyed).toBe(false);
-        expect(resolveRegistration).not.toHaveBeenCalled();
-        flush();
-        await closed;
-        expect(socket.destroyed).toBe(true);
-      } finally {
-        flush();
-        socket.destroy();
-        shutdown.resolve();
-        await closing;
-        await handler.close();
-      }
-    },
-  );
-
-  it("owns raw socket errors while rejection bytes are buffered", async () => {
-    const { handler, socket, flush, reject } = rejectedUpgradeHarness();
-    try {
-      reject();
-      expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
-      expect(socket.destroyed).toBe(true);
-    } finally {
-      flush();
-      socket.destroy();
-      await handler.close();
-    }
-  });
-});

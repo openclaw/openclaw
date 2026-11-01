@@ -1,33 +1,28 @@
-import { createMemo, createSignal } from "solid-js";
+import { createMemo } from "solid-js";
 import { formatDurationCompact, formatDurationHuman } from "../lib/format-duration.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
-import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 
-type ElapsedTimeProps = {
+export function ElapsedTime(props: {
   class?: string;
   startMs?: number | null;
   endMs?: number | null;
   minimumUnit?: "second" | "minute";
   singleUnit?: boolean;
-};
-
-export function ElapsedTime(props: ElapsedTimeProps) {
-  const [tick, setTick] = createSignal(0);
-  useVisiblePoll(1_000, () => setTick((value) => value + 1), {
-    enabled: () => props.startMs != null && props.endMs == null,
-  });
+  includeSeconds?: boolean;
+}) {
   const label = createMemo(() => {
-    tick();
     i18nRevision();
     if (props.startMs == null) {
       return undefined;
     }
     const minimumMs = props.minimumUnit === "minute" ? 60_000 : 1_000;
-    const elapsedMs = Math.max(minimumMs, (props.endMs ?? Date.now()) - props.startMs);
+    const elapsedMs = Math.max(minimumMs, (props.endMs ?? readVisibleTime(1_000)) - props.startMs);
     return props.singleUnit
       ? formatDurationHuman(elapsedMs)
       : formatDurationCompact(
           props.minimumUnit === "minute" ? Math.floor(elapsedMs / 60_000) * 60_000 : elapsedMs,
+          { includeSeconds: props.includeSeconds },
         );
   });
   return (

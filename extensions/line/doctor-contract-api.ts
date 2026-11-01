@@ -29,6 +29,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "line-pre-drain-spool-rows",
     label: "LINE pre-drain webhook spool rows",
+    // The host recovery inventory already captures shared-state ingress queues.
+    collectBackupResources: () => [],
     async detectLegacyState(params) {
       const spool = lineSpoolQueueAccess(params.context);
       const preview: string[] = [];

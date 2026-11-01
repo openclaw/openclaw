@@ -129,16 +129,16 @@ export async function loadSessionEntryForAdmission(
     const result = await withSessionStoreTarget(
       { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
       async (target, owner) => {
-        const options = { ...target.database, path: target.sourcePath, env };
+        const options = { ...target.database, env };
         const observed = readDatabasePathIdentitySync(options.path);
         return await runOpenClawAgentWorkerWrite(
           options,
           async () => {
             // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
-            const execution = captureOpenClawAgentDatabaseExecution(
-              options,
-              toAgentExecutionConstraints(observed),
-            );
+            const execution = captureOpenClawAgentDatabaseExecution(options, {
+              ...toAgentExecutionConstraints(observed),
+              requestedPath: target.sourcePath,
+            });
             const assertSourceCurrent = () => {
               assertCurrent();
               execution.assertCurrent();

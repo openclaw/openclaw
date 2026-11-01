@@ -34,13 +34,22 @@ never opens the selected Gateway database. Shared state schema 29 retires
 and removes socket material from `exec_approvals_config`. Approval policy remains
 shared; its meaning and execution authority are unchanged.
 
+The cutover reads socket credentials from the canonical approval JSON, even when
+the legacy SQL path or token-presence projections are stale. It preserves the
+socket path, token, and approval policy; rollback restores the original row,
+including its projections. Invalid socket values in the canonical JSON still
+require repair before migration.
+
 The TypeScript owner and Swift adapter use exclusive SQLite custody in DELETE
 journal mode. A running macOS app owns the bounded operation route; other clients
 use its authenticated control socket first. The app closes the physical database
 between operations so existing maintenance custody can capture and restore it.
 A dispatched operation with a lost reply is never replayed offline. When no app
 received the request, clients acquire bounded exclusive custody and release it
-at completion, including when another CLI briefly owns the file.
+at completion, including when another CLI briefly owns the file. An app released
+before this route refuses it as an unknown operation before dispatch; clients
+treat that app as absent and use the same offline custody, so a newer CLI or
+Gateway still starts while an older app is running.
 iOS app and extension operations use the same Swift owner for a bounded
 operation and close before suspension. No owner selects an identity or token
 by comparing timestamps with another store. The existing maintenance lock blocks
@@ -178,6 +187,38 @@ writer's transaction. SQLite and PostgreSQL drop the triggers without changing
 retained rows or revision values. Older writers require the verified pre-upgrade
 backup because they rely on those triggers to invalidate readers.
 
+Agent [schema 32](/reference/database-schemas/agent-schema-history#agent-schema-32)
+replaces the PostgreSQL vector decoder without rewriting embeddings or indexes.
+SQLite advances metadata only. PostgreSQL stores that have not admitted vector
+search remain unchanged until first use. Older binaries require the verified
+pre-upgrade backup with its matching build for catalog compatibility.
+
+Shared-state [schema 31](/reference/database-schemas/state-schema-history#state-schema-31)
+stores local workspace baselines by path and checkpoints as recoverable deltas.
+The schema migration preserves legacy manifest documents and pending receipts;
+the existing projection owner converts each workspace atomically and resumes
+unfinished conversions from the retained input. Archives and publications keep
+their complete manifest format. This is a shared-state change only: the agent
+schema version is unchanged. Older checkpoint writers require the verified
+pre-upgrade backup for rollback.
+
+Shared-state [schema 35](/reference/database-schemas/state-schema-history#state-schema-35)
+replaces per-worktree node storage with shared content-addressed trees and source
+path sets. Its migration is DDL only; the existing reconciliation owner converts
+individual projections online and preserves pending checkpoints. Although the
+added columns are nullable, older writers would advance only the retired rows
+and leave accepted roots stale. They therefore must refuse schema 35. Rollback
+requires the verified pre-upgrade backup and matching build; the agent schema
+version is unchanged.
+
+State schemas 32–33 and agent schemas 34–35 correct PostgreSQL index ordering;
+agent schema 36 adds indexed memory keyword path candidates. With writers
+stopped, `openclaw doctor --fix` backs up older stores and applies consecutive
+forward migrations before PostgreSQL runtime admission. SQLite advances metadata
+only for these versions. Logbook's service-open owner applies its ordering
+migrations through schema 3. See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations)
+and [agent schema 36](/reference/database-schemas/agent-schema-history#agent-schema-36).
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports
@@ -211,7 +252,7 @@ rewriting their paths or completion state. Older readers continue treating every
 journal row as a deletion fence and may require an explicit cleanup retry. The
 numeric schema version, journal retention, and rollback backup policy are unchanged.
 Retirement-only callers leave the phase null. Automatic Gateway recovery leaves
-those journals with retained Claw ownership to the existing Claw removal owner;
+those journals with retained Template ownership to the existing Template removal owner;
 its selective package and workspace cleanup still requires a removal-plan retry.
 
 Linux Node worker cleanup uses the additive `node_worker_launch_process_scopes`
@@ -336,7 +377,7 @@ permissions, and transaction ownership are unchanged. Older same-version
 readers ignore the additional nonunique index, so binary rollback leaves both
 caption rows and the index intact.
 
-Logbook's plugin-local database keeps schema version 1 while replacing the unused
+At Logbook schema 1, its plugin-local database replaced the unused
 batch-day index with a nonunique partial index on `batches(start_ms, id)` where
 `status = 'pending'`. The existing worker-owned schema open installs the index on
 populated databases before dropping the retired index. Batch rows remain the source of truth;
@@ -344,7 +385,10 @@ the index is derived, and retention and recovery are unchanged. Initial construc
 scans batch history once and stores only pending entries. Older same-version builds
 can read and write the database safely, leaving the new index intact and recreating
 their day index; reopening with the current build retires it again. Binary rollback
-requires no row conversion or schema-version change.
+for that index-only change requires no row conversion or schema-version change.
+Subsequent [PostgreSQL ordering migrations](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations)
+advance Logbook through schema 3; their rollback requires the matching predecessor
+backup and build.
 
 Memory chunk admission retires the nonunique `idx_memory_index_chunks_path`
 index at the same agent schema version. Both schema publishers retain the
@@ -894,6 +938,10 @@ integrity scan; the migration's source integrity admission runs a whole-database
 quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
+Fresh credential capture also uses Doctor's full image when a legacy
+`sqlite_stat4` table cannot be recreated by the current runtime. The image must
+still contain the tables and rows being retired; a changed retry source preserves
+its original backup and reports a data-risk refusal instead of losing credentials.
 Historical migrations keep their full-file backup when no scoped backup is
 declared, while integrity admission uses the same quick-plus-affected-tables
 policy. Backup eligibility and integrity coverage are separate contracts.

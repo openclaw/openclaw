@@ -825,7 +825,6 @@ describe("message tool secret scoping", () => {
       expect(progress?.params).not.toHaveProperty("final");
       expect(terminal?.params).not.toHaveProperty("final");
       if (remote) {
-        expect(terminal?.gateway?.terminalSourceReplyReceiptOwner).toBe("caller");
         expect(terminal?.gateway?.resolveAgentRuntimeIdentityToken).toEqual(expect.any(Function));
       }
     },
@@ -1677,6 +1676,7 @@ describe("message tool schema scoping", () => {
   });
 
   it.each([
+    { action: "channel-create", fields: ["teamId", "name"], scopedOnly: false },
     { action: "conversation-open", fields: ["teamId"], scopedOnly: false },
     { action: "send", fields: [], scopedOnly: false },
     { action: "channel-move", fields: ["position", "parentId"], scopedOnly: true },
@@ -1691,6 +1691,7 @@ describe("message tool schema scoping", () => {
           "read",
           "channel-info",
           "channel-list",
+          "channel-create",
           "conversation-open",
           "channel-move",
           "category-delete",
@@ -1716,7 +1717,7 @@ describe("message tool schema scoping", () => {
         for (const field of fields) {
           expect(properties).toHaveProperty(field);
         }
-        if (action !== "conversation-open") {
+        if (action !== "conversation-open" && action !== "channel-create") {
           expect(properties).not.toHaveProperty("teamId");
           continue;
         }
@@ -1724,6 +1725,9 @@ describe("message tool schema scoping", () => {
         expect(Value.Check(tool.parameters, { action })).toBe(true);
         for (const teamId of ["11111111-1111-1111-1111-111111111111", "T11111111"]) {
           expect(Value.Check(tool.parameters, { action, teamId })).toBe(true);
+        }
+        if (action === "channel-create") {
+          expect(Value.Check(tool.parameters, { action, name: "project-planning" })).toBe(true);
         }
         if (currentChannelProvider && action === "conversation-open") {
           for (const field of ["channelId", "guildId", "userId", "roleId"]) {

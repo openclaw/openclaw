@@ -53,19 +53,15 @@ export function gatewayPresentationScope(
     scopes.set(gateway, next);
     return next.scope;
   }
-  // First authentication completes the existing owner; reconnects may temporarily
-  // clear selfUser, including after hello while users.self is pending. Only an
-  // explicit null resolves profileless without retiring mounted pages or loaders.
+  // Transport/startup phases may temporarily clear selfUser, including after
+  // hello while users.self is pending. Keep display identity in this scope until
+  // explicit profileless resolution or stop; it never grants request authority.
   previous.userId ??= userId;
   previous.recoveryScope ??= recoveryScope;
   previous.scope.readyOnce ||= ready;
   if (user !== undefined) {
     previous.scope.displayUser = user;
-  } else if (
-    snapshot.phase !== "connected" &&
-    snapshot.phase !== "reconnecting" &&
-    snapshot.phase !== "reload-required"
-  ) {
+  } else if (snapshot.phase === "stopped") {
     previous.scope.displayUser = null;
   }
   return previous.scope;

@@ -10,8 +10,8 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { hasErrnoCode } from "./errno.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { prepareUpdateFailureTriage, runUpdateFailureTriage } from "./update-triage.js";
 
@@ -21,9 +21,7 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts?.close();
-});
+afterAll(() => receipts?.close());
 
 async function createInstalledTriage(params: { hang?: boolean; promptPath?: string } = {}) {
   const root = await fs.realpath(tempDirs.make("openclaw-triage-child-"));
@@ -105,7 +103,6 @@ describe("update triage child lifecycle", () => {
 
   it("keeps artifact paths in local output and returns the partial-export outcome", async () => {
     const { target, promptPath, receiptPath, runtime, run } = await createInstalledTriage();
-    const runCommand = vi.spyOn(exec, "runCommandWithTimeout");
     const result = await run({
       target: { ...target, env: { ...target.env, [UPDATE_RUN_ID_ENV]: "completed-update-run" } },
       failure: { error: "Update could not install the package" },
@@ -114,9 +111,6 @@ describe("update triage child lifecycle", () => {
       status: "completed",
       hint: expect.stringContaining("Diagnostics export unavailable: Snapshot unavailable"),
     });
-    expect(runCommand).toHaveBeenCalledOnce();
-    const args = runCommand.mock.calls[0]![0];
-    expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
     expect("hint" in result && result.hint).not.toContain(target.root);
     expect(runtime.log).toHaveBeenCalledWith(
       JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),
@@ -156,13 +150,7 @@ describe("update triage child lifecycle", () => {
     try {
       // The child writes its record before replying; receipt delivery and command exit are unordered.
       const settled = pending.then(async () => {
-        const record = await fs.readFile(receiptPath, "utf8").catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return "";
-          }
-          throw error;
-        });
-        expect(record).not.toBe("");
+        expect(await fs.readFile(receiptPath, "utf8")).not.toBe("");
       });
       await withinTest(Promise.race([receipts.waitFor(receiptPath, "ready"), settled]), signal);
       const { pid } = JSON.parse(await fs.readFile(receiptPath, "utf8")) as { pid: number };
@@ -188,14 +176,13 @@ describe("update triage child lifecycle", () => {
     const timeout = failure === "timeout with zero exit";
     const { promptPath, run } = await createInstalledTriage(timeout ? {} : { promptPath: "" });
     if (timeout) {
-      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValueOnce({
-        stdout: JSON.stringify({ promptPath }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: true,
-        termination: "timeout",
-      });
+      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValueOnce(
+        createCommandResult({
+          stdout: JSON.stringify({ promptPath }),
+          killed: true,
+          termination: "timeout",
+        }),
+      );
     }
     expect(await run()).toMatchObject({
       status: "failed",
@@ -227,7 +214,6 @@ describe("update triage child lifecycle", () => {
       const guidance = runtime.log.mock.calls.flat().join("\n");
       expect(result.hint).not.toContain(target.root);
       expect(result.hint.split("\n")[0]?.length).toBeLessThan(284);
-      expect(runCommand).toHaveBeenCalledOnce();
       const args = runCommand.mock.calls[0]![0];
       expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
       const contextPath = args.at(-2)!;

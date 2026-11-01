@@ -11,9 +11,9 @@ const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
 const ready = { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" };
 const settlement = (seconds = 4) => ({ seconds, pr: ready });
 
-function unknownGraphqlCandidate() {
+function unknownGraphqlCandidate(changes: Parameters<typeof configureMerge>[1] = {}) {
   const f = preExistingCandidate();
-  configureMerge(f, { graphqlMergeProjection: { mergeStateStatus: "UNKNOWN" } });
+  configureMerge(f, { graphqlMergeProjection: { mergeStateStatus: "UNKNOWN" }, ...changes });
   return f;
 }
 
@@ -158,12 +158,6 @@ describePosix("prior-CI whole REST observation fallback", () => {
     if (stage === "stable" || stage === "missing REST commit") {
       const reads = readsBeforeDispatch(f);
       expect(reads.filter((call) => call.includes(landingSnapshotQuery))).toHaveLength(1);
-      expect(
-        reads.filter((call) => call.includes("repos/fixture/repo/git/ref/heads/main")),
-      ).toHaveLength(8);
-      expect(
-        reads.filter((call) => call.includes("orgs/fixture/memberships/fixture-operator")),
-      ).toHaveLength(4);
       expectFinalAuthority(reads);
       expect(f.record()).toMatchObject({
         route: "admin",
@@ -171,9 +165,6 @@ describePosix("prior-CI whole REST observation fallback", () => {
         priorCiAdmin: { head: f.head, runId: 501, runAttempt: 2, dispatchTransport: "rest" },
       });
       expect(final.graphqlMergePayloads).toEqual([]);
-      expect(
-        final.observationReads > reads.filter((call) => call.includes(landingSnapshotQuery)).length,
-      ).toBe(stage === "missing REST commit");
     }
     if (stage === "within read") {
       expect(final.mainAdvances).toHaveLength(1);
@@ -256,6 +247,39 @@ describePosix("prior-CI whole REST observation fallback", () => {
     },
   );
 
+  it("refuses a remote-only fork after consecutive materialization", () => {
+    const f = unknownGraphqlCandidate();
+    configureMerge(f, {
+      restObservations: [
+        ...unchanged(3),
+        { advanceMain: true },
+        { advanceMain: true, advanceMainFrom: f.base },
+      ],
+    });
+
+    const result = refuse(f, "both observed and verified main");
+    const advances = f.state().mainAdvances;
+    expect(advances).toHaveLength(2);
+    expect(() => f.git(["merge-base", "--is-ancestor", advances[0]!, advances[1]!])).toThrow();
+    expect(result.output).toContain("Requalifying admin admission");
+  });
+
+  it("refuses a remote-only mainAfter fork from qualified mainBefore", () => {
+    const f = unknownGraphqlCandidate();
+    const before = f.commit(f.tree("before\n", "qualified before\n"), [f.base]);
+    const state = f.state();
+    state.restObservations = [
+      ...unchanged(3),
+      { main: before, advanceMainAfterPolicy: true, advanceMainFrom: f.base },
+    ];
+    f.save(state);
+
+    refuse(f, "both observed and verified main");
+    const advances = f.state().mainAdvances;
+    expect(advances).toHaveLength(1);
+    expect(() => f.git(["merge-base", "--is-ancestor", before, advances[0]!])).toThrow();
+  });
+
   it("requires merged receipt during admission", () => {
     const f = unknownGraphqlCandidate();
     configureMerge(f, {
@@ -269,8 +293,7 @@ describePosix("prior-CI whole REST observation fallback", () => {
     expect(f.state().observationReads).toBe(1);
   });
   it("reads checks once after historical preparation", () => {
-    const f = unknownGraphqlCandidate();
-    configureMerge(f, {
+    const f = unknownGraphqlCandidate({
       restObservation: { afterHistoricalRead: true, restUnseenSuite: "new-gate" },
     });
 

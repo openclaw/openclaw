@@ -1,32 +1,47 @@
-import { channel } from "node:diagnostics_channel";
 import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken as readToken } from "../sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-schema-facts.js";
+import {
+  runSqliteImmediateTransaction as prepared,
+  runSqliteImmediateTransactionSync as immediate,
+  runSqliteReservedTransactionSync as reserved,
+  runSqliteWorkerTransactionSync as worker,
+} from "../sqlite-transaction.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import {
+  assertSqliteWorkerCommitReceiptPending as assertPending,
   deferSqliteWorkerCommitReceipt as deferReceipt,
   observeSqliteWorkerCommittedFacts,
   withSqliteWorkerOperationAdmission as withAdmission,
 } from "../sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
+import * as bridgePrestart from "./bridge-prestart.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
+import { observeStatementEvents } from "./sql.test-support.js";
 
 const harness = usePostgresFixture();
+const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
 
-function observeStatements() {
-  const statements = channel("openclaw.database.statement");
-  const events: unknown[] = [];
-  const subscriber = (event: unknown) => events.push(event);
-  statements.subscribe(subscriber);
-  harness.cleanups.push(() => statements.unsubscribe(subscriber));
-  return events;
+function transactionFixture() {
+  const db = harness.connection();
+  const statements: string[] = [];
+  db.exec = (sql) => {
+    statements.push(sql);
+    if (sql.startsWith("BEGIN")) {
+      db.isTransaction = true;
+    } else if (sql === "COMMIT" || sql === "ROLLBACK") {
+      db.isTransaction = false;
+    }
+  };
+  return { db, statements };
 }
 
 function transportFixture(
-  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout",
+  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout" | "service-death",
 ) {
   let mode = initialMode;
   let command: string | undefined;
@@ -34,14 +49,11 @@ function transportFixture(
   const { port1, port2 } = new MessageChannel();
   const control = new Int32Array(new SharedArrayBuffer(8));
   control.set([1, 1]);
-  const terminate = vi.fn(async () => 0);
+  const service = new Int32Array(new SharedArrayBuffer(8));
   // Exercise the connection over real ports; live tests cover worker startup and admission.
   const db = harness.connection();
   Object.assign(db, {
-    port: port1,
-    control,
-    worker: { terminate, off: vi.fn() },
-    requestId: 1,
+    bridge: { port: port1, control, service, requestId: 1 },
   });
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
@@ -69,7 +81,10 @@ function transportFixture(
         now += 1;
         return "ok";
       }
-      if (mode === "timeout") {
+      if (mode === "timeout" || mode === "service-death") {
+        if (mode === "service-death") {
+          Atomics.store(service, 1, 1);
+        }
         now += timeout ?? 0;
         return "timed-out";
       }
@@ -78,28 +93,30 @@ function transportFixture(
     if (mode !== "missing" || !query) {
       const sql = query?.sql ?? "";
       const reply: BridgeReply =
-        queryError && query
-          ? { id, error: queryError }
-          : {
-              id: mode === "mismatched" && query ? id + 1 : id,
-              result: {
-                inTransaction: /^\s*BEGIN\b/i.test(sql)
-                  ? true
-                  : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
-                    ? false
-                    : db.isTransaction,
-                command,
-                mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
-                  ? "scoped"
-                  : undefined,
-                rows: [{ value: 7 }],
-                rowCount: 1,
-                fields: [{ name: "value", dataTypeID: 23 }],
-              },
-            };
+        pending.operation === "release"
+          ? { id, reusable: !db.isTransaction }
+          : queryError && query
+            ? { id, error: queryError }
+            : {
+                id: mode === "mismatched" && query ? id + 1 : id,
+                result: {
+                  inTransaction: /^\s*BEGIN\b/i.test(sql)
+                    ? true
+                    : /^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)
+                      ? false
+                      : db.isTransaction,
+                  command,
+                  mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
+                    ? "scoped"
+                    : undefined,
+                  rows: [{ value: 7 }],
+                  rowCount: 1,
+                  fields: [{ name: "value", dataTypeID: 23 }],
+                },
+              };
       port2.postMessage(reply);
     }
-    Atomics.store(control, index, id);
+    Atomics.store(control, 0, id);
     return "ok";
   });
   harness.cleanups.push(() => {
@@ -116,12 +133,84 @@ function transportFixture(
     db,
     sent,
     waits,
-    terminate,
+    elapse: (ms: number) => (now += ms),
     normal: () => (mode = "normal"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
 }
+
+it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const fixture = transportFixture("normal");
+  const params = {
+    url: "postgresql://localhost/synthetic",
+    schema: "schema_a",
+    storeId: "store_a",
+  };
+  Object.assign(fixture.db, {
+    schema: params.schema,
+    reuseKey: bridgePrestart.postgresBridgeReuseKey(params),
+  });
+  const create = vi.spyOn(bridgePrestart, "createPostgresBridge").mockImplementation(() => {
+    throw new Error("Unexpected physical connection");
+  });
+  let next: PostgresSyncConnection | undefined;
+  try {
+    withEngineStoreAdmission(() => fixture.db.prepare("SELECT 7 AS value").get());
+    fixture.sent.mockClear();
+    fixture.db.releaseIdleTransport();
+    fixture.elapse(idleMs);
+    const reader = withEngineStoreAdmission(
+      () =>
+        new PostgresSyncConnection(params.url, "schema_b", harness.nativeDatabase(), "store_b", {
+          reuse: true,
+        }),
+    );
+    next = reader;
+    expect(create).not.toHaveBeenCalled();
+    expect(fixture.sent).not.toHaveBeenCalled();
+    const read = () => withEngineStoreAdmission(() => reader.prepare("SELECT 7 AS value").get());
+    expect([read(), read()]).toEqual([{ value: 7 }, { value: 7 }]);
+    expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
+      {
+        operation: "query",
+        schema: "schema_b",
+        sql: "SELECT 7 AS value",
+        parameters: [],
+        reconnectIfIdle: true,
+        ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
+        id: 3,
+      },
+      { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 4 },
+    ]);
+  } finally {
+    next?.close();
+    vi.advanceTimersByTime(3 * 60_000);
+    vi.useRealTimers();
+  }
+});
+
+it("checks transport status after a query error instead of reusing an earlier idle reply", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const fixture = transportFixture("normal");
+  Object.assign(fixture.db, { reuseKey: "failed-query" });
+  try {
+    withEngineStoreAdmission(() => fixture.db.prepare("SELECT 7 AS value").get());
+    fixture.rejectQuery({ name: "error", message: "duplicate", code: "23505" });
+    expect(() =>
+      withEngineStoreAdmission(() => fixture.db.exec("INSERT INTO entries VALUES (7)")),
+    ).toThrow("UNIQUE constraint failed");
+    fixture.sent.mockClear();
+    fixture.db.releaseIdleTransport();
+    expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
+      { operation: "release", id: 4 },
+    ]);
+  } finally {
+    vi.advanceTimersByTime(3 * 60_000);
+    vi.useRealTimers();
+  }
+});
 
 it("reports an invalid DSN promptly with connection repair guidance", () => {
   const anchor = harness.nativeDatabase();
@@ -166,50 +255,6 @@ it.each([
   expect(readToken(fixture.db.anchor, "entry")).toBe(before);
 });
 
-it.each(["read", "write", "rollback", "inner-rollback"] as const)(
-  "publishes worker receipts only for committed mutations (%s)",
-  (mode) => {
-    const { db, command } = transportFixture("normal");
-    const admission = harness.admission((_request, grant) => grant());
-    const receipts: unknown[] = [];
-    observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
-    const operation = () => {
-      command(mode === "read" ? "SELECT" : "INSERT");
-      db.exec(mode === "read" ? "SELECT 1" : "INSERT INTO proof VALUES (7)");
-      if (mode === "inner-rollback") {
-        command("SAVEPOINT");
-        expect(() =>
-          db.runTransaction(() => {
-            deferReceipt(db, { value: 7 });
-            command("ROLLBACK");
-            throw new Error("cancel inner receipt");
-          }),
-        ).toThrow("cancel inner receipt");
-      }
-      if (mode === "rollback") {
-        command("ROLLBACK");
-        throw new Error("cancel write");
-      }
-    };
-    const run = () =>
-      withAdmission({ port: admission.port, sourceReservations: true }, () =>
-        db.runTransaction(operation, {
-          withCommit(commit) {
-            command("COMMIT");
-            commit();
-          },
-        }),
-      );
-    if (mode === "rollback") {
-      expect(run).toThrow("cancel write");
-    } else {
-      run();
-    }
-    admission.service();
-    expect(receipts).toEqual(mode === "write" || mode === "inner-rollback" ? [{}] : []);
-  },
-);
-
 it("invalidates local mutation witnesses inside a transaction and across rollback", () => {
   const fixture = transportFixture("normal");
   fixture.db.isTransaction = true;
@@ -238,7 +283,8 @@ it.each([
   ["error", "SELECT ?::text", "private\0text", "SELECT ?::text"],
 ] as const)("redacts statement observations on %s", (outcome, sql, binding, redacted) => {
   const fixture = transportFixture("normal");
-  const events = observeStatements();
+  using observation = observeStatementEvents();
+  const { events } = observation;
   const run = () => fixture.db.prepare(sql).get(binding);
   if (outcome === "error") {
     fixture.rejectQuery({
@@ -258,18 +304,18 @@ it("waits through a late notify until its own completion and preserves increasin
   const { db, sent, waits, normal } = transportFixture("spurious");
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(waits).toEqual([
-    { observed: 1, timeout: 120_000 },
-    { observed: 1, timeout: 119_999 },
+    { observed: 1, timeout: 50 },
+    { observed: 1, timeout: 50 },
   ]);
   normal();
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(sent.mock.calls.map(([request]) => request.id)).toEqual([2, 3]);
 });
 
-it.each(["mismatched", "missing", "timeout"] as const)(
+it.each(["mismatched", "missing", "timeout", "service-death"] as const)(
   "poisons %s requests and never sends another operation",
   (mode) => {
-    const { db, sent, terminate, waits } = transportFixture(mode);
+    const { db, sent, waits } = transportFixture(mode);
     const before = readToken(db.anchor, "entry");
     let failure: unknown;
     try {
@@ -284,9 +330,12 @@ it.each(["mismatched", "missing", "timeout"] as const)(
     expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
     const after = readToken(db.anchor, "entry");
     expect(after).not.toBe(before);
-    expect(terminate).toHaveBeenCalledOnce();
     if (mode === "timeout") {
-      expect(waits).toHaveLength(1);
+      expect(waits.reduce((sum, wait) => sum + (wait.timeout ?? 0), 0)).toBe(120_000);
+      expect(waits.every((wait) => wait.timeout! <= 50)).toBe(true);
+    }
+    if (mode === "service-death") {
+      expect(waits).toEqual([{ observed: 1, timeout: 50 }]);
     }
     const count = sent.mock.calls.length;
     expect(() => db.exec("SELECT 8")).toThrow("PostgreSQL connection lost; outcome unknown");
@@ -295,3 +344,110 @@ it.each(["mismatched", "missing", "timeout"] as const)(
     expect(readToken(db.anchor, "entry")).toBe(after);
   },
 );
+
+it.each([false, true])("settles anchored receipts (rollback=%s)", (rollback) => {
+  const { db } = transactionFixture();
+  const admission = harness.admission((_request, grant) => grant());
+  const owner: SqliteWorkerOperationContext = { port: admission.port };
+  const receipts: unknown[] = [];
+  observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
+  const write = () =>
+    withAdmission(owner, () =>
+      immediate(db, () => {
+        deferReceipt(db, { value: 7 });
+        assertPending(db);
+        assertPending(db.anchor);
+        expect(owner.committed).toBeUndefined();
+        if (rollback) {
+          throw new Error("cancel receipt");
+        }
+      }),
+    );
+  if (rollback) {
+    expect(write).toThrow("cancel receipt");
+  } else {
+    write();
+  }
+  admission.service();
+  expect(receipts).toEqual(rollback ? [] : [{ value: 7 }]);
+  expect(owner.pendingReceipts?.size).toBe(0);
+});
+
+it.each(["reserved", "worker"] as const)(
+  "uses a locked read-committed transaction for %s writes",
+  (mode) => {
+    const { db, statements } = transactionFixture();
+    const operation = () => {
+      statements.push("body");
+      return 7;
+    };
+    const admit = (stage: string) => statements.push(`admit:${stage}`);
+    expect(
+      mode === "reserved"
+        ? reserved(db, operation, {})
+        : worker({ database: db, databasePath: "", admit }, operation),
+    ).toBe(7);
+    expect(statements).toEqual(
+      mode === "worker"
+        ? ["admit:transaction", writeBegin, "body", "admit:commit", "COMMIT"]
+        : [writeBegin, "body", "COMMIT"],
+    );
+  },
+);
+
+it("runs the commit authority guard and rolls back when it refuses", () => {
+  const { db, statements } = transactionFixture();
+  const refusal = new Error("authority revoked");
+  expect(() =>
+    immediate(db, () => 1, {
+      withCommit() {
+        throw refusal;
+      },
+    }),
+  ).toThrow(refusal);
+  expect(statements).toEqual([writeBegin, "ROLLBACK"]);
+  expect(db.isTransaction).toBe(false);
+});
+
+it("prepares before asynchronous admission and commits only inside its guard", async () => {
+  const { db, statements } = transactionFixture();
+  const result = await prepared(
+    db,
+    async () => {
+      statements.push("prepare");
+      return () => "result";
+    },
+    {
+      withCommit(commit) {
+        statements.push("guard");
+        commit();
+      },
+    },
+    (write) => {
+      statements.push("admit");
+      return write();
+    },
+  );
+  expect(result).toBe("result");
+  expect(statements).toEqual(["prepare", "admit", writeBegin, "guard", "COMMIT"]);
+});
+
+it("rolls a failed inner write back to its savepoint before the outer commit", () => {
+  const { db, statements } = transactionFixture();
+  const failure = new Error("inner write refused");
+  immediate(db, () => {
+    expect(() =>
+      immediate(db, () => {
+        throw failure;
+      }),
+    ).toThrow(failure);
+    expect(db.isTransaction).toBe(true);
+  });
+  expect(statements).toEqual([
+    writeBegin,
+    "SAVEPOINT openclaw_tx_nested",
+    "ROLLBACK TO SAVEPOINT openclaw_tx_nested",
+    "RELEASE SAVEPOINT openclaw_tx_nested",
+    "COMMIT",
+  ]);
+});

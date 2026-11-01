@@ -21,7 +21,6 @@ import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
-import { buildMainSessionRecoveryAfterAgentRunPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
@@ -43,7 +42,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   compactionAccounting?: Extract<CompactionAccountingFact, { kind: "durable" }>;
   touchInteraction?: boolean;
   /**
-   * When false, skip the lastActivityAt bump so heartbeat/internal-event runs
+   * When false, skip the lastActivityAt bump so internal-event runs
    * do not re-flag sessions unread; cron and user-facing runs count as activity.
    */
   touchActivity?: boolean;
@@ -51,12 +50,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
    * them with the model used by this run. Used for turn-local fallback and
-   * heartbeat runs so their model does not bleed into the session selection.
+   * scheduled runs so their model does not bleed into the session selection.
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
-  /** Clear the durable replay-safe recovery guard after this recovery run terminates. */
-  clearRestartRecoveryForceSafeTools?: boolean;
 }) {
   const {
     cfg,
@@ -103,7 +100,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     sessionStartedAt: now,
   };
   const expectedSession = params.compactionAccounting?.target ?? entry;
-  if (!preserveUserFacingRunState && expectedSession.sessionId !== sessionId) {
+  const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
+  const updatesContext = !preserveUserFacingRunState || currentContextSnapshot !== undefined;
+  if (updatesContext && expectedSession.sessionId !== sessionId) {
     return;
   }
   const next: SessionEntry = {
@@ -153,8 +152,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     );
     Object.assign(next, projectSessionUsageSnapshot(usage, runEstimatedCostUsd));
   }
-  if (!preserveUserFacingRunState) {
-    const currentContextSnapshot = params.compactionAccounting?.currentContextSnapshot;
+  if (updatesContext) {
     if (currentContextSnapshot || hasUsage) {
       const totalTokens = currentContextSnapshot
         ? currentContextSnapshot.tokens
@@ -187,7 +185,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     (currentEntry, context) => {
       if (
         (!context.existingEntry && hadPreExistingEntry) ||
-        (!preserveUserFacingRunState &&
+        (updatesContext &&
           context.existingEntry &&
           !isSameSessionLifecycleOwner(context.existingEntry, expectedSession))
       ) {
@@ -197,20 +195,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
       const patch: Partial<SessionEntry> = preserveUserFacingRunState
         ? metadataPatch
-        : projectSessionSnapshotChanges({
-            initial: entry,
-            next,
-            current: currentEntry,
-            reassertAbortedLastRun: result.meta.aborted === true,
-          });
-      if (!preserveUserFacingRunState) {
-        Object.assign(
-          patch,
-          buildMainSessionRecoveryAfterAgentRunPatch(
-            { ...currentEntry, ...patch },
-            params.clearRestartRecoveryForceSafeTools,
-          ),
-        );
+        : projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry });
+      if (updatesContext) {
+        // This writer's context supersedes its request estimate independently of chat activity.
+        patch.totalTokens = next.totalTokens;
+        patch.totalTokensFresh = next.totalTokensFresh;
+        patch.totalTokensVersion = next.totalTokensVersion;
       }
       if (touchActivity && !preserveUserFacingRunState && currentEntry.snoozedUntil !== undefined) {
         // Clear the current snooze, including one set while this run was in flight.

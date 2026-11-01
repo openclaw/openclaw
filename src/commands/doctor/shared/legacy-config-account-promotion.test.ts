@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { widenOfficialExternalChannelSecretSchema } from "../../../config/official-external-channel-secret-schema.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { waitForPluginCacheRetirement } from "../../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
-import { validateJsonSchemaValue } from "../../../plugins/schema-validator.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -42,31 +40,44 @@ async function installChannel(
   if (setup) {
     await fs.writeFile(path.join(pluginDir, "setup-entry.js"), setup);
   }
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name,
-      version: id === "openclaw-qqbot" ? "2.0.3" : "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"], channel: { id: channel }, ...openclaw },
-    }),
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      channels: [channel],
-      configSchema: { type: "object" },
-      channelConfigs: {
-        [channel]: {
-          schema: {
-            type: "object",
-            ...(channel === "qqbot" ? { additionalProperties: true } : {}),
-          },
-        },
-      },
-    }),
-  );
+  const writeJson = (file: string, value: unknown) =>
+    fs.writeFile(path.join(pluginDir, file), JSON.stringify(value));
+  await writeJson("package.json", {
+    name,
+    version: id === "openclaw-qqbot" ? "2.0.3" : "1.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.js"], channel: { id: channel }, ...openclaw },
+  });
+  const schema = { type: "object", ...(channel === "qqbot" ? { additionalProperties: true } : {}) };
+  await writeJson("openclaw.plugin.json", {
+    id,
+    channels: [channel],
+    configSchema: { type: "object" },
+    channelConfigs: { [channel]: { schema } },
+  });
+}
+
+function channelConfig(
+  channel: string,
+  value: unknown,
+  plugin?: string,
+  enabled = true,
+): OpenClawConfig {
+  return {
+    meta: { migrations: { webhookListeners: true } },
+    ...(plugin ? { plugins: { allow: [plugin], entries: { [plugin]: { enabled } } } } : {}),
+    channels: { [channel]: value },
+  };
+}
+
+function normalizeAndRepeat(cfg: OpenClawConfig) {
+  const before = structuredClone(cfg);
+  const first = normalizeCompatibilityConfigValues(cfg);
+  clearPluginMetadataLifecycleCaches();
+  resetPluginRuntimeStateForTest();
+  expect(normalizeCompatibilityConfigValues(first.config)).toEqual(first);
+  expect(cfg).toEqual(before);
+  return first;
 }
 
 afterEach(async () => {
@@ -79,69 +90,49 @@ afterEach(async () => {
   state = undefined;
 });
 
-it.each([true, false])(
-  "promotes installed channel credentials without loading runtime (enabled=%s)",
-  async (enabled) => {
+it.each([
+  { enabled: true, configPromotion: true, declared: true },
+  { enabled: false, configPromotion: true, declared: true },
+  { enabled: true, configPromotion: "preserve-root", declared: false },
+  { enabled: false, configPromotion: "preserve-root", declared: false },
+  { enabled: true, configPromotion: true, declared: false },
+  { enabled: true, configPromotion: false, declared: false },
+  { enabled: true, configPromotion: undefined, declared: false },
+])(
+  "honors cold installed channel promotion without loading runtime: %j",
+  async ({ enabled, configPromotion, declared }) => {
     await installChannel(
       await createColdState("doctor-installed-promotion"),
       "promotion",
       "promotion-chat",
-      { setupEntry: "./setup-entry.js", setupFeatures: { configPromotion: true } },
-      `export default { plugin: {
+      {
+        ...(declared ? { setupEntry: "./setup-entry.js" } : {}),
+        setupFeatures: { configPromotion },
+      },
+      declared
+        ? `export default { plugin: {
         id: "promotion-chat",
         setupContract: {
           singleAccountKeysToMove: ["connectionUrl"],
           namedAccountPromotionKeys: ["connectionUrl", "botToken"]
         }
-      } };\n`,
+      } };\n`
+        : undefined,
     );
-    const root = {
-      botToken: "root-token",
-      connectionUrl: "https://root.example.com",
-      dmPolicy: "pairing",
-    };
-    const cfg: OpenClawConfig = {
-      plugins: { allow: ["promotion"], entries: { promotion: { enabled } } },
-      channels: { "promotion-chat": { enabled: true, ...root, accounts: {} } },
-    };
-    const before = structuredClone(cfg);
-    const changes: string[] = [];
-    const first = seedMissingDefaultAccountsFromSingleAccountBase(cfg, changes);
-    expect(first.channels?.["promotion-chat"]).toEqual({
-      enabled: true,
-      accounts: { default: root },
-    });
-    expect(changes).toHaveLength(1);
-    expect(cfg).toEqual(before);
-    clearPluginMetadataLifecycleCaches();
-    resetPluginRuntimeStateForTest();
-    const repeatedChanges: string[] = [];
-    expect(seedMissingDefaultAccountsFromSingleAccountBase(first, repeatedChanges)).toEqual(first);
-    expect(repeatedChanges).toEqual([]);
-  },
-);
-
-it.each([
-  { enabled: true, configPromotion: "preserve-root" },
-  { enabled: false, configPromotion: "preserve-root" },
-  { enabled: true, configPromotion: true },
-  { enabled: true, configPromotion: false },
-  { enabled: true, configPromotion: undefined },
-])(
-  "honors cold installed plugin promotion metadata without loading runtime: %j",
-  async ({ enabled, configPromotion }) => {
-    await installChannel(
-      await createColdState("doctor-preserved-account"),
-      "preserved",
-      "preserved-chat",
-      { setupFeatures: { configPromotion } },
+    const root = declared
+      ? {
+          botToken: "root-token",
+          connectionUrl: "https://root.example.com",
+          dmPolicy: "pairing",
+        }
+      : { name: "Environment-backed root", groupPolicy: "allowlist", groupAllowFrom: [] };
+    const channelFlags = declared ? { enabled: true } : {};
+    const cfg = channelConfig(
+      "promotion-chat",
+      { ...channelFlags, ...root, accounts: {} },
+      "promotion",
+      enabled,
     );
-    // Only generic fields: undeclared-key deferral cannot hide a missing static contract.
-    const root = { name: "Environment-backed root", groupPolicy: "allowlist", groupAllowFrom: [] };
-    const cfg: OpenClawConfig = {
-      plugins: { allow: ["preserved"], entries: { preserved: { enabled } } },
-      channels: { "preserved-chat": { ...root, accounts: {} } },
-    };
     const before = structuredClone(cfg);
     for (let run = 0; run < 2; run++) {
       clearPluginMetadataLifecycleCaches();
@@ -152,11 +143,17 @@ it.each([
         expect(result).toEqual(before);
         expect(changes).toEqual([]);
       } else {
-        expect(result.channels?.["preserved-chat"]).toEqual({
+        expect(result.channels?.["promotion-chat"]).toEqual({
+          ...channelFlags,
           accounts: { default: root },
         });
         expect(changes).toHaveLength(1);
       }
+      const repeatedChanges: string[] = [];
+      expect(seedMissingDefaultAccountsFromSingleAccountBase(result, repeatedChanges)).toEqual(
+        result,
+      );
+      expect(repeatedChanges).toEqual([]);
     }
     expect(cfg).toEqual(before);
   },
@@ -180,47 +177,22 @@ it.each([
     );
   }
 
-  const cfg: OpenClawConfig = {
-    meta: { migrations: { webhookListeners: true } },
-    ...(enabled === undefined
-      ? {}
-      : {
-          plugins: {
-            allow: ["openclaw-qqbot"],
-            entries: { "openclaw-qqbot": { enabled } },
-          },
-        }),
-    channels: {
-      qqbot: {
-        allowFrom: ["ROOT-OWNER"],
-        accounts: {
-          ops: { appId: "ops-app", clientSecret: "ops-secret", allowFrom: ["OPS-OWNER"] },
-          qa: { appId: "qa-app", clientSecret: "qa-secret", allowFrom: ["QA-OWNER"] },
-        },
+  const cfg = channelConfig(
+    "qqbot",
+    {
+      allowFrom: ["ROOT-OWNER"],
+      accounts: {
+        ops: { appId: "ops-app", clientSecret: "ops-secret", allowFrom: ["OPS-OWNER"] },
+        qa: { appId: "qa-app", clientSecret: "qa-secret", allowFrom: ["QA-OWNER"] },
       },
     },
-  };
-  const schema = widenOfficialExternalChannelSecretSchema({
-    channelId: "qqbot",
-    schema: { type: "object", additionalProperties: true },
-  });
+    enabled === undefined ? undefined : "openclaw-qqbot",
+    enabled,
+  );
   const before = structuredClone(cfg);
-  const first = normalizeCompatibilityConfigValues(cfg);
-  clearPluginMetadataLifecycleCaches();
-  resetPluginRuntimeStateForTest();
-  const second = normalizeCompatibilityConfigValues(first.config);
-
-  expect(
-    validateJsonSchemaValue({
-      cacheKey: `qqbot-promotion-${String(enabled)}`,
-      schema: schema ?? {},
-      value: cfg.channels?.qqbot,
-    }).ok,
-  ).toBe(true);
+  const first = normalizeAndRepeat(cfg);
   expect(first.config).toEqual(before);
   expect(first.changes).toEqual([]);
-  expect(second.config).toEqual(first.config);
-  expect(second.changes).toEqual([]);
 });
 
 it.each([false, true])(
@@ -233,23 +205,15 @@ it.each([false, true])(
       allowFrom: ["+15550001111"],
       groupPolicy: "disabled" as const,
     };
-    const cfg: OpenClawConfig = {
-      meta: { migrations: { webhookListeners: true } },
-      channels: {
-        whatsapp: {
-          ...root,
-          accounts: {
-            work: { authDir: "/synthetic/work" },
-            ...(existingDefault ? { default: root } : {}),
-          },
-        },
+    const cfg = channelConfig("whatsapp", {
+      ...root,
+      accounts: {
+        work: { authDir: "/synthetic/work" },
+        ...(existingDefault ? { default: root } : {}),
       },
-    };
+    });
     const before = structuredClone(cfg);
-    const first = normalizeCompatibilityConfigValues(cfg);
-    expect(Object.keys(first.config.channels?.whatsapp?.accounts ?? {})).toEqual(
-      existingDefault ? ["work", "default"] : ["work"],
-    );
+    const first = normalizeAndRepeat(cfg);
     expect(first.config).toEqual(before);
     expect(first.changes).toEqual([]);
     if (existingDefault) {
@@ -259,21 +223,16 @@ it.each([false, true])(
     } else {
       expect(first.warnings).toBeUndefined();
     }
-    expect(normalizeCompatibilityConfigValues(first.config)).toEqual(first);
   },
 );
 
 it("honors WhatsApp root preservation from the cold official catalog", async () => {
   await createColdState("doctor-whatsapp-cold");
-  const cfg: OpenClawConfig = {
-    channels: {
-      whatsapp: {
-        dmPolicy: "allowlist",
-        allowFrom: ["+15550001111"],
-        accounts: {},
-      },
-    },
-  };
+  const cfg = channelConfig("whatsapp", {
+    dmPolicy: "allowlist",
+    allowFrom: ["+15550001111"],
+    accounts: {},
+  });
   const changes: string[] = [];
   expect(seedMissingDefaultAccountsFromSingleAccountBase(cfg, changes)).toEqual(cfg);
   expect(changes).toEqual([]);

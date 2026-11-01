@@ -5,19 +5,6 @@ import {
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { canonicalizeVoiceCallMediaBase64 } from "../media-base64.js";
 
-/** Normalized inbound media stream frame. */
-type StreamFrame =
-  | { kind: "start"; streamId: string; providerCallId: string }
-  | {
-      kind: "media";
-      payloadBase64: string;
-      timestampMs?: number;
-    }
-  | { kind: "mark"; name?: string }
-  | { kind: "stop" }
-  | { kind: "error"; code?: string; title?: string; detail?: string }
-  | { kind: "ignored" };
-
 /** Parse numeric timestamps sent as numbers or integer strings. */
 function parseTimestampMs(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -37,10 +24,11 @@ export class StreamFrameAdapter {
     this.streamSid = provider === "twilio" ? "" : undefined;
   }
 
-  parseInbound(rawMessage: string): StreamFrame {
+  /** Normalized inbound media stream frame. */
+  parseInbound(rawMessage: string) {
     const msg = asNullableRecord(safeParseJson<unknown>(rawMessage));
     if (!msg) {
-      return { kind: "ignored" };
+      return { kind: "ignored" as const };
     }
     switch (msg.event) {
       case "start": {
@@ -53,34 +41,41 @@ export class StreamFrameAdapter {
           typeof providerCallId !== "string" ||
           !providerCallId
         ) {
-          return { kind: "ignored" };
+          return { kind: "ignored" as const };
         }
         if (this.provider === "twilio") {
           this.streamSid = streamId;
         }
-        return { kind: "start", streamId, providerCallId };
+        return { kind: "start" as const, streamId, providerCallId };
       }
       case "media": {
         const media = asOptionalObjectRecord(msg.media);
         const payload = typeof media?.payload === "string" ? media.payload : undefined;
         const payloadBase64 = payload ? canonicalizeVoiceCallMediaBase64(payload) : undefined;
         return payloadBase64
-          ? { kind: "media", payloadBase64, timestampMs: parseTimestampMs(media?.timestamp) }
-          : { kind: "ignored" };
+          ? {
+              kind: "media" as const,
+              payloadBase64,
+              timestampMs: parseTimestampMs(media?.timestamp),
+            }
+          : { kind: "ignored" as const };
       }
       case "mark": {
         const mark = asOptionalObjectRecord(msg.mark);
-        return { kind: "mark", name: typeof mark?.name === "string" ? mark.name : undefined };
+        return {
+          kind: "mark" as const,
+          name: typeof mark?.name === "string" ? mark.name : undefined,
+        };
       }
       case "stop":
-        return { kind: "stop" };
+        return { kind: "stop" as const };
       case "error": {
         if (this.provider !== "telnyx") {
-          return { kind: "ignored" };
+          return { kind: "ignored" as const };
         }
         const error = asOptionalObjectRecord(msg.payload);
         return {
-          kind: "error",
+          kind: "error" as const,
           code:
             typeof error?.code === "string" || typeof error?.code === "number"
               ? String(error.code)
@@ -90,7 +85,7 @@ export class StreamFrameAdapter {
         };
       }
       default:
-        return { kind: "ignored" };
+        return { kind: "ignored" as const };
     }
   }
 

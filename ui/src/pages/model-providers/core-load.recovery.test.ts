@@ -54,3 +54,35 @@ it.each(["providers", "discovery"] as const)(
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
   },
 );
+
+it("only publishes the current read after replacing an active read", async () => {
+  const first = createDeferred();
+  const next = createDeferred();
+  let calls = 0;
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "models.authStatus") {
+      await (calls++ === 0 ? first.promise : next.promise);
+      return { ts: calls, providers: [] };
+    }
+    if (method === "models.list") {
+      return { models: [] };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const completed = vi.fn();
+  const loader = new ModelProviderCoreLoader(() => {}, {
+    onStart: () => {},
+    onComplete: completed,
+    onCatalogComplete: () => {},
+  });
+  const client = createTestGatewayClient(request);
+  const original = loader.refresh(client, "main", "replacement");
+  await loader.refresh(client, "main", "publication");
+  const replacement = loader.refresh(client, "main", "replacement");
+  first.resolve();
+  await original;
+  expect(completed).not.toHaveBeenCalled();
+  next.resolve();
+  await replacement;
+  expect(completed).toHaveBeenCalledOnce();
+});

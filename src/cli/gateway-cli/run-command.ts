@@ -38,6 +38,15 @@ export async function bootstrapGatewayRun(params: {
   if (!shouldBootstrap) {
     return;
   }
+  if (process.platform === "linux" && process.env.OPENCLAW_SERVICE_KIND === "gateway") {
+    const { prepareSystemdGatewayActivation } = await import("./systemd-activation.js");
+    await startupTrace.measure("gateway-systemd-activation", () =>
+      prepareSystemdGatewayActivation({
+        runtime,
+        beforeStatePreparation: () => beforeStatePreparation?.() ?? Promise.resolve(true),
+      }),
+    );
+  }
   await startupTrace.measure("gateway-run-bootstrap", async () => {
     const { ensureCliExecutionBootstrap } = await import("../command-execution-startup.js");
     await ensureCliExecutionBootstrap({

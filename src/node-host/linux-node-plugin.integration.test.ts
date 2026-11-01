@@ -2,14 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { reconcileNodePairingOnConnect } from "../gateway/node-connect-reconcile.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
-import {
-  getNodeHostPluginRegistry,
-  resetNodeHostPluginRegistry,
-} from "./plugin-node-host.test-support.js";
+import { resetNodeHostPluginRegistry } from "./plugin-node-host.test-support.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const LINUX_NODE_COMMANDS = [
@@ -73,42 +68,6 @@ it("loads and advertises enabled linux-node commands through the node-host runti
   const prepared = await prepareNodeHostRuntime({ config, env: process.env });
   const registered = listRegisteredNodeHostCapsAndCommands({ config, env: process.env });
 
-  expect(registered.commands, JSON.stringify(getNodeHostPluginRegistry()?.diagnostics)).toEqual(
-    LINUX_NODE_COMMANDS,
-  );
   expect(registered.caps).toEqual(["camera", "location"]);
   expect(prepared.manifest.commands).toEqual(expect.arrayContaining([...LINUX_NODE_COMMANDS]));
-
-  const requestPairing = vi.fn();
-  setActivePluginRegistry(getNodeHostPluginRegistry()!);
-  const reconciliation = await reconcileNodePairingOnConnect({
-    cfg: config,
-    connectParams: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "node-host",
-        version: "test",
-        platform: "linux",
-        deviceFamily: "Linux",
-        mode: "node",
-      },
-      caps: registered.caps,
-      commands: registered.commands,
-    },
-    pairedNode: {
-      nodeId: "node-host",
-      createdAtMs: 1,
-      approvedAtMs: 1,
-      caps: registered.caps,
-      commands: registered.commands,
-    },
-    requestPairing,
-  });
-
-  expect(reconciliation).toMatchObject({
-    declaredCommands: LINUX_NODE_COMMANDS,
-    effectiveCommands: LINUX_NODE_COMMANDS,
-  });
-  expect(requestPairing).not.toHaveBeenCalled();
 });

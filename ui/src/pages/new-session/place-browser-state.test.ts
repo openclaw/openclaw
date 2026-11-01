@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { PlaceBrowserState, PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
 
 function directory(path: string, names: string[], parent = "/workspace"): FsListDirResult {
@@ -146,7 +146,8 @@ describe("PlaceBrowserState", () => {
     await browser.navigate("/missing");
     expect(listDirectory.mock.calls).toEqual([["/missing"]]);
     expect(browser).toMatchObject({ listing: null, draft: "/missing", loading: false });
-    expect(browser.error).toBe(
+    expect(browser.error).toBeNull();
+    expect(await browser.readCompletion).toBe(
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
     );
     expect(onListing).not.toHaveBeenCalled();
@@ -163,7 +164,8 @@ describe("PlaceBrowserState", () => {
     listDirectory.mockRejectedValueOnce(missingFolder);
     browser.setDraft("/missing");
     await browser.activate();
-    expect(browser).toMatchObject({ draft: "/missing", error: "Couldn't list that folder." });
+    expect(browser).toMatchObject({ draft: "/missing", error: null });
+    expect(await browser.readCompletion).toBe("Couldn't list that folder.");
   });
 
   it("wraps the highlight, completes with Tab, and opens the highlighted folder with Enter", async () => {

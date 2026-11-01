@@ -2,7 +2,7 @@ import { resolveGlobalSingleton } from "./global-singleton.js";
 
 // Shared queue owners also run in the browser, which has no Node async context.
 const asyncHooks =
-  typeof process === "undefined" ? undefined : process.getBuiltinModule("node:async_hooks");
+  typeof process === "undefined" ? undefined : process.getBuiltinModule?.("node:async_hooks");
 const detachedAsyncContext = asyncHooks
   ? resolveGlobalSingleton(
       Symbol.for("openclaw.detachedAsyncContext"),

@@ -4,13 +4,16 @@
  * This module gathers agent/config knobs before rendering the canonical system
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { shouldHandleTextCommands } from "../auto-reply/commands-text-routing.js";
+import { isRestartEnabled } from "../config/commands.flags.js";
+import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
-import type { McpServerInstruction } from "./system-prompt-tool-list.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
@@ -19,32 +22,11 @@ type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPromp
   agentId?: string;
   preparedTtsPreferences?: PreparedTtsPreferences;
   tools?: { name: string; parameters: unknown }[];
-  preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases" | "isCurrent">;
+  preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases">;
 };
 
-/**
- * Server-level MCP guidance for the servers that still back at least one tool in this
- * prompt. Deriving it from the effective tool set keeps servers whose tools were all
- * filtered out, denied, or catalog-hidden from contributing guidance.
- */
-function collectMcpServerInstructions(
-  tools: readonly { name: string; parameters: unknown }[],
-): McpServerInstruction[] {
-  const byServer = new Map<string, string>();
-  for (const tool of tools) {
-    const mcp = classifyAgentToolSource(tool).mcp;
-    const server = mcp?.serverName?.trim();
-    const instructions = mcp?.instructions?.trim();
-    if (!server || !instructions || byServer.has(server)) {
-      continue;
-    }
-    byServer.set(server, instructions);
-  }
-  return [...byServer].map(([server, instructions]) => ({ server, instructions }));
-}
-
 function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["preparedModelRuntime"]) {
-  if (!owner?.isCurrent()) {
+  if (!owner) {
     return [];
   }
   return (owner.configuredModelAliases ?? [])
@@ -66,15 +48,43 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);
     renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
-    renderParams.mcpServerInstructions = collectMcpServerInstructions(tools);
+    /**
+     * Server-level MCP guidance for the servers that still back at least one tool in this
+     * prompt. Deriving it from the effective tool set keeps servers whose tools were all
+     * filtered out, denied, or catalog-hidden from contributing guidance.
+     */
+    const byServer = new Map<string, string>();
+    for (const tool of tools) {
+      const mcp = classifyAgentToolSource(tool).mcp;
+      const server = mcp?.serverName?.trim();
+      const instructions = mcp?.instructions?.trim();
+      if (!server || !instructions || byServer.has(server)) {
+        continue;
+      }
+      byServer.set(server, instructions);
+    }
+    renderParams.mcpServerInstructions = [...byServer].map(([server, instructions]) => ({
+      server,
+      instructions,
+    }));
   }
   if (!config) {
     return buildAgentSystemPrompt(renderParams);
   }
+  const channel = normalizeOptionalLowercaseString(renderParams.runtimeInfo?.channel) ?? "";
   const includeFullSections =
     renderParams.promptMode !== "minimal" && renderParams.promptMode !== "none";
   return buildAgentSystemPrompt({
     ...renderParams,
+    restartCommandsEnabled: isRestartEnabled(config),
+    reasoningCommandsEnabled:
+      shouldHandleTextCommands({ cfg: config, surface: channel }) ||
+      resolveNativeCommandsEnabled({
+        providerId: channel,
+        providerSetting: config.channels?.[channel]?.commands?.native,
+        globalSetting: config.commands?.native,
+        config,
+      }),
     ownerDisplay: "raw",
     ownerDisplaySecret: undefined,
     subagentDelegationMode: resolveMainSessionDelegationMode({

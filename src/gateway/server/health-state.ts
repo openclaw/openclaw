@@ -19,6 +19,7 @@ import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
+import type { GatewayCronState } from "../server-cron-contract.js";
 import type { GatewayClient } from "../server-methods/types.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
@@ -178,6 +179,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
+  getCronState?: () => GatewayCronState;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
@@ -203,6 +205,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
       audience,
       probe: strength === "probe",
       runtimeSnapshot,
+      cronState: opts?.getCronState?.(),
       ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
       ...(opts?.getSessionRowProjection
         ? { sessionRowProjection: opts.getSessionRowProjection() }

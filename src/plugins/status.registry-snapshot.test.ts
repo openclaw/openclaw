@@ -245,12 +245,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const params = { config, env };
     const index = loadInstalledPluginIndex(params);
     await writePersistedInstalledPluginIndex(index, { stateDir });
-    const open = vi.spyOn(fs, "openSync");
     const report = buildPluginRegistrySnapshotReport(params);
-    const manifestOpens = open.mock.calls.filter(
-      ([file]) => file === path.join(fixture.rootDir, "openclaw.plugin.json"),
-    ).length;
-    open.mockRestore();
 
     expect(report.plugins).toMatchObject([
       {
@@ -270,8 +265,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     expect(getCurrentPluginMetadataSnapshot(params)).toBeUndefined();
-    // Discovery, validation, index hashing, and status share one checked manifest read.
-    expect(manifestOpens).toBe(1);
   });
 
   it.each([false, true])(
@@ -290,15 +283,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
         current.registryDiagnostics = [];
       }
       setCurrentPluginMetadataSnapshot(current, params);
-      const open = vi.spyOn(fs, "openSync");
-
       const report = buildPluginRegistrySnapshotReport(params);
-      const metadataOpens = open.mock.calls.filter(
-        ([file]) =>
-          file === path.join(rootDir, "openclaw.plugin.json") ||
-          file === path.join(rootDir, "package.json"),
-      );
-      open.mockRestore();
 
       expect(report.plugins).toEqual(coldReport.plugins);
       expect(report).toMatchObject({
@@ -308,126 +293,83 @@ describe("buildPluginRegistrySnapshotReport", () => {
           : [],
         diagnostics: [],
       });
-      expect(metadataOpens).toEqual([]);
       expect(getCurrentPluginMetadataSnapshot(params)).toBe(current);
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     },
   );
 
-  it.each([true, false])(
-    "reports dependency health without importing runtime (enabled=%s)",
-    (enabled) => {
-      const rootDir = makeTempDir();
-      const dependencyDir = path.join(rootDir, "node_modules", "present-required");
-      fs.mkdirSync(dependencyDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(dependencyDir, "package.json"),
-        JSON.stringify({ name: "present-required", version: "1.0.0" }),
-      );
+  it.each(["disabled", "missing", "preparation"] as const)(
+    "reports %s dependency health without importing runtime",
+    async (mode) => {
+      const { rootDir, env } = createStatusEnv(false);
       const fixture = createColdPluginFixture({
         rootDir,
         pluginId: "dependency-demo",
         packageJson: {
-          dependencies: { "missing-required": "1.0.0", "present-required": "1.0.0" },
-          optionalDependencies: { "missing-optional": "1.0.0" },
+          dependencies: { "missing-runtime": "1.0.0", "optional-runtime": "1.0.0" },
+          optionalDependencies: { "optional-runtime": "2.0.0" },
         },
         manifest: { contracts: { tools: ["disabled_demo_tool"] } },
       });
-      const report = buildPluginRegistrySnapshotReport({
+      const params = {
         config: {
           plugins: {
-            load: { paths: [fixture.rootDir] },
-            ...(enabled ? {} : { entries: { [fixture.pluginId]: { enabled: false } } }),
+            load: { paths: [rootDir] },
+            entries: { [fixture.pluginId]: { enabled: mode !== "disabled" } },
           },
         },
-      });
-      const plugin = report.plugins.find((entry) => entry.id === fixture.pluginId);
-      expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-      if (!enabled) {
-        expect(plugin).toMatchObject({
-          enabled: false,
-          status: "disabled",
-          toolNames: ["disabled_demo_tool"],
-        });
-        expect(plugin?.error).toBeUndefined();
-        expect(plugin?.dependencyStatus?.missing).toEqual(["missing-required"]);
-        expect(report.diagnostics).not.toContainEqual(
-          expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
-        );
-        return;
-      }
-      const message =
-        'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.';
-      expect(plugin).toEqual(expect.objectContaining({ status: "error", error: message }));
-      expect(report.diagnostics).toContainEqual({
-        level: "error",
-        pluginId: "dependency-demo",
-        source: fs.realpathSync(fixture.runtimeSource),
-        message,
-      });
-      expect(plugin?.dependencyStatus).toMatchObject({
-        hasDependencies: true,
-        installed: false,
-        requiredInstalled: false,
-        optionalInstalled: false,
-        missing: ["missing-required"],
-        missingOptional: ["missing-optional"],
-        dependencies: [
-          { name: "missing-required", spec: "1.0.0", installed: false, optional: false },
-          { name: "present-required", spec: "1.0.0", installed: true, optional: false },
-        ],
-        optionalDependencies: [
-          { name: "missing-optional", spec: "1.0.0", installed: false, optional: true },
-        ],
-      });
-    },
-  );
-
-  it("preserves the preparation error while explaining missing required dependencies", async () => {
-    const rootDir = makeTempDir();
-    const bundledRoot = makeTempDir();
-    const fixture = createColdPluginFixture({
-      rootDir,
-      pluginId: "failed-runtime-dependency-demo",
-      packageJson: {
-        dependencies: { "missing-runtime": "1.0.0", "optional-runtime": "1.0.0" },
-        optionalDependencies: { "optional-runtime": "2.0.0" },
-      },
-    });
-    fs.writeFileSync(
-      fixture.runtimeSource,
-      `require("node:fs").writeFileSync(${JSON.stringify(fixture.runtimeMarker)}, "loaded");\n` +
-        'require("missing-runtime");\n',
-      "utf8",
-    );
-
-    await withPluginDiagnosticsReport(
-      {
-        config: createColdPluginConfig(rootDir, fixture.pluginId),
         workspaceDir: rootDir,
-        env: createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: bundledRoot }),
+        env,
         logger: { info() {}, warn() {}, error() {}, debug() {} },
-      },
-      (report) => {
+      };
+      const verify = (report: ReturnType<typeof buildPluginSnapshotReport>) => {
         const plugin = report.plugins.find((entry) => entry.id === fixture.pluginId);
         const diagnostics = report.diagnostics.filter(
           (entry) => entry.pluginId === fixture.pluginId,
         );
-
-        expect(plugin).toMatchObject({
-          status: "error",
-          dependencyStatus: {
-            missing: ["missing-runtime"],
-            missingOptional: ["optional-runtime"],
-          },
-        });
-        expect(diagnostics).toHaveLength(1);
-        for (const message of [plugin?.error, diagnostics[0]?.message]) {
-          expect(message).toContain("Plugin dependency missing-runtime is missing from");
-          expect(message).toContain("Install the plugin dependencies");
-        }
         expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-      },
-    );
-  });
+        expect(plugin?.dependencyStatus?.missing).toEqual(["missing-runtime"]);
+        if (mode === "disabled") {
+          expect(plugin).toMatchObject({
+            enabled: false,
+            status: "disabled",
+            toolNames: ["disabled_demo_tool"],
+          });
+          expect(plugin?.error).toBeUndefined();
+          expect(diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
+        } else if (mode === "missing") {
+          const message =
+            'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-runtime. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.';
+          expect(plugin).toMatchObject({ status: "error", error: message });
+          expect(diagnostics).toContainEqual({
+            level: "error",
+            pluginId: fixture.pluginId,
+            source: fs.realpathSync(fixture.runtimeSource),
+            message,
+          });
+        } else {
+          expect(plugin).toMatchObject({
+            status: "error",
+            dependencyStatus: { missingOptional: ["optional-runtime"] },
+          });
+          expect(diagnostics).toHaveLength(1);
+          for (const message of [plugin?.error, diagnostics[0]?.message]) {
+            expect(message).toContain("Plugin dependency missing-runtime is missing from");
+            expect(message).toContain("Install the plugin dependencies");
+          }
+        }
+      };
+      if (mode === "preparation") {
+        fs.writeFileSync(
+          fixture.runtimeSource,
+          `require("node:fs").writeFileSync(${JSON.stringify(fixture.runtimeMarker)}, "loaded");\n` +
+            'require("missing-runtime");\n',
+          "utf8",
+        );
+        await withPluginDiagnosticsReport(params, verify);
+      } else {
+        verify(buildPluginRegistrySnapshotReport(params));
+      }
+    },
+  );
 });

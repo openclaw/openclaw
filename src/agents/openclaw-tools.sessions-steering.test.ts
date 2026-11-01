@@ -78,25 +78,19 @@ function userEntries(scope: Parameters<typeof SessionManager.open>[0], dir: stri
 }
 async function steeringFixture(sessionKey: string, alternateStore = false, updatedAt = Date.now()) {
   const dir = tempDirs.make("openclaw-steering-");
+  const store = alternateStore
+    ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
+    : path.join(dir, "sessions.json");
   const scope = {
     agentId: "leasing-ops",
     sessionId: "caller-active-session",
     sessionKey,
     storePath: alternateStore
       ? resolveSessionStorePathCore(undefined, { agentId: "leasing-ops" })
-      : path.join(dir, "sessions.json"),
-  };
-  const testConfig = {
-    ...config,
-    session: {
-      ...config.session,
-      store: alternateStore
-        ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
-        : scope.storePath,
-    },
+      : store,
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt });
-  return { dir, scope, testConfig };
+  return { dir, scope, testConfig: { ...config, session: { ...config.session, store } } };
 }
 registerAgentSessionLoopTestLifecycle();
 beforeEach(() => {
@@ -251,9 +245,7 @@ it.each([
 
       const tool = sendTool(testConfig, callerKey);
 
-      if (mode === "steer" || ownChild) {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const caller = createSessionsSendTestCaller(callerKey);
       if (refreshedDisplay) {
         caller.requesterOrigin = {
@@ -277,14 +269,13 @@ it.each([
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
-      if (mode === "steer" || ownChild) {
-        // A reply-wait deadline cannot turn volatile steering into a durable ACK.
-        await vi.advanceTimersByTimeAsync(30_000);
-        vi.useRealTimers();
-        expect(acknowledged).toBe(false);
-        expect(session.pendingMessageCount).toBe(1);
-        expect(userEntries(scope, dir)).toHaveLength(1);
-      }
+      // Reply waiting cannot acknowledge volatile input or withdraw it before
+      // the independent durable-admission deadline and receiver consumption.
+      await vi.advanceTimersByTimeAsync(30_000);
+      vi.useRealTimers();
+      expect(acknowledged).toBe(false);
+      expect(session.pendingMessageCount).toBe(1);
+      expect(userEntries(scope, dir)).toHaveLength(1);
       held.release();
       const [result] = await Promise.all([send, prompt]);
 
@@ -295,6 +286,9 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
+      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(true);
+      expect(queueMessage.mock.calls[0]?.[1]?.deliveryTimeoutMs).toBeUndefined();
+      expect(queueMessage.mock.calls[0]?.[1]).not.toHaveProperty("sourceReplyDeliveryMode");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
       const entries = userEntries(scope, dir);
       expect(entries).toHaveLength(2);

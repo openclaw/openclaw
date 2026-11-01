@@ -35,6 +35,15 @@ describe("application router registration", () => {
     expect(routeIdFromPath("/tasks")).toBeNull();
     expect(routeIdFromPath("/control/tasks", "/control")).toBeNull();
   });
+
+  it("replaces the Agents overview with Templates while keeping per-agent settings", () => {
+    expect(routeIdFromPath("/agents")).toBeNull();
+    expect(routeIdFromPath("/agents/templates/workflow-operator")).toBeNull();
+    expect(routeIdFromPath("/templates")).toBe("templates");
+    expect(routeIdFromPath("/templates/workflow-operator")).toBe("templates");
+    expect(routeIdFromPath("/settings/agents/research")).toBe("agents");
+    expect(routeIdFromPath("/settings/agents/research/tools")).toBe("agents");
+  });
 });
 
 it("compares optional route locations by pathname, search, and hash", () => {

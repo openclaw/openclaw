@@ -150,6 +150,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
     borrowRegistry: params.borrowRegistry,
+    previousRegistry: params.purpose === "model-catalog" ? params.reusableRegistry : undefined,
   };
 }
 
@@ -265,7 +266,7 @@ export async function acquireAgentRuntimePluginRegistry(
       channelSource,
     );
     // Fence replacement before adopting donors, including the await back to the build owner.
-    releaseWork = retainRuntimePluginWork([registry]);
+    releaseWork = retainRuntimePluginWork([registry], "registry-construction");
     const primaryResources = getPluginRegistryInspectionResources(acquired.registry);
     if (!primaryResources) {
       throw new Error("Acquired prepared registry has no registration resource owner");

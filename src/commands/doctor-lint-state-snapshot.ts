@@ -5,6 +5,7 @@ import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { applyProcessEnvKeys } from "../infra/process-env.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import {
   resolvePluginInstallRoots,
@@ -223,25 +224,14 @@ export async function withDoctorLintStateEnv<T>(
           OPENCLAW_CONFIG_PATH: resolveConfigPath(env, stateDir),
           OPENCLAW_STATE_DIR: stateDir,
         };
-  const previous = Object.keys(overrides).map((key) => [key, process.env[key]] as const);
+  const keys = Object.keys(overrides);
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   // Doctor checks run serially. Scope ambient auth/global-store owners together,
   // restoring the enclosing private view even when a detector throws.
-  for (const [key, value] of Object.entries(overrides)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
+  applyProcessEnvKeys(keys, overrides);
   try {
     return await run();
   } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    applyProcessEnvKeys(keys, previous);
   }
 }

@@ -219,7 +219,12 @@ it.for(["usage", "removed", "failed"] as const)(
       expect(published).toEqual(change === "failed" ? [] : [publication(change !== "usage")]);
       expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
         "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: change === "removed", commandsChanged: false },
+        {
+          modelCatalogChanged: change !== "usage",
+          ...(change === "usage" ? { modelCatalogStatusChanged: true } : {}),
+          authChanged: change === "removed",
+          commandsChanged: false,
+        },
         { dropIfSlow: true },
       );
       expect(harness.observedCatalogs).toHaveLength(1);

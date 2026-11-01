@@ -4,11 +4,9 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
-  listAgentIds,
   resolveAgentWorkspaceDir,
   resolveConfiguredAgentId,
   resolveAmbientOwnerAgentId,
-  tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
 import { LEGACY_AGENT_ROSTER_RULES } from "../commands/doctor/shared/legacy-config-migrations.runtime.entries.js";
@@ -18,7 +16,6 @@ import { isPathInside } from "../infra/path-guards.js";
 import { LINEAR_MATCHER_SOURCES } from "../logging/redact-linear-matchers.js";
 import { parseRedactPatternSource } from "../logging/redact-pattern-runtime.js";
 import { PEM_REDACT_PATTERN_SOURCE } from "../logging/redact-pem.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import {
   isAvatarDataUrl,
@@ -33,12 +30,9 @@ import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
-import { findLegacyConfigRuleIssues } from "./legacy.js";
+import { findLegacyConfigRuleIssues } from "./legacy.shared.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import {
-  createModelPolicyRefValidator,
-  parseOperatorModelPolicyWildcardRef,
-} from "./model-policy-ref.js";
+import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
@@ -50,25 +44,6 @@ import {
 } from "./validation-issues.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
-
-export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
-  const agentEntries = listAgentEntries(config);
-  // Match heartbeat enrollment so validation never warns for an owner the runner can use.
-  const unresolved =
-    listAgentIds(config).length > 1 &&
-    !agentEntries.some((entry) => Boolean(entry.heartbeat)) &&
-    !config.agents?.defaults?.heartbeat &&
-    tryResolveAmbientOwnerAgentId(config) === undefined;
-  return unresolved
-    ? [
-        {
-          path: "agents.defaults.heartbeat.agentId",
-          message:
-            "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-        },
-      ]
-    : [];
-}
 
 // The schema accepts any string, but log redaction drops entries the safe-regex compiler
 // rejects; warn so operators do not rely on a mask that never applies.
@@ -279,24 +254,20 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     refs: readonly string[] | undefined,
     configPath: string,
     agentModels?: typeof defaultModels,
-    allowModelPrefix = false,
   ) => {
     if (!refs?.length) {
       return;
     }
     const isValidRef = createModelPolicyRefValidator(defaultModels, agentModels);
     for (const [index, raw] of refs.entries()) {
-      if (isValidRef(raw) || (allowModelPrefix && parseOperatorModelPolicyWildcardRef(raw))) {
+      if (isValidRef(raw)) {
         continue;
       }
       issues.push({
         path: `${configPath}.${index}`,
         message:
           `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
-          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".' +
-          (allowModelPrefix
-            ? ' Role policies also accept a model-name prefix such as "provider/family-*".'
-            : ""),
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*", "provider/namespace/*" or "provider/family-*".',
       });
     }
   };
@@ -327,8 +298,8 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
       continue;
     }
     const models = listAgentEntries(config).find((agent) => agent.id === sourceAgent)?.models;
-    validateRefs(policy.allow, `${pathPrefix}.allow`, models, true);
-    validateRefs(policy.deny, `${pathPrefix}.deny`, models, true);
+    validateRefs(policy.allow, `${pathPrefix}.allow`, models);
+    validateRefs(policy.deny, `${pathPrefix}.deny`, models);
   }
   return issues;
 }
@@ -502,7 +473,6 @@ export function validateConfigObjectRaw(
 export function validateConfigObject(
   raw: unknown,
   opts?: {
-    manifestRegistry?: Pick<PluginMetadataSnapshot, "manifestRegistry">["manifestRegistry"];
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
@@ -512,10 +482,6 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: attachAgentListProjection(
-      materializeRuntimeConfig(result.config, {
-        manifestRegistry: opts?.manifestRegistry,
-      }),
-    ),
+    config: attachAgentListProjection(materializeRuntimeConfig(result.config)),
   };
 }

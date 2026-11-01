@@ -29,6 +29,8 @@ it.each(["final", "aborted", "error"] as const)("clears later model waits on %s"
   const { state, receive } = fixture();
   const label = () =>
     chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
+  receive("status", { phase: "preparing_worktree_base", seq: 0 });
+  expect(label()).toBe("Updating repository…");
   receive("status", { phase: "starting_model", seq: 1 });
   receive("status", { phase: "waiting_for_model", waitReason: "slot", seq: 2 });
   expect(label()).toBe("Waiting for a free model slot");

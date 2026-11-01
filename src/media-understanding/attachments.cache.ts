@@ -144,14 +144,12 @@ export type MediaAttachmentCacheOptions = {
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly stagedPaths = new Set<string>();
-  private readonly attachments: MediaAttachment[];
   private readonly localPathRoots: readonly string[];
   private readonly ssrfPolicy: SsrFPolicy | undefined;
   private readonly fallbackWorkspaceDir?: string;
   private canonicalLocalPathRoots?: Promise<readonly string[]>;
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
-    this.attachments = attachments;
     this.ssrfPolicy = options?.ssrfPolicy;
     this.localPathRoots =
       options?.includeDefaultLocalPathRoots === false
@@ -415,9 +413,7 @@ export class MediaAttachmentCache {
 
   private async ensureEntry(attachmentIndex: number): Promise<AttachmentCacheEntry> {
     const entry: AttachmentCacheEntry = this.entries.get(attachmentIndex) ?? {
-      attachment: this.attachments.find((item) => item.index === attachmentIndex) ?? {
-        index: attachmentIndex,
-      },
+      attachment: { index: attachmentIndex },
     };
     if (!entry.localResolutionAttempted) {
       entry.resolvedPath = await this.resolveLocalPath(entry.attachment);

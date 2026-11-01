@@ -264,7 +264,7 @@ describe("follow-up delivery channel boundary", () => {
           runId: "run-1",
           outcome: { kind: "rejected", payload: { text, isError: true } },
         },
-        opts: { isHeartbeat: true },
+        opts: {},
       });
 
       expect(decision).toMatchObject(
@@ -340,6 +340,7 @@ describe("follow-up delivery channel boundary", () => {
         replyToId: testCase.expectedReply,
       }),
       undefined,
+      undefined,
     );
   });
 
@@ -352,6 +353,7 @@ describe("follow-up delivery channel boundary", () => {
 
     expect(channelState.deliver).toHaveBeenCalledWith(
       expect.objectContaining({ replyToId: "111.000" }),
+      undefined,
       undefined,
     );
   });

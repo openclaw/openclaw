@@ -50,7 +50,6 @@ describe("buildDiscordNativeInteractionContext", () => {
       }).effectiveRoute,
       sessionPrefix: "discord:slash",
       channelContext: {
-        channelType: ChannelType.DM,
         channelName: undefined,
         channelSlug: "",
         rawChannelId: "dm-1",
@@ -136,7 +135,6 @@ describe("buildDiscordNativeInteractionContext", () => {
       }).effectiveRoute,
       sessionPrefix: "discord:slash",
       channelContext: {
-        channelType: isThread ? ChannelType.PublicThread : ChannelType.GuildText,
         channelName: undefined,
         channelSlug: "",
         rawChannelId: "chan-1",

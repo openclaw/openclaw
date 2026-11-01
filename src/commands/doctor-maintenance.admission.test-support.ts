@@ -19,7 +19,33 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db-cache.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
+import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { useDoctorMaintenanceRuntimeDirectory } from "./doctor-maintenance.test-support.js";
+
+export const doctorMaintenanceTestEnv = {
+  OPENCLAW_HOME: undefined,
+  OPENCLAW_STATE_DIR: undefined,
+  OPENCLAW_CONFIG_PATH: undefined,
+  OPENCLAW_PROFILE: undefined,
+  OPENCLAW_SUPERVISOR_MODE: undefined,
+  OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
+  OPENCLAW_SERVICE_MARKER: undefined,
+  OPENCLAW_SERVICE_KIND: undefined,
+  OPENCLAW_SYSTEMD_UNIT: undefined,
+  OPENCLAW_UPDATE_RUN_ID: undefined,
+  OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+  OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
+};
+
+export function beginDoctorRepair(overrides: Partial<DoctorMaintenanceParams> = {}) {
+  return beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log() {}, error() {}, exit() {} },
+    ...overrides,
+  });
+}
 
 export function setupDoctorAdmissionFixture() {
   const directories = createTempDirTracker();
@@ -185,6 +211,7 @@ export function setupDoctorAdmissionFixture() {
       family,
       admission: admitted.assertCurrent,
       assertIsolation,
+      [Symbol.dispose]: assertIsolation,
       createStateDir: () => directories.make("doctor-admission-replacement-"),
     };
   };

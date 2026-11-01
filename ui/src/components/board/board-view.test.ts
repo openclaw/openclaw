@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
-import "../../lib/toast-host.ts";
-import "../mcp-app-view-registration.ts";
+import "../../lib/toast-host.tsx";
+import "../mcp-app-view.tsx";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
-import "./board-view.ts";
+import "./board-view.tsx";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import {
+  expectText,
+  mountWidget,
+  widgetSnapshot,
+  testId,
   boardWidget,
   callbacks,
   gatewayContext,
@@ -43,6 +47,38 @@ function keyDown(target: EventTarget | undefined, key: string, altKey = false) {
   );
 }
 
+const cellsOf = (root: ParentNode) => [...root.querySelectorAll("openclaw-board-widget-cell")];
+const removeButton = (root: ParentNode) =>
+  root.querySelector<HTMLButtonElement>(".board-widget__menu-danger");
+const grantButton = (root: ParentNode, decision: "allow" | "reject") =>
+  root.querySelector<HTMLButtonElement>(`[data-test-id="board-grant-${decision}"]`);
+const sandboxSnapshot = (widget: Parameters<typeof widgetSnapshot>[0] = {}) =>
+  widgetSnapshot({
+    sandboxUrl: "/mcp-app-sandbox",
+    sandboxPort: 18790,
+    viewTicket: "ticket",
+    ...widget,
+  });
+const documentUrl = () => "/__openclaw__/board/session/alpha/index.html?bt=ticket";
+
+function pointer(
+  target: EventTarget,
+  type: string,
+  clientY: number,
+  clientX = 100,
+  cancelable = false,
+) {
+  const event = new MouseEvent(type, {
+    button: 0,
+    clientX,
+    clientY,
+    bubbles: true,
+    cancelable,
+  });
+  Object.defineProperty(event, "pointerId", { value: 7 });
+  target.dispatchEvent(event);
+}
+
 function stubBoardDocumentFetch(read: () => Promise<Response>): void {
   const originalFetch = globalThis.fetch;
   vi.stubGlobal("fetch", ((input, init) => {
@@ -60,18 +96,14 @@ describe("openclaw-board-view", () => {
     const view = document.createElement("openclaw-board-view");
     view.activeTabId = "main";
     view.callbacks = callbacks();
-    view.widgetFrameUrl = () => "/__openclaw__/board/session/alpha/index.html?bt=ticket";
+    view.widgetFrameUrl = documentUrl;
     const provider = createApplicationContextProvider(gatewayContext(null));
     provider.append(view);
     document.body.append(provider);
     await view.updateComplete;
     const skeleton = view.querySelector("openclaw-panel-loading-skeleton");
     expect(skeleton).not.toBeNull();
-    view.snapshot = snapshot({
-      widgets: [
-        boardWidget({ sandboxUrl: "/mcp-app-sandbox", sandboxPort: 18790, viewTicket: "ticket" }),
-      ],
-    });
+    view.snapshot = sandboxSnapshot();
     await settleCells(view);
     const frame = view.querySelector("iframe")!;
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
@@ -109,20 +141,17 @@ describe("openclaw-board-view", () => {
     const view = await mount({
       context: gatewayContext(null),
       callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({
-        widgets: [
-          boardWidget({ sandboxUrl: "/mcp-app-sandbox", sandboxPort: 18790, viewTicket: "ticket" }),
-        ],
-      }),
-      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
+      snapshot: sandboxSnapshot(),
+      widgetFrameUrl: documentUrl,
     });
     const frame = view.querySelector("iframe")!;
     const source = frame.src;
-    const reload = vi.spyOn(frame, "src", "set");
+    // Browser navigation keeps the WindowProxy; jsdom replaces it when src is assigned.
+    const reload = vi.spyOn(frame, "src", "set").mockImplementation(() => {});
     await vi.advanceTimersByTimeAsync(10_000);
     await settleCells(view);
     expect(view.querySelector('.board-widget__notice[role="status"]')).not.toBeNull();
-    expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
+    expect(testId(view, "board-widget-error")).toBeNull();
     expect(reload).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(20_000);
     expect(reload).not.toHaveBeenCalled();
@@ -138,7 +167,7 @@ describe("openclaw-board-view", () => {
     await settleCells(view);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(view.querySelector('.board-widget__notice[role="status"]')).toBeNull();
-    expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
+    expect(testId(view, "board-widget-error")).toBeNull();
   });
 
   it("requires a renewed frame ticket before using a reconnected Gateway client", async () => {
@@ -243,7 +272,7 @@ describe("openclaw-board-view", () => {
     vi.stubGlobal("fetch", fetchMock);
     const view = await mount({
       callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({ widgets: [boardWidget()] }),
+      snapshot: widgetSnapshot(),
       widgetFrameUrl: () => "/__openclaw__/board/session/status/index.html?bt=expired",
     });
     const frame = view.querySelector("iframe");
@@ -270,18 +299,9 @@ describe("openclaw-board-view", () => {
       .mockResolvedValue(undefined);
     const view = await mount({
       context: gatewayContext(null),
-      widgetFrameUrl: () => "/__openclaw__/board/session/alpha/index.html?bt=ticket",
+      widgetFrameUrl: documentUrl,
       callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({
-        widgets: [
-          boardWidget({
-            sandboxUrl: "/mcp-app-sandbox",
-            sandboxPort: 18790,
-            viewTicket: "ticket",
-            viewTicketTtlMs: 15_000,
-          }),
-        ],
-      }),
+      snapshot: sandboxSnapshot({ viewTicketTtlMs: 15_000 }),
     });
     const cell = view.querySelector("openclaw-board-widget-cell")!;
     const frame = cell.querySelector("iframe");
@@ -296,7 +316,7 @@ describe("openclaw-board-view", () => {
     expect(frameLoadFailed).toHaveBeenCalledTimes(5);
     await settleCells(view);
     expect(cell.querySelector("iframe")).toBe(frame);
-    expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
+    expect(testId(cell, "board-widget-error")).toBeNull();
   });
 
   it("bounds repeated frame ticket refreshes after persistent 401 responses", async () => {
@@ -311,7 +331,7 @@ describe("openclaw-board-view", () => {
     );
     const view = await mount({
       callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({ widgets: [boardWidget()] }),
+      snapshot: widgetSnapshot(),
       widgetFrameUrl: () => frameUrl,
     });
     const frame = view.querySelector("iframe");
@@ -323,9 +343,7 @@ describe("openclaw-board-view", () => {
 
     await vi.waitFor(() => expect(frameLoadFailed).toHaveBeenCalledTimes(3));
     await vi.waitFor(() =>
-      expect(view.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
-        "repeated refresh attempts",
-      ),
+      expectText(testId(view, "board-widget-error"), "repeated refresh attempts"),
     );
 
     frameStatus = 200;
@@ -341,19 +359,14 @@ describe("openclaw-board-view", () => {
 
   it("ignores authorization results from a superseded widget frame", async () => {
     const frameLoadFailed = vi.fn(async () => undefined);
-    let resolveProbe: ((response: Response) => void) | undefined;
+    const probe = deferred<Response>();
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        () =>
-          new Promise<Response>((resolve) => {
-            resolveProbe = resolve;
-          }),
-      ),
+      vi.fn(() => probe.promise),
     );
     const view = await mount({
       callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({ widgets: [boardWidget()] }),
+      snapshot: widgetSnapshot(),
       widgetFrameUrl: (_name, revision) =>
         `/__openclaw__/board/session/status/index.html?revision=${revision}`,
     });
@@ -366,7 +379,7 @@ describe("openclaw-board-view", () => {
     });
     await settleCells(view);
     expect(frame?.getAttribute("src")).toContain("revision=2");
-    resolveProbe?.(new Response("expired", { status: 401 }));
+    probe.resolve(new Response("expired", { status: 401 }));
     await Promise.resolve();
     await Promise.resolve();
 
@@ -382,10 +395,8 @@ describe("openclaw-board-view", () => {
     await openBoardMenu(view);
     view.querySelector<HTMLButtonElement>(".board-widget__menu-danger")?.click();
     await vi.waitFor(() => {
-      expect(view.querySelector(".board-view__error")?.textContent).toContain("could not be saved");
-      expect(
-        view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent,
-      ).toContain("fixture write failed");
+      expectText(view.querySelector(".board-view__error"), "could not be saved");
+      expectText(testId(view, "board-widget-action-error"), "fixture write failed");
     });
     expect(view.querySelector("iframe")).toBe(frame);
     view.snapshot = { ...snapshot(), revision: 2 };
@@ -397,13 +408,13 @@ describe("openclaw-board-view", () => {
     const pending = deferred();
     const applyOps = vi.fn(() => pending.promise);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
-    const cells = [...view.querySelectorAll("openclaw-board-widget-cell")];
+    const cells = cellsOf(view);
     await openBoardMenu(cells[0]!);
-    cells[0]?.querySelector<HTMLButtonElement>(".board-widget__menu-danger")?.click();
+    removeButton(cells[0]!)?.click();
     await vi.waitFor(() => expect(applyOps).toHaveBeenCalledTimes(1));
     await settleCells(view);
     await openBoardMenu(cells[1]!);
-    const secondRemove = cells[1]?.querySelector<HTMLButtonElement>(".board-widget__menu-danger");
+    const secondRemove = removeButton(cells[1]!);
     expect(secondRemove?.disabled).toBe(true);
     secondRemove?.click();
     expect(applyOps).toHaveBeenCalledTimes(1);
@@ -411,12 +422,45 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(secondRemove?.disabled).toBe(false));
   });
 
+  it("clears a failed mutation during retry without replacing the widget document", async () => {
+    const pending = deferred();
+    const applyOps = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fixture write failed"))
+      .mockImplementationOnce(() => pending.promise);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const frame = view.querySelector("iframe");
+    await openBoardMenu(view);
+    removeButton(view)?.click();
+    await vi.waitFor(() =>
+      expectText(view.querySelector(".board-view__error"), "could not be saved"),
+    );
+
+    await openBoardMenu(view);
+    const remove = removeButton(view);
+    remove?.click();
+    await vi.waitFor(() => {
+      expect(applyOps).toHaveBeenCalledTimes(2);
+      expect(view.querySelector(".board-view__error")).toBeNull();
+      expect(remove?.disabled).toBe(true);
+    });
+    expect(view.querySelector("iframe")).toBe(frame);
+
+    pending.resolve();
+    await vi.waitFor(() => {
+      expect(remove?.disabled).toBe(false);
+      expectText(view.querySelector(".board-announcer"), "Removed Alpha status");
+    });
+    expect(view.querySelector(".board-view__error")).toBeNull();
+    expect(view.querySelector("iframe")).toBe(frame);
+  });
+
   it("ignores a late operation failure after switching sessions", async () => {
     const pending = deferred();
     const applyOps = vi.fn(() => pending.promise);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
     await openBoardMenu(view);
-    view.querySelector<HTMLButtonElement>(".board-widget__menu-danger")?.click();
+    removeButton(view)?.click();
     await vi.waitFor(() => expect(applyOps).toHaveBeenCalledTimes(1));
     view.snapshot = { ...snapshot(), sessionKey: "agent:main:new-session" };
     await settleCells(view);
@@ -432,7 +476,7 @@ describe("openclaw-board-view", () => {
     { profile: "writer with approvals", canMutate: true, canGrant: true, controls: true },
   ])("gates dashboard controls for the $profile scope profile", async (profile) => {
     const view = await mount({
-      snapshot: snapshot({ widgets: [boardWidget({ grantState: "pending" })] }),
+      snapshot: widgetSnapshot({ grantState: "pending" }),
       canMutate: profile.canMutate,
       canGrant: profile.canGrant,
     });
@@ -440,12 +484,8 @@ describe("openclaw-board-view", () => {
     expect(view.querySelector(".board-widget__drag-handle") !== null).toBe(profile.controls);
     expect(view.querySelector(".board-widget__resize-handle") !== null).toBe(profile.controls);
     expect(view.querySelector(".board-widget__menu") !== null).toBe(profile.controls);
-    expect(
-      view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.disabled,
-    ).toBe(!profile.canGrant);
-    expect(
-      view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]')?.disabled,
-    ).toBe(!profile.canGrant);
+    expect(grantButton(view, "allow")?.disabled).toBe(!profile.canGrant);
+    expect(grantButton(view, "reject")?.disabled).toBe(!profile.canGrant);
   });
 
   it("does not schedule renewal when an in-flight MCP App load resolves after disconnect", async () => {
@@ -463,7 +503,7 @@ describe("openclaw-board-view", () => {
       expiresAtMs: 71_000,
     }));
     const view = await mount({
-      snapshot: snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] }),
+      snapshot: widgetSnapshot({ contentKind: "mcp-app" }),
       callbacks: callbacks({ widgetAppView, refreshWidgetAppView }),
     });
     expect(widgetAppView).toHaveBeenCalledWith("alpha", 1);
@@ -486,14 +526,12 @@ describe("openclaw-board-view", () => {
     }));
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({
-      snapshot: snapshot({ widgets: [boardWidget({ contentKind: "mcp-app" })] }),
+      snapshot: widgetSnapshot({ contentKind: "mcp-app" }),
       callbacks: callbacks({ applyOps, widgetAppView, refreshWidgetAppView }),
       context: gatewayContext(null),
     });
 
-    await vi.waitFor(() =>
-      expect(view.querySelector('[data-test-id="board-mcp-app-stale"]')).not.toBeNull(),
-    );
+    await vi.waitFor(() => expect(testId(view, "board-mcp-app-stale")).not.toBeNull());
     const buttons = view.querySelectorAll<HTMLButtonElement>(
       '[data-test-id="board-mcp-app-stale"] button',
     );
@@ -513,36 +551,24 @@ describe("openclaw-board-view", () => {
   });
 
   it("renders declared approval details instead of the generic copy", async () => {
-    const source = snapshot({
-      widgets: [
-        boardWidget({
-          grantState: "pending",
-          declaredSummary: ["Network access: https://api.example.com", "Tool access: lookup"],
-          declared: { netOrigins: ["https://api.example.com"], tools: ["lookup"] },
-        }),
-      ],
+    const view = await mountWidget({
+      grantState: "pending",
+      declaredSummary: ["Network access: https://api.example.com", "Tool access: lookup"],
+      declared: { netOrigins: ["https://api.example.com"], tools: ["lookup"] },
     });
-    const view = await mount({ snapshot: source });
-    const pending = view.querySelector('[data-test-id="board-pending"]');
+    const pending = testId(view, "board-pending");
 
     expect(pending?.querySelectorAll(".board-widget__grant-summary li")).toHaveLength(2);
-    expect(pending?.textContent).toContain("Network origins");
-    expect(pending?.textContent).toContain("https://api.example.com");
-    expect(pending?.textContent).toContain("Host tools and data");
+    expectText(pending, "Network origins", "https://api.example.com", "Host tools and data");
     expect(pending?.textContent).not.toContain("This widget requested additional access.");
   });
 
   it("shows granted capabilities in a compact chip and tooltip", async () => {
-    const source = snapshot({
-      widgets: [
-        boardWidget({
-          grantState: "granted",
-          declared: { netOrigins: ["https://api.example.com"], tools: ["health"] },
-        }),
-      ],
+    const view = await mountWidget({
+      grantState: "granted",
+      declared: { netOrigins: ["https://api.example.com"], tools: ["health"] },
     });
-    const view = await mount({ snapshot: source });
-    const chip = view.querySelector('[data-test-id="board-capabilities-granted"]');
+    const chip = testId(view, "board-capabilities-granted");
     const tooltip = chip?.closest("openclaw-tooltip") as
       | (HTMLElement & { content?: string })
       | null;
@@ -553,15 +579,10 @@ describe("openclaw-board-view", () => {
   });
 
   it("serializes pending approval decisions while the callback is in flight", async () => {
-    let finishGrant: (() => void) | undefined;
-    const grant = vi.fn(
-      async () =>
-        new Promise<void>((resolve) => {
-          finishGrant = resolve;
-        }),
-    );
+    const pending = deferred();
+    const grant = vi.fn(() => pending.promise);
     const view = await mount({
-      snapshot: snapshot({ widgets: [boardWidget({ grantState: "pending" })] }),
+      snapshot: widgetSnapshot({ grantState: "pending" }),
       callbacks: callbacks({ grant }),
     });
     const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
@@ -572,9 +593,8 @@ describe("openclaw-board-view", () => {
     expect(grant).toHaveBeenCalledTimes(1);
     const cell = view.querySelector("openclaw-board-widget-cell");
     await cell?.updateComplete;
-    expect(allow?.disabled).toBe(true);
-    expect(reject?.disabled).toBe(true);
-    finishGrant?.();
+    expect([allow?.disabled, reject?.disabled]).toEqual([true, true]);
+    pending.resolve();
     await vi.waitFor(() => expect(allow?.disabled).toBe(false));
   });
 
@@ -586,7 +606,7 @@ describe("openclaw-board-view", () => {
         throw new Error("approval service unavailable");
       }
     });
-    const source = snapshot({ widgets: [boardWidget({ grantState: "pending" })] });
+    const source = widgetSnapshot({ grantState: "pending" });
     const view = await mount({ snapshot: source, callbacks: callbacks({ grant }) });
     const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
     const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
@@ -597,28 +617,26 @@ describe("openclaw-board-view", () => {
 
     reject?.click();
     await vi.waitFor(() => {
-      expect(
-        view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent,
-      ).toContain("approval service unavailable");
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
+      expectText(testId(view, "board-widget-action-error"), "approval service unavailable");
+      expectText(
+        toastHost.querySelector(".app-toast__message"),
         "Could not reject widget access. Try again.",
       );
     });
-    expect(allow?.disabled).toBe(false);
-    expect(reject?.disabled).toBe(false);
+    expect([allow?.disabled, reject?.disabled]).toEqual([false, false]);
 
     view.snapshot = structuredClone({ ...source, revision: source.revision + 1 });
     await settleCells(view);
-    expect(view.querySelector('[data-test-id="board-widget-action-error"]')).toBeNull();
+    expect(testId(view, "board-widget-action-error")).toBeNull();
   });
 
   it("keeps a rejected widget inert and removable", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({
-      snapshot: snapshot({ widgets: [boardWidget({ grantState: "rejected" })] }),
+      snapshot: widgetSnapshot({ grantState: "rejected" }),
       callbacks: callbacks({ applyOps }),
     });
-    expect(view.querySelector('[data-test-id="board-rejected"]')).not.toBeNull();
+    expect(testId(view, "board-rejected")).not.toBeNull();
     expect(view.querySelector("iframe")).toBeNull();
     view.querySelector<HTMLButtonElement>('[data-test-id="board-rejected"] button')?.click();
     await vi.waitFor(() =>
@@ -628,13 +646,11 @@ describe("openclaw-board-view", () => {
 
   it("does not downgrade snapshots that advertise the shared sandbox contract", async () => {
     const view = await mount({
-      snapshot: snapshot({ widgets: [boardWidget({ viewTicket: "ticket" })] }),
+      snapshot: widgetSnapshot({ viewTicket: "ticket" }),
     });
 
     expect(view.querySelector("iframe")).toBeNull();
-    expect(view.querySelector('[data-test-id="board-widget-error"]')?.textContent).toContain(
-      "Widget sandbox host is unavailable.",
-    );
+    expectText(testId(view, "board-widget-error"), "Widget sandbox host is unavailable.");
   });
 
   it("keeps cell focus order stable and exposes move, resize, and menu labels", async () => {
@@ -648,19 +664,16 @@ describe("openclaw-board-view", () => {
       expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
       expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
       expect(cell.getAttribute("aria-label")).toContain("Dashboard widget");
-      expect(cell.querySelector(".board-widget__drag-handle")?.getAttribute("title")).toMatch(
-        /^Move /u,
-      );
-      expect(cell.querySelector(".board-widget__drag-handle")?.getAttribute("tabindex")).toBeNull();
-      expect(cell.querySelector(".board-widget__resize-handle")?.getAttribute("title")).toMatch(
-        /^Resize /u,
-      );
-      expect(
-        cell.querySelector(".board-widget__resize-handle")?.getAttribute("tabindex"),
-      ).toBeNull();
-      expect(cell.querySelector(".board-widget__menu-trigger")?.getAttribute("aria-label")).toBe(
-        "Widget options",
-      );
+      const drag = cell.querySelector(".board-widget__drag-handle");
+      const resize = cell.querySelector(".board-widget__resize-handle");
+      const menu = cell.querySelector(".board-widget__menu-trigger");
+      expect(drag?.getAttribute("title")).toMatch(/^Move /u);
+      expect(resize?.getAttribute("title")).toMatch(/^Resize /u);
+      expect([drag?.getAttribute("tabindex"), resize?.getAttribute("tabindex")]).toEqual([
+        null,
+        null,
+      ]);
+      expect(menu?.getAttribute("aria-label")).toBe("Widget options");
     }
 
     cells[0]?.focus();
@@ -677,9 +690,7 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "beta", position: 0 }]),
     );
-    await vi.waitFor(() =>
-      expect(view.querySelector(".board-announcer")?.textContent).toContain("Moved Beta chart"),
-    );
+    await vi.waitFor(() => expectText(view.querySelector(".board-announcer"), "Moved Beta chart"));
   });
 
   it("leaves arrow keys from nested widget controls untouched", async () => {
@@ -697,11 +708,6 @@ describe("openclaw-board-view", () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
     const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle")!;
-    const pointer = (target: EventTarget, type: string, clientY: number) => {
-      const event = new MouseEvent(type, { button: 0, clientX: 100, clientY, bubbles: true });
-      Object.defineProperty(event, "pointerId", { value: 7 });
-      target.dispatchEvent(event);
-    };
     pointer(handle, "pointerdown", 100);
     pointer(window, "pointerup", 100 + 2 * (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP));
     expect(applyOps).toHaveBeenCalledExactlyOnceWith([
@@ -709,22 +715,14 @@ describe("openclaw-board-view", () => {
     ]);
     await settleCells(view);
     expect(view.querySelector(".board-widget--dragging")).toBeNull();
-    expect(view.querySelector(".board-announcer")?.textContent).toContain("Resized Alpha status");
+    expectText(view.querySelector(".board-announcer"), "Resized Alpha status");
   });
 
   it("cancels an in-progress gesture when the board becomes inactive", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount({ callbacks: callbacks({ applyOps }) });
     const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
-    const pointerDown = new MouseEvent("pointerdown", {
-      bubbles: true,
-      button: 0,
-      cancelable: true,
-      clientX: 100,
-      clientY: 100,
-    });
-    Object.defineProperty(pointerDown, "pointerId", { value: 7 });
-    handle?.dispatchEvent(pointerDown);
+    pointer(handle!, "pointerdown", 100, 100, true);
     await view.updateComplete;
     expect(view.querySelector(".board-widget--dragging")).not.toBeNull();
 
@@ -732,9 +730,7 @@ describe("openclaw-board-view", () => {
     await settleCells(view);
     expect(view.querySelector(".board-widget--dragging")).toBeNull();
 
-    const pointerUp = new MouseEvent("pointerup", { bubbles: true, clientX: 200, clientY: 200 });
-    Object.defineProperty(pointerUp, "pointerId", { value: 7 });
-    window.dispatchEvent(pointerUp);
+    pointer(window, "pointerup", 200, 200);
     expect(applyOps).not.toHaveBeenCalled();
   });
 

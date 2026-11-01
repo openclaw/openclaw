@@ -7,6 +7,8 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { engineNullSafeEqual } from "./database-engine/scalar.js";
+import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { safeStatSync } from "./path-guards.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
@@ -404,16 +406,33 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
           );
         }
 
-        const selectSession = db.prepare(
-          `SELECT
-            started_at AS startedAt,
-            ended_at AS endedAt,
-            mode,
-            source_scope AS sourceScope,
-            source_process AS sourceProcess,
-            proxy_url AS proxyUrl
-           FROM capture_sessions
-           WHERE id = ?`,
+        const query = getNodeSqliteKysely<Pick<DB, "capture_sessions" | "capture_events">>(db);
+        const selectSession = prepareSqliteQueryTakeFirstSync<
+          string,
+          {
+            startedAt: number;
+            endedAt: number | null;
+            mode: string;
+            sourceScope: string;
+            sourceProcess: string;
+            proxyUrl: string | null;
+          }
+        >(db, (parameter) =>
+          query
+            .selectFrom("capture_sessions")
+            .select([
+              "started_at as startedAt",
+              "ended_at as endedAt",
+              "mode",
+              "source_scope as sourceScope",
+              "source_process as sourceProcess",
+              "proxy_url as proxyUrl",
+            ])
+            .where(
+              "id",
+              "=",
+              parameter((id) => id),
+            ),
         );
         const insertSession = db.prepare(
           `INSERT INTO capture_sessions (
@@ -430,7 +449,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
             session.source_process,
             session.proxy_url,
           ] satisfies SQLInputValue[];
-          const existing = selectSession.get(session.id);
+          const existing = selectSession(session.id);
           if (existing) {
             const expected = {
               startedAt: values[1],
@@ -448,11 +467,25 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
           insertSession.run(...values);
         }
 
-        const existingEventCount = db.prepare(
-          `SELECT COUNT(*) AS count
-           FROM capture_events
-           WHERE ${CAPTURE_EVENT_COLUMNS.map((column) => `${column} IS ?`).join(" AND ")}
-          `,
+        const existingEventCount = prepareSqliteQueryTakeFirstSync<
+          SQLInputValue[],
+          { count: number }
+        >(db, (parameter) =>
+          query
+            .selectFrom("capture_events")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where((eb) =>
+              eb.and(
+                CAPTURE_EVENT_COLUMNS.map((column, index) =>
+                  engineNullSafeEqual(
+                    db,
+                    eb.ref(column),
+                    // SAFETY: eventValues maps these same columns in this order.
+                    parameter((values) => values[index]!),
+                  ),
+                ),
+              ),
+            ),
         );
         const insertEvent = db.prepare(
           `INSERT INTO capture_events (${CAPTURE_EVENT_COLUMNS.join(", ")})
@@ -467,8 +500,8 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
           seenCounts.set(key, seenCount);
           let existingCount = existingCounts.get(key);
           if (existingCount === undefined) {
-            const row = existingEventCount.get(...values) as { count?: unknown } | undefined;
-            existingCount = Number(row?.count ?? 0);
+            const row = existingEventCount(values);
+            existingCount = row?.count ?? 0;
             existingCounts.set(key, existingCount);
           }
           if (seenCount > existingCount) {

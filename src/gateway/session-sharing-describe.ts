@@ -20,11 +20,12 @@ export function authorizeSessionDescribe(params: {
   }
   const { cfg, policyConfig } = projection.state;
   for (const target of resolveDirectSessionTargets("sessions.describe", params.requestParams)) {
-    const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+    const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId, "read");
     if (!agent.ok) {
       return agent.error;
     }
     const row = projection.describe({ key: target.sessionKey, agentId: agent.agentId });
+    const identity = gatewayClientSessionCreator(params.client);
     const sharing = prepareProjectedSessionSharing({
       cfg: policyConfig,
       client: params.client,
@@ -32,9 +33,9 @@ export function authorizeSessionDescribe(params: {
     });
     if (
       row &&
-      gatewayClientSessionCreator(params.client) &&
-      sharing.sessionCap === "none" &&
-      !sharing.isCreator(row.entry.createdActor)
+      identity &&
+      (sharing.sessionCap === "none" || sharing.sessionCap === "invited") &&
+      sharing.entryFilter?.(row.key, row.entry, row.membership.has(identity.id)) === false
     ) {
       return hiddenSessionNotFound(target.sessionKey);
     }

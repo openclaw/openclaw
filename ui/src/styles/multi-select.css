@@ -14,27 +14,23 @@ openclaw-multi-select {
   align-items: center;
   gap: 6px;
   width: 100%;
-  min-height: 38px;
-  padding: 5px 34px 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  min-height: var(--settings-control-height);
+  padding: 2px 34px 2px var(--field-padding-inline);
+  border: 1px solid var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
   color: var(--text);
   cursor: text;
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .multi-select:focus-within,
 .multi-select--open {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--field-focus-border);
 }
 
 .multi-select[data-disabled] {
-  opacity: 0.6;
-  cursor: default;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .multi-select__input,
@@ -46,8 +42,7 @@ openclaw-multi-select {
   background: transparent;
   outline: none;
   box-shadow: none;
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--field-font-size);
   color: var(--text);
 }
 
@@ -81,13 +76,6 @@ openclaw-multi-select {
   gap: 6px;
   max-width: 100%;
   color: var(--text);
-}
-
-.multi-select__chip-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .multi-select__chip-icon {
@@ -147,33 +135,8 @@ openclaw-multi-select {
 }
 
 .multi-select__menu {
-  max-height: min(320px, var(--oc-overlay-available-height, calc(100dvh - 48px)));
+  max-height: min(400px, var(--oc-overlay-available-height, calc(100dvh - 16px)));
   overflow: auto;
-  padding: 6px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-  color: var(--text);
-}
-
-.multi-select__option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: calc(var(--radius-md) - 4px);
-  font-size: var(--control-ui-text-sm);
-  cursor: var(--cursor-action);
-}
-
-.multi-select__option[aria-selected="true"] {
-  background: var(--bg-hover);
-}
-
-.multi-select__option[aria-disabled="true"] {
-  opacity: 0.45;
-  cursor: default;
 }
 
 .multi-select__option-icon {

@@ -1,11 +1,10 @@
-import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, merge, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import {
-  EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
   type SessionManagementAction,
   type SessionMenuData,
@@ -14,6 +13,7 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
 import { SessionMenuShortcut, useSessionMenuEntries } from "./session-menu-view.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
@@ -27,7 +27,6 @@ import {
 
 /** Only resolved local worktree destinations are offered by the menu host. */
 export type SessionMenuWork = {
-  loading: boolean;
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };
@@ -95,17 +94,14 @@ function SessionMenuContent(
     }
   };
   const actions = new SessionMenuActions(
-    {
-      get updateComplete() {
-        return host.updateComplete;
-      },
-      focusCurrentView() {
+    () => {
+      void host.updateComplete.then(() => {
         if (compactView() === "icon") {
           view.appearance.focusFirst();
         } else {
           menu?.focusFirst();
         }
-      },
+      });
     },
     readState,
     (action) => props.onAction(action),
@@ -119,7 +115,7 @@ function SessionMenuContent(
   };
   let stopShortcut: (() => void) | undefined;
   let stopAfterHide: (() => void) | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     stopShortcut?.();
     stopAfterHide?.();
   });

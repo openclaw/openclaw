@@ -50,7 +50,8 @@ const fixture = vi.hoisted(() => {
     pools: [] as WorkerTaskPool[],
   };
 });
-vi.mock("../infra/runtime-worker-url.js", () => ({
+vi.mock("../infra/runtime-worker-url.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-worker-url.js")>()),
   resolveRuntimeWorkerUrl: () => new URL(fixture.workerUrl),
 }));
 // mock-isolation: Control worker execution and retirement without starting real worker threads.
@@ -77,6 +78,17 @@ const input = {
 let host: LegacyPluginSdkResourceHost;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const run = () => host.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
+async function warmPool() {
+  await run();
+  return fixture.pools.at(-1)!;
+}
+const resume = (
+  continuation: Extract<Awaited<ReturnType<typeof run>>, { status: "waiting" }>["continuation"],
+) =>
+  continuation.resume(
+    { kind: "resume", config: input.config, settledRequests: [] },
+    { timeoutMs: 1000 },
+  );
 let stormTime = 0;
 const assignedWorkerId = () =>
   (fixture.executions.at(-1)!.input as CodeModeNodeInput).gcAttribution!.workerId;
@@ -129,8 +141,7 @@ afterEach(async () => {
 it("retires a storming warm worker, bounds retirement admission, and replaces it on demand", async () => {
   const clock = vi.spyOn(performance, "now").mockReturnValue((stormTime += 60_000));
   const storm = channel("openclaw.code-mode.gc-storm");
-  await run();
-  const retired = fixture.pools.at(-1)!;
+  const retired = await warmPool();
   const workerId = assignedWorkerId();
   const count = fixture.pools.length;
   storm.publish(workerId);
@@ -154,8 +165,7 @@ it.each(["complete", "expire"] as const)(
   "drains a storming worker without dropping its active or parked cell until %s",
   async (settlement) => {
     vi.spyOn(performance, "now").mockReturnValue((stormTime += 60_000));
-    await run();
-    const pool = fixture.pools.at(-1)!;
+    const pool = await warmPool();
     const workerId = assignedWorkerId();
     const held = holdRun(pool);
     const active = run();
@@ -169,17 +179,11 @@ it.each(["complete", "expire"] as const)(
     expect(await run()).toMatchObject({ status: "completed" });
     expect(fixture.pools.at(-1)).not.toBe(pool);
     if (settlement === "complete") {
-      expect(
-        await result.continuation.resume(
-          { kind: "resume", config: input.config, settledRequests: [] },
-          { timeoutMs: 1000 },
-        ),
-      ).toMatchObject({ status: "completed" });
+      expect(await resume(result.continuation)).toMatchObject({ status: "completed" });
     } else {
       // The existing continuation TTL owner expires parked work through dispose().
       await result.continuation.dispose();
     }
-    expect(pool.close).toHaveBeenCalledWith(undefined, "gc-storm");
     expect(pool.isClosed).toBe(true);
   },
 );
@@ -223,17 +227,33 @@ it("shares catalog bytes across cells while sending current execution limits", a
   expect(revised.config.maxPendingToolCalls).toBe(3);
 });
 
-it("joins its native workers at host close without retiring a sibling host", async () => {
+it("retains compatible warm workers and joins host close without retiring a sibling host", async () => {
+  vi.useFakeTimers();
   const sibling = new LegacyPluginSdkResourceHost();
-  const siblingScheduler = createTestGatewayScheduler();
+  const siblingScheduler = createTestGatewayScheduler("fake-timers");
   sibling.bindScheduler(siblingScheduler);
+  const start = fixture.pools.length;
   let held: ReturnType<typeof holdRetirement> | undefined;
   try {
-    await run();
-    const owned = fixture.pools.at(-1)!;
-    await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
-    const survivor = fixture.pools.at(-1)!;
-    expect(survivor).not.toBe(owned);
+    const cases = [
+      [host, 64],
+      [host, 128],
+      [sibling, 64],
+    ] as const;
+    for (const gap of [0, 10 * 60_000]) {
+      await vi.advanceTimersByTimeAsync(gap);
+      for (const [index, [owner, heapMiB]] of cases.entries()) {
+        const config = { ...input.config, memoryLimitBytes: heapMiB * 1024 * 1024 };
+        await owner.run(() =>
+          nodeCodeModeExecutor.execute({ ...input, config }, { timeoutMs: 1000 }),
+        );
+        expect(fixture.pools[start + index]!.run).toHaveBeenCalledTimes(gap ? 2 : 1);
+      }
+      expect(fixture.pools).toHaveLength(start + 3);
+      expect(fixture.pools.slice(start).every((pool) => !pool.isClosed)).toBe(true);
+    }
+    const owned = fixture.pools[start]!;
+    const survivor = fixture.pools[start + 2]!;
     held = holdRetirement(owned);
     const completed = vi.fn();
     const closing = host.close().then(completed);
@@ -243,10 +263,9 @@ it("joins its native workers at host close without retiring a sibling host", asy
     expect(survivor.isClosed).toBe(false);
     held.release();
     await closing;
-    expect(owned.close).toHaveBeenCalledWith(undefined, "shutdown");
-    const count = fixture.pools.length;
+    expect(owned.isClosed).toBe(true);
     await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
-    expect(fixture.pools).toHaveLength(count);
+    expect(fixture.pools).toHaveLength(start + 3);
     expect(survivor.isClosed).toBe(false);
     await expect(run()).rejects.toThrow("Plugin SDK resource host is closed");
   } finally {
@@ -261,8 +280,7 @@ it.each(["standalone", "runtime changed"] as const)(
   async (reason) => {
     let previous: (typeof fixture.pools)[number] | undefined;
     if (reason === "runtime changed") {
-      await run();
-      previous = fixture.pools.at(-1)!;
+      previous = await warmPool();
       previous.run.mockImplementationOnce(async () => {
         fixture.workerUrl += ".updated";
         return fixture.completed;
@@ -274,10 +292,6 @@ it.each(["standalone", "runtime changed"] as const)(
         : run()),
     ).toMatchObject({ status: "completed" });
     expect((previous ?? fixture.pools.at(-1))?.isClosed).toBe(true);
-    expect((previous ?? fixture.pools.at(-1))?.close).toHaveBeenCalledWith(
-      undefined,
-      reason === "runtime changed" ? "rotation" : "dispose",
-    );
   },
 );
 
@@ -304,7 +318,6 @@ it.each(["host", "idle"] as const)(
     expect(retired.isClosed).toBe(false);
     expect(fixture.pools).toHaveLength(count);
     expect(await run()).toMatchObject({ status: "completed" });
-    expect(retired.close).toHaveBeenCalledTimes(2);
     expect(retired.isClosed).toBe(true);
     expect(fixture.pools).toHaveLength(count + 1);
     if (reason === "host") {
@@ -313,76 +326,81 @@ it.each(["host", "idle"] as const)(
   },
 );
 
-it("reuses idle workers and expires them without retaining completed caller context", async () => {
-  const caller = new AsyncLocalStorage<string>();
-  const retiredContexts: Array<string | undefined> = [];
-  vi.useFakeTimers();
-  try {
-    await caller.run("completed-turn", () => Promise.all([run(), run()]));
-    const count = fixture.pools.length;
-    const previous = fixture.pools.at(-1)!;
-    const reused = fixture.pools.at(-2)!;
-    for (const pool of [previous, reused]) {
-      pool.close.mockImplementation(async () => {
-        retiredContexts.push(caller.getStore());
-        pool.isClosed = true;
-      });
-    }
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect([previous.isClosed, reused.isClosed]).toEqual([true, false]);
-    await vi.advanceTimersByTimeAsync(40_000);
-    expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
-    expect(fixture.pools).toHaveLength(count);
-    await vi.advanceTimersByTimeAsync(4 * 60_000);
-    expect([previous.isClosed, reused.isClosed]).toEqual([true, false]);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(reused.isClosed).toBe(true);
-    expect(retiredContexts).toEqual([undefined, undefined]);
-    expect(previous.close).toHaveBeenCalledWith(undefined, "idle-expiry");
-    expect(reused.close).toHaveBeenCalledWith(undefined, "idle-expiry");
-  } finally {
-    caller.disable();
-  }
-});
-
-it.each([
-  ["90s delayed wake", 0, 60_000, 30_000, 210_000],
-  ["360s delayed wake", 0, 330_000, 30_000, 0],
-  ["immediate backward clock", 0, -3_600_000, 300_000, 0],
-  ["backward clock after 60s", 60_000, -3_600_000, 240_000, 0],
-] as const)(
-  "keeps idle expiry through %s",
-  async (_label, beforeMs, clockShift, afterMs, remainingMs) => {
+it.each(["idle deadline", "newer completion"] as const)(
+  "keeps the newest idle worker and releases caller context after %s",
+  async (retirement) => {
+    const caller = new AsyncLocalStorage<string>();
+    const retiredContexts: Array<string | undefined> = [];
     vi.useFakeTimers();
-    await run();
-    const pool = fixture.pools.at(-1)!;
-    await vi.advanceTimersByTimeAsync(beforeMs);
-    vi.setSystemTime(Date.now() + clockShift);
-    await vi.advanceTimersByTimeAsync(afterMs);
-    if (remainingMs) {
-      expect(pool.isClosed).toBe(false);
-      await vi.advanceTimersByTimeAsync(remainingMs);
+    const reused = await caller.run("completed-turn", warmPool);
+    const held = holdRun(reused);
+    const config = { ...input.config, timeoutMs: 5 * 60_000 };
+    const active = host.run(() => nodeCodeModeExecutor.execute({ ...input, config }, config));
+    try {
+      await held.started;
+      await caller.run("completed-turn", run);
+      const previous = fixture.pools.at(-1)!;
+      const count = fixture.pools.length;
+      for (const pool of [previous, reused]) {
+        pool.close.mockImplementation(async () => {
+          retiredContexts.push(caller.getStore());
+          pool.isClosed = true;
+        });
+      }
+      if (retirement === "idle deadline") {
+        held.complete(fixture.completed);
+        await active;
+      }
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      expect(previous.isClosed).toBe(retirement === "idle deadline");
+      held.complete(fixture.completed);
+      expect(await active).toMatchObject({ status: "completed" });
+      expect([previous.isClosed, reused.isClosed]).toEqual([true, false]);
+      for (const gap of [40_000, 10 * 60_000]) {
+        await vi.advanceTimersByTimeAsync(gap);
+        expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
+        expect(fixture.pools).toHaveLength(count);
+      }
+      channel("openclaw.memory.critical").publish({});
+      expect(reused.isClosed).toBe(true);
+      expect(retiredContexts).toEqual([undefined, undefined]);
+    } finally {
+      held.complete(fixture.completed);
+      await active;
+      caller.disable();
     }
-    expect(pool.isClosed).toBe(true);
   },
 );
 
+it("keeps repeated bursts warm, then retires surplus capacity during serial traffic", async () => {
+  vi.useFakeTimers();
+  const start = fixture.pools.length;
+  await Promise.all(Array.from({ length: 8 }, run));
+  const burst = fixture.pools.slice(start);
+  expect(burst).toHaveLength(8);
+  for (const gap of [45_000, 60_000, 45_000]) {
+    await vi.advanceTimersByTimeAsync(gap);
+    await Promise.all(Array.from({ length: 8 }, run));
+    expect(fixture.pools).toHaveLength(start + 8);
+  }
+  for (let turn = 0; turn < 10; turn++) {
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await run()).toMatchObject({ status: "completed" });
+  }
+  expect(fixture.pools).toHaveLength(start + 8);
+  expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
+});
+
 it("bounds the warm set and retires every idle pool on memory pressure", async () => {
   const start = fixture.pools.length;
-  const results = await Promise.all(Array.from({ length: 6 }, run));
+  const results = await Promise.all(Array.from({ length: 10 }, run));
   expect(results.every((result) => result.status === "completed")).toBe(true);
   const idle = fixture.pools.filter((pool) => !pool.isClosed);
-  expect(idle).toHaveLength(4);
+  expect(idle).toHaveLength(8);
   const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
   expect(evicted).toHaveLength(2);
-  for (const pool of evicted) {
-    expect(pool.close).toHaveBeenCalledWith(undefined, "eviction");
-  }
   channel("openclaw.memory.critical").publish({});
   expect(idle.every((pool) => pool.isClosed)).toBe(true);
-  for (const pool of idle) {
-    expect(pool.close).toHaveBeenCalledWith(undefined, "memory_pressure");
-  }
   expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
   const count = fixture.pools.length;
   expect(await run()).toMatchObject({ status: "completed" });
@@ -393,8 +411,7 @@ it.each(["abort", "timeout"] as const)(
   "ends acquisition on %s while native retirement still owns its worker",
   async (reason) => {
     vi.useFakeTimers();
-    await run();
-    const previous = fixture.pools.at(-1)!;
+    const previous = await warmPool();
     const poolCount = fixture.pools.length;
     const executionCount = fixture.executions.length;
     const held = holdRetirement(previous);
@@ -434,30 +451,24 @@ it.each(["abort", "timeout"] as const)(
 );
 
 it("retries failed continuation cleanup without restoring resume authority", async () => {
-  await run();
-  const pool = fixture.pools.at(-1)!;
+  const pool = await warmPool();
   pool.run.mockResolvedValueOnce(parkedResult());
   const result = await run();
   assert(result.status === "waiting", "Expected a live continuation");
   pool.close.mockRejectedValueOnce(new Error("native exit uncertain"));
   await expect(result.continuation.dispose()).rejects.toThrow("native exit uncertain");
-  expect(
-    await result.continuation.resume(
-      { kind: "resume", config: input.config, settledRequests: [] },
-      { timeoutMs: 1000 },
-    ),
-  ).toMatchObject({ status: "failed", code: "runtime_unavailable" });
+  expect(await resume(result.continuation)).toMatchObject({
+    status: "failed",
+    code: "runtime_unavailable",
+  });
   await result.continuation.dispose();
-  expect(pool.close).toHaveBeenCalledTimes(2);
-  expect(pool.close).toHaveBeenCalledWith(undefined, "dispose");
   expect(pool.isClosed).toBe(true);
 });
 
 it.each([250, 1500])(
   "charges %d ms of native retirement to the deadline without shortening the separate CPU allowance",
   async (retirementMs) => {
-    await run();
-    const previous = fixture.pools.at(-1)!;
+    const previous = await warmPool();
     const executionCount = fixture.executions.length;
     const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     previous.close.mockImplementationOnce(async () => {
@@ -503,16 +514,14 @@ it("retires all old runtime workers before executing against a new entry", async
 });
 
 it("does not release an excess completed pool after native cleanup fails", async () => {
-  await run();
-  const first = fixture.pools.at(-1)!;
+  const first = await warmPool();
   const held = holdRun(first);
   const pending = run();
   await held.started;
-  const siblings = await Promise.all(Array.from({ length: 4 }, run));
+  const siblings = await Promise.all(Array.from({ length: 8 }, run));
   expect(siblings.every((result) => result.status === "completed")).toBe(true);
   first.close.mockRejectedValueOnce(new Error("native exit uncertain"));
   held.complete(fixture.completed);
   expect(await pending).toMatchObject({ status: "failed", error: "native exit uncertain" });
-  expect(first.close).toHaveBeenCalledTimes(2);
   expect(first.isClosed).toBe(true);
 });

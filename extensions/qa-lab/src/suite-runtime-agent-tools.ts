@@ -93,12 +93,9 @@ async function callPluginToolsMcp(params: {
     env: transportEnv,
   });
   const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
-  const stderr = transport.stderr;
-  if (stderr && typeof stderr.on === "function") {
-    stderr.on("data", (chunk: unknown) => {
-      appendQaChildOutputTail(stderrTail, chunk);
-    });
-  }
+  transport.stderr?.on("data", (chunk: unknown) => {
+    appendQaChildOutputTail(stderrTail, chunk);
+  });
   const client = new Client(
     { name: "openclaw-qa-suite", version: "0.0.0" },
     { versionNegotiation: { mode: "legacy" } },

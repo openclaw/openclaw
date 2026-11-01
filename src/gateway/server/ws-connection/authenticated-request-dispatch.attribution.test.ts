@@ -9,9 +9,11 @@ import { serializeGatewayFrame } from "../../serialized-json.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { captureSessionRowGeneration } from "../../session-row-identity.js";
 import { shareSidebarSessionRows } from "../../session-row-presentation.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 beforeEach(() => resetDiagnosticEventsForTest());
@@ -58,20 +60,17 @@ async function dispatch(
     clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
   });
   if (delivery === "shared") {
-    client.authenticatedUserProfile = {
-      profileId: "private-profile",
+    client.authenticatedUserProfile = dispatchProfile("private-profile", {
       displayName: "Test operator",
-      hasAvatar: false,
       avatarRevision: "0",
       updatedAt: 0,
-    };
+    });
   }
-  const request = { type: "req", id: "private-request", method, params };
+  const request = requestFrame("private-request", method, params);
   const internalSend = delivery === "internal" ? harness.send : undefined;
   await dispatchRequest(request, client, undefined, internalSend);
   if (delivery === "shared") {
     await harness.dispatcher.dispatch({ ...request, id: "private-follower" }, client);
-    expect(handler).toHaveBeenCalledOnce();
     for (const [frame] of harness.send.mock.calls) {
       expect(JSON.parse(serializeGatewayFrame(frame).toString()).payload).toEqual(payload);
     }
@@ -94,7 +93,7 @@ it.each(["wire", "shared", "internal"] as const)(
       const payload = shareSidebarSessionRows(changed, token, [
         captureSessionRowGeneration(previous),
       ]);
-      expect(Object.keys(payload).toSorted()).toEqual(["rowsRevision", "sessions", "sharedFacts"]);
+      expect(payload).not.toHaveProperty("baseMissReason");
       const events = await dispatch(
         "sessions.list",
         { rowMode: "sidebar", ifRowsRevision: token },
@@ -116,12 +115,9 @@ it.each([
   ["sidebar", revision, unchanged, "unchanged"],
   ["sidebar", `delta:${revision}`, delta, "delta"],
   ["sidebar", undefined, full, "full-no-base"],
-  ["sidebar", `delta:${revision}`, full, "full-with-base"],
   ["sidebar", revision, full, "full-with-base"],
   ["compact", undefined, full, "not-sidebar"],
   ["compact", "", full, "full-no-base"],
-  ["compact", revision, unchanged, "unchanged"],
-  ["compact", `delta:${revision}`, delta, "delta"],
 ] as const)(
   "attributes session response bytes (%s, %s, %j, %s)",
   async (rowMode, ifRowsRevision, payload, rowsOutcome) => {

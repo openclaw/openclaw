@@ -70,12 +70,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     };
   }
   async function compactionFixture(onContextCompacted = vi.fn()) {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent },
-      { onContextCompacted },
-    );
-    return { projector, onAgentEvent, onContextCompacted };
+    return { ...(await fixture.observe({}, { onContextCompacted })), onContextCompacted };
   }
   async function misalignmentProjector(
     detailedExplanation: string | undefined,
@@ -146,8 +141,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     const result = fixture.result(projector);
     expect(result.assistantTexts).toEqual(["final answer"]);
     expectTerminal(result, null, null);
-    expect(result.lastAssistant?.stopReason).toBe("stop");
-    expect(result.lastAssistant?.errorMessage).toBeUndefined();
+    expect(result.lastAssistant).toMatchObject({ stopReason: "stop", errorMessage: undefined });
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "run_status",
@@ -402,9 +396,8 @@ describe("CodexAppServerEventProjector usage projection", () => {
   });
 
   it("replaces the resolved window with native context and prompt-token snapshots", async () => {
-    const callback = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent: callback },
+    const { projector, onAgentEvent: callback } = await fixture.observe(
+      {},
       { initialContextTokens: 1_050_000 },
     );
     expect(result(projector)).toMatchObject({

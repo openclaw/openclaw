@@ -69,6 +69,14 @@ const schemaMigrationDescriptions = {
   "state-write-indexes-v27": "replay, skill usage, and lease writes -> smaller index maintenance",
   "github-publication-draft-v28": "GitHub publication requests -> durable draft choice",
   "local-client-credentials-v29": "client credentials and native socket material -> local owner",
+  "automation-policy-fence-v30":
+    "heartbeat monitors -> ordinary automation timing and delivery policy fence",
+  "local-workspace-manifests-v31": "local workspace baselines -> incremental checkpoint manifests",
+  "local-workspace-cas-v35":
+    "local workspace baselines -> shared immutable trees and scan fingerprints",
+  "template-names-v36": "starter installs and provenance -> canonical Template storage names",
+  "worker-resource-receipts-v37": "worker environments -> immutable provider resource receipts",
+  "repository-disk-authority-v38": "repository authority and pending-result disk identity retained",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":

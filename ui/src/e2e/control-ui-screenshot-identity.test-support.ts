@@ -82,31 +82,23 @@ export function defineControlUiFrameIdentityTests(createPage: () => Promise<Page
       await page.setContent(
         '<style>#clip { width: 200px; height: 80px; overflow: hidden; } #proof { width: 100px; height: 40px; background: purple; }</style><div id="clip"><div id="proof">Ready</div></div>',
       );
-      const context = page.context();
-      const newSession = context.newCDPSession.bind(context);
-      const capture = vi.spyOn(context, "newCDPSession").mockImplementation(async (target) => {
-        const session = await newSession(target);
-        const send = session.send.bind(session);
-        vi.spyOn(session, "send").mockImplementation(async (method, params) => {
-          if (method === "Page.captureScreenshot") {
-            // Mutate at the actual capture boundary, then forward the native CDP
-            // capture. No fabricated pixels or helper readiness results.
-            await page.locator("#proof").evaluate((element, mutation) => {
-              const mutations = {
-                hidden: () => element.setAttribute("style", "visibility: hidden"),
-                clipped: () => {
-                  element.parentElement!.style.height = "0px";
-                },
-                removed: () => element.remove(),
-                moved: () => element.setAttribute("style", "transform: translateX(10px)"),
-                replaced: () => element.replaceWith(element.cloneNode(true)),
-              };
-              mutations[mutation]();
-            }, change);
-          }
-          return send(method, params);
-        });
-        return session;
+      const screenshot = page.screenshot.bind(page);
+      const capture = vi.spyOn(page, "screenshot").mockImplementation(async (options) => {
+        // Mutate at the capture boundary, then forward the native screenshot.
+        // No fabricated pixels or helper readiness results.
+        await page.locator("#proof").evaluate((element, mutation) => {
+          const mutations = {
+            hidden: () => element.setAttribute("style", "visibility: hidden"),
+            clipped: () => {
+              element.parentElement!.style.height = "0px";
+            },
+            removed: () => element.remove(),
+            moved: () => element.setAttribute("style", "transform: translateX(10px)"),
+            replaced: () => element.replaceWith(element.cloneNode(true)),
+          };
+          mutations[mutation]();
+        }, change);
+        return screenshot(options);
       });
       try {
         const proof = page.locator("#proof");

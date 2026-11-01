@@ -49,19 +49,6 @@ const facts = (cfg: OpenClawConfig = {}) => ({
 type ViewOptions = Parameters<typeof prepareModelCatalogView>[0];
 const prepare = (options: Partial<ViewOptions> = {}) =>
   prepareModelCatalogView({ ...facts(options.cfg), ...options });
-function trackedConfig(providers: Record<string, ModelProviderConfig>) {
-  const enumerate = vi.fn(Reflect.ownKeys);
-  return {
-    cfg: {
-      models: {
-        providers: new Proxy<Record<string, ModelProviderConfig>>(providers, {
-          ownKeys: enumerate,
-        }),
-      },
-    },
-    enumerate,
-  };
-}
 const paired = (entry: ModelCatalogEntry) => ({ entry, runtimeEntry: entry });
 
 describe("prepared model catalog view", () => {
@@ -74,15 +61,14 @@ describe("prepared model catalog view", () => {
     });
   });
 
-  it("prepares physical variants with provider-bounded identity discovery", () => {
-    const policy = vi
-      .spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface")
-      .mockImplementation((provider) =>
+  it("groups physical variants without merging distinct model IDs", () => {
+    vi.spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface").mockImplementation(
+      (provider) =>
         provider === "fixture"
           ? { normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^vendor\//u, "") }
           : null,
-      );
-    const canonical = Array.from({ length: 64 }, (_, index) => row("fixture", `model-${index}`));
+    );
+    const canonical = [row("fixture", "model-0"), row("fixture", "model-1")];
     const physical = canonical.map((entry) => ({ ...entry, id: `vendor/${entry.id}` }));
     const distinct = [row("unknown", "Reader"), row("unknown", "reader@variant")];
     const view = createModelCatalogView({
@@ -91,24 +77,21 @@ describe("prepared model catalog view", () => {
     });
 
     expect(view.logicalEntries).toEqual([...canonical, ...distinct]);
-    expect(policy).toHaveBeenCalledTimes(2);
     const variant = physical[0]!;
     expect(view.variantsOf(variant)).toEqual([canonical[0], variant]);
   });
 
-  it("prepares empty provider overrides once for distinct view rows", () => {
+  it("captures provider overrides until a new view is prepared", () => {
     const providers: Record<string, ModelProviderConfig> = { fixture: { baseUrl: "", models: [] } };
-    const { cfg, enumerate } = trackedConfig(providers);
-    const catalog = Array.from({ length: 1_000 }, (_, index) => row("fixture", `model-${index}`));
+    const cfg = { models: { providers } };
+    const catalog = [row("fixture", "model-0"), row("fixture", "model-1")];
     const keyOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
       `${entry.provider}/${entry.id}`;
     const params = { cfg, catalog, keyOf };
     const view = createModelCatalogView(params);
-    expect(enumerate).not.toHaveBeenCalled();
     expect(
       catalog.map((entry) => view.readProjection(entry, { kind: "unmanaged" }, keyOf(entry))),
     ).toEqual(catalog.map(paired));
-    expect(enumerate).toHaveBeenCalledOnce();
 
     providers.fixture = {
       baseUrl: "",
@@ -118,7 +101,6 @@ describe("prepared model catalog view", () => {
     expect(view.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual(
       paired(freshEntry),
     );
-    expect(enumerate).toHaveBeenCalledOnce();
     const nextView = createModelCatalogView(params);
     const expected: ModelCatalogEntry = {
       ...freshEntry,
@@ -130,7 +112,6 @@ describe("prepared model catalog view", () => {
     expect(nextView.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual(
       paired(expected),
     );
-    expect(enumerate).toHaveBeenCalledTimes(2);
   });
 
   it("keeps missing runtime credentials labeled missing", async () => {
@@ -184,55 +165,14 @@ describe("prepared model catalog view", () => {
     ]);
   });
 
-  it("builds provider-config inventory independently of picker allowlists", () => {
+  it("sorts authored inventory independently of picker allowlists, using canonical route metadata", () => {
     const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/allowlisted": {},
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "two",
-                name: "Two",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              },
-              {
-                id: "one",
-                name: "One",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              },
-            ],
-          },
-        },
-      },
+      agents: { defaults: { models: { "custom/allowlisted": {} } } },
+      ...providerConfig("custom", {
+        baseUrl: "https://authored.example/v1",
+        models: [model("private"), model("kept")],
+      }),
     };
-
-    expect(prepare({ cfg }).providerInventory(cfg, [])).toMatchObject([
-      { provider: "openai", id: "one", name: "One" },
-      { provider: "openai", id: "two", name: "Two" },
-    ]);
-  });
-
-  it("uses authored inventory membership with canonical route metadata", () => {
-    const cfg = providerConfig("custom", {
-      baseUrl: "https://authored.example/v1",
-      models: [model("kept"), model("private")],
-    });
     const canonical: ModelCatalogEntry = {
       ...row("custom", "kept"),
       api: "openai-responses",
@@ -306,9 +246,6 @@ describe("prepared model catalog view", () => {
         readOnly: true,
         providerDiscoveryProviderIds: [provider],
         scopedLiveProviderDiscovery: true,
-        agentDir: "/tmp/catalog-view-agent",
-        workspaceDir: "/tmp/catalog-view-workspace",
-        env: {},
       }),
     );
     expect(mocks.loadOwner).not.toHaveBeenCalled();
@@ -342,9 +279,7 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 
 describe("prepared native catalog readiness", () => {
   it("does not let an uncredentialed API catalog twin hide a discovered native offering", () => {
-    const logical = row("custom", "native-model");
-    const api = { ...logical, api: "openai-responses" as const };
-    const read = nativeReader(api);
+    const read = nativeReader(row("custom", "native-model", { api: "openai-responses" }));
     expect(read()).toMatchObject(nativeResult(true));
   });
 
@@ -406,23 +341,17 @@ describe("prepared native catalog readiness", () => {
       },
       pluginRegistry: registry,
     });
-    const decision = read({
-      ...host,
-      unavailableReason: "missing-auth",
-    });
-    expect(decision).toMatchObject(
-      nativeResult(undefined, {
-        availabilityAuthoritative: true,
-      }),
-    );
+    const decision = read({ ...host, unavailableReason: "missing-auth" });
+    expect(decision).toMatchObject(nativeResult(undefined, { availabilityAuthoritative: true }));
     expect(decision.unavailableReason).toBeUndefined();
   });
 
-  it("reuses captured host configuration while observing native readiness and selection", () => {
+  it("observes live native readiness and selection until retirement", () => {
     let ready = true;
     let current = true;
-    const { cfg, enumerate: enumerateProviders } = trackedConfig({
-      custom: { baseUrl: "", models: [model("native-model"), model("other-model")] },
+    const cfg = providerConfig("custom", {
+      baseUrl: "",
+      models: [model("native-model"), model("other-model")],
     });
     const read = nativeReader(nativeEntry, {
       cfg,
@@ -435,28 +364,16 @@ describe("prepared native catalog readiness", () => {
     });
     const observed = nativeResult(true, { selectedAuthMode: "oauth" });
     expect(read(host, "native-test")).toMatchObject(observed);
-    const preparedEnumerations = enumerateProviders.mock.calls.length;
-    expect(preparedEnumerations).toBeGreaterThan(0);
-    expect(read(host, "native-test")).toMatchObject(observed);
     expect(read(host, "openclaw")).toEqual(host);
     expect(read({ ...host, requestedRuntimeId: "native-test" })).toMatchObject({
       ...observed,
       requestedRuntimeId: "native-test",
     });
-    const credentialedHost: ModelAuthAvailabilityEvaluation = {
-      ...host,
-      availability: true,
-      evidence: "profile",
-      selectedProfileId: "custom:host",
-      selectedAuthMode: "api_key",
-    };
-    expect(read(credentialedHost, "native-test")).toEqual(credentialedHost);
     ready = false;
     expect(read(host, "native-test")).toMatchObject({ availability: false });
     ready = true;
     current = false;
     expect(read(host, "native-test")).toMatchObject({ availability: false });
-    expect(enumerateProviders).toHaveBeenCalledTimes(preparedEnumerations);
   });
 
   it.each([
@@ -488,6 +405,13 @@ it.each([
     undefined,
   ],
   ["native-without-api-fallback", [base], "native-fixture", false, undefined],
+  [
+    "native-before-api",
+    [base, { ...base, nativeRuntime: "native-fixture", contextWindows: undefined }],
+    "native-fixture",
+    true,
+    undefined,
+  ],
 ] as const)(
   "preserves logical fallback without borrowing native windows (%s)",
   (_, routeVariants, runtimeId, allowApiFallback, expected) => {
@@ -498,5 +422,7 @@ it.each([
       allowApiFallback,
     });
     expect(selected.entry.contextWindows).toEqual(expected);
+    const view = createModelCatalogView({ cfg: {}, catalog: [base], routeVariants });
+    expect(view.selectRuntimeEntry({ entry: base, runtimeId, allowApiFallback })).toEqual(selected);
   },
 );

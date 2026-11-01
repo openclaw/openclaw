@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  parseOptionalPositiveInteger,
-  parseOptionalTimeoutMs,
-  requireProviderModelOverride,
-} from "./shared.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
+import { parseOptionalTimeoutMs, requireProviderModelOverride } from "./shared.js";
 
 describe("capability CLI model overrides", () => {
   it.each([undefined, "", " \t"])("keeps a blank override %j absent", (raw) => {

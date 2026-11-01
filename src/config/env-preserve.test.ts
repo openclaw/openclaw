@@ -361,22 +361,19 @@ describe("restoreEnvVarRefsFromResolved", () => {
       sibling: "read-token",
       indirect: "${INDIRECT}",
     });
-    expect(candidate.edited).toBe("replacement");
-    expect(candidate.value).toBe("prefix-read-token");
+    expect(candidate).toMatchObject({ edited: "replacement", value: "prefix-read-token" });
   });
 
   it("keeps explicit parent templates without activating untouched literal descendants", () => {
+    const snapshot = (directory: string, token: string, removed = true) => ({
+      owner: { directory, token, ...(removed ? { removed: token } : {}) },
+      literal: directory,
+    });
     expect(
       restoreEnvVarRefsFromResolved(
-        { owner: { directory: "${OWNER}", token: "read-token" }, literal: "${OWNER}" },
-        {
-          owner: { directory: "$${OWNER}", token: "${TOKEN}", removed: "${TOKEN}" },
-          literal: "$${OWNER}",
-        },
-        {
-          owner: { directory: "${OWNER}", token: "read-token", removed: "read-token" },
-          literal: "${OWNER}",
-        },
+        snapshot("${OWNER}", "read-token", false),
+        snapshot("$${OWNER}", "${TOKEN}"),
+        snapshot("${OWNER}", "read-token"),
         [["owner"]],
       ),
     ).toEqual({ owner: { directory: "${OWNER}", token: "${TOKEN}" }, literal: "$${OWNER}" });

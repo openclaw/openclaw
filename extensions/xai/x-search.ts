@@ -11,19 +11,21 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolveXaiResponsesEndpoint } from "./src/responses-tool-shared.js";
 import {
   isXaiToolEnabled,
   resolveXaiToolApiKeyWithAuth,
   type XaiToolAuthContext,
 } from "./src/tool-auth-shared.js";
+import {
+  resolveNormalizedXaiToolModel,
+  resolvePositiveIntegerToolConfig,
+} from "./src/tool-config-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
-  resolveXaiXSearchEndpoint,
-  resolveXaiXSearchInlineCitations,
-  resolveXaiXSearchMaxTurns,
-  resolveXaiXSearchModel,
+  XAI_DEFAULT_X_SEARCH_MODEL,
   type XaiXSearchOptions,
 } from "./src/x-search-shared.js";
 import {
@@ -128,10 +130,13 @@ export function createXSearchTool(options?: {
       enableImageUnderstanding: args.enable_image_understanding === true,
       enableVideoUnderstanding: args.enable_video_understanding === true,
     };
-    const model = resolveXaiXSearchModel(xSearchConfig);
-    const endpoint = resolveXaiXSearchEndpoint(xSearchConfig);
-    const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfig);
-    const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfig);
+    const model = resolveNormalizedXaiToolModel({
+      config: xSearchConfig,
+      defaultModel: XAI_DEFAULT_X_SEARCH_MODEL,
+    });
+    const endpoint = resolveXaiResponsesEndpoint(xSearchConfig?.baseUrl);
+    const inlineCitations = xSearchConfig?.inlineCitations === true;
+    const maxTurns = resolvePositiveIntegerToolConfig(xSearchConfig, "maxTurns");
     const cacheKey = JSON.stringify([
       "x_search",
       sha256Hex(apiKey),

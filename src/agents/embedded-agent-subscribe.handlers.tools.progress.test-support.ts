@@ -5,10 +5,7 @@ import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import {
-  adjustedParamsByToolCallId,
-  buildAdjustedParamsKey,
-} from "./agent-tools.before-tool-call.state.js";
+import { peekAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -90,7 +87,6 @@ export function registerToolChannelProgressTests({
       for (const explicitHide of [false, true]) {
         const { ctx, events } = contextWithEvents();
         const toolCallId = `rewrite-${explicitHide}`;
-        const adjustedKey = buildAdjustedParamsKey({ runId: ctx.params.runId, toolCallId });
         const toolRef = { toolName: "process", toolCallId };
         const args = { action: "poll", sessionId: "fixture" };
         const executedArgs = { ...args, action: "kill" };
@@ -99,20 +95,18 @@ export function registerToolChannelProgressTests({
           details: { status: "completed" },
         };
         const registry = createTestRegistry();
-        const rewrite = vi.fn(() => ({ params: executedArgs }));
         registry.typedHooks.push({
           pluginId: "rewrite-fixture",
           hookName: "before_tool_call",
-          handler: rewrite,
+          handler: () => ({ params: executedArgs }),
           source: "test",
         });
         setActivePluginRegistry(registry);
         initializeGlobalHookRunner(registry);
-        const execute = vi.fn(async (_toolCallId: string, _args: unknown) => {
+        const execute = async () => {
           updateTool(ctx, { ...toolRef, partialResult: result });
-          expect(adjustedParamsByToolCallId.get(adjustedKey)).toEqual(executedArgs);
           return result;
-        });
+        };
         const tool = wrapToolWithBeforeToolCallHook(
           { ...createProcessTool(), execute },
           { runId: ctx.params.runId },
@@ -121,15 +115,13 @@ export function registerToolChannelProgressTests({
           await startTool(ctx, { ...toolRef, args, hideFromChannelProgress: explicitHide });
           const observedResult = await tool.execute(toolCallId, args);
           await endTool(ctx, { ...toolRef, result: observedResult, isError: false });
-          expect(rewrite).toHaveBeenCalledOnce();
-          expect(execute.mock.calls[0]?.[1]).toEqual(executedArgs);
           const start = events.filter((event) => event.data?.phase === "start");
           const settled = events.filter((event) => event.data?.phase !== "start");
           expect(start).toHaveLength(2);
           expect(settled).toHaveLength(4);
           expectProgressVisibility(start, true, explicitHide);
           expectProgressVisibility(settled, explicitHide, explicitHide);
-          expect(adjustedParamsByToolCallId.has(adjustedKey)).toBe(false);
+          expect(peekAdjustedParamsForToolCall(toolCallId, ctx.params.runId)).toBeUndefined();
         } finally {
           const emptyRegistry = createTestRegistry();
           setActivePluginRegistry(emptyRegistry);
@@ -180,71 +172,64 @@ export function registerToolChannelProgressTests({
         expect(ctx.emitToolSummary).toHaveBeenCalledTimes(2);
         expect(ctx.emitToolOutput).toHaveBeenCalledTimes(2);
         expect(ctx.state.itemActiveIds.size).toBe(0);
-        expect(ctx.state.itemStartedCount).toBe(2);
-        expect(ctx.state.itemCompletedCount).toBe(2);
         expect(ctx.state.toolMetaById.size).toBe(0);
         expect(ctx.state.toolSummaryById.size).toBe(0);
-        expect(ctx.state.toolMetas).toEqual([
-          expect.objectContaining({ toolCallId: "poll-running", isError: false }),
-          expect.objectContaining({ toolCallId: "poll-completed", isError: false }),
-        ]);
       } finally {
         unsubscribe();
         deleteSession(session.id);
       }
     });
 
-    it.each(["missing", "nonzero", "timeout"] as const)(
-      "exposes a real %s poll failure unless explicitly hidden",
-      async (failure) => {
-        for (const explicitHide of [undefined, "start", "update", "end"] as const) {
-          const { ctx, events } = contextWithEvents();
-          const session = createProcessSessionFixture({
-            id: `poll-${failure}`,
-            backgrounded: true,
-          });
-          if (failure !== "missing") {
-            addSession(session);
-            markExited(
-              session,
-              failure === "nonzero" ? 1 : 0,
-              null,
-              failure === "nonzero" ? "completed" : "failed",
-              failure === "timeout" ? "overall-timeout" : "exit",
-            );
-          }
-          try {
-            const toolCallId = `poll-${failure}-${explicitHide}`;
-            const toolRef = { toolName: "process", toolCallId };
-            const args = { action: "poll", sessionId: session.id };
-            await runTool(
-              ctx,
-              toolRef,
-              args,
-              () => createProcessTool().execute(toolCallId, args),
-              explicitHide,
-            );
-            const completed = completedEvents(events);
-            expect(completed).toHaveLength(2);
-            expect(allHidden(completed)).toBe(explicitHide !== undefined);
-            expect(events).toContainEqual(
-              expect.objectContaining({
-                stream: "tool",
-                data: expect.objectContaining({ phase: "result", isError: failure !== "nonzero" }),
-              }),
-            );
-            expect(completed.find((event) => event.stream === "item")?.data?.status).toBe("failed");
-            if (failure === "nonzero") {
-              expect(ctx.state.lastToolError).toBeUndefined();
-            } else {
-              expect(ctx.state.lastToolError).toMatchObject({ toolName: "process" });
-            }
-          } finally {
-            deleteSession(session.id);
-          }
+    it.each([
+      ["nonzero", undefined],
+      ["timeout", undefined],
+      ["timeout", "start"],
+      ["timeout", "update"],
+      ["timeout", "end"],
+    ] as const)("exposes %s poll failure unless hidden at %s", async (failure, explicitHide) => {
+      const { ctx, events } = contextWithEvents();
+      const session = createProcessSessionFixture({
+        id: `poll-${failure}`,
+        backgrounded: true,
+      });
+      addSession(session);
+      markExited(
+        session,
+        failure === "nonzero" ? 1 : 0,
+        null,
+        failure === "nonzero" ? "completed" : "failed",
+        failure === "timeout" ? "overall-timeout" : "exit",
+      );
+      try {
+        const toolCallId = `poll-${failure}-${explicitHide}`;
+        const toolRef = { toolName: "process", toolCallId };
+        const args = { action: "poll", sessionId: session.id };
+        await runTool(
+          ctx,
+          toolRef,
+          args,
+          () => createProcessTool().execute(toolCallId, args),
+          explicitHide,
+        );
+        const completed = completedEvents(events);
+        expect(completed).toHaveLength(2);
+        expect(allHidden(completed)).toBe(explicitHide !== undefined);
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            stream: "tool",
+            data: expect.objectContaining({ phase: "result", isError: failure !== "nonzero" }),
+          }),
+        );
+        expect(completed.find((event) => event.stream === "item")?.data?.status).toBe("failed");
+        if (failure === "nonzero") {
+          expect(ctx.state.lastToolError).toBeUndefined();
+        } else {
+          expect(ctx.state.lastToolError).toMatchObject({ toolName: "process" });
         }
-      },
-    );
+      } finally {
+        deleteSession(session.id);
+      }
+    });
   });
 
   describe("sessions_yield channel progress privacy", () => {

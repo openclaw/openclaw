@@ -105,16 +105,7 @@ export class ExtensionRelayBridge {
   private latestPromotedCandidateOrdinal = 0;
   private pingTimer: NodeJS.Timeout | null = null;
   private missedPongs = 0;
-  private readonly onStateChange?: () => void;
   private readonly connectionEvents = new EventTarget();
-
-  constructor(
-    opts: {
-      onStateChange?: () => void;
-    } = {},
-  ) {
-    this.onStateChange = opts.onStateChange;
-  }
 
   /** True once an extension socket completed its hello handshake. */
   get extensionConnected(): boolean {
@@ -250,7 +241,6 @@ export class ExtensionRelayBridge {
         this.syncTabs(msg.tabs);
         this.startPing();
         this.connectionEvents.dispatchEvent(new Event("ready"));
-        this.onStateChange?.();
         return;
       }
       if (this.extension?.socket !== socket) {
@@ -268,7 +258,6 @@ export class ExtensionRelayBridge {
       this.extensionCandidates.delete(socket);
       if (this.extension?.socket === socket) {
         this.handleExtensionGone();
-        this.onStateChange?.();
       }
     };
     return { onMessage, onClose };
@@ -360,7 +349,6 @@ export class ExtensionRelayBridge {
         owner.socket.close(4000, "extension heartbeat timeout");
         if (this.extension === owner) {
           this.handleExtensionGone();
-          this.onStateChange?.();
         }
         return;
       }

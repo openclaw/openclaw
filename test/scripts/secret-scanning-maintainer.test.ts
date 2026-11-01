@@ -27,33 +27,28 @@ it.each([
 ])("keeps %s private with identity and edit history", (type, nodeType, numberKey) => {
   const tempDir = createTempDir("openclaw-secret-scan-content-");
   const ghPath = path.join(tempDir, "gh");
-  const fixturePath = path.join(tempDir, "content.json");
   const body = "synthetic private content\n";
   const htmlUrl = "https://github.com/openclaw/openclaw/pull/123";
-  fs.writeFileSync(
-    fixturePath,
-    JSON.stringify({
-      id: 456,
-      node_id: "fixture-node",
-      number: 123,
-      user: { login: "contributor" },
-      body,
-      html_url: htmlUrl,
-      merged: false,
-      state: "open",
-    }),
-  );
+  const content = JSON.stringify({
+    id: 456,
+    node_id: "fixture-node",
+    number: 123,
+    user: { login: "contributor" },
+    body,
+    html_url: htmlUrl,
+    merged: false,
+    state: "open",
+  });
   fs.writeFileSync(
     ghPath,
     `#!/usr/bin/env node
-const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] !== "api") process.exit(1);
 if (args[1] === "graphql") {
-  if (!args.join(" ").includes("... on " + process.env.EXPECTED_NODE_TYPE)) process.exit(2);
+  if (!args.join(" ").includes(${JSON.stringify("... on " + nodeType)})) process.exit(2);
   console.log(JSON.stringify({ data: { node: { userContentEdits: { totalCount: 3 } } } }));
 } else {
-  process.stdout.write(fs.readFileSync(process.env.CONTENT_FIXTURE, "utf8"));
+  process.stdout.write(${JSON.stringify(content)});
 }
 `,
     { mode: 0o755 },
@@ -66,8 +61,6 @@ if (args[1] === "graphql") {
     {
       ...ghEnv(tempDir),
       TMPDIR: tempDir,
-      EXPECTED_NODE_TYPE: nodeType,
-      CONTENT_FIXTURE: fixturePath,
     },
   );
   const result = JSON.parse(output);
@@ -116,24 +109,14 @@ it.each([false, true])("notifies only for changed redaction: %s", (changed) => {
       `api repos/openclaw/openclaw/issues/123 -X PATCH -F body=@${redactedBody}`,
     );
   } else {
-    expect(JSON.parse(fs.readFileSync(resultFile, "utf8"))).toMatchObject({
-      notify_required: false,
-    });
-  }
-});
-
-it.each([false, true])("gates body notifications on redaction metadata: %s", (provided) => {
-  const tempDir = createTempDir("openclaw-secret-scan-");
-  const resultFile = path.join(tempDir, "redaction-result.json");
-  fs.writeFileSync(resultFile, JSON.stringify({ body_changed: false, notify_required: false }));
-  const notify = () => run([...notificationArgs, ...(provided ? [resultFile] : [])]);
-  if (provided) {
-    expect(JSON.parse(notify())).toStrictEqual({
+    expect(JSON.parse(run([...notificationArgs, resultFile], ghEnv(root)))).toStrictEqual({
       ok: true,
       reason: "current_body_already_redacted",
       skipped: true,
     });
-  } else {
-    expect(notify).toThrow(/Body notifications require a redaction result file/);
   }
+});
+
+it("requires redaction metadata before notifying", () => {
+  expect(() => run(notificationArgs)).toThrow(/Body notifications require a redaction result file/);
 });

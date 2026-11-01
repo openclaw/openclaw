@@ -7,29 +7,12 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
-import { canAccessSync } from "./path-existence.js";
+import { canAccessSync, realpathExistingAncestorSync } from "./path-existence.js";
 import { isPathInside, safeStatSync } from "./path-guards.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
   return existingPathParts.has(dirPath) || safeStatSync(dirPath)?.isDirectory() === true;
-}
-
-function realpathExistingPath(candidate: string): string | undefined {
-  const suffix: string[] = [];
-  let current = candidate;
-  while (true) {
-    try {
-      return path.resolve(fs.realpathSync.native(current), ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return undefined;
-      }
-      suffix.push(path.basename(current));
-      current = parent;
-    }
-  }
 }
 
 function isFilesystemRoot(dirPath: string): boolean {
@@ -62,9 +45,9 @@ function normalizeTrustedPackageManagerRoot(params: {
     return undefined;
   }
 
-  const realCandidate = realpathExistingPath(normalized);
-  const realCwd = realpathExistingPath(cwd);
-  const realHome = realpathExistingPath(homeDir);
+  const realCandidate = realpathExistingAncestorSync(normalized);
+  const realCwd = realpathExistingAncestorSync(cwd);
+  const realHome = realpathExistingAncestorSync(homeDir);
   if (
     realCwd &&
     realCwd !== realHome &&

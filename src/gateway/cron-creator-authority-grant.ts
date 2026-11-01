@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../cron/runtime-authority.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -11,11 +13,19 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
 import type {
   CronAuthenticatedChannelRequester,
   CronCreatorAuthorityGrant,
 } from "./cron-creator-authority-grant.types.js";
+
+/** Resolve the deployment's automation scope when binding model tools or admitting RPCs. */
+export function isCronModelManagementAllowed(
+  config: OpenClawConfig | undefined = getRuntimeConfigSnapshot() ?? undefined,
+): boolean {
+  return config?.tools?.gatewayPolicy?.automations?.scope !== "caller";
+}
 
 export const CRON_MANAGEMENT_METHODS = [
   "cron.list",
@@ -23,6 +33,7 @@ export const CRON_MANAGEMENT_METHODS = [
   "cron.update",
   "cron.run",
   "cron.remove",
+  "cron.bind",
 ] as const;
 type CronManagementBinding = { method: string; authority: AgentRunDelegatedAuthority };
 type CronManagementCaller = {
@@ -68,6 +79,7 @@ type CronCreatorAuthorityGrantEntry = {
   scope: CronCreatorAuthorityRunScope;
   runtimeAuthority?: CronRuntimeAuthority;
   capturesRuntimeAuthority: boolean;
+  creatorProfileId?: string;
   isCurrent?: () => boolean;
   operationSignal?: AbortSignal;
   onOperationAbort?: () => void;
@@ -114,7 +126,11 @@ export function createCronCreatorAuthorityRunScope(
     },
     ...(isCurrent ? { isCurrent } : {}),
     active: true,
-    abort: () => abortController.abort(expiredAuthorityError()),
+    abort: () => {
+      const reason = expiredAuthorityError();
+      materializeErrorStack(reason);
+      abortController.abort(reason);
+    },
   };
   if (requester) {
     channelRequestersByScope.set(scope, Object.freeze(requester));
@@ -142,6 +158,7 @@ export function mintCronCreatorAuthorityGrant(
   management?: CronManagementBinding,
   capture: "runtime" | "requester" = "runtime",
   isCurrent?: () => boolean,
+  creatorProfileId?: string,
 ): CronCreatorAuthorityGrant {
   if (
     !scope.active ||
@@ -190,6 +207,7 @@ export function mintCronCreatorAuthorityGrant(
   const entry: CronCreatorAuthorityGrantEntry = {
     scope,
     capturesRuntimeAuthority: capture === "runtime",
+    ...(creatorProfileId ? { creatorProfileId } : {}),
     ...(isCurrent ? { isCurrent } : {}),
     operationSignal,
     ...(normalizedRuntimeAuthority ? { runtimeAuthority: normalizedRuntimeAuthority } : {}),
@@ -213,6 +231,9 @@ export function resolveCronCreatorAuthorityGrantProvenance(
 ):
   | {
       capturesRuntimeAuthority: boolean;
+      callerScopedCreation?: true;
+      /** Host-captured causal human; never permission or model input. */
+      creatorProfileId?: string;
       callerOrigin?: CronScheduledToolCallerOrigin;
       channelRequester?: CronAuthenticatedChannelRequester;
     }
@@ -238,6 +259,8 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   const channelRequester = channelRequestersByScope.get(scope);
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
+    ...(scope.callerScopedCreation ? { callerScopedCreation: true as const } : {}),
+    ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
     ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
   };
@@ -261,7 +284,9 @@ export function hasCronCreatorGrantProvenance(
     input.cronCreatorAuthorityGrant,
     runId,
   );
-  return Boolean(provenance?.callerOrigin || provenance?.channelRequester);
+  return Boolean(
+    provenance?.callerOrigin || provenance?.channelRequester || provenance?.callerScopedCreation,
+  );
 }
 
 function revokeCronCreatorAuthorityGrant(token: string): void {

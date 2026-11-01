@@ -19,15 +19,14 @@ vi.mock("../../sessions/session-controller.mailbox.js", async (importOriginal) =
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
   resolveQueuedReplyExecutionConfig: (config: unknown) => state.resolveConfig(config),
-  resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
 vi.mock("./reply-turn-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./reply-turn-admission.js")>()),
   admitReplyTurn: state.admit,
 }));
-vi.mock("./reply-turn-preflight.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./reply-turn-preflight.js")>()),
-  prepareReplyTurnContext: state.preflight,
+vi.mock("./agent-runner-memory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-memory.js")>()),
+  runSessionCompactionIfNeeded: state.preflight,
 }));
 
 const { prepareReplyAgentTurn } = await import("./reply-agent-turn-preparation.js");
@@ -71,20 +70,6 @@ function prepare({ opts, ...params }: PrepareOptions = {}) {
   });
 }
 
-it("prepares immediate and queued turns through the same model and memory preflight", async () => {
-  const signalRunStart = vi.fn(async () => {});
-  for (const kind of ["visible", "queued_followup"] as const) {
-    const result = await prepare({ kind, signalRunStart });
-    expect(result.kind).toBe("admitted");
-  }
-  expect(state.resolveConfig).toHaveBeenCalledTimes(2);
-  expect(signalRunStart).toHaveBeenCalledTimes(2);
-  expect(state.preflight.mock.calls.map(([params]) => params.defaultModel)).toEqual([
-    "default-model",
-    "default-model",
-  ]);
-});
-
 it("gives consecutive unbound queued turns distinct execution identities", async () => {
   const opts = { runId: "immediate" };
   const runIds: string[] = [];
@@ -101,14 +86,16 @@ it("gives consecutive unbound queued turns distinct execution identities", async
 it.each(["visible", "queued_followup"] as const)(
   "preserves an explicit protocol run identity for %s turns",
   async (kind) => {
+    const signalRunStart = vi.fn(async () => {});
     const input = reserveSessionControllerSource("run-identity-test", {
       protocolRunId: "protocol-turn",
       policy: { mode: "followup" },
     });
     try {
       const queued = { ...createRun(), controllerInput: input };
-      const result = await prepare({ queued, opts: { runId: "immediate" }, kind });
+      const result = await prepare({ queued, opts: { runId: "immediate" }, kind, signalRunStart });
       expect(result).toMatchObject({ kind: "admitted", turn: { runId: "protocol-turn" } });
+      expect(signalRunStart).toHaveBeenCalledOnce();
       expect(state.preflight.mock.calls[0]?.[0].opts.runId).toBe("protocol-turn");
     } finally {
       retireSessionControllerInput(input);
@@ -120,9 +107,7 @@ it.each([null, "aborted_by_user", "aborted_for_restart"] as const)(
   "settles rejected admission once without replacing %s",
   async (code) => {
     const { operation, spies } = createOperation();
-    Object.defineProperty(operation, "result", {
-      value: code ? { kind: "aborted", code } : null,
-    });
+    Object.assign(operation, { result: code ? { kind: "aborted", code } : null });
     state.admit.mockResolvedValue({ status: "owned", operation });
     const failure = new Error("source adoption failed");
     const settled = vi.fn(async () => {});

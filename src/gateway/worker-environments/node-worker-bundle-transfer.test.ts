@@ -27,7 +27,7 @@ it("streams despite observer errors and rejects revoked downloads", async ({ onT
   const { bundleHash } = input.build;
   const tarballPath = path.join(root, "bundle.tgz");
   await fs.writeFile(tarballPath, archive);
-  const service = createNodeWorkerBundleTransferService({ generateToken: () => "A".repeat(43) });
+  const service = createNodeWorkerBundleTransferService();
   onTestFinished(() => service.closeAll());
   const progress: number[] = [];
   const prepared = service.prepare({

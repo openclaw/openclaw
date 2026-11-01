@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,20 +7,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const json = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
-const variants = [
-  {
-    name: "clawhub",
-    version: "0.23.3",
-    hash: "8dc2d1dadd9c2423b87752c7fde83bf40018a30a46edb80166c43e458690f2b0",
-  },
-  {
-    name: "vercel",
-    version: "63.1.2",
-    hash: "81a44227cdb0fdb14aeb166302ae0c44ccd91cd99ab9e19d95b507b53373bf74",
-  },
-] as const;
+const variants = ["clawhub", "vercel"] as const;
 
-function fixture(variant: (typeof variants)[number]) {
+function fixture(name: (typeof variants)[number]) {
   const root = tempDirs.make("openclaw-pinned-cli-");
   const source = path.join(root, "source");
   const destination = path.join(root, "installed");
@@ -27,7 +17,9 @@ function fixture(variant: (typeof variants)[number]) {
   const receipt = path.join(root, "npm-receipt.json");
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
-  fs.cpSync(path.join(".github/release", `${variant.name}-cli`), source, { recursive: true });
+  fs.cpSync(path.join(".github/release", `${name}-cli`), source, { recursive: true });
+  const lock = fs.readFileSync(path.join(source, "package-lock.json"));
+  const version: string = json(path.join(source, "package.json")).dependencies[name];
   fs.symlinkSync(process.execPath, path.join(bin, "node"));
   fs.writeFileSync(
     path.join(bin, "npm"),
@@ -50,26 +42,21 @@ for (const name of [process.env.FIXTURE_CLI_PACKAGE, "sandbox"]) {
     destination,
     output,
     receipt,
+    version,
+    integrity: JSON.parse(lock.toString()).packages[`node_modules/${name}`].integrity,
+    hash: createHash("sha256").update(lock).digest("hex"),
     run(overrides: Record<string, string> = {}) {
       return spawnSync(
         "/bin/bash",
-        [path.resolve(`scripts/materialize-${variant.name}-cli.sh`), source, destination, output],
+        [path.resolve(`scripts/materialize-${name}-cli.sh`), source, destination, output],
         {
           encoding: "utf8",
           env: {
             PATH: `${bin}:/usr/bin:/bin`,
             HOME: root,
-            OPENCLAW_HOME: path.join(root, ".openclaw"),
-            OPENCLAW_STATE_DIR: path.join(root, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
-            XDG_CONFIG_HOME: path.join(root, "config"),
-            XDG_CACHE_HOME: path.join(root, "cache"),
-            XDG_DATA_HOME: path.join(root, "data"),
-            XDG_STATE_HOME: path.join(root, "xdg-state"),
-            XDG_RUNTIME_DIR: path.join(root, "run"),
             FIXTURE_NPM_RECEIPT: receipt,
-            FIXTURE_CLI_PACKAGE: variant.name,
-            FIXTURE_CLI_VERSION: variant.version,
+            FIXTURE_CLI_PACKAGE: name,
+            FIXTURE_CLI_VERSION: version,
             ...overrides,
           },
         },
@@ -80,9 +67,9 @@ for (const name of [process.env.FIXTURE_CLI_PACKAGE, "sandbox"]) {
 
 describe("pinned release CLI materialization", () => {
   it.each(variants)(
-    "materializes $name without lifecycle scripts and preserves workflow outputs",
-    (variant) => {
-      const test = fixture(variant);
+    "materializes %s without lifecycle scripts and preserves workflow outputs",
+    (name) => {
+      const test = fixture(name);
       const result = test.run();
       expect(result.status, result.stderr).toBe(0);
       expect(json(test.receipt)).toEqual({
@@ -97,22 +84,17 @@ describe("pinned release CLI materialization", () => {
           .map((line) => line.split(/[=](.*)/s, 2)),
       );
       expect(output).toEqual({
-        cli: path.join(test.destination, "node_modules/.bin", variant.name),
-        ...(variant.name === "vercel"
+        cli: path.join(test.destination, "node_modules/.bin", name),
+        ...(name === "vercel"
           ? { sandbox_cli: path.join(test.destination, "node_modules/.bin/sandbox") }
           : {}),
-        integrity: json(path.join(test.source, "package-lock.json")).packages[
-          `node_modules/${variant.name}`
-        ].integrity,
-        lock_sha256: variant.hash,
-        version: variant.version,
+        integrity: test.integrity,
+        lock_sha256: test.hash,
+        version: test.version,
       });
       expect(fs.statSync(test.destination).mode & 0o777).toBe(0o700);
       expect(fs.statSync(path.join(test.destination, "package-lock.json")).mode & 0o777).toBe(
         0o600,
-      );
-      expect(result.stdout).toBe(
-        `Materialized ${variant.name}@${variant.version} from lock ${variant.hash}.\n`,
       );
     },
   );

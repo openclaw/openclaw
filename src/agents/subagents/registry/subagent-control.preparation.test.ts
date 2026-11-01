@@ -8,12 +8,11 @@ import { prepareReplyAgentTurn } from "../../../auto-reply/reply/reply-agent-tur
 import { createTypingController } from "../../../auto-reply/reply/typing.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import * as mailbox from "../../../sessions/session-controller.mailbox.js";
-import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
+import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
-import { registerSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
 const fixture = useSubagentControlFixture();
+const runs = createControlRunFixture(() => fixture.stateDir);
 
 it("waits for the cancelled preparation's actual return before Stop completes", async ({
   signal,
@@ -21,25 +20,11 @@ it("waits for the cancelled preparation's actual return before Stop completes", 
   const wait = <T>(work: PromiseLike<T>) => sync.withinTest(work, signal);
   const gate = (ready: PromiseLike<unknown>, work: PromiseLike<unknown>) =>
     wait(sync.awaitGateBeforeSettlement(ready, work, "Settled before selected-source gate"));
-  const sessionKey = "agent:main:subagent:preparing-stop";
-  const sessionId = "preparing-stop-session";
-  const lifecycleRevision = "preparing-stop-lifecycle";
-  const runId = "preparing-stop-run";
-  const storePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey,
-    defaultSessionId: sessionId,
-    lifecycleRevision,
-  });
-  const registration = createSubagentRunParams({
-    runId,
-    childSessionKey: sessionKey,
-    sessionEntry: { sessionId, lifecycleRevision },
-    requesterAgentId: "main",
-    expectsCompletionMessage: false,
-  });
-  await registerSubagentRun(registration);
+  const { sessionKey, sessionId, runId, storePath } = await runs.seed(
+    "preparing-stop",
+    { runId: "preparing-stop-run", task: "preparing-stop-run" },
+    "preparing-stop-lifecycle",
+  );
   const cfg = getRuntimeConfig();
   const upstream = new AbortController();
   const queued = createQueueTestRun({ prompt: "do not execute after Stop" });

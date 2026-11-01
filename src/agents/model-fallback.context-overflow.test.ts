@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { buildEmbeddedRunBlockedResult } from "./embedded-agent-runner/run/blocked-run-result.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { FailoverError } from "./failover-error.js";
+import { model as catalogModel } from "./model-catalog-fixtures.test-support.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 
 const guidance = "This message exceeds the model's context window on its own.";
@@ -32,16 +32,8 @@ function makeConfig(fallbacks = ["capped", "fit-first", "fit-second"]): OpenClaw
     primary: "fixture-overflow/primary",
     fallbacks: fallbacks.map((id) => `fixture-overflow/${id}`),
   };
-  const definition = (id: string, window: number, tokens: number): ModelDefinitionConfig => ({
-    id,
-    name: id,
-    contextWindow: window,
-    contextTokens: tokens,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    maxTokens: 1024,
-  });
+  const definition = (id: string, contextWindow: number, contextTokens: number) =>
+    catalogModel(id, id, { contextWindow, contextTokens });
   const provider = {
     baseUrl: "http://127.0.0.1:11434",
     models: [

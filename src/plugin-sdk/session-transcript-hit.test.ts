@@ -1,17 +1,21 @@
-// Session transcript hit tests cover builtin transcript paths and key resolution.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
-  extractTranscriptIdentityFromSessionsMemoryHit,
-  extractTranscriptStemFromSessionsMemoryHit,
-  formatSessionTranscriptMemoryHitKey,
+  extractTranscriptIdentityFromSessionsMemoryHit as extractIdentity,
+  extractTranscriptStemFromSessionsMemoryHit as extractStem,
+  formatSessionTranscriptMemoryHitKey as formatKey,
   loadCombinedSessionStoreForGateway,
   loadCombinedSessionStoreForGatewayAsync,
-  parseSessionTranscriptMemoryHitKey,
-  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
-  resolveTranscriptStemToSessionKeys,
+  parseSessionTranscriptMemoryHitKey as parseKey,
+  resolveSessionTranscriptMemoryHitKeyToSessionKeys as resolveHitKeys,
+  resolveTranscriptStemToSessionKeys as resolveStemKeys,
 } from "./session-transcript-hit.js";
 
+const entry = (sessionId = "stem-a", overrides: Partial<SessionEntry> = {}): SessionEntry => ({
+  sessionId,
+  updatedAt: 1,
+  ...overrides,
+});
 const { loadGatewaySessionStore, loadGatewaySessionStoreAsync } = vi.hoisted(() => ({
   loadGatewaySessionStore: vi.fn(),
   loadGatewaySessionStoreAsync: vi.fn(),
@@ -28,103 +32,64 @@ vi.mock("../config/sessions/combined-store-gateway-read.js", () => ({
 it.each([
   ["synchronous compatibility", loadCombinedSessionStoreForGateway],
   ["async", loadCombinedSessionStoreForGatewayAsync],
-] as const)(
-  "filters incognito rows from the %s plugin cross-session view",
-  async (_label, load) => {
-    const snapshot = {
-      storePath: "(multiple)",
-      store: {
-        "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-        "agent:main:dashboard:incognito-private": {
-          incognito: true,
-          sessionId: "private",
-          updatedAt: 2,
-        },
-      },
-    };
-    loadGatewaySessionStore.mockReturnValue(snapshot);
-    loadGatewaySessionStoreAsync.mockResolvedValue(snapshot);
+] as const)("filters incognito rows (%s)", async (_label, load) => {
+  const visible = entry("visible");
+  const snapshot = {
+    storePath: "(multiple)",
+    store: {
+      "agent:main:dashboard:visible": visible,
+      "agent:main:dashboard:incognito-private": entry("private", { incognito: true }),
+    },
+  };
+  loadGatewaySessionStore.mockReturnValue(snapshot);
+  loadGatewaySessionStoreAsync.mockResolvedValue(snapshot);
 
-    expect((await load({})).store).toEqual({
-      "agent:main:dashboard:visible": { sessionId: "visible", updatedAt: 1 },
-    });
-  },
-);
-
-describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
-  it("extracts builtin live and archived transcript identities", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("sessions/abc-uuid.jsonl")).toBe("abc-uuid");
-    expect(
-      extractTranscriptIdentityFromSessionsMemoryHit(
-        "sessions/main/deleted-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z",
-      ),
-    ).toEqual({
-      stem: "deleted-uuid",
-      ownerAgentId: "main",
-      archived: true,
-    });
-  });
-
-  it("rejects paths outside the builtin transcript format", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("sessions/note.md")).toBeNull();
-    expect(
-      extractTranscriptStemFromSessionsMemoryHit("sessions/weird.jsonl.backup.2026-01-01.zst"),
-    ).toBeNull();
-  });
+  expect((await load({})).store).toEqual({ "agent:main:dashboard:visible": visible });
 });
 
-describe("resolveTranscriptStemToSessionKeys", () => {
-  const baseEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
-    sessionId: "stem-a",
-    updatedAt: 1,
-    ...overrides,
-  });
-
-  it("returns every non-incognito key with an exact session identity", () => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:s1": baseEntry(),
-      "agent:peer:s2": baseEntry(),
-      "agent:main:dashboard:incognito-private": baseEntry({ incognito: true }),
-    };
-
-    expect(resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted()).toEqual([
-      "agent:main:s1",
-      "agent:peer:s2",
-    ]);
-  });
-
-  it("falls back to archived owner metadata after the live row is removed", () => {
-    expect(
-      resolveTranscriptStemToSessionKeys({
-        store: {},
-        stem: "deleted-stem",
-        archivedOwnerAgentId: "main",
-      }),
-    ).toEqual(["agent:main:deleted-stem"]);
-  });
+it("extracts builtin live and archived transcript identities", () => {
+  expect(extractStem("sessions/abc-uuid.jsonl")).toBe("abc-uuid");
+  const archived = "sessions/main/deleted-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z";
+  const expected = { stem: "deleted-uuid", ownerAgentId: "main", archived: true };
+  expect(extractIdentity(archived)).toEqual(expected);
 });
 
-describe("session transcript memory hit key compatibility exports", () => {
-  it("exports storage-neutral memory hit key helpers from the legacy hit subpath", () => {
-    const key = formatSessionTranscriptMemoryHitKey({
-      agentId: "main",
-      sessionId: "session:legacy",
-    });
-    const store: Record<string, SessionEntry> = {
-      "agent:main:discord:direct:42": {
-        sessionFile: "/tmp/not-the-identity.jsonl",
-        sessionId: "session:legacy",
-        updatedAt: 10,
-      },
-    };
+it("rejects paths outside the builtin transcript format", () => {
+  expect(extractStem("sessions/note.md")).toBeNull();
+  expect(extractStem("sessions/weird.jsonl.backup.2026-01-01.zst")).toBeNull();
+});
 
-    expect(key).toBe("transcript:main:session%3Alegacy");
-    expect(parseSessionTranscriptMemoryHitKey(key)).toMatchObject({
-      agentId: "main",
-      sessionId: "session:legacy",
-    });
-    expect(resolveSessionTranscriptMemoryHitKeyToSessionKeys({ key, store })).toEqual([
-      "agent:main:discord:direct:42",
-    ]);
-  });
+it("returns every non-incognito key with an exact session identity", () => {
+  const store: Record<string, SessionEntry> = {
+    "agent:main:s1": entry(),
+    "agent:peer:s2": entry(),
+    "agent:main:dashboard:incognito-private": entry("stem-a", { incognito: true }),
+  };
+
+  expect(resolveStemKeys({ store, stem: "stem-a" }).toSorted()).toEqual([
+    "agent:main:s1",
+    "agent:peer:s2",
+  ]);
+});
+
+it("falls back to archived owner metadata after the live row is removed", () => {
+  const keys = resolveStemKeys({ store: {}, stem: "deleted-stem", archivedOwnerAgentId: "main" });
+  expect(keys).toEqual(["agent:main:deleted-stem"]);
+});
+
+it.each([
+  ["session:legacy", "session%3Alegacy"],
+  ["my-plugin:task/1", "my-plugin%3Atask%2F1"],
+])("resolves identity %s", (sessionId, encoded) => {
+  const key = formatKey({ agentId: "main", sessionId });
+  const store: Record<string, SessionEntry> = {
+    "agent:main:discord:direct:42": entry(sessionId, {
+      sessionFile: "/tmp/other.jsonl",
+      updatedAt: 10,
+    }),
+  };
+
+  expect(key).toBe(`transcript:main:${encoded}`);
+  expect(parseKey(key)).toMatchObject({ agentId: "main", sessionId });
+  expect(resolveHitKeys({ key, store })).toEqual(["agent:main:discord:direct:42"]);
 });

@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -9,7 +10,14 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { createAppearanceBackground } from "./appearance-background-state.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 type BackgroundView = ReturnType<ReturnType<typeof createAppearanceBackground>["viewProps"]>;
-export type AppearanceBackgroundView = Omit<BackgroundView, "onRetry"> & {
+export type AppearanceBackgroundView = Omit<
+  BackgroundView,
+  "onRetry" | "onFile" | "onRemoveImage" | "mutation"
+> & {
+  busy: boolean;
+  status?: JSX.Element;
+  onFile: (file: File) => void;
+  onRemoveImage: () => void;
   fileRef?: (element: HTMLInputElement) => void;
   onRetry?: BackgroundView["onRetry"];
 };
@@ -220,30 +228,31 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
         </p>
       ) : undefined}
       <p class="settings-section__desc">{props.scopeHint}</p>
-      {props.message ? (
-        <p
-          role={props.message.kind === "error" ? "alert" : "status"}
-          class={[
-            "settings-status",
-            {
-              "settings-status--danger": props.message.kind === "error",
-              "settings-status--muted": props.message.kind !== "error",
-            },
-          ]}
-        >
-          {props.message.text}{" "}
-          {props.onRetry ? (
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-background-retry
-              onClick={() => props.onRetry?.()}
-            >
-              {t("common.retry")}
-            </button>
-          ) : undefined}
-        </p>
-      ) : undefined}
+      {props.status ??
+        (props.message ? (
+          <p
+            role={props.message.kind === "error" ? "alert" : "status"}
+            class={[
+              "settings-status",
+              {
+                "settings-status--danger": props.message.kind === "error",
+                "settings-status--muted": props.message.kind !== "error",
+              },
+            ]}
+          >
+            {props.message.text}{" "}
+            {props.onRetry ? (
+              <button
+                type="button"
+                class="btn btn--sm"
+                data-background-retry
+                onClick={() => props.onRetry?.()}
+              >
+                {t("common.retry")}
+              </button>
+            ) : undefined}
+          </p>
+        ) : undefined)}
     </section>
   );
 }

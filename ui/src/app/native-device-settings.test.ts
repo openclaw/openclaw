@@ -220,7 +220,7 @@ describe("native device settings wire contract", () => {
     const listener = vi.fn();
     const settled = vi.fn();
     capability!.subscribe(listener);
-    capability!.set("capabilities.desktopSharingEnabled", false, settled);
+    void capability!.set("capabilities.desktopSharingEnabled", false, settled);
     const stopped = {
       ...initial,
       revision: 3,
@@ -562,13 +562,20 @@ describe("native device settings wire contract", () => {
     const settled = vi.fn(() => {
       pending = "";
     });
-    capability!.set("browser.cookieSync.targetProfile", pending, settled);
+    const completion = capability!.set("browser.cookieSync.targetProfile", pending, settled);
+    let completed = false;
+    void completion.then(() => {
+      completed = true;
+    });
     const observed: string[] = [];
     capability!.subscribe(() =>
       observed.push(pending || capability!.snapshot!.browser!.cookieSync!.targetProfile),
     );
+    await Promise.resolve();
+    expect(completed).toBe(false);
     reply.resolve(createNativeDeviceSettingsSnapshot());
-    await vi.waitFor(() => expect(observed).toEqual(["default"]));
+    await completion;
+    expect(observed).toEqual(["default"]);
     expect(settled).toHaveBeenCalledTimes(1);
   });
 
@@ -580,7 +587,7 @@ describe("native device settings wire contract", () => {
     const settled = vi.fn();
     const listener = vi.fn();
     capability!.subscribe(listener);
-    capability!.set("browser.cookieSync.targetProfile", "rejected", settled);
+    void capability!.set("browser.cookieSync.targetProfile", "rejected", settled);
     const failure = new Error("Document retired");
     rejected.reject(failure);
     await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
@@ -589,8 +596,11 @@ describe("native device settings wire contract", () => {
     expect(settled).toHaveBeenCalledWith(failure);
     const delayed = createDeferred<unknown>();
     post.mockReturnValueOnce(delayed.promise);
-    capability!.set("app.showDockIcon", false, settled);
+    const completion = capability!.set("app.showDockIcon", false, settled);
     capability!.dispose();
+    await completion;
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(1);
     const next = createNativeDeviceSettingsSnapshot();
     next.app.showDockIcon = false;
     delayed.resolve(next);
@@ -604,13 +614,13 @@ describe("native device settings wire contract", () => {
   it("posts exact native commands without optimistically changing the owner snapshot", () => {
     const post = installBridge();
     post.mockClear();
-    capability?.set("app.showDockIcon", false);
-    capability?.set("app.nativeExperienceEnabled", true);
-    capability?.set("app.iconStyle", "origami");
-    capability?.set("app.keepGatewayRunning", true);
-    capability?.set("voice.microphone", null);
-    capability?.set("browser.cookieSync.domains", ["example.com"]);
-    capability?.set("voice.locale.primary", "de-DE");
+    void capability?.set("app.showDockIcon", false);
+    void capability?.set("app.nativeExperienceEnabled", true);
+    void capability?.set("app.iconStyle", "origami");
+    void capability?.set("app.keepGatewayRunning", true);
+    void capability?.set("voice.microphone", null);
+    void capability?.set("browser.cookieSync.domains", ["example.com"]);
+    void capability?.set("voice.locale.primary", "de-DE");
     capability?.requestPermission("microphone");
     capability?.openSystemSettings("accessibility");
     capability?.openPanel("quick-chat-shortcut");

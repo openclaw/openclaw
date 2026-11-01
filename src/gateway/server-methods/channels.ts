@@ -1,7 +1,6 @@
 import {
   type ChannelsStartParams,
   ErrorCodes,
-  errorShape,
   validateChannelsStartParams,
   validateChannelsStopParams,
   validateChannelsLogoutParams,
@@ -47,7 +46,7 @@ import {
   type ChannelAccountParams,
   resolveRuntimeAccountSnapshot,
 } from "./channels-account.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
   GatewayRequestContext,
@@ -70,11 +69,7 @@ function resolveChannelOperationParams(params: {
   const rawChannel = rawParams.channel;
   const channelId = normalizeChannelId(rawChannel);
   if (!channelId) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${params.method} channel`),
-    );
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, `invalid ${params.method} channel`);
     return null;
   }
   const plugin = getChannelPlugin(channelId);
@@ -85,7 +80,7 @@ function resolveChannelOperationParams(params: {
         : params.method === "channels.stop"
           ? `unknown channel ${channelId}`
           : `channel ${channelId} does not support logout`;
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, message);
     return null;
   }
   const unsupported =
@@ -95,13 +90,10 @@ function resolveChannelOperationParams(params: {
         ? "logout"
         : undefined;
   if (unsupported) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `channel ${channelId} does not support ${unsupported}`,
-      ),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `channel ${channelId} does not support ${unsupported}`,
     );
     return null;
   }
@@ -258,10 +250,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
     );
     if (rawChannel !== undefined && !requestedChannel) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${formatForLog(rawChannel)}`),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `unknown channel: ${formatForLog(rawChannel)}`,
       );
       return;
     }
@@ -598,10 +590,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const requestAuthority = readGatewayRequestMutationAuthority(invocation);
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config invalid; fix it before logging out"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "config invalid; fix it before logging out",
       );
       return;
     }

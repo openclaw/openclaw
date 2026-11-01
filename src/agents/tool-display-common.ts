@@ -11,6 +11,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
+export { defaultTitle, normalizeToolDisplayName } from "./tool-display-name.js";
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -27,21 +28,6 @@ export type ToolDisplaySpec = {
 type CoerceDisplayValueOptions = {
   includeFalsy?: boolean;
 };
-
-export function normalizeToolDisplayName(name?: string): string {
-  return (name ?? "tool").trim();
-}
-
-export function defaultTitle(name: string): string {
-  const cleaned = name.replace(/_/g, " ").trim();
-  if (!cleaned) {
-    return "Tool";
-  }
-  return cleaned
-    .split(/\s+/)
-    .map((part) => `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
-}
 
 /** Beyond this nesting depth, a value does not contribute to the compact display preview. */
 const TOOL_DISPLAY_ARRAY_DEPTH_LIMIT = 64;
@@ -105,9 +91,6 @@ function coerceDisplayValue(
 }
 
 function lookupValueByPath(args: unknown, path: string): unknown {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
   let current: unknown = args;
   for (const segment of path.split(".")) {
     if (!segment) {
@@ -276,45 +259,6 @@ function resolveWebFetchDetail(record: Record<string, unknown>): string | undefi
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-function resolveDetailFromKeys(
-  args: unknown,
-  keys: string[],
-  opts: {
-    mode: "first" | "summary";
-    coerce?: CoerceDisplayValueOptions;
-    formatKey?: (raw: string) => string;
-  },
-): string | undefined {
-  const entries: Array<{ label: string; value: string }> = [];
-  for (const key of keys) {
-    const value = lookupValueByPath(args, key);
-    const display = coerceDisplayValue(value, opts.coerce);
-    if (!display) {
-      continue;
-    }
-    if (opts.mode === "first") {
-      return display;
-    }
-    entries.push({ label: opts.formatKey ? opts.formatKey(key) : key, value: display });
-  }
-  if (entries.length === 0) {
-    return undefined;
-  }
-  if (entries.length === 1) {
-    return entries.at(0)?.value;
-  }
-
-  const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
-  const parts: string[] = [];
-  for (let index = 0; index < unique.length && index < 8; index += 1) {
-    const entry = unique[index];
-    if (entry) {
-      parts.push(`${entry.label} ${entry.value}`);
-    }
-  }
-  return parts.join(", ");
-}
-
 export function resolveToolDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -354,11 +298,32 @@ export function resolveToolDetailForArgs(params: {
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];
   if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(args, detailKeys, {
-      mode: detailMode,
-      coerce: detailCoerce,
-      formatKey: detailFormatKey,
-    });
+    const entries: Array<{ label: string; value: string }> = [];
+    for (const key of detailKeys) {
+      const value = lookupValueByPath(args, key);
+      const display = coerceDisplayValue(value, detailCoerce);
+      if (!display) {
+        continue;
+      }
+      if (detailMode === "first") {
+        detail = display;
+        break;
+      }
+      entries.push({ label: detailFormatKey ? detailFormatKey(key) : key, value: display });
+    }
+    if (entries.length === 1) {
+      detail = entries.at(0)?.value;
+    } else if (entries.length > 1) {
+      const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
+      const parts: string[] = [];
+      for (let index = 0; index < unique.length && index < 8; index += 1) {
+        const entry = unique[index];
+        if (entry) {
+          parts.push(`${entry.label} ${entry.value}`);
+        }
+      }
+      detail = parts.join(", ");
+    }
   }
   if (!detail && meta) {
     detail = meta;
