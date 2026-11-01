@@ -466,10 +466,10 @@ it.each(["removed", "disabled"] as const)(
         }).entries,
         expected,
       );
-      expect(latestRunReceipt(state.deps.storePath, job.id)).toEqual({
-        status: "error",
-        error: reason,
-      });
+      // The cancelled receipt keeps its active-job fence until execution settles.
+      await expect
+        .poll(() => latestRunReceipt(state.deps.storePath, job.id))
+        .toEqual({ status: "error", error: reason });
       const storedJob = state.store?.jobs.find((entry) => entry.id === job.id);
       if (mutation === "removed") {
         expect(storedJob).toBeUndefined();
