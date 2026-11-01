@@ -1924,6 +1924,21 @@
     gap: 14px;
   }
 
+  /* Numbers keep their natural width; the identity takes the rest and wraps. */
+  .usage-creators-table {
+    table-layout: auto;
+  }
+
+  .usage-creators-table th:first-child {
+    width: auto;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .usage-creator-select {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .usage-controls,
   .usage-filter-row,
   .usage-filters-inline {
