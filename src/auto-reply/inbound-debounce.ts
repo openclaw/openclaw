@@ -122,12 +122,18 @@ function createInboundDebounceFlush(params: {
 
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
 const MAX_DEBOUNCE_WINDOW_MULTIPLIER = 5;
+const DEFAULT_MAX_ITEMS_PER_FLUSH = 100;
+const DEFAULT_MAX_PENDING_BATCHES_PER_KEY = 4;
 
 /** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   maxTrackedKeys?: number;
   maxWaitMs?: number | ((item: T) => number | undefined);
+  /** Seal a collecting batch at this item count instead of buffering without bound. */
+  maxItemsPerFlush?: number;
+  /** Hold new buffered work while a key already has this many batches pending dispatch. */
+  maxPendingBatchesPerKey?: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   /** Hold a quiet-period flush before its deadline; explicit flushes bypass this check. */
@@ -149,6 +155,14 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const activeCompletions = new Set<Promise<void>>();
   const defaultDebounceMs = resolveNonNegativeIntegerOption(params.debounceMs, 0);
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
+  const maxItemsPerFlush = Math.max(
+    1,
+    Math.trunc(params.maxItemsPerFlush ?? DEFAULT_MAX_ITEMS_PER_FLUSH),
+  );
+  const maxPendingBatchesPerKey = Math.max(
+    1,
+    Math.trunc(params.maxPendingBatchesPerKey ?? DEFAULT_MAX_PENDING_BATCHES_PER_KEY),
+  );
 
   const resolveDebounceMs = (item: T, pending?: readonly T[]) => {
     const resolved = params.resolveDebounceMs?.(item, pending);
@@ -157,7 +171,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
 
   const resolvePending = (item: T, key: string) => {
     const buffer = buffers.get(key);
-    return buffer && (params.canAppend?.(item, buffer.items) ?? true) ? buffer : undefined;
+    if (!buffer || buffer.items.length >= maxItemsPerFlush) {
+      // A full batch seals like a canAppend rejection: the incoming item starts
+      // the next batch instead of growing retained memory without bound.
+      return undefined;
+    }
+    return (params.canAppend?.(item, buffer.items) ?? true) ? buffer : undefined;
   };
   const shouldBuffer = (item: T): boolean => {
     const key = params.buildKey(item);
@@ -374,6 +393,18 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       // instead of buffering, but still preserve same-key ordering.
       await enqueueImmediate(key, item);
       return;
+    }
+    const queuedBatches = pendingBuffers.get(key);
+    if (queuedBatches && queuedBatches.size >= maxPendingBatchesPerKey) {
+      // Backpressure, not drops: sealed batches accumulate only while a key's
+      // flush chain is blocked, so hold this enqueue until the oldest pending
+      // batch starts dispatching. Awaiting callers propagate the wait to their
+      // durable ingress source; concurrent fire-and-forget callers resolve in
+      // wait-completion order rather than call order.
+      const oldest = queuedBatches.values().next().value;
+      if (oldest) {
+        await oldest.task.catch(() => undefined);
+      }
     }
     const { promise: ready, resolve: releaseReady } = createDeferredCore();
     const task = enqueueKeyTask(key, async () => {
