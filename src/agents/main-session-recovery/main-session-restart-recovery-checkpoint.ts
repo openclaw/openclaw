@@ -358,7 +358,11 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
         !entry ||
         entry.sessionId !== params.entry.sessionId ||
         (params.pendingFinalDeliveryIntentId !== undefined &&
-          entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId) ||
+          (entry.pendingFinalDelivery?.intentId !== params.pendingFinalDeliveryIntentId ||
+            entry.lifecycleRevision !== params.entry.lifecycleRevision ||
+            entry.activeWriterRunId !== params.entry.activeWriterRunId ||
+            entry.mainRestartRecovery?.reservation !== undefined ||
+            entry.mainRestartRecovery?.foregroundClaims !== undefined)) ||
         entry.status !== "running" ||
         entry.abortedLastRun !== true ||
         normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== expectedRecoveryRunId ||
