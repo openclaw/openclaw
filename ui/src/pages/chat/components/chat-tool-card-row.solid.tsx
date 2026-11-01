@@ -131,16 +131,22 @@ function ToolRowContent(props: {
       fallback={
         <>
           <Show when={!displayName() || summary().label !== props.toolLabel}>
-            <span class="chat-tool-msg-summary__label">{displayLabel()}</span>
+            <span class={["chat-tool-msg-summary__label", { "text-shimmer": props.running }]}>
+              {displayLabel()}
+            </span>
           </Show>
           <Show when={displayName()}>
-            <span class="chat-tool-msg-summary__names">{displayName()}</span>
+            <span class={["chat-tool-msg-summary__names", { "text-shimmer": props.running }]}>
+              {displayName()}
+            </span>
           </Show>
         </>
       }
     >
       <Match when={props.view.title}>
-        <span class="chat-tool-row__title">{props.view.title}</span>
+        <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
+          {props.view.title}
+        </span>
       </Match>
       <Match when={props.view.kind === "command" && props.view.command}>
         <span class="chat-tool-row__prompt" aria-hidden="true">

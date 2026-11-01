@@ -727,7 +727,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       sessionId: "session-1",
       updatedAt: 1,
       lastInteractionAt: 1,
-      channel: "old-channel",
     } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
       const persisted = loadSessionEntry({ sessionKey, storePath });
@@ -736,7 +735,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         sessionStartedAt: 100,
         updatedAt: 100,
         lastInteractionAt: 100,
-        channel: "telegram",
       };
       expect(params.sessionEntry).toMatchObject(initialized);
       expect(persisted).toMatchObject(initialized);

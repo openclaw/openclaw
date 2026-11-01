@@ -905,6 +905,14 @@
   color: var(--text-strong) !important;
 }
 
+.oc-menu-item.sidebar-agent-menu__agent-switch--active {
+  background: var(--menu-selected);
+}
+
+.oc-menu-item.sidebar-agent-menu__agent-switch--active:is(:hover, :focus-visible) {
+  background: var(--surface-selected-hover) !important;
+}
+
 .sidebar-agent-menu__agent-row {
   display: flex;
   align-items: center;

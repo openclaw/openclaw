@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import type { SessionForkRequester } from "../../agents/session-fork-requester.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -40,7 +40,9 @@ type ExperienceReviewAgentContext = {
   modelId?: string;
   authProfileId?: string;
   toolNames?: readonly string[];
-  foregroundPromptContext: EmbeddedForegroundPromptContext;
+  trigger?: string;
+  agentId: string;
+  requester?: SessionForkRequester;
 };
 
 export type SkillExperienceReviewParams = {
@@ -53,7 +55,7 @@ export type SkillExperienceReviewParams = {
 };
 
 export type ExperienceReviewCandidate = {
-  ctx: Pick<ExperienceReviewAgentContext, "runId" | "authProfileId" | "foregroundPromptContext"> & {
+  ctx: Pick<ExperienceReviewAgentContext, "runId" | "authProfileId" | "requester"> & {
     workspaceDir: string;
     modelProviderId: string;
     modelId: string;
@@ -84,7 +86,7 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
   ) {
     return false;
   }
-  const trigger = ctx.foregroundPromptContext.trigger?.trim().toLowerCase();
+  const trigger = ctx.trigger?.trim().toLowerCase();
   if (trigger && EXPERIENCE_REVIEW_BLOCKED_TRIGGERS.has(trigger)) {
     return false;
   }
@@ -282,7 +284,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       // Unqualified keys such as global still belong to one foreground agent.
-      const key = JSON.stringify([params.ctx.foregroundPromptContext.agentId, sessionKey]);
+      const key = JSON.stringify([params.ctx.agentId, sessionKey]);
       // Stop suppression precedes the aborted turn's own agent_end. Drop anything
       // this session queued, but never arm the stopped run or a later session flag.
       if (consumeSuppressedRun(params.ctx.runId)) {
@@ -349,7 +351,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           modelProviderId,
           modelId,
           authProfileId: params.ctx.authProfileId,
-          foregroundPromptContext: params.ctx.foregroundPromptContext,
+          requester: params.ctx.requester,
         },
         config: params.config,
         source: { ...source },

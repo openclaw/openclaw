@@ -20,12 +20,7 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -33,6 +28,7 @@ import { createToolResultPromptProjectionState } from "../../src/agents/embedded
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -161,14 +157,9 @@ function distribution(samples: number[]) {
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      const detail = (entry as PerformanceEntry & { detail: { kind: number } }).detail;
-      collections.push({ kind: detail.kind, ms: entry.duration });
-    }
-  }
-});
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const inspector = new Session();
 if (values.mode === "allocation") {
   inspector.connect();

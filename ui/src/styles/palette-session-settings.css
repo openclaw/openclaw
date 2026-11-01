@@ -64,10 +64,30 @@
   text-align: start;
 }
 
+:is(.palette-session-settings__row, .palette-session-settings__reason)
+  + .palette-session-settings__row,
+:is(.palette-session-settings__row, .palette-session-settings__reason)
+  + .palette-session-settings__reason
+  > .palette-session-settings__row {
+  margin-block-start: var(--menu-item-gap);
+}
+
 .palette-session-settings .agent-select .agent-select__trigger:hover:not(:disabled),
 .palette-session-settings__row:hover:not(:disabled),
 .palette-session-settings__back:hover {
   background: var(--bg-hover);
+}
+
+.palette-session-settings__row[aria-pressed]:hover:not(:disabled) {
+  background: var(--menu-hover);
+}
+
+.palette-session-settings__row[aria-pressed="true"] {
+  background: var(--menu-selected);
+}
+
+.palette-session-settings__row[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--surface-selected-hover);
 }
 
 .palette-session-settings__row:disabled {
