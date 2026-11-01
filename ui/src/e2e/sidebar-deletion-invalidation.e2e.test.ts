@@ -169,7 +169,10 @@ suite.define(() => {
           } else {
             await deletedRow.first().waitFor();
           }
-          await target.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+          // Finish the initial handoff before counting writes caused by deletion.
+          await target
+            .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+            .waitFor();
         }
         for (const target of pages) {
           await target.evaluate(() => {

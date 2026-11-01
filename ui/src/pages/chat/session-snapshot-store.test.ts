@@ -391,7 +391,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 3,
+        projectionVersion: 4,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },

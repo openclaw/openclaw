@@ -311,6 +311,10 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["worktree_provisioned_file_chunks", []],
   ["worktree_templates", []],
   ["worktrees", ["idx_worktrees_removed_at", "idx_worktrees_repo_fingerprint"]],
+  [
+    "worker_environments",
+    ["idx_worker_environments_provider_lease", "idx_worker_environments_terminal_changed"],
+  ],
   ["session_repository_workspaces", []],
   ["worker_workspace_pending_results", []],
   [
@@ -372,9 +376,9 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
   // state
-  afb8073871d07f76b893dfa0b6492fa9db95f8dc7f5b1f728c035ca7a70221c7: [
+  "9e94c01d86715ad99b030156f84cd341e1128482942617e1c980ce97c6082aae": [
     "state",
-    "f58eff1248523f0781a6cd49b28a3a72d6bc2790d8f0bdaf5b5401741b776adb",
+    "d390898276ecc57a24c5008543a9f4a22fab6ec2e28a7847b379f62f4bb287aa",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
@@ -382,6 +386,20 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
       72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94,
       95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
       115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133,
+    ],
+    [],
+  ],
+  // state-before-v39
+  afb8073871d07f76b893dfa0b6492fa9db95f8dc7f5b1f728c035ca7a70221c7: [
+    "state-before-v39",
+    "f58eff1248523f0781a6cd49b28a3a72d6bc2790d8f0bdaf5b5401741b776adb",
+    [
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+      26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+      49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94,
+      95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+      115, 116, 117, 134, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -393,9 +411,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
       49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
-      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 134, 89, 90, 91, 92, 93, 94,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90, 91, 92, 93, 94,
       95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
-      115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 135, 127, 128, 129, 130, 131, 132, 133,
+      115, 116, 117, 134, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -407,9 +425,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
       49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
-      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 134, 89, 90, 91, 92, 93, 94,
+      72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90, 91, 92, 93, 94,
       95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
-      115, 116, 117, 136, 119, 120, 121, 122, 123, 124, 125, 135, 127, 128, 129, 130, 131, 132, 133,
+      115, 116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -418,12 +436,12 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v36",
     "4d53b2bb2d8a94a586420eabc070971d1d4604b09268e6ee72213fa6bfa0492e",
     [
-      0, 1, 2, 3, 4, 5, 137, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 138, 139, 140, 141, 142,
+      0, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 139, 140, 141, 142, 143,
       19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
       42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
       65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87,
-      134, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 110, 111, 112, 113,
-      114, 115, 116, 117, 136, 119, 120, 121, 122, 123, 124, 125, 135, 127, 128, 129, 130, 131, 132,
+      135, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 110, 111, 112, 113,
+      114, 115, 116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132,
       133,
     ],
     [],
@@ -433,12 +451,12 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v35",
     "9e3e25fa1a24a3c47d3dfb4f13e1a380f28432cc721e96704ea578c40b9893d3",
     [
-      0, 1, 2, 3, 4, 5, 137, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 138, 139, 140, 141, 142,
+      0, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 139, 140, 141, 142, 143,
       19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
-      42, 43, 44, 45, 46, 47, 48, 49, 50, 143, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66,
-      67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 134, 89,
+      42, 43, 44, 45, 46, 47, 48, 49, 50, 144, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66,
+      67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89,
       90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 110, 111, 112, 113, 114, 115,
-      116, 117, 136, 119, 120, 121, 122, 123, 124, 125, 135, 127, 128, 129, 130, 131, 132, 133,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -447,12 +465,12 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v31",
     "cceee24bd79c3c429ed3a9b5a8062416ba3eeca3c4ce55c75005561fbf51fbff",
     [
-      0, 1, 2, 3, 4, 5, 137, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 138, 139, 140, 141, 142,
+      0, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 139, 140, 141, 142, 143,
       19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
-      42, 43, 44, 45, 46, 47, 48, 49, 144, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
-      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 134, 89, 90,
+      42, 43, 44, 45, 46, 47, 48, 49, 145, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90,
       91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 110, 111, 112, 113, 114, 115,
-      116, 117, 136, 119, 120, 121, 122, 123, 124, 125, 135, 127, 128, 129, 130, 131, 132, 133,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -461,12 +479,12 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v27",
     "9cbdbdda82c11a7042edd6c582d0d48745209ba3d487e35cc30b6acffa6296b4",
     [
-      145, 1, 2, 3, 4, 5, 137, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 138, 139, 140, 141, 142,
+      146, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 139, 140, 141, 142, 143,
       19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
-      42, 43, 44, 45, 46, 47, 48, 49, 144, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
-      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 134, 89, 90,
-      91, 92, 93, 94, 95, 96, 97, 98, 146, 100, 147, 102, 103, 104, 110, 111, 112, 113, 114, 115,
-      116, 117, 136, 119, 120, 121, 122, 123, 124, 125, 135, 127, 128, 129, 130, 131, 132, 133,
+      42, 43, 44, 45, 46, 47, 48, 49, 145, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 90,
+      91, 92, 93, 94, 95, 96, 97, 98, 147, 100, 148, 102, 103, 104, 110, 111, 112, 113, 114, 115,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -475,12 +493,12 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     "state-before-v26",
     "4c51aff4ecb9e77237ddbce525e6a286650823df0ae2ab72acba5a473ee1a2dc",
     [
-      145, 1, 2, 3, 4, 5, 137, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 138, 139, 140, 141, 142,
+      146, 1, 2, 3, 4, 5, 138, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 139, 140, 141, 142, 143,
       19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41,
-      42, 43, 44, 45, 46, 47, 48, 49, 144, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
-      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 134, 89, 148,
-      91, 92, 93, 94, 95, 96, 97, 98, 146, 100, 147, 102, 103, 104, 110, 111, 112, 113, 114, 115,
-      116, 117, 136, 119, 120, 121, 122, 123, 124, 125, 135, 127, 128, 129, 130, 131, 132, 133,
+      42, 43, 44, 45, 46, 47, 48, 49, 145, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+      68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 135, 89, 149,
+      91, 92, 93, 94, 95, 96, 97, 98, 147, 100, 148, 102, 103, 104, 110, 111, 112, 113, 114, 115,
+      116, 117, 137, 119, 120, 121, 122, 123, 124, 125, 136, 127, 128, 129, 130, 131, 132, 133,
     ],
     [],
   ],
@@ -523,28 +541,28 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   bc86e378ea153c42527b6106b01ba4cb8285cca40378ffa0142656577309723e: [
     "fragment-user_profiles",
     "268e6f3b53eb2048a3edf527da424f8df229a01166befc8137ea94dbb560227e",
-    [149, 113, 150],
+    [150, 113, 151],
     [],
   ],
   // state-feature-user_profiles
   f5b54f0fedd88d94c24add8a1fd987ac8592b05d4615424bab9dbc0d19c9cd4a: [
     "state-feature-user_profiles",
     "2c2611b7d0c64f467494ae3922f763dee7fc023a5ee6b92d5821639b18e825aa",
-    [149, 151, 150],
+    [150, 152, 151],
     [],
   ],
   // state-feature-user_profile_emails
   "9eaae0feb245733106045a2c6766d2a2a729a9bdb22b98ec4434c09d76663264": [
     "state-feature-user_profile_emails",
     "202fadb0df4fc5da385edddbda27e96126d0d7a2db6a63375fa506221163a4fb",
-    [152],
+    [153],
     [],
   ],
   // state-feature-user_profile_identities
   "45451969c6ea5bebf37bbfba310467e482af74731a7cb0f2affb316059e21528": [
     "state-feature-user_profile_identities",
     "3a24e89bd446dffbef50b7bd4b87288abc6eb470c290eaabcb1761fbe5244c06",
-    [151],
+    [152],
     [],
   ],
   // fragment-skill_library_entries
@@ -607,7 +625,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "7b8bf2fd3ae786c589bf138b32270450c1a2582bcb9a825c1eaf7fb3a7bcea06": [
     "fragment-worker_environment_session_attachments",
     "b95d7054311f0f2d1e0885104c66ff243dfe4f68b84ed2d814ae68e748574417",
-    [153],
+    [154],
     [],
   ],
   // fragment-durable_background_processes, state-feature-durable_background_processes
@@ -628,7 +646,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "156673e9396f27223073abdbbd2e13269bd7f45f577ed6aff00e017ab232d940": [
     "state-feature-sandbox_persistent_execs",
     "026ac7355b83187c8f7eef5cbd48ab36ba7de1b4fe40413ee1168ebff6c2d67a",
-    [154],
+    [155],
     [],
   ],
   // fragment-user_background_images, state-feature-user_background_images
@@ -649,7 +667,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   c3db4ffcf4092146e5d923b60516a00a8db41825f8bffb138b848195576b987b: [
     "state-feature-update_runs",
     "4caad814f837565106a1a17b982bf4ff004bbdba00a6ff05a3b9c5ef2e5a5945",
-    [155],
+    [156],
     [],
   ],
   // fragment-session_repository_workspaces, state-feature-session_repository_workspaces
@@ -670,7 +688,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "6d205ed705fcf89e34e2679f192b2dd50e4cbcb9b06b473c3e81dd48c8811102": [
     "state-feature-github_repository_publication_requests",
     "bc5c46f3cc22c0572b25d10344108465509d7189e1d51b0f6fa335b1d86497cf",
-    [156],
+    [157],
     [],
   ],
   // fragment-github_publication_session_lifecycles, state-feature-github_publication_session_lifecycles
@@ -691,7 +709,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "8a4a42e9e8549a0f2e73b33b4031673e2e939624d95586693bc2ac43742bf30f": [
     "state-feature-github_personal_publication_requests",
     "aeb05b8ff41f64e5bab165feac6f1abcdb6dfefc2a5bfbbe88e34861cc40922e",
-    [157],
+    [158],
     [],
   ],
   // fragment-cron_job_runtime_authorities, state-feature-cron_job_runtime_authorities
@@ -719,7 +737,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "7683ab1fd0bccb8e29499c3b6df0070d9cc7cd6249c8c103d654b015ce309417": [
     "state-feature-execution_identity_contexts",
     "2dc283d04b315fd0199a9e13653edb03c8614d12be2ca6f005c7e110aab62d2a",
-    [158],
+    [159],
     [],
   ],
   // fragment-mcp_oauth_pending_authorizations, state-feature-mcp_oauth_pending_authorizations
@@ -768,7 +786,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "5dc1cf9bb59834e9497e191514c7bfb850e062f7744047c7a4289516b4b0e214": [
     "state-feature-node_worker_launches",
     "f07514c3996f79e89f46d771b58859826342f72a12f024b29726a82f6481d6f9",
-    [159],
+    [160],
     [],
   ],
   // fragment-node_worker_prepared_workspaces, state-feature-node_worker_prepared_workspaces
@@ -789,7 +807,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "64cf0d044c7dede24d58a370a2f52cf19616efc9523343a698f7127c4d187f1d": [
     "state-feature-node_worker_turns",
     "d1d9be01c96d9dd47e4e23d0099074f561aedb976de062622daffd173443c17d",
-    [160],
+    [161],
     [],
   ],
   // fragment-operator_approval_execution_identities, state-feature-operator_approval_execution_identities
@@ -810,7 +828,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "74b05c720f6b4a8ff88824c9843816992d5233b93ccd85bea66c2fbd2a3480c5": [
     "state-feature-web_push_approval_deliveries",
     "92bd2e9265be63167980a22960aa201502864ec59e283821ad3eab6e765744ce",
-    [161],
+    [162],
     [],
   ],
   // fragment-execution_decision_facts
@@ -824,7 +842,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "9cd9f63b1002094a7e0538c52b75f2c8d26664937ff5559f64a004feabe47816": [
     "state-feature-execution_decision_facts",
     "8235ed3d9eb951894768fa49670db7390f7950e96618daded2851a55c2e827ed",
-    [162],
+    [163],
     [],
   ],
   // fragment-execution_owner_lifecycle_bindings, state-feature-execution_owner_lifecycle_bindings
@@ -845,7 +863,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   f782e56e1dca81426ff88a94a9702580d0c6bdd1a420e8c1741fef3aa7c18b81: [
     "state-feature-outbound_message_execution_bindings",
     "c29af535c3d6cf16bb31a085c7b68d150c132921b51f560495e75dd1f5451f2d",
-    [163],
+    [164],
     [],
   ],
   // fragment-outbound_message_progress
@@ -859,7 +877,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "6e2c6c197a77c179716d6ddead9a7226c49db5e8b69c1775ea8808e5e24cf271": [
     "state-feature-outbound_message_progress",
     "b1fdd16f1d29ceeed6d32e873b0ef54831ad693b4e910c1fe55bc59aa60c4709",
-    [164],
+    [165],
     [],
   ],
   // fragment-agent_provenance, state-feature-agent_provenance
@@ -880,7 +898,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "41824738e9d17ef8abfa9bda96824ab259ca9e81d3ad647b16b407a6bc4dc28f": [
     "state-feature-cron_run_receipts",
     "1c1c9f4b60d18e51e0db6940a6813c5a7a1a14dffbe38921318e61c295597112",
-    [165],
+    [166],
     [],
   ],
   // fragment-config_revision_keys, state-feature-config_revision_keys
@@ -901,7 +919,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "10e3ba9552ac35206e3f3d467a44f71602f4b1d3404204836f72106155b5fe6d": [
     "state-feature-secret_store_entries",
     "1eefc2ba0eecf91c8fd96442e750b4e555fb97485569f3bd2bf7205c02466cee",
-    [166],
+    [167],
     [],
   ],
   // fragment-projects, state-feature-projects
@@ -943,7 +961,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "4c1eb061476b0ecbfc022fb1bd4c927c7c4b3868f40702507c9911ccd3504b2f": [
     "state-feature-github_publication_requests",
     "0375d1a5a88363e5cd216f3addbf170f8be1098ea8626e0e0f95ebb91768588d",
-    [167],
+    [168],
     [],
   ],
   // fragment-device_pairing_join_codes, state-feature-device_pairing_join_codes
@@ -964,7 +982,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "4d5f1559c7bbec87a6ef236de2ff5dd8e82ee0fd0a369236f6d09872193fb9d3": [
     "state-feature-audit_skill_selection_events",
     "c1284d077d6d7bcf7027bf78e8aeb3f6b73189357bf90a01314d5b4b436d1a9c",
-    [168],
+    [169],
     [],
   ],
   // fragment-skill_workshop_changes
@@ -978,7 +996,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   d3bf805006eb83550c1d4a662610e8897cd41ce52de6e370424d3f3ed26e3d80: [
     "state-feature-skill_workshop_changes",
     "01b83680a33b4f2e7d46a70f3e122ebe40044b44ff733891a29a340bdcbba3fb",
-    [169],
+    [170],
     [],
   ],
   // fragment-worker_environment_ssh_fallback_ports, state-feature-worker_environment_ssh_fallback_ports
@@ -996,9 +1014,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // state-runtime-0-0
-  "040b25533678480bf7890ae8cb32b6e6e6b9153568d90063505400a7df734e2d": [
+  d867544f0eef2a762dc9051ea0e15b8091c270bbb2a73b4903ecd0928e04aaef: [
     "state-runtime-0-0",
-    "9f29ef589befa2d31367f05c7cfa8f2a8b2da9f2a5fc7d3252cb45bd4da7b282",
+    "0d8a0829977f7e6ec02a3fa9febb23562a521779369ad959613d26c4a96d72fe",
     [
       0, 1, 2, 3, 4, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 33,
       34, 35, 37, 41, 42, 43, 44, 45, 54, 55, 57, 58, 59, 60, 61, 62, 63, 71, 75, 76, 79, 80, 81,
@@ -1008,9 +1026,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // state-runtime-0-1
-  f114cc9f30a0652abd1d529e6bd5289535265a5934320af99bf72f80480b0880: [
+  "413ccc65b8a2461f1b8a0d51d1b5dcf815a0adbe5f2d6d9639096b9217deccb4": [
     "state-runtime-0-1",
-    "78a2814716461524624ed103a1876373bda2c38904faf524fa9b14e216512c3f",
+    "b866dbf70f630e748a46d2ad5a2c48c5d95bd4070784a9f7fcec3dc349d28af1",
     [
       0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 24, 25, 28, 29, 30, 33,
       34, 35, 37, 41, 42, 43, 44, 45, 54, 55, 57, 58, 59, 60, 61, 62, 63, 71, 75, 76, 79, 80, 81,
@@ -1020,9 +1038,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // state-runtime-1-0
-  "16b40ae8a13fa16c53d2284e124133dc80f89e097fd9812886f866dcfacaf2a3": [
+  "18180a4cb062b9b3a7591243f04344a87a771d9c15ed915ec0d5613f0fc90f02": [
     "state-runtime-1-0",
-    "ba5a0721c9ffc4f9c73066e0abf388da39a6524477f16bb72fb6c41accc2001b",
+    "74d5396116e901d0762143a2d8e0e693ca64623fd3ccf7dd7184513f5f09e4a8",
     [
       0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 28,
       29, 30, 31, 32, 33, 34, 35, 37, 41, 42, 43, 44, 45, 47, 54, 55, 57, 58, 59, 60, 61, 62, 63,
@@ -1033,9 +1051,9 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // state-runtime-1-1
-  "7746651eb7d7412b5f6275700aa072471f83aca7b323ccbccde0e16f0cb0c8e7": [
+  "49992d8ed832224f1aa240a8453cc509cdcebadc48879674be554c8c02d5f902": [
     "state-runtime-1-1",
-    "111361a7e26d84f9e3d272c5b62e516b496ae0c77c1e75a953bf6ec31ac95f19",
+    "8278ff1055e94bb27e23d0e58ca13c449e840c7263a3edb41bdfa358b167aa53",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26,
       28, 29, 30, 31, 32, 33, 34, 35, 37, 41, 42, 43, 44, 45, 47, 54, 55, 57, 58, 59, 60, 61, 62,
@@ -1084,7 +1102,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   cb1f3279e7e3b90290d5ab10856edf532f9c69f278116dd1a8002a4b050f2c1c: [
     "state-table-state_leases",
     "6117e088b6b48fe1007de8ef29868981f820404cc3be99040c2bcd899902b7cc",
-    [170],
+    [171],
     [],
   ],
   // state-table-worker_session_tool_operations
@@ -1119,49 +1137,49 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   d40fd26bedb861443248d33289dc8d89a1750f3631730dfde2ae285f2c7988ca: [
     "state-existing-state_leases",
     "4289076cebb114b14ac96672941b2be0679f1033e23fe059eedce8dc2b1eea57",
-    [85, 170],
+    [85, 171],
     [],
   ],
   // state-existing-agent_database_leases
   "13150d745ef24ab5e6aafe0b365af15d6c5d471a659e5eb2a1c38e359984a47f": [
     "state-existing-agent_database_leases",
     "9fe50268db674b01265b7e77701aedcfffe36567086fc763de8b89f87f4cb67d",
-    [3, 85, 170],
+    [3, 85, 171],
     [],
   ],
   // state-existing-migration_runs
   cc6464642f0f115776287e4d0966e2fc564b8e62db519c2bfad7a25c9e67de51: [
     "state-existing-migration_runs",
     "c8d7a60b14124212b817fab783e7e9e97253d27ae97c14dd6107ba9f1ad727f1",
-    [171, 85],
+    [172, 85],
     [],
   ],
   // state-node-worker-lineage
   "789bdcc904f4b35b57f9cb829909f2c9cda541c86179beb6904977146665c0c9": [
     "state-node-worker-lineage",
     "f235501e3f5767c362c7aebce3e678d33cdb45e3b776391980019cdf7cc0f37d",
-    [65, 159],
+    [65, 160],
     [],
   ],
   // state-node-worker-descendants
   "7c5c2640b3ec45cbac611c07c67f478f0ddc85a4bbfceb9c3576f0d7aa3bd14a": [
     "state-node-worker-descendants",
     "0991532bbc3ca042fc5c1c2026b8aa8d50b24a5bccf26e53675340a4853a665e",
-    [65, 67, 159],
+    [65, 67, 160],
     [],
   ],
   // state-retired-commitments
   "72c354791974ce88794c96c16135a89f07b48b9b03542f968beadf05b76aae1e": [
     "state-retired-commitments",
     "19bef9367d336bb367e75740610741cb67deeef86a7f54065758609d67ae8a38",
-    [172],
+    [173],
     [],
   ],
   // state-retired-commitments-shipped
   "2309aff06f4bac77072697764926a0042e6b6069c9504d5bb8c6a0601e9d1314": [
     "state-retired-commitments-shipped",
     "f4d088664f133eea8b1e83fd342d1effaa86d836f8593e02778531468372a303",
-    [173],
+    [174],
     [],
   ],
 };

@@ -40,7 +40,9 @@ keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
 Connections without general read access also skip CLI session catalogs, plugin
-tool artwork, and detailed usage reads. Tool activities keep their standard
+tool artwork, detailed usage reads, and the separate command catalog. Slash-command
+menus retain permitted chat metadata or built-in commands without requesting a
+catalog that the connection cannot read. Tool activities keep their standard
 symbols and context meters keep the session's total token count. The context
 breakdown and Usage page explain how to request access instead of offering a
 retry that cannot succeed. Session creation and effective tool access still

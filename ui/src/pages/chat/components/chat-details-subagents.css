@@ -38,6 +38,11 @@
   cursor: var(--cursor-action);
 }
 
+/* Avatar ink and badges set their own colors, so only the label recedes. */
+.chat-details-subagents__row--finished {
+  color: var(--muted);
+}
+
 .chat-details-subagents__row:is(:hover, :focus-visible) {
   background: var(--surface-hover);
 }
@@ -74,7 +79,6 @@
   height: 10px;
   border-radius: 50%;
   background: var(--details-subagent-surface);
-  color: var(--muted);
   box-shadow: 0 0 0 1px var(--details-subagent-surface);
 }
 
@@ -107,7 +111,6 @@
 .chat-details-subagents:not(.chat-details-subagents--mobile) .chat-details-subagents__badge {
   width: 8px;
   height: 8px;
-  border-radius: 50%;
   corner-shape: round;
   box-shadow: 0 0 0 1.5px var(--details-subagent-surface);
 }
@@ -120,7 +123,6 @@
 
 .chat-details-subagents:not(.chat-details-subagents--mobile) .chat-details-subagents__check {
   stroke-width: 2.5;
-  color: var(--ok);
 }
 
 .chat-details-subagents__name {

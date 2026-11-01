@@ -11,6 +11,8 @@ import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-d
 import {
   controlUiSessionPath,
   installMockGateway,
+  pauseVirtualClock,
+  type MockGatewayWindow,
   reconnectMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -23,6 +25,81 @@ import { navigationAgents } from "./new-session-page.navigation-fixtures.test-su
 
 const suite = createControlUiE2eSuite({ name: "model catalog dashboard" });
 const durationMs = Number(process.env.OPENCLAW_CATALOG_DASHBOARD_MS ?? 0);
+const compact = durationMs === 0;
+const expectedCounts: Record<string, number> = {
+  "startup-new": 1,
+  "open-main-a": 1,
+  "open-main-b": 1,
+  "open-research": 1,
+  "return-main-a": 0,
+  "plugin-ui-change": 0,
+  "tab-hidden": 0,
+  "ui-config-while-hidden": 0,
+  "tab-visible": 0,
+  "ui-config-change": 0,
+  "same-config-notice": 0,
+  "commands-only": 0,
+  "catalog-change": 1,
+  "plugin-generation-change": 0,
+  "picker-open-close": 0,
+  "plugin-ui-change-again": 0,
+  "ui-config-change-again": 0,
+};
+
+declare global {
+  interface Window {
+    catalogDashboardWork: { requests: Set<string>; idleCallbacks: Set<number> };
+  }
+}
+
+// Observe the mock wire through delivery, including host-backed response bindings.
+// Idle callbacks must also finish; UI readiness alone can precede background work.
+function trackDashboardWork() {
+  const work = { requests: new Set<string>(), idleCallbacks: new Set<number>() };
+  window.catalogDashboardWork = work;
+  const MockSocket = window.WebSocket;
+  window.WebSocket = class extends MockSocket {
+    constructor(...args: ConstructorParameters<typeof WebSocket>) {
+      super(...args);
+      // The routed mock constructor returns its transport, without this subclass's prototype.
+      const send = this.send.bind(this);
+      this.addEventListener("message", (event: MessageEvent) => {
+        const frame: { type: string; id: string } = JSON.parse(event.data);
+        if (frame.type === "res") {
+          work.requests.delete(frame.id);
+        }
+      });
+      this.send = (data) => {
+        if (typeof data === "string") {
+          const frame: { type: string; id: string } = JSON.parse(data);
+          if (frame.type === "req") {
+            work.requests.add(frame.id);
+          }
+        }
+        send(data);
+      };
+    }
+  };
+  const requestIdle = window.requestIdleCallback;
+  const cancelIdle = window.cancelIdleCallback;
+  window.requestIdleCallback = (callback, options) => {
+    const id = requestIdle.call(
+      window,
+      (deadline) => {
+        work.idleCallbacks.delete(id);
+        callback(deadline);
+      },
+      options,
+    );
+    work.idleCallbacks.add(id);
+    return id;
+  };
+  window.cancelIdleCallback = (id) => {
+    work.idleCallbacks.delete(id);
+    cancelIdle.call(window, id);
+  };
+}
+
 const agentIds = ["main", "research"];
 const sessionKeys = [
   "agent:main:dashboard-a",
@@ -42,6 +119,9 @@ suite.define(() => {
     "attributes catalog reads to dashboard navigation and invalidation triggers",
     async () => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        if (compact) {
+          await page.clock.install();
+        }
         let configGeneration = 0;
         let surfaceGeneration = 0;
         const surfaceUrl = () =>
@@ -97,6 +177,7 @@ suite.define(() => {
             },
           },
           {
+            afterInitScript: `;(() => { const __name = (target) => target; (${trackDashboardWork.toString()})(); })();`,
             requestHandlers: {
               "plugins.uiDescriptors": () => ({
                 methods: features,
@@ -105,10 +186,11 @@ suite.define(() => {
                 controlUiLinkReaders: [],
                 pluginSurfaceUrls: { canvas: surfaceUrl() },
               }),
-              "plugin.surface.refresh": () => ({
+              "plugin.surface.refresh": async () => ({
                 surface: "canvas",
                 pluginSurfaceUrls: { canvas: surfaceUrl() },
-                expiresAtMs: Date.now() + 15_000 + Math.max(durationMs, 60_000),
+                expiresAtMs:
+                  (await page.evaluate(() => Date.now())) + 15_000 + Math.max(durationMs, 60_000),
               }),
             },
           },
@@ -145,7 +227,7 @@ suite.define(() => {
           await gateway.emitGatewayEvent("config.changed", {
             path: "/synthetic/openclaw.json",
             hash: `config-${configGeneration}`,
-            ts: Date.now(),
+            ts: await page.evaluate(() => Date.now()),
           });
         };
         steps.push(
@@ -173,13 +255,27 @@ suite.define(() => {
           ],
           [
             "catalog-change",
-            () =>
-              gateway.emitGatewayEvent("chat.metadata.changed", {
+            async () => {
+              const match = { agentId: "main", sessionKey: sessionKeys[0] };
+              const after = compact ? await gateway.deferNext("models.list", match) : undefined;
+              await gateway.emitGatewayEvent("chat.metadata.changed", {
                 agentId: "main",
                 modelCatalogChanged: true,
                 commandsChanged: false,
                 authChanged: false,
-              }),
+              });
+              if (compact) {
+                const request = await gateway.waitForRequest("models.list", { after, match });
+                // A held wire reply proves the observer is active before settlement relies on it.
+                expect(
+                  await page.evaluate(
+                    (id) => window.catalogDashboardWork.requests.has(id),
+                    request.id,
+                  ),
+                ).toBe(true);
+                await gateway.resolveDeferred("models.list", undefined, { match });
+              }
+            },
           ],
           [
             "plugin-generation-change",
@@ -201,7 +297,12 @@ suite.define(() => {
               await page
                 .locator("openclaw-command-palette .cmd-palette__input")
                 .fill("Dashboard model");
-              await delay(500);
+              await page.evaluate(
+                () =>
+                  new Promise<void>((resolve) => {
+                    setTimeout(resolve, 500);
+                  }),
+              );
               await page.keyboard.press("Escape");
             },
           ],
@@ -215,12 +316,62 @@ suite.define(() => {
           ],
           ["ui-config-change-again", () => configEvent(true)],
         );
+        const advanceUntil = <T>(read: () => T | Promise<T>, expected: T) =>
+          expect
+            .poll(
+              async () => {
+                await page.clock.runFor(50);
+                return read();
+              },
+              { interval: 10 },
+            )
+            .toEqual(expected);
         for (const [index, [trigger, action]] of steps.entries()) {
-          await action();
-          // Allow the existing idle/background metadata coalescers to settle.
-          await delay(
-            Math.max(3000, started + (durationMs * (index + 1)) / steps.length - Date.now()),
-          );
+          if (compact) {
+            if (index === 0) {
+              // Boot with the clock ticking; later actions run under the paused clock.
+              await action();
+              await pauseVirtualClock(page);
+            } else {
+              let completed = false;
+              const actionDone = action();
+              const finish = () => {
+                completed = true;
+              };
+              void actionDone.then(finish, finish);
+              await advanceUntil(() => completed, true);
+              await actionDone;
+            }
+            const minimumReads =
+              modelCursor + (expectedCounts[trigger] ?? (trigger === "reconnect" ? 1 : 0));
+            const settle = () =>
+              advanceUntil(
+                () =>
+                  page.evaluate(
+                    (minimum) => ({
+                      ready: window.openclawControlUi?.snapshot().ready === true,
+                      requests: window.catalogDashboardWork.requests.size,
+                      idleCallbacks: window.catalogDashboardWork.idleCallbacks.size,
+                      catalogReady:
+                        ((window as MockGatewayWindow).openclawControlUiE2eGateway?.findRequests(
+                          "models.list",
+                        ).length ?? 0) >= minimum,
+                    }),
+                    minimumReads,
+                  ),
+                { ready: true, requests: 0, idleCallbacks: 0, catalogReady: true },
+              );
+            await settle();
+            // Cross the 2.5s metadata debounce, 750ms chat idle deadline (50ms
+            // fallback), and 500ms shell idle delay, even for zero-read rows.
+            await page.clock.runFor(4_000);
+            await settle();
+          } else {
+            await action();
+            await delay(
+              Math.max(3000, started + (durationMs * (index + 1)) / steps.length - Date.now()),
+            );
+          }
           const requests = await gateway.getRequests("models.list");
           const surfaces = await gateway.getRequests("plugin.surface.refresh");
           const row = {
@@ -240,25 +391,7 @@ suite.define(() => {
         }
         expect(await gateway.getRequests("connect")).toHaveLength(2);
         const counts = Object.fromEntries(rows.map((row) => [row.trigger, row.models.length]));
-        expect(counts).toMatchObject({
-          "startup-new": 1,
-          "open-main-a": 1,
-          "open-main-b": 1,
-          "open-research": 1,
-          "return-main-a": 0,
-          "plugin-ui-change": 0,
-          "tab-hidden": 0,
-          "ui-config-while-hidden": 0,
-          "tab-visible": 0,
-          "ui-config-change": 0,
-          "same-config-notice": 0,
-          "commands-only": 0,
-          "catalog-change": 1,
-          "plugin-generation-change": 0,
-          "picker-open-close": 0,
-          "plugin-ui-change-again": 0,
-          "ui-config-change-again": 0,
-        });
+        expect(counts).toMatchObject(expectedCounts);
         expect(counts.reconnect).toBeGreaterThan(0);
         expect(rows.reduce((total, row) => total + row.surfaceRefreshes, 0)).toBeGreaterThan(1);
       });
