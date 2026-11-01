@@ -1,15 +1,18 @@
-import { createMemo, createSignal, For } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
+import { SidebarSessionFilterPopover } from "../../components/sidebar-session-filter-popover.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
+import "../../styles/sidebar-menus.css";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   normalizeSessionsGroupBy,
@@ -22,8 +25,14 @@ import type { JSX } from "../../types/solid-elements.js";
 
 registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
+registerEnglishCatalog(registerCronEnglish);
 
 export type SessionsAdvancedFiltersProps = {
+  /** Phone width: search lives in the toolbar, sort moves in here, the filter opens as a sheet. */
+  phoneLayout?: boolean;
+  sortColumn: "key" | "updated";
+  sortDir: "asc" | "desc";
+  onSortChange: (column: "key" | "updated", direction: "asc" | "desc") => void;
   activeMinutes: string;
   limit: string;
   includeGlobal: boolean;
@@ -92,53 +101,58 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
     props.limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
     !props.includeGlobal ||
     props.includeUnknown ||
-    props.searchQuery.trim() !== "" ||
+    (props.phoneLayout
+      ? props.sortColumn !== "updated" || props.sortDir !== "desc"
+      : props.searchQuery.trim() !== "") ||
     props.statusFilter !== "active" ||
     props.groupBy !== "none";
-  return (
-    <Popover
-      id="sessions-filter-popover"
-      triggerId="sessions-filter-popover-trigger"
-      triggerClass={[
-        "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
-        { active: active() },
-      ]}
-      trigger={<Icon name="listFilter" />}
-      ref={(handle) => {
-        popover = handle;
-      }}
-      label={t("sessionsView.filters")}
-      class="sessions-filter-popover"
-      placement="bottom-end"
-      onOpenChange={(open) => {
-        if (open) {
-          popover?.overlay.surface.focus({ preventScroll: true });
-        }
-      }}
-    >
+  const triggerClass = () => [
+    "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
+    { active: active() },
+  ];
+  // Sheet focus wraps through these; the panel's controls register as they mount.
+  const sheetControls = new Set<HTMLElement>();
+  const sheetControl = (element: HTMLElement) => {
+    if (props.phoneLayout) {
+      sheetControls.add(element);
+    }
+  };
+  let sheetTrigger!: HTMLButtonElement;
+  let sheetInitialFocus: HTMLElement | undefined;
+  const [sheetOpen, setSheetOpen] = createSignal(false);
+  function FilterPanel() {
+    return (
       <div class="sessions-filter-popover__panel">
-        <HeaderSearch
-          title={t("sessionsView.filters")}
-          label={t("sessionsView.searchPlaceholder")}
-          closeLabel={t("sessionsView.clearSearch")}
-          class="sessions-filter-popover__search"
-          query={props.searchQuery}
-          open={searching() || Boolean(props.searchQuery)}
-          onOpenChange={setSearching}
-          onQueryChange={props.onSearchChange}
-          ownsEscape={() =>
-            !props.sessionMenu &&
-            !hasModalSurface(document) &&
-            !registryFor(document).stack.some(
-              (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
-            ) &&
-            !hasMenuSurface(document)
-          }
-        />
+        <Show when={!props.phoneLayout}>
+          <HeaderSearch
+            title={t("sessionsView.filters")}
+            label={t("sessionsView.searchPlaceholder")}
+            closeLabel={t("sessionsView.clearSearch")}
+            class="sessions-filter-popover__search"
+            query={props.searchQuery}
+            open={searching() || Boolean(props.searchQuery)}
+            onOpenChange={setSearching}
+            onQueryChange={props.onSearchChange}
+            ownsEscape={() =>
+              !props.sessionMenu &&
+              !hasModalSurface(document) &&
+              !registryFor(document).stack.some(
+                (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
+              ) &&
+              !hasMenuSurface(document)
+            }
+          />
+        </Show>
         <SettingsSegmented<SessionArchivedFilter>
           value={props.statusFilter}
           ariaLabel={t("sessionsView.sessionState")}
           class="sessions-view-segment"
+          inputRef={(value, element) => {
+            sheetControl(element);
+            if (value === "active") {
+              sheetInitialFocus = element;
+            }
+          }}
           options={[
             { value: "active", label: t("common.active") },
             {
@@ -167,7 +181,10 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                   <label class="session-filter-field">
                     <span class="session-filter-label">{t(labelKey)}</span>
                     <input
-                      ref={(element) => (input = element)}
+                      ref={(element) => {
+                        input = element;
+                        sheetControl(element);
+                      }}
                       class={["session-filter-input", `session-filter-input--${suffix}`]}
                       placeholder={
                         key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
@@ -202,7 +219,10 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
                     ]}
                   >
                     <input
-                      ref={(element) => (input = element)}
+                      ref={(element) => {
+                        input = element;
+                        sheetControl(element);
+                      }}
                       name={key}
                       class="session-filter-check__input"
                       type="checkbox"
@@ -222,6 +242,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         <label class="session-groupby">
           <span class="session-groupby__label">{t("sessionsView.groupBy")}</span>
           <SettingsSelect
+            ref={sheetControl}
             class="session-groupby__select"
             value={props.groupBy}
             options={SESSION_GROUP_MODES.filter(
@@ -234,6 +255,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         </label>
         {props.groupBy === "category" ? (
           <button
+            ref={sheetControl}
             class="btn btn--sm"
             disabled={Boolean(props.groupWriteDisabledReason)}
             title={props.groupWriteDisabledReason ?? undefined}
@@ -242,8 +264,47 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
             <Icon name="plus" /> {t("sessionsView.newGroup")}
           </button>
         ) : undefined}
+        <Show when={props.phoneLayout}>
+          <label class="session-groupby">
+            <span class="session-groupby__label">{t("cron.jobs.sort")}</span>
+            <SettingsSelect
+              ref={sheetControl}
+              class="session-groupby__select"
+              value={props.sortColumn}
+              options={[
+                { value: "updated", label: t("sessionsView.updated") },
+                { value: "key", label: t("sessionsView.session") },
+              ]}
+              onChange={(event) =>
+                props.onSortChange(
+                  event.currentTarget.value === "key" ? "key" : "updated",
+                  props.sortDir,
+                )
+              }
+            />
+          </label>
+          <label class="session-groupby">
+            <span class="session-groupby__label">{t("cron.jobs.direction")}</span>
+            <SettingsSelect
+              ref={sheetControl}
+              class="session-groupby__select"
+              value={props.sortDir}
+              options={[
+                { value: "desc", label: t("cron.jobs.descending") },
+                { value: "asc", label: t("cron.jobs.ascending") },
+              ]}
+              onChange={(event) =>
+                props.onSortChange(
+                  props.sortColumn,
+                  event.currentTarget.value === "asc" ? "asc" : "desc",
+                )
+              }
+            />
+          </label>
+        </Show>
         {props.statusFilter === "archived" ? (
           <button
+            ref={sheetControl}
             class="btn btn--sm danger"
             disabled={
               props.loading ||
@@ -257,7 +318,57 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           </button>
         ) : undefined}
       </div>
-    </Popover>
+    );
+  }
+  return (
+    <Show
+      when={props.phoneLayout}
+      fallback={
+        <Popover
+          id="sessions-filter-popover"
+          triggerId="sessions-filter-popover-trigger"
+          triggerClass={triggerClass()}
+          trigger={<Icon name="listFilter" />}
+          ref={(handle) => {
+            popover = handle;
+          }}
+          label={t("sessionsView.filters")}
+          class="sessions-filter-popover"
+          placement="bottom-end"
+          onOpenChange={(open) => {
+            if (open) {
+              popover?.overlay.surface.focus({ preventScroll: true });
+            }
+          }}
+        >
+          <FilterPanel />
+        </Popover>
+      }
+    >
+      <button
+        ref={(element) => (sheetTrigger = element)}
+        id="sessions-filter-popover-trigger"
+        type="button"
+        class={triggerClass()}
+        aria-label={t("sessionsView.filters")}
+        aria-haspopup="dialog"
+        aria-expanded={sheetOpen() ? "true" : "false"}
+        onClick={() => setSheetOpen(!sheetOpen())}
+      >
+        <Icon name="listFilter" />
+      </button>
+      <Show when={sheetOpen()}>
+        <SidebarSessionFilterPopover
+          class="sidebar-session-sort-menu sessions-filter-sheet"
+          anchor={sheetTrigger}
+          label={t("sessionsView.filters")}
+          initialFocus={() => sheetInitialFocus}
+          focusTargets={() => [...sheetControls].filter((element) => element.isConnected)}
+          onClose={() => setSheetOpen(false)}
+          content={<FilterPanel />}
+        />
+      </Show>
+    </Show>
   );
 }
 

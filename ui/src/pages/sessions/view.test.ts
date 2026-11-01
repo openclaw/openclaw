@@ -829,3 +829,76 @@ describe("Sessions query clearing", () => {
     }
   });
 });
+
+describe("sessions view at phone width", () => {
+  beforeEach(() => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (media) =>
+        ({
+          matches: media === "(max-width: 640px)",
+          media,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList,
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders list rows, keeps select-all reachable, and searches from the toolbar", async () => {
+    const onSearchChange = vi.fn();
+    const onSelectPage = vi.fn();
+    await renderSettled(
+      [
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
+      ],
+      { onSearchChange, onSelectPage, selectedKeys: new Set(["agent:main:alpha"]) },
+    );
+    await flush();
+
+    expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
+    expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
+    expect(query(".session-key-cell")).toBeNull();
+    expect(query("thead input")).toBeNull();
+    getInput(".data-table-bulk-bar input[type='checkbox']")?.dispatchEvent(
+      new Event("change", { bubbles: true }),
+    );
+    expect(onSelectPage).toHaveBeenCalledWith(["agent:main:alpha", "agent:main:beta"]);
+
+    const search = getInput(".sessions-search input");
+    expect(search).not.toBeNull();
+    search!.value = "alp";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSearchChange).toHaveBeenCalledWith("alp");
+  });
+
+  it("sorts from the filter and shows a changed sort on the trigger", async () => {
+    const onSortChange = vi.fn();
+    document.body.append(container);
+    const defaults = { onSortChange, searchQuery: "alp", includeGlobal: true, limit: "50" };
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], defaults);
+    await flush();
+    const trigger = getButton(".sessions-filter-popover__trigger");
+    // The toolbar shows the search itself, so only a changed sort lights the trigger.
+    expect(trigger?.classList.contains("active")).toBe(false);
+
+    trigger?.click();
+    await flush();
+    await vi.waitFor(() => expect(queryAll(".session-groupby select")).toHaveLength(3));
+    const [, sort, direction] = queryAll<HTMLSelectElement>(".session-groupby select");
+    change(sort!, "key");
+    expect(onSortChange).toHaveBeenLastCalledWith("key", "desc");
+    change(direction!, "asc");
+    expect(onSortChange).toHaveBeenLastCalledWith("updated", "asc");
+
+    disposeSessionViews();
+    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], {
+      ...defaults,
+      sortDir: "asc",
+    });
+    await flush();
+    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
+  });
+});
